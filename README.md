@@ -33,15 +33,36 @@ a 2D game engine built in Rust.
 
 ## getting started
 
+### native (linux)
+
 ```bash
+# run the engine directly
 cargo run
+
+# or build and run the shooter example
+cargo run --bin shooter
+
+# or use the build script
+./scripts/build-native.sh
+./target/release/shooter
 ```
 
-### running the shooter example
+### browser (wasm)
 
 ```bash
-cargo run --bin shooter
+# build the wasm binary and generate dist/
+./scripts/build-web.sh
+
+# serve locally with the included go server
+go run scripts/serve.go
+
+# open http://localhost:8080 in your browser
 ```
+
+requirements:
+- `go` 1.21+ (for the dev server)
+- `wasm-bindgen-cli` (installed automatically by build script)
+- a browser with WebGPU support (chrome 113+, firefox nightly)
 
 ## targets
 
