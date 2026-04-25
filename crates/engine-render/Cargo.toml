@@ -1,0 +1,11 @@
+[package]
+name = "engine-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wgpu = { workspace = true }
+raw-window-handle = "0.6"
+engine-math = { path = "../engine-math" }
+log = { workspace = true }

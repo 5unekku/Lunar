@@ -1,0 +1,48 @@
+[workspace]
+members = [
+    "crates/engine-core",
+    "crates/engine-render",
+    "crates/engine-input",
+    "crates/engine-audio",
+    "crates/engine-math",
+    "crates/engine-api",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+bevy_ecs = "0.18"
+glam = "0.30"
+wgpu = "29"
+raw-window-handle = "0.6"
+sdl3 = "0.18"
+log = "0.4"
+env_logger = "0.11"
+
+[package]
+name = "lunar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "lunar"
+path = "src/main.rs"
+
+[dependencies]
+engine-core = { path = "crates/engine-core" }
+engine-render = { path = "crates/engine-render" }
+engine-input = { path = "crates/engine-input" }
+engine-audio = { path = "crates/engine-audio" }
+engine-math = { path = "crates/engine-math" }
+engine-api = { path = "crates/engine-api" }
+env_logger = { workspace = true }
+log = { workspace = true }
+wgpu = { workspace = true }
+sdl3 = { workspace = true, features = ["raw-window-handle"] }
+raw-window-handle = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
