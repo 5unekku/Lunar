@@ -3,9 +3,10 @@
 //! these are the common types used across all 2D game code.
 
 use crate::{Vec2, Vec3};
+use bevy_ecs::prelude::Component;
 
 /// 2D transform component: position, rotation, scale
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub struct Transform {
     /// x, y position + z layer for depth sorting
     pub translation: Vec3,

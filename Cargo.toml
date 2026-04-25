@@ -7,6 +7,7 @@ members = [
     "crates/engine-math",
     "crates/engine-api",
     "crates/engine-assets",
+    "examples/shooter",
 ]
 resolver = "2"
 
