@@ -1,0 +1,291 @@
+//! dialogue and text system
+//!
+//! provides multi-stage conversations, speaker identification, branching choices,
+//! and narrator text. designed for RPG-style dialogue without requiring games
+//! to implement their own solutions.
+
+use bevy_ecs::prelude::*;
+
+use crate::app::App;
+
+/// a dialogue line with optional speaker and choices
+#[derive(Debug, Clone)]
+pub struct DialogueLine {
+    /// speaker identifier, none for narrator text
+    pub speaker: Option<String>,
+    /// the text content
+    pub text: String,
+    /// optional sprite change for the speaker
+    pub sprite_change: Option<String>,
+    /// optional choices for branching
+    pub choices: Vec<DialogueChoice>,
+}
+
+/// a branching choice in a dialogue
+#[derive(Debug, Clone)]
+pub struct DialogueChoice {
+    /// the text shown to the player
+    pub label: String,
+    /// the next dialogue node id if chosen
+    pub target: String,
+}
+
+/// a named dialogue node within a conversation
+#[derive(Debug, Clone)]
+pub struct DialogueNode {
+    /// unique identifier within the conversation
+    pub id: String,
+    /// the line of dialogue
+    pub line: DialogueLine,
+    /// next node id if no choices (auto-advance)
+    pub next: Option<String>,
+}
+
+/// a complete conversation or dialogue tree
+#[derive(Debug, Clone)]
+pub struct Dialogue {
+    /// the entry point node id
+    pub start: String,
+    /// all nodes in this dialogue
+    pub nodes: Vec<DialogueNode>,
+}
+
+impl Dialogue {
+    /// create a new dialogue with a start node
+    pub fn new(start: &str) -> Self {
+        Dialogue {
+            start: start.to_string(),
+            nodes: Vec::new(),
+        }
+    }
+
+    /// add a node to this dialogue
+    pub fn add_node(&mut self, node: DialogueNode) {
+        self.nodes.push(node);
+    }
+
+    /// get a node by id
+    pub fn get_node(&self, id: &str) -> Option<&DialogueNode> {
+        self.nodes.iter().find(|n| n.id == id)
+    }
+}
+
+/// a builder for constructing dialogue nodes
+pub struct DialogueBuilder {
+    dialogue: Dialogue,
+}
+
+impl DialogueBuilder {
+    /// create a new dialogue builder with the given start node id
+    pub fn new(start: &str) -> Self {
+        DialogueBuilder {
+            dialogue: Dialogue::new(start),
+        }
+    }
+
+    /// add a simple line with auto-advance
+    pub fn line(mut self, id: &str, speaker: Option<&str>, text: &str, next: Option<&str>) -> Self {
+        self.dialogue.nodes.push(DialogueNode {
+            id: id.to_string(),
+            line: DialogueLine {
+                speaker: speaker.map(String::from),
+                text: text.to_string(),
+                sprite_change: None,
+                choices: Vec::new(),
+            },
+            next: next.map(String::from),
+        });
+        self
+    }
+
+    /// add a line with choices
+    pub fn choice_line(
+        mut self,
+        id: &str,
+        speaker: Option<&str>,
+        text: &str,
+        choices: Vec<(&str, &str)>,
+    ) -> Self {
+        self.dialogue.nodes.push(DialogueNode {
+            id: id.to_string(),
+            line: DialogueLine {
+                speaker: speaker.map(String::from),
+                text: text.to_string(),
+                sprite_change: None,
+                choices: choices
+                    .into_iter()
+                    .map(|(label, target)| DialogueChoice {
+                        label: label.to_string(),
+                        target: target.to_string(),
+                    })
+                    .collect(),
+            },
+            next: None,
+        });
+        self
+    }
+
+    /// finish building
+    pub fn build(self) -> Dialogue {
+        self.dialogue
+    }
+}
+
+/// dialogue state for an active conversation
+#[derive(Debug, Clone)]
+pub struct DialogueState {
+    /// the current dialogue definition
+    pub dialogue: Dialogue,
+    /// the current node id
+    pub current_node: String,
+    /// whether the dialogue is active
+    pub active: bool,
+}
+
+impl DialogueState {
+    /// create a new dialogue state from a dialogue
+    pub fn new(dialogue: Dialogue) -> Self {
+        let start = dialogue.start.clone();
+        DialogueState {
+            dialogue,
+            current_node: start,
+            active: true,
+        }
+    }
+
+    /// get the current line
+    pub fn current_line(&self) -> Option<&DialogueLine> {
+        self.dialogue.get_node(&self.current_node).map(|n| &n.line)
+    }
+
+    /// advance to the next node (auto-advance, no choice)
+    pub fn advance(&mut self) {
+        if let Some(node) = self.dialogue.get_node(&self.current_node) {
+            if let Some(ref next) = node.next {
+                self.current_node = next.clone();
+            } else if node.line.choices.is_empty() {
+                self.active = false;
+            }
+        }
+    }
+
+    /// choose a branch
+    pub fn choose(&mut self, index: usize) {
+        if let Some(node) = self.dialogue.get_node(&self.current_node)
+            && let Some(choice) = node.line.choices.get(index)
+        {
+            self.current_node = choice.target.clone();
+        }
+    }
+
+    /// check if there are choices available
+    pub fn has_choices(&self) -> bool {
+        self.current_line()
+            .is_some_and(|line| !line.choices.is_empty())
+    }
+}
+
+/// dialogue manager resource
+#[derive(Resource)]
+pub struct DialogueManager {
+    /// registered dialogues by name
+    dialogues: std::collections::HashMap<String, Dialogue>,
+    /// the currently active dialogue state
+    active_dialogue: Option<DialogueState>,
+}
+
+impl DialogueManager {
+    /// create a new dialogue manager
+    pub fn new() -> Self {
+        DialogueManager {
+            dialogues: std::collections::HashMap::new(),
+            active_dialogue: None,
+        }
+    }
+
+    /// register a dialogue by name
+    pub fn register(&mut self, name: &str, dialogue: Dialogue) {
+        self.dialogues.insert(name.to_string(), dialogue);
+        log::info!("DialogueManager: registered dialogue '{}'", name);
+    }
+
+    /// start a dialogue by name
+    pub fn start(&mut self, name: &str) {
+        if let Some(dialogue) = self.dialogues.get(name).cloned() {
+            self.active_dialogue = Some(DialogueState::new(dialogue));
+            log::info!("DialogueManager: started dialogue '{}'", name);
+        } else {
+            log::warn!("DialogueManager: dialogue '{}' not found", name);
+        }
+    }
+
+    /// get the current line if a dialogue is active
+    pub fn current_line(&self) -> Option<&DialogueLine> {
+        self.active_dialogue.as_ref().and_then(|s| s.current_line())
+    }
+
+    /// advance the current dialogue
+    pub fn advance(&mut self) {
+        if let Some(state) = &mut self.active_dialogue {
+            state.advance();
+            if !state.active {
+                self.active_dialogue = None;
+            }
+        }
+    }
+
+    /// choose a branch in the current dialogue
+    pub fn choose(&mut self, index: usize) {
+        if let Some(state) = &mut self.active_dialogue {
+            state.choose(index);
+        }
+    }
+
+    /// check if a dialogue is active
+    pub fn is_active(&self) -> bool {
+        self.active_dialogue.as_ref().is_some_and(|s| s.active)
+    }
+
+    /// check if the current line has choices
+    pub fn has_choices(&self) -> bool {
+        self.active_dialogue
+            .as_ref()
+            .is_some_and(|s| s.has_choices())
+    }
+
+    /// get the choice labels for the current line
+    pub fn choice_labels(&self) -> Vec<&str> {
+        self.current_line()
+            .map(|line| line.choices.iter().map(|c| c.label.as_str()).collect())
+            .unwrap_or_default()
+    }
+
+    /// close the active dialogue
+    pub fn close(&mut self) {
+        self.active_dialogue = None;
+    }
+}
+
+impl Default for DialogueManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// dialogue plugin, registers the dialogue manager resource
+pub struct DialoguePlugin;
+
+impl crate::GamePlugin for DialoguePlugin {
+    fn name(&self) -> &str {
+        "DialoguePlugin"
+    }
+
+    fn dependencies(&self) -> &[&str] {
+        &[]
+    }
+
+    fn build(&mut self, app: &mut App) {
+        app.insert_resource(DialogueManager::new());
+        log::info!("DialoguePlugin: dialogue manager resource registered");
+    }
+}

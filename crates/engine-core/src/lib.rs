@@ -9,6 +9,7 @@ pub use engine_math;
 
 mod app;
 mod command;
+mod dialogue;
 mod engine;
 mod game_loop;
 mod schedule;
@@ -17,6 +18,10 @@ mod zone;
 
 pub use app::{App, GamePlugin, Time};
 pub use command::{Command, CommandRegistry};
+pub use dialogue::{
+    Dialogue, DialogueBuilder, DialogueChoice, DialogueLine, DialogueManager, DialogueNode,
+    DialoguePlugin, DialogueState,
+};
 pub use engine::Engine;
 pub use game_loop::{GameLoop, TickRate};
 pub use schedule::{StageOrder, UpdateStage};
