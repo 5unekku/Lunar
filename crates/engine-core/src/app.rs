@@ -3,6 +3,7 @@
 //! the app builder provides a fluent interface for configuring the engine.
 //! game plugins register their systems, resources, and sub-plugins through the app.
 
+use std::collections::VecDeque;
 use std::time::Instant;
 
 use bevy_ecs::prelude::*;
@@ -98,6 +99,10 @@ impl Default for Time {
 pub struct App {
     /// the engine instance
     engine: Engine,
+    /// plugins registered but not yet built
+    pending_plugins: Vec<Box<dyn GamePlugin>>,
+    /// names of plugins already built (for cycle detection)
+    built_plugins: Vec<String>,
 }
 
 impl App {
@@ -106,7 +111,11 @@ impl App {
         let mut engine = Engine::new();
         // insert the time resource
         engine.world_mut().insert_resource(Time::new());
-        Self { engine }
+        Self {
+            engine,
+            pending_plugins: Vec::new(),
+            built_plugins: Vec::new(),
+        }
     }
 
     /// get mutable access to the world for direct manipulation
@@ -134,9 +143,65 @@ impl App {
     }
 
     /// add a plugin to the app
-    pub fn add_plugin(&mut self, plugin: &mut impl GamePlugin) -> &mut Self {
-        plugin.build(self);
+    /// plugins are built in dependency order using topological sort.
+    /// each plugin's dependencies must be built before the plugin itself.
+    pub fn add_plugin(&mut self, plugin: impl GamePlugin + 'static) -> &mut Self {
+        self.pending_plugins.push(Box::new(plugin));
         self
+    }
+
+    /// build all pending plugins in dependency order
+    fn build_plugins(&mut self) {
+        // simple topological sort using Kahn's algorithm
+        let mut built = std::mem::take(&mut self.built_plugins);
+        let mut pending = std::mem::take(&mut self.pending_plugins);
+
+        let mut queue = VecDeque::new();
+
+        // find plugins with no dependencies
+        for (i, plugin) in pending.iter().enumerate() {
+            let deps = plugin.dependencies();
+            if deps.is_empty() || deps.iter().all(|d| built.contains(&d.to_string())) {
+                queue.push_back(i);
+            }
+        }
+
+        let mut built_indices = Vec::new();
+
+        while let Some(idx) = queue.pop_front() {
+            let mut plugin = pending.remove(idx);
+            let name = plugin.name().to_string();
+
+            // adjust remaining indices
+            for i in &mut queue {
+                if *i > idx {
+                    *i -= 1;
+                }
+            }
+
+            plugin.build(self);
+            built.push(name.clone());
+            built_indices.push(idx);
+
+            // check if any pending plugins now have all deps met
+            for (i, p) in pending.iter().enumerate() {
+                let deps = p.dependencies();
+                if deps.iter().all(|d| built.contains(&d.to_string())) && !queue.contains(&i) {
+                    queue.push_back(i);
+                }
+            }
+        }
+
+        // put back any plugins that couldn't be built (circular deps or missing deps)
+        self.pending_plugins = pending;
+        self.built_plugins = built;
+
+        if !self.pending_plugins.is_empty() {
+            log::warn!(
+                "{} plugins could not be built (missing dependencies or circular deps)",
+                self.pending_plugins.len()
+            );
+        }
     }
 
     /// get a reference to the engine
@@ -151,6 +216,9 @@ impl App {
 
     /// start the game loop with the given frame cap (0 = uncapped)
     pub fn run(&mut self, frame_cap: u32) {
+        // build all pending plugins before starting
+        self.build_plugins();
+
         let mut game_loop = GameLoop::new(frame_cap);
 
         while game_loop.is_running() {
@@ -181,7 +249,15 @@ impl Default for App {
 /// trait for game plugins
 ///
 /// plugins configure the app by adding systems, resources, and other plugins.
-pub trait GamePlugin {
+pub trait GamePlugin: Send {
+    /// get the plugin name for dependency resolution
+    fn name(&self) -> &str;
+
+    /// get the list of plugin names this plugin depends on
+    fn dependencies(&self) -> &[&str] {
+        &[]
+    }
+
     /// build the plugin, adding systems and resources to the app
     fn build(&mut self, _app: &mut App) {}
 
