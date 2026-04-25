@@ -8,4 +8,6 @@ license.workspace = true
 sdl3 = { workspace = true }
 raw-window-handle = { workspace = true }
 engine-math = { path = "../engine-math" }
+engine-core = { path = "../engine-core" }
+bevy_ecs = { workspace = true }
 log = { workspace = true }

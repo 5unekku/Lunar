@@ -3,7 +3,7 @@
 //! completely decoupled from game logic. handles 2D rendering with wgpu.
 //! architecture allows for future 3D expansion without breaking changes.
 
-/// rendering configuration
+//! rendering configuration
 #[derive(Debug, Clone)]
 pub struct RenderConfig {
     /// window width
@@ -177,5 +177,102 @@ impl RenderEngine {
         self.surface.configure(&self.device, &self.config);
         self.render_config.width = width;
         self.render_config.height = height;
+    }
+}
+
+/// render queue resource, collects draw commands each frame
+#[derive(bevy_ecs::prelude::Resource)]
+pub struct RenderQueue {
+    /// pending draw commands
+    commands: Vec<DrawCommand>,
+}
+
+/// a single draw command
+#[derive(Debug, Clone)]
+pub struct DrawCommand {
+    /// entity id
+    pub entity: u64,
+    /// draw type
+    pub kind: DrawKind,
+}
+
+/// type of draw command
+#[derive(Debug, Clone)]
+pub enum DrawKind {
+    /// draw a 2D sprite
+    Sprite {
+        /// texture handle
+        texture: Option<u64>,
+        /// position
+        position: (f32, f32),
+        /// rotation in radians
+        rotation: f32,
+        /// scale
+        scale: (f32, f32),
+        /// tint color
+        tint: (f32, f32, f32, f32),
+    },
+    /// draw a 2D rectangle
+    Rect {
+        /// position
+        position: (f32, f32),
+        /// size
+        size: (f32, f32),
+        /// fill color
+        color: (f32, f32, f32, f32),
+    },
+    /// draw text
+    Text {
+        /// text content
+        content: String,
+        /// position
+        position: (f32, f32),
+        /// font size
+        font_size: f32,
+        /// color
+        color: (f32, f32, f32, f32),
+    },
+}
+
+impl RenderQueue {
+    /// create a new empty render queue
+    pub fn new() -> Self {
+        RenderQueue {
+            commands: Vec::new(),
+        }
+    }
+
+    /// clear all pending draw commands
+    pub fn clear(&mut self) {
+        self.commands.clear();
+    }
+
+    /// add a draw command
+    pub fn push(&mut self, command: DrawCommand) {
+        self.commands.push(command);
+    }
+
+    /// get all pending draw commands
+    pub fn commands(&self) -> &[DrawCommand] {
+        &self.commands
+    }
+}
+
+impl Default for RenderQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// render plugin, registers render systems and resources
+pub struct RenderPlugin;
+
+impl engine_core::GamePlugin for RenderPlugin {
+    fn name(&self) -> &str {
+        "RenderPlugin"
+    }
+
+    fn build(&mut self, app: &mut engine_core::App) {
+        app.insert_resource(RenderQueue::new());
     }
 }
