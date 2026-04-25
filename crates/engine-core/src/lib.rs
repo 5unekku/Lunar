@@ -13,6 +13,7 @@ mod engine;
 mod game_loop;
 mod schedule;
 mod state;
+mod zone;
 
 pub use app::{App, GamePlugin, Time};
 pub use command::{Command, CommandRegistry};
@@ -20,3 +21,4 @@ pub use engine::Engine;
 pub use game_loop::{GameLoop, TickRate};
 pub use schedule::{StageOrder, UpdateStage};
 pub use state::EngineState;
+pub use zone::{FadeConfig, WorldManager, Zone, ZoneTransition};
