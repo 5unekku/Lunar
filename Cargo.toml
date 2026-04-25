@@ -6,6 +6,7 @@ members = [
     "crates/engine-audio",
     "crates/engine-math",
     "crates/engine-api",
+    "crates/engine-assets",
 ]
 resolver = "2"
 
@@ -40,6 +41,7 @@ engine-input = { path = "crates/engine-input" }
 engine-audio = { path = "crates/engine-audio" }
 engine-math = { path = "crates/engine-math" }
 engine-api = { path = "crates/engine-api" }
+engine-assets = { path = "crates/engine-assets" }
 env_logger = { workspace = true }
 log = { workspace = true }
 wgpu = { workspace = true }
