@@ -23,6 +23,9 @@ Cargo.lock
 node_modules/
 package-lock.json
 
+# vendored dependency patches (local only, not tracked)
+/vendor/
+
 # wasm build output
 /dist/
 

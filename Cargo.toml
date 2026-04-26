@@ -1,3 +1,8 @@
+[patch.crates-io]
+# wgpu 29.0.1 instanceof check for GPUCanvasContext fails in wasm-bindgen;
+# patched to use unchecked_into which is safe since getContext("webgpu") guarantees the type
+wgpu = { path = "vendor/wgpu" }
+
 [workspace]
 members = [
     "crates/engine-core",
