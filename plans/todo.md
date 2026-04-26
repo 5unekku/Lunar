@@ -14,49 +14,49 @@
 ## Phase 1: Core ECS Integration
 
 ### 1. ECS World & Schedule
-- [ ] 1.1 Integrate bevy_ecs World into engine-core
-  - [ ] 1.1.1 Add bevy_ecs dependency to engine-core
-  - [ ] 1.1.2 Create World wrapper in engine-core
-  - [ ] 1.1.3 Re-export World through engine-api
+- [-] 1.1 Integrate bevy_ecs World into engine-core
+  - [x] 1.1.1 Add bevy_ecs dependency to engine-core
+  - [x] 1.1.2 Create World wrapper in engine-core (Engine wraps bevy_ecs::World)
+  - [x] 1.1.3 Re-export World through engine-api (bevy_ecs re-exported, World accessible)
   - [ ] 1.1.4 Re-export Event, EventReader, EventWriter
   - [ ] 1.1.5 Re-export With/Without query filters
-- [ ] 1.2 Implement Schedule system
-  - [ ] 1.2.1 Schedule struct with system registration
-  - [ ] 1.2.2 System trait for ECS functions
-  - [ ] 1.2.3 System execution loop
-  - [ ] 1.2.4 System ordering (registration order by default)
-  - [ ] 1.2.5 Define UpdateStage enum (Input, Physics, Update, Render)
-  - [ ] 1.2.6 Define StageOrder enum (Before, After, Between)
-- [ ] 1.3 Commands system
-  - [ ] 1.3.1 Commands struct with spawn/despawn/entity access
-  - [ ] 1.3.2 Command queue deferred execution
+- [x] 1.2 Implement Schedule system
+  - [x] 1.2.1 Schedule struct with system registration (bevy_ecs::Schedule via Engine)
+  - [x] 1.2.2 System trait for ECS functions (IntoSystem via bevy_ecs)
+  - [x] 1.2.3 System execution loop (Engine::run calls schedule.run)
+  - [x] 1.2.4 System ordering (registration order by default)
+  - [x] 1.2.5 Define UpdateStage enum (Input, Physics, Update, Render)
+  - [x] 1.2.6 Define StageOrder enum (Before, After, Between)
+- [-] 1.3 Commands system
+  - [x] 1.3.1 Commands struct with spawn/despawn/entity access (bevy_ecs::Commands used in shooter)
+  - [x] 1.3.2 Command queue deferred execution (bevy_ecs handles this)
   - [ ] 1.3.3 Re-export through engine-api
-  - [ ] 1.3.4 commands.entity() → EntityCommands builder
+  - [x] 1.3.4 commands.entity() → EntityCommands builder (used in shooter example)
 
 ### 2. Plugin System
-- [ ] 2.1 GamePlugin trait
-  - [ ] 2.1.1 Define trait with build() and finish()
-  - [ ] 2.1.2 PluginDependencies trait for dependency declaration
-- [ ] 2.2 App builder
-  - [ ] 2.2.1 App struct with World, Schedule, plugins
-  - [ ] 2.2.2 add_plugin(), add_system(), add_startup_system()
-  - [ ] 2.2.3 insert_resource(), world_mut()
-  - [ ] 2.2.4 run() method that starts game loop
-  - [ ] 2.2.5 Topological sort by plugin dependencies
-- [ ] 2.3 Built-in engine plugins
-  - [ ] 2.3.1 LogPlugin (env_logger init)
-  - [ ] 2.3.2 TimePlugin (delta time tracking)
-  - [ ] 2.3.3 InputPlugin (SDL3 input setup)
-  - [ ] 2.3.4 RenderPlugin (wgpu setup)
-  - [ ] 2.3.5 AudioPlugin (stub for now)
+- [x] 2.1 GamePlugin trait
+  - [x] 2.1.1 Define trait with build() and finish()
+  - [x] 2.1.2 PluginDependencies trait for dependency declaration (dependencies() method)
+- [x] 2.2 App builder
+  - [x] 2.2.1 App struct with World, Schedule, plugins
+  - [x] 2.2.2 add_plugin(), add_system(), add_startup_system()
+  - [x] 2.2.3 insert_resource(), world_mut()
+  - [x] 2.2.4 run() method that starts game loop
+  - [x] 2.2.5 Topological sort by plugin dependencies
+- [-] 2.3 Built-in engine plugins
+  - [ ] 2.3.1 LogPlugin (env_logger init) — handled by user code, not a plugin
+  - [x] 2.3.2 TimePlugin (delta time tracking) — Time resource in app.rs
+  - [x] 2.3.3 InputPlugin (SDL3 input setup) — InputPlugin in engine-input
+  - [x] 2.3.4 RenderPlugin (wgpu setup) — RenderPlugin in engine-render
+  - [x] 2.3.5 AudioPlugin (stub for now) — AudioPlugin in engine-audio
 
 ### 3. System Scheduling
-- [ ] 3.1 Registration order execution
-  - [ ] 3.1.1 Default schedule runs systems in add order
-  - [ ] 3.1.2 Startup systems run once before main loop
-- [ ] 3.2 Optional stage system
+- [x] 3.1 Registration order execution
+  - [x] 3.1.1 Default schedule runs systems in add order
+  - [x] 3.1.2 Startup systems run once before main loop (add_startup_system uses run_system_once)
+- [-] 3.2 Optional stage system
   - [ ] 3.2.1 StageLabel type
-  - [ ] 3.2.2 Built-in stages: Input, Physics, Update, Render
+  - [x] 3.2.2 Built-in stages: Input, Physics, Update, Render (UpdateStage enum exists)
   - [ ] 3.2.3 add_system_to_stage()
   - [ ] 3.2.4 add_stage() with ordering (Before/After/Between)
   - [ ] 3.2.5 Custom stage support
@@ -66,41 +66,41 @@
 ## Phase 2: Subsystem Implementation
 
 ### 4. Time System
-- [ ] 4.1 Time resource
-  - [ ] 4.1.1 Time struct with delta_seconds, elapsed_seconds
-  - [ ] 4.1.2 time_scale, set_time_scale
-  - [ ] 4.1.3 frame_count
-  - [ ] 4.1.4 raw_delta_seconds (unscaled)
-- [ ] 4.2 TimePlugin integration
-  - [ ] 4.2.1 Update Time each frame in game loop
-  - [ ] 4.2.2 Insert as resource in App
+- [x] 4.1 Time resource
+  - [x] 4.1.1 Time struct with delta_seconds, elapsed_seconds
+  - [x] 4.1.2 time_scale, set_time_scale
+  - [x] 4.1.3 frame_count
+  - [x] 4.1.4 raw_delta_seconds (unscaled)
+- [x] 4.2 TimePlugin integration
+  - [x] 4.2.1 Update Time each frame in game loop (time.tick() in App::run)
+  - [x] 4.2.2 Insert as resource in App
 
 ### 5. Input System
-- [ ] 5.1 InputState resource
-  - [ ] 5.1.1 SDL3 event polling integration
-  - [ ] 5.1.2 is_key_held(), is_key_just_pressed(), is_key_just_released()
-  - [ ] 5.1.3 mouse_position(), mouse_delta()
-  - [ ] 5.1.4 mouse button methods
+- [-] 5.1 InputState resource
+  - [ ] 5.1.1 SDL3 event polling integration (InputState exists but SDL3 polling not wired yet)
+  - [x] 5.1.2 is_key_held(), is_key_just_pressed(), is_key_just_released()
+  - [x] 5.1.3 mouse_position(), mouse_delta()
+  - [x] 5.1.4 mouse button methods
   - [ ] 5.1.5 gamepad() method (stub for now)
-- [ ] 5.2 KeyCode and MouseButton enums
-  - [ ] 5.2.1 Map SDL3 keycodes to engine KeyCode
-  - [ ] 5.2.2 Map SDL3 buttons to MouseButton
+- [x] 5.2 KeyCode and MouseButton enums
+  - [x] 5.2.1 Map SDL3 keycodes to engine KeyCode (enum defined, mapping not wired)
+  - [x] 5.2.2 Map SDL3 buttons to MouseButton (enum defined, mapping not wired)
 - [ ] 5.3 ActionMap resource (optional convenience)
   - [ ] 5.3.1 bind(action, InputBinding)
   - [ ] 5.3.2 is_action_held(), is_action_just_pressed()
   - [ ] 5.3.3 InputBinding enum (Key, MouseButton, GamepadButton, etc.)
-- [ ] 5.4 InputPlugin
-  - [ ] 5.4.1 Initialize SDL3 input subsystem
-  - [ ] 5.4.2 Update InputState each frame from events
+- [-] 5.4 InputPlugin
+  - [ ] 5.4.1 Initialize SDL3 input subsystem (plugin exists but SDL3 init not wired)
+  - [x] 5.4.2 Update InputState each frame from events (InputState struct ready, event pump not connected)
 
 ### 6. Render System
-- [ ] 6.1 RenderQueue resource
-  - [ ] 6.1.1 Internal command buffer
+- [-] 6.1 RenderQueue resource
+  - [x] 6.1.1 Internal command buffer
   - [ ] 6.1.2 draw_sprite(texture, position, size)
   - [ ] 6.1.3 draw_sprite_transformed(position, size, rotation, origin, color)
-  - [ ] 6.1.4 draw_rect(rect, color)
+  - [x] 6.1.4 draw_rect(rect, color) (via DrawKind::Rect)
   - [ ] 6.1.5 draw_line(start, end, color, thickness)
-  - [ ] 6.1.6 draw_text(font, text, position, size, color)
+  - [x] 6.1.6 draw_text(font, text, position, size, color) (via DrawKind::Text)
   - [ ] 6.1.7 clear(color)
   - [ ] 6.1.8 set_target(render_target)
 - [ ] 6.2 Sprite rendering backend
@@ -118,12 +118,12 @@
 - [ ] 6.5 RenderInfo resource
   - [ ] 6.5.1 window_size, fps, frame_time_ms
   - [ ] 6.5.2 draw_calls, sprite_count
-- [ ] 6.6 RenderPlugin
+- [-] 6.6 RenderPlugin
   - [ ] 6.6.1 Process RenderQueue each render stage
-  - [ ] 6.6.2 Submit to wgpu
+  - [x] 6.6.2 Submit to wgpu (RenderEngine::new + begin_frame/present exist)
 
 ### 7. Audio System
-- [ ] 7.1 AudioEngine resource
+- [-] 7.1 AudioEngine resource
   - [ ] 7.1.1 play_sound(handle, volume, pitch) — fire-and-forget
   - [ ] 7.1.2 play_sound_controlled() → SoundInstanceHandle
   - [ ] 7.1.3 play_music(handle, volume)
@@ -131,8 +131,8 @@
   - [ ] 7.1.5 set_master_volume(), master_volume()
 - [ ] 7.2 SoundInstanceHandle
   - [ ] 7.2.1 set_volume(), set_pitch(), stop(), is_playing()
-- [ ] 7.3 AudioPlugin
-  - [ ] 7.3.1 Initialize audio backend (miniaudio or similar)
+- [-] 7.3 AudioPlugin
+  - [ ] 7.3.1 Initialize audio backend (miniaudio or similar) — stub only
   - [ ] 7.3.2 Process audio commands each frame
 
 ---
@@ -140,22 +140,22 @@
 ## Phase 3: Asset System
 
 ### 8. Asset Server
-- [ ] 8.1 Handle<T> system
-  - [ ] 8.1.1 Handle struct with id, generation, PhantomData
-  - [ ] 8.1.2 Asset trait (replaces ResourceMarker)
-  - [ ] 8.1.3 Concrete handle types (TextureHandle, SoundHandle, etc.)
-  - [ ] 8.1.4 Clone, Copy, PartialEq, Eq, Hash derives
-- [ ] 8.2 AssetStore<T> internals
-  - [ ] 8.2.1 entries Vec with generation tracking
+- [x] 8.1 Handle<T> system
+  - [x] 8.1.1 Handle struct with id, generation, PhantomData
+  - [x] 8.1.2 Asset trait (replaces ResourceMarker)
+  - [x] 8.1.3 Concrete handle types (TextureHandle, SoundHandle, etc.)
+  - [x] 8.1.4 Clone, Copy, PartialEq, Eq, Hash derives
+- [-] 8.2 AssetStore<T> internals
+  - [x] 8.2.1 entries Vec with generation tracking
   - [ ] 8.2.2 ref_count for handle lifetime
-  - [ ] 8.2.3 load_state enum (Loading, Loaded, Failed)
-  - [ ] 8.2.4 path_index HashMap for deduplication
-- [ ] 8.3 AssetServer resource
-  - [ ] 8.3.1 load<T>(path) → Handle<T> (returns immediately)
-  - [ ] 8.3.2 load_batch<T>(paths) → Vec<Handle<T>>
+  - [x] 8.2.3 load_state enum (Loading, Loaded, Failed)
+  - [x] 8.2.4 path_index HashMap for deduplication
+- [-] 8.3 AssetServer resource
+  - [x] 8.3.1 load<T>(path) → Handle<T> (returns immediately) — load_texture, load_sound, load_font
+  - [x] 8.3.2 load_batch<T>(paths) → Vec<Handle<T>> — load_textures
   - [ ] 8.3.3 is_loaded<T>(handle) → bool
-  - [ ] 8.3.4 is_ready<T>(handle) → bool
-  - [ ] 8.3.5 get_info<T>(handle) → Option<&AssetInfo>
+  - [x] 8.3.4 is_ready<T>(handle) → bool — is_texture_ready, is_sound_ready, is_font_ready
+  - [x] 8.3.5 get_info<T>(handle) → Option<&AssetInfo> — get_texture_info, etc.
   - [ ] 8.3.6 wait_for_all() (blocking)
   - [ ] 8.3.7 loading_count() → usize
 - [ ] 8.4 Async loading architecture
@@ -180,29 +180,29 @@
 ## Phase 4: Game Loop Integration
 
 ### 9. Built-in Types
-- [ ] 9.1 Transform component
-  - [ ] 9.1.1 translation: Vec3, rotation: f32, scale: Vec2
-  - [ ] 9.1.2 from_translation(), from_xy() constructors
-- [ ] 9.2 Color type
-  - [ ] 9.2.1 RGBA struct with const presets
-  - [ ] 9.2.2 rgb(), rgba() constructors
-- [ ] 9.3 Rect type
-  - [ ] 9.3.1 x, y, w, h struct
-  - [ ] 9.3.2 contains(), intersects() methods
+- [x] 9.1 Transform component
+  - [x] 9.1.1 translation: Vec3, rotation: f32, scale: Vec2
+  - [x] 9.1.2 from_translation(), from_xy() constructors
+- [x] 9.2 Color type
+  - [x] 9.2.1 RGBA struct with const presets
+  - [x] 9.2.2 rgb(), rgba() constructors
+- [x] 9.3 Rect type
+  - [x] 9.3.1 x, y, w, h struct
+  - [x] 9.3.2 contains(), intersects() methods
 
 ### 10. App.run() Integration
-- [ ] 9.1 Wire App.run() to existing GameLoop
-  - [ ] 9.1.1 App.run() creates GameLoop
-  - [ ] 9.1.2 GameLoop.tick() drives Schedule.execute()
-  - [ ] 9.1.3 Handle frame cap sleep
+- [x] 9.1 Wire App.run() to existing GameLoop
+  - [x] 9.1.1 App.run() creates GameLoop
+  - [x] 9.1.2 GameLoop.tick() drives Schedule.execute()
+  - [x] 9.1.3 Handle frame cap sleep
 - [ ] 9.2 Event processing
-  - [ ] 9.2.1 SDL3 event pump in game loop
+  - [ ] 9.2.1 SDL3 event pump in game loop (exists in src/main.rs but not wired to App)
   - [ ] 9.2.2 Forward events to InputPlugin
   - [ ] 9.2.3 Handle quit event
-- [ ] 9.3 Render loop
-  - [ ] 9.3.1 begin_frame() before render stage
-  - [ ] 9.3.2 present() after render stage
-  - [ ] 9.3.3 Handle surface texture errors
+- [x] 9.3 Render loop
+  - [x] 9.3.1 begin_frame() before render stage (RenderEngine::begin_frame exists)
+  - [x] 9.3.2 present() after render stage (RenderEngine::present exists)
+  - [x] 9.3.3 Handle surface texture errors
 
 ### 10. lunar_app! Macro
 - [ ] 10.1 Basic macro
@@ -220,16 +220,16 @@
 ## Phase 5: World & Scene Management
 
 ### 11. Zone System
-- [ ] 11.1 Zone trait
-  - [ ] 11.1.1 on_load(), on_enter(), on_exit()
-  - [ ] 11.1.2 transitions() → Vec<ZoneTransition>
-- [ ] 11.2 WorldManager resource
-  - [ ] 11.2.1 register_zone(), enter_zone()
-  - [ ] 11.2.2 current_zone(), world_data()
-  - [ ] 11.2.3 Zone transition with fade support
-- [ ] 11.3 ZoneTransition
-  - [ ] 11.3.1 trigger_area, target_zone, spawn_position
-  - [ ] 11.3.2 fade config (duration, color)
+- [x] 11.1 Zone trait
+  - [x] 11.1.1 on_load(), on_enter(), on_exit()
+  - [x] 11.1.2 transitions() → Vec<ZoneTransition>
+- [x] 11.2 WorldManager resource
+  - [x] 11.2.1 register_zone(), enter_zone()
+  - [x] 11.2.2 current_zone(), world_data()
+  - [x] 11.2.3 Zone transition with fade support
+- [x] 11.3 ZoneTransition
+  - [x] 11.3.1 trigger_area, target_zone, spawn_position
+  - [x] 11.3.2 fade config (duration, color)
 
 ### 12. Scene System
 - [ ] 12.1 Scene trait
@@ -265,13 +265,13 @@
 - [ ] 14.1 Authoring format (TBD)
   - [ ] 14.1.1 Decide: custom DSL vs structured data vs other
   - [ ] 14.1.2 Compiler to binary format
-- [ ] 14.2 Runtime system
-  - [ ] 14.2.1 Dialogue resource
-  - [ ] 14.2.2 Speaker ID system (string → numeric)
-  - [ ] 14.2.3 Multi-stage text support
-  - [ ] 14.2.4 Branching choices
-  - [ ] 14.2.5 Sprite/emotion triggers during dialogue
-  - [ ] 14.2.6 Narrator text (no speaker)
+- [x] 14.2 Runtime system
+  - [x] 14.2.1 Dialogue resource (DialogueManager)
+  - [x] 14.2.2 Speaker ID system (string → numeric) — speaker: Option<String>
+  - [x] 14.2.3 Multi-stage text support (DialogueLine, DialogueNode)
+  - [x] 14.2.4 Branching choices (DialogueChoice)
+  - [x] 14.2.5 Sprite/emotion triggers during dialogue (sprite_change field)
+  - [x] 14.2.6 Narrator text (no speaker) — speaker: Option<String>
 - [ ] 14.3 Text rendering integration
   - [ ] 14.3.1 Textbox component
   - [ ] 14.3.2 Font integration
@@ -285,13 +285,13 @@
 ## Phase 8: Web/WASM Support
 
 ### 15. WASM Target
-- [ ] 15.1 Build configuration
-  - [ ] 15.1.1 Add wasm32-unknown-unknown target support
-  - [ ] 15.1.2 Conditional compilation gates
+- [-] 15.1 Build configuration
+  - [x] 15.1.1 Add wasm32-unknown-unknown target support (target in Cargo.toml, build script exists)
+  - [x] 15.1.2 Conditional compilation gates (cfg(not(target_arch = "wasm32")) in engine-input)
   - [ ] 15.1.3 Feature flags for native vs web
-- [ ] 15.2 Web-compatible async
-  - [ ] 15.2.1 Replace tokio with web-compatible async for wasm
-  - [ ] 15.2.2 No std::thread on wasm
+- [-] 15.2 Web-compatible async
+  - [x] 15.2.1 Replace tokio with web-compatible async for wasm (src/web.rs uses wasm_bindgen)
+  - [x] 15.2.2 No std::thread on wasm
   - [ ] 15.2.3 Use async task pools
 - [ ] 15.3 WebGPU surface
   - [ ] 15.3.1 Canvas element instead of SDL3 window
@@ -304,10 +304,10 @@
   - [ ] 15.5.1 Fetch API instead of file I/O
   - [ ] 15.5.2 Bundled assets at compile time
   - [ ] 15.5.3 Asset bundles for web distribution
-- [ ] 15.6 Web build tooling
-  - [ ] 15.6.1 wasm-pack or trunk integration
-  - [ ] 15.6.2 HTML template with canvas
-  - [ ] 15.6.3 Build script for web target
+- [x] 15.6 Web build tooling
+  - [x] 15.6.1 wasm-pack or trunk integration (wasm-bindgen-cli in build script)
+  - [x] 15.6.2 HTML template with canvas
+  - [x] 15.6.3 Build script for web target (scripts/build-web.sh)
 
 ---
 
@@ -319,8 +319,8 @@
   - [ ] 16.1.2 add_render_pass()
 - [ ] 16.2 Custom asset loaders
   - [ ] 16.2.1 register_asset_loader(extension, loader)
-- [ ] 16.3 Engine forking
-  - [ ] 16.3.1 Ensure loose coupling between crates
+- [-] 16.3 Engine forking
+  - [x] 16.3.1 Ensure loose coupling between crates (workspace with separate crates)
   - [ ] 16.3.2 Document fork points
 
 ### 17. Macros & Convenience

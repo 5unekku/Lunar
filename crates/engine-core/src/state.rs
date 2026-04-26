@@ -2,8 +2,10 @@
 //!
 //! holds the current state of the engine, always inspectable from outside.
 
+use bevy_ecs::prelude::Resource;
+
 /// engine running state
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
 pub enum EngineState {
     /// engine is initializing
     Initializing,

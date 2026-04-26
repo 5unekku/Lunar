@@ -3,7 +3,7 @@
 //! handles keyboard, mouse, gamepad input. exposes state through clean interfaces.
 
 use bevy_ecs::prelude::*;
-use engine_core::{App, GamePlugin};
+use engine_core::{App, EngineState, GamePlugin};
 
 /// keyboard key codes mapped from SDL3
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -196,6 +196,11 @@ impl InputState {
         self.mouse_position = (x, y);
     }
 
+    /// add to the mouse delta (for accumulating motion events)
+    pub fn add_mouse_delta(&mut self, dx: f32, dy: f32) {
+        self.mouse_delta = (self.mouse_delta.0 + dx, self.mouse_delta.1 + dy);
+    }
+
     /// press a mouse button
     pub fn press_mouse_button(&mut self, button: MouseButton) {
         if !self.mouse_buttons_held.contains(&button) {
@@ -230,5 +235,152 @@ impl GamePlugin for InputPlugin {
     fn build(&mut self, app: &mut App) {
         app.insert_resource(InputState::new());
         log::info!("InputPlugin: input state resource registered");
+    }
+}
+
+/// process SDL3 events and update the input state
+/// call this each frame from your event callback in App::run_with_events
+#[cfg(not(target_arch = "wasm32"))]
+pub fn process_events(event_pump: &mut sdl3::EventPump, world: &mut bevy_ecs::prelude::World) {
+    use sdl3::event::Event;
+
+    // begin frame: clear just_pressed/just_released sets
+    if let Some(mut input) = world.get_resource_mut::<InputState>() {
+        input.begin_frame();
+    }
+
+    for event in event_pump.poll_iter() {
+        match event {
+            Event::KeyDown {
+                keycode: Some(key), ..
+            } => {
+                if let Some(code) = keycode_from_sdl(key)
+                    && let Some(mut input) = world.get_resource_mut::<InputState>()
+                {
+                    input.press_key(code);
+                }
+            }
+            Event::KeyUp {
+                keycode: Some(key), ..
+            } => {
+                if let Some(code) = keycode_from_sdl(key)
+                    && let Some(mut input) = world.get_resource_mut::<InputState>()
+                {
+                    input.release_key(code);
+                }
+            }
+            Event::MouseButtonDown {
+                mouse_btn: btn,
+                x,
+                y,
+                ..
+            } => {
+                if let Some(button) = mouse_button_from_sdl(btn)
+                    && let Some(mut input) = world.get_resource_mut::<InputState>()
+                {
+                    input.set_mouse_position(x, y);
+                    input.press_mouse_button(button);
+                }
+            }
+            Event::MouseButtonUp {
+                mouse_btn: btn,
+                x,
+                y,
+                ..
+            } => {
+                if let Some(button) = mouse_button_from_sdl(btn)
+                    && let Some(mut input) = world.get_resource_mut::<InputState>()
+                {
+                    input.set_mouse_position(x, y);
+                    input.release_mouse_button(button);
+                }
+            }
+            Event::MouseMotion {
+                x, y, xrel, yrel, ..
+            } => {
+                if let Some(mut input) = world.get_resource_mut::<InputState>() {
+                    input.add_mouse_delta(xrel, yrel);
+                    input.set_mouse_position(x, y);
+                }
+            }
+            Event::Quit { .. } => {
+                if let Some(mut state) = world.get_resource_mut::<EngineState>() {
+                    *state = EngineState::Stopping;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn keycode_from_sdl(key: sdl3::keyboard::Keycode) -> Option<KeyCode> {
+    use sdl3::keyboard::Keycode;
+    match key {
+        Keycode::A => Some(KeyCode::A),
+        Keycode::B => Some(KeyCode::B),
+        Keycode::C => Some(KeyCode::C),
+        Keycode::D => Some(KeyCode::D),
+        Keycode::E => Some(KeyCode::E),
+        Keycode::F => Some(KeyCode::F),
+        Keycode::G => Some(KeyCode::G),
+        Keycode::H => Some(KeyCode::H),
+        Keycode::I => Some(KeyCode::I),
+        Keycode::J => Some(KeyCode::J),
+        Keycode::K => Some(KeyCode::K),
+        Keycode::L => Some(KeyCode::L),
+        Keycode::M => Some(KeyCode::M),
+        Keycode::N => Some(KeyCode::N),
+        Keycode::O => Some(KeyCode::O),
+        Keycode::P => Some(KeyCode::P),
+        Keycode::Q => Some(KeyCode::Q),
+        Keycode::R => Some(KeyCode::R),
+        Keycode::S => Some(KeyCode::S),
+        Keycode::T => Some(KeyCode::T),
+        Keycode::U => Some(KeyCode::U),
+        Keycode::V => Some(KeyCode::V),
+        Keycode::W => Some(KeyCode::W),
+        Keycode::X => Some(KeyCode::X),
+        Keycode::Y => Some(KeyCode::Y),
+        Keycode::Z => Some(KeyCode::Z),
+        Keycode::F1 => Some(KeyCode::F1),
+        Keycode::F2 => Some(KeyCode::F2),
+        Keycode::F3 => Some(KeyCode::F3),
+        Keycode::F4 => Some(KeyCode::F4),
+        Keycode::F5 => Some(KeyCode::F5),
+        Keycode::F6 => Some(KeyCode::F6),
+        Keycode::F7 => Some(KeyCode::F7),
+        Keycode::F8 => Some(KeyCode::F8),
+        Keycode::F9 => Some(KeyCode::F9),
+        Keycode::F10 => Some(KeyCode::F10),
+        Keycode::F11 => Some(KeyCode::F11),
+        Keycode::F12 => Some(KeyCode::F12),
+        Keycode::Escape => Some(KeyCode::Escape),
+        Keycode::Space => Some(KeyCode::Space),
+        Keycode::Return => Some(KeyCode::Enter),
+        Keycode::Tab => Some(KeyCode::Tab),
+        Keycode::Backspace => Some(KeyCode::Backspace),
+        Keycode::Left => Some(KeyCode::Left),
+        Keycode::Right => Some(KeyCode::Right),
+        Keycode::Up => Some(KeyCode::Up),
+        Keycode::Down => Some(KeyCode::Down),
+        Keycode::LShift => Some(KeyCode::LShift),
+        Keycode::RShift => Some(KeyCode::RShift),
+        Keycode::LCtrl => Some(KeyCode::LCtrl),
+        Keycode::RCtrl => Some(KeyCode::RCtrl),
+        Keycode::LAlt => Some(KeyCode::LAlt),
+        Keycode::RAlt => Some(KeyCode::RAlt),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn mouse_button_from_sdl(btn: sdl3::mouse::MouseButton) -> Option<MouseButton> {
+    use sdl3::mouse::MouseButton as SdlBtn;
+    match btn {
+        SdlBtn::Left => Some(MouseButton::Left),
+        SdlBtn::Right => Some(MouseButton::Right),
+        SdlBtn::Middle => Some(MouseButton::Middle),
+        _ => None,
     }
 }

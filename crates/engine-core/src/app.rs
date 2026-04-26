@@ -11,6 +11,7 @@ use bevy_ecs::system::RunSystemOnce;
 
 use crate::engine::Engine;
 use crate::game_loop::GameLoop;
+use crate::state::EngineState;
 
 /// time resource updated each frame
 ///
@@ -111,6 +112,8 @@ impl App {
         let mut engine = Engine::new();
         // insert the time resource
         engine.world_mut().insert_resource(Time::new());
+        // insert the engine state resource
+        engine.world_mut().insert_resource(EngineState::Running);
         Self {
             engine,
             pending_plugins: Vec::new(),
@@ -216,12 +219,32 @@ impl App {
 
     /// start the game loop with the given frame cap (0 = uncapped)
     pub fn run(&mut self, frame_cap: u32) {
+        self.run_with_events(frame_cap, |_| {});
+    }
+
+    /// start the game loop with per-frame event processing
+    /// the callback runs each frame before the ECS tick, giving you a chance to
+    /// poll native events and update resources like InputState.
+    pub fn run_with_events<F>(&mut self, frame_cap: u32, mut process_events: F)
+    where
+        F: FnMut(&mut World),
+    {
         // build all pending plugins before starting
         self.build_plugins();
 
         let mut game_loop = GameLoop::new(frame_cap);
 
         while game_loop.is_running() {
+            // process native events (SDL3 input, etc.)
+            process_events(self.engine.world_mut());
+
+            // check if the engine state signals stop
+            if let Some(state) = self.engine.world().get_resource::<EngineState>()
+                && state.is_stopping()
+            {
+                break;
+            }
+
             let ticks = game_loop.tick();
 
             // run ECS ticks
