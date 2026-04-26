@@ -1,7 +1,6 @@
 # rust
 /target/
 **/*.rs.bk
-Cargo.lock
 
 # ide
 .idea/
@@ -25,9 +24,6 @@ package-lock.json
 
 # vendored dependency patches (local only, not tracked)
 /vendor/
-
-# wasm build output
-/dist/
 
 # test artifacts
 test-results/
