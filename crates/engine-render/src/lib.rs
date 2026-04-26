@@ -574,6 +574,136 @@ impl RenderEngine {
         self.queue.submit(Some(encoder.finish()));
         frame.present();
     }
+
+    /// render all draw commands for this frame (WASM)
+    #[cfg(target_arch = "wasm32")]
+    pub fn render(&mut self, commands: &[DrawCommand]) {
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame) => frame,
+            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            _ => return,
+        };
+
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // update projection matrix (orthographic, y-down for screen coords)
+        let w = self.config.width as f32;
+        let h = self.config.height as f32;
+        let proj: [f32; 16] = [
+            2.0 / w,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -2.0 / h,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            -1.0,
+            1.0,
+            0.0,
+            1.0,
+        ];
+        self.queue
+            .write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&proj));
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("render encoder"),
+            });
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("render pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.07,
+                            g: 0.07,
+                            b: 0.07,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            pass.set_pipeline(&self.rect_pipeline);
+            pass.set_bind_group(0, &self.bind_group, &[]);
+
+            for cmd in commands {
+                if let DrawKind::Rect {
+                    position,
+                    size,
+                    color,
+                } = &cmd.kind
+                {
+                    let verts: [f32; 12] = [
+                        position.0,
+                        position.1,
+                        position.0 + size.0,
+                        position.1,
+                        position.0,
+                        position.1 + size.1,
+                        position.0,
+                        position.1 + size.1,
+                        position.0 + size.0,
+                        position.1,
+                        position.0 + size.0,
+                        position.1 + size.1,
+                    ];
+                    let vertex_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("vertex buffer"),
+                        size: (verts.len() * 4) as u64,
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    self.queue
+                        .write_buffer(&vertex_buf, 0, bytemuck::cast_slice(&verts));
+
+                    let color_arr: [f32; 4] = [color.0, color.1, color.2, color.3];
+                    let color_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("color buffer"),
+                        size: 16,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    self.queue
+                        .write_buffer(&color_buf, 0, bytemuck::cast_slice(&color_arr));
+
+                    let color_bind_group =
+                        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("color bind group"),
+                            layout: &self.color_bind_group_layout,
+                            entries: &[wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: color_buf.as_entire_binding(),
+                            }],
+                        });
+
+                    pass.set_vertex_buffer(0, vertex_buf.slice(..));
+                    pass.set_bind_group(1, &color_bind_group, &[]);
+                    pass.draw(0..6, 0..1);
+                }
+            }
+        }
+
+        self.queue.submit(Some(encoder.finish()));
+        frame.present();
+    }
 }
 
 const SHADER_SOURCE: &str = r#"
