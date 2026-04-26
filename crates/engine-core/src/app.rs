@@ -4,7 +4,12 @@
 //! game plugins register their systems, resources, and sub-plugins through the app.
 
 use std::collections::VecDeque;
+
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+
+#[cfg(target_arch = "wasm32")]
+use web_sys::Performance;
 
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::RunSystemOnce;
@@ -28,8 +33,11 @@ pub struct Time {
     time_scale: f32,
     /// total frame count since engine start
     frame_count: u64,
-    /// instant of the last frame
+    /// timestamp of the last frame in milliseconds
+    #[cfg(not(target_arch = "wasm32"))]
     last_frame: Instant,
+    #[cfg(target_arch = "wasm32")]
+    last_frame: f64,
 }
 
 impl Time {
@@ -41,7 +49,13 @@ impl Time {
             elapsed_seconds: 0.0,
             time_scale: 1.0,
             frame_count: 0,
+            #[cfg(not(target_arch = "wasm32"))]
             last_frame: Instant::now(),
+            #[cfg(target_arch = "wasm32")]
+            last_frame: web_sys::window()
+                .and_then(|w| w.performance())
+                .map(|p| p.now())
+                .unwrap_or(0.0),
         }
     }
 
@@ -77,12 +91,29 @@ impl Time {
 
     /// update the time resource, called once per frame
     pub fn tick(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
         let now = Instant::now();
-        let delta = now - self.last_frame;
-        self.last_frame = now;
+        #[cfg(not(target_arch = "wasm32"))]
+        let delta = (now - self.last_frame).as_secs_f32();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.last_frame = now;
+        }
 
-        self.raw_delta_seconds = delta.as_secs_f32();
-        self.delta_seconds = self.raw_delta_seconds * self.time_scale;
+        #[cfg(target_arch = "wasm32")]
+        let now = web_sys::window()
+            .and_then(|w| w.performance())
+            .map(|p| p.now())
+            .unwrap_or(0.0);
+        #[cfg(target_arch = "wasm32")]
+        let delta = ((now - self.last_frame) / 1000.0) as f32;
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.last_frame = now;
+        }
+
+        self.raw_delta_seconds = delta;
+        self.delta_seconds = delta * self.time_scale;
         self.elapsed_seconds += self.delta_seconds;
         self.frame_count += 1;
     }

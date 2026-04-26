@@ -251,29 +251,33 @@ impl RenderEngine {
         }
     }
 
-    /// create a new render engine from an existing wgpu surface (WASM)
+    /// create a new render engine from an existing wgpu surface (WASM, async)
     #[cfg(target_arch = "wasm32")]
-    pub fn from_surface(
+    pub async fn from_surface(
         instance: &wgpu::Instance,
         surface: wgpu::Surface<'static>,
         config: RenderConfig,
     ) -> Self {
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
-            force_fallback_adapter: false,
-            compatible_surface: Some(&surface),
-        }))
-        .expect("failed to request adapter");
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::default(),
+                force_fallback_adapter: false,
+                compatible_surface: Some(&surface),
+            })
+            .await
+            .expect("failed to request adapter");
 
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("lunar render device"),
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
-            memory_hints: wgpu::MemoryHints::Performance,
-            trace: wgpu::Trace::default(),
-            experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        }))
-        .expect("failed to request device");
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("lunar render device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                memory_hints: wgpu::MemoryHints::Performance,
+                trace: wgpu::Trace::default(),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            })
+            .await
+            .expect("failed to request device");
 
         let caps = surface.get_capabilities(&adapter);
         let format = caps
