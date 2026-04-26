@@ -7,6 +7,11 @@ use bevy_ecs::prelude::*;
 use engine_core::EngineState;
 use engine_core::{App, GamePlugin};
 
+/// number of distinct KeyCode variants (used to size the input arrays)
+const KEY_COUNT: usize = 64;
+/// number of distinct MouseButton variants
+const MOUSE_BUTTON_COUNT: usize = 4;
+
 /// keyboard key codes mapped from SDL3
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyCode {
@@ -91,55 +96,48 @@ pub enum MouseButton {
     Middle,
 }
 
-/// input state resource, tracks current and previous frame input
+/// input state resource, tracks current and previous frame input.
+/// uses fixed-size bool arrays indexed by discriminant value — O(1) lookup, no hashing.
 #[derive(Resource, Clone)]
 pub struct InputState {
-    /// keys currently held down
-    keys_held: std::collections::HashSet<KeyCode>,
-    /// keys pressed this frame
-    keys_just_pressed: std::collections::HashSet<KeyCode>,
-    /// keys released this frame
-    keys_just_released: std::collections::HashSet<KeyCode>,
-    /// current mouse position
+    keys_held: [bool; KEY_COUNT],
+    keys_just_pressed: [bool; KEY_COUNT],
+    keys_just_released: [bool; KEY_COUNT],
     mouse_position: (f32, f32),
-    /// mouse delta this frame
     mouse_delta: (f32, f32),
-    /// mouse buttons currently held down
-    mouse_buttons_held: std::collections::HashSet<MouseButton>,
-    /// mouse buttons just pressed this frame
-    mouse_buttons_just_pressed: std::collections::HashSet<MouseButton>,
-    /// mouse buttons just released this frame
-    mouse_buttons_just_released: std::collections::HashSet<MouseButton>,
+    mouse_buttons_held: [bool; MOUSE_BUTTON_COUNT],
+    mouse_buttons_just_pressed: [bool; MOUSE_BUTTON_COUNT],
+    mouse_buttons_just_released: [bool; MOUSE_BUTTON_COUNT],
 }
 
 impl InputState {
     /// create a new empty input state
     pub fn new() -> Self {
         Self {
-            keys_held: std::collections::HashSet::new(),
-            keys_just_pressed: std::collections::HashSet::new(),
-            keys_just_released: std::collections::HashSet::new(),
+            keys_held: [false; KEY_COUNT],
+            keys_just_pressed: [false; KEY_COUNT],
+            keys_just_released: [false; KEY_COUNT],
             mouse_position: (0.0, 0.0),
             mouse_delta: (0.0, 0.0),
-            mouse_buttons_held: std::collections::HashSet::new(),
-            mouse_buttons_just_pressed: std::collections::HashSet::new(),
-            mouse_buttons_just_released: std::collections::HashSet::new(),
+            mouse_buttons_held: [false; MOUSE_BUTTON_COUNT],
+            mouse_buttons_just_pressed: [false; MOUSE_BUTTON_COUNT],
+            mouse_buttons_just_released: [false; MOUSE_BUTTON_COUNT],
         }
     }
 
     /// check if a key is currently held down
     pub fn is_key_held(&self, key: KeyCode) -> bool {
-        self.keys_held.contains(&key)
+        self.keys_held[key as usize]
     }
 
     /// check if a key was just pressed this frame
     pub fn is_key_just_pressed(&self, key: KeyCode) -> bool {
-        self.keys_just_pressed.contains(&key)
+        self.keys_just_pressed[key as usize]
     }
 
     /// check if a key was just released this frame
     pub fn is_key_just_released(&self, key: KeyCode) -> bool {
-        self.keys_just_released.contains(&key)
+        self.keys_just_released[key as usize]
     }
 
     /// get the current mouse position
@@ -154,42 +152,44 @@ impl InputState {
 
     /// check if a mouse button is currently held down
     pub fn is_mouse_button_held(&self, button: MouseButton) -> bool {
-        self.mouse_buttons_held.contains(&button)
+        self.mouse_buttons_held[button as usize]
     }
 
     /// check if a mouse button was just pressed this frame
     pub fn is_mouse_button_just_pressed(&self, button: MouseButton) -> bool {
-        self.mouse_buttons_just_pressed.contains(&button)
+        self.mouse_buttons_just_pressed[button as usize]
     }
 
     /// check if a mouse button was just released this frame
     pub fn is_mouse_button_just_released(&self, button: MouseButton) -> bool {
-        self.mouse_buttons_just_released.contains(&button)
+        self.mouse_buttons_just_released[button as usize]
     }
 
     /// begin frame: clear just_pressed/just_released sets
     pub fn begin_frame(&mut self) {
-        self.keys_just_pressed.clear();
-        self.keys_just_released.clear();
-        self.mouse_buttons_just_pressed.clear();
-        self.mouse_buttons_just_released.clear();
+        self.keys_just_pressed = [false; KEY_COUNT];
+        self.keys_just_released = [false; KEY_COUNT];
+        self.mouse_buttons_just_pressed = [false; MOUSE_BUTTON_COUNT];
+        self.mouse_buttons_just_released = [false; MOUSE_BUTTON_COUNT];
         self.mouse_delta = (0.0, 0.0);
     }
 
     /// press a key
     pub fn press_key(&mut self, key: KeyCode) {
-        if !self.keys_held.contains(&key) {
-            self.keys_just_pressed.insert(key);
+        let index = key as usize;
+        if !self.keys_held[index] {
+            self.keys_just_pressed[index] = true;
         }
-        self.keys_held.insert(key);
+        self.keys_held[index] = true;
     }
 
     /// release a key
     pub fn release_key(&mut self, key: KeyCode) {
-        if self.keys_held.contains(&key) {
-            self.keys_just_released.insert(key);
+        let index = key as usize;
+        if self.keys_held[index] {
+            self.keys_just_released[index] = true;
         }
-        self.keys_held.remove(&key);
+        self.keys_held[index] = false;
     }
 
     /// set mouse position
@@ -199,24 +199,26 @@ impl InputState {
     }
 
     /// add to the mouse delta (for accumulating motion events)
-    pub fn add_mouse_delta(&mut self, dx: f32, dy: f32) {
-        self.mouse_delta = (self.mouse_delta.0 + dx, self.mouse_delta.1 + dy);
+    pub fn add_mouse_delta(&mut self, delta_x: f32, delta_y: f32) {
+        self.mouse_delta = (self.mouse_delta.0 + delta_x, self.mouse_delta.1 + delta_y);
     }
 
     /// press a mouse button
     pub fn press_mouse_button(&mut self, button: MouseButton) {
-        if !self.mouse_buttons_held.contains(&button) {
-            self.mouse_buttons_just_pressed.insert(button);
+        let index = button as usize;
+        if !self.mouse_buttons_held[index] {
+            self.mouse_buttons_just_pressed[index] = true;
         }
-        self.mouse_buttons_held.insert(button);
+        self.mouse_buttons_held[index] = true;
     }
 
     /// release a mouse button
     pub fn release_mouse_button(&mut self, button: MouseButton) {
-        if self.mouse_buttons_held.contains(&button) {
-            self.mouse_buttons_just_released.insert(button);
+        let index = button as usize;
+        if self.mouse_buttons_held[index] {
+            self.mouse_buttons_just_released[index] = true;
         }
-        self.mouse_buttons_held.remove(&button);
+        self.mouse_buttons_held[index] = false;
     }
 }
 
@@ -240,78 +242,69 @@ impl GamePlugin for InputPlugin {
     }
 }
 
-/// process SDL3 events and update the input state
-/// call this each frame from your event callback in App::run_with_events
+/// process SDL3 events and update the input state.
+/// events are collected first so InputState is borrowed only once per frame.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn process_events(event_pump: &mut sdl3::EventPump, world: &mut bevy_ecs::prelude::World) {
     use sdl3::event::Event;
 
-    // begin frame: clear just_pressed/just_released sets
+    let events: Vec<Event> = event_pump.poll_iter().collect();
+    let mut got_quit = false;
+
     if let Some(mut input) = world.get_resource_mut::<InputState>() {
         input.begin_frame();
+        for event in &events {
+            match event {
+                Event::KeyDown {
+                    keycode: Some(key), ..
+                } => {
+                    if let Some(code) = keycode_from_sdl(*key) {
+                        input.press_key(code);
+                    }
+                }
+                Event::KeyUp {
+                    keycode: Some(key), ..
+                } => {
+                    if let Some(code) = keycode_from_sdl(*key) {
+                        input.release_key(code);
+                    }
+                }
+                Event::MouseButtonDown {
+                    mouse_btn: button,
+                    x,
+                    y,
+                    ..
+                } => {
+                    if let Some(mouse_button) = mouse_button_from_sdl(*button) {
+                        input.set_mouse_position(*x, *y);
+                        input.press_mouse_button(mouse_button);
+                    }
+                }
+                Event::MouseButtonUp {
+                    mouse_btn: button,
+                    x,
+                    y,
+                    ..
+                } => {
+                    if let Some(mouse_button) = mouse_button_from_sdl(*button) {
+                        input.set_mouse_position(*x, *y);
+                        input.release_mouse_button(mouse_button);
+                    }
+                }
+                Event::MouseMotion {
+                    x, y, xrel, yrel, ..
+                } => {
+                    input.add_mouse_delta(*xrel, *yrel);
+                    input.set_mouse_position(*x, *y);
+                }
+                Event::Quit { .. } => got_quit = true,
+                _ => {}
+            }
+        }
     }
 
-    for event in event_pump.poll_iter() {
-        match event {
-            Event::KeyDown {
-                keycode: Some(key), ..
-            } => {
-                if let Some(code) = keycode_from_sdl(key)
-                    && let Some(mut input) = world.get_resource_mut::<InputState>()
-                {
-                    input.press_key(code);
-                }
-            }
-            Event::KeyUp {
-                keycode: Some(key), ..
-            } => {
-                if let Some(code) = keycode_from_sdl(key)
-                    && let Some(mut input) = world.get_resource_mut::<InputState>()
-                {
-                    input.release_key(code);
-                }
-            }
-            Event::MouseButtonDown {
-                mouse_btn: btn,
-                x,
-                y,
-                ..
-            } => {
-                if let Some(button) = mouse_button_from_sdl(btn)
-                    && let Some(mut input) = world.get_resource_mut::<InputState>()
-                {
-                    input.set_mouse_position(x, y);
-                    input.press_mouse_button(button);
-                }
-            }
-            Event::MouseButtonUp {
-                mouse_btn: btn,
-                x,
-                y,
-                ..
-            } => {
-                if let Some(button) = mouse_button_from_sdl(btn)
-                    && let Some(mut input) = world.get_resource_mut::<InputState>()
-                {
-                    input.set_mouse_position(x, y);
-                    input.release_mouse_button(button);
-                }
-            }
-            Event::MouseMotion {
-                x, y, xrel, yrel, ..
-            } => {
-                if let Some(mut input) = world.get_resource_mut::<InputState>() {
-                    input.add_mouse_delta(xrel, yrel);
-                    input.set_mouse_position(x, y);
-                }
-            }
-            Event::Quit { .. } => {
-                if let Some(mut state) = world.get_resource_mut::<EngineState>() {
-                    *state = EngineState::Stopping;
-                }
-            }
-            _ => {}
-        }
+    if got_quit && let Some(mut state) = world.get_resource_mut::<EngineState>() {
+        *state = EngineState::Stopping;
     }
 }
 
@@ -377,9 +370,9 @@ fn keycode_from_sdl(key: sdl3::keyboard::Keycode) -> Option<KeyCode> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn mouse_button_from_sdl(btn: sdl3::mouse::MouseButton) -> Option<MouseButton> {
+fn mouse_button_from_sdl(button: sdl3::mouse::MouseButton) -> Option<MouseButton> {
     use sdl3::mouse::MouseButton as SdlBtn;
-    match btn {
+    match button {
         SdlBtn::Left => Some(MouseButton::Left),
         SdlBtn::Right => Some(MouseButton::Right),
         SdlBtn::Middle => Some(MouseButton::Middle),
@@ -398,45 +391,55 @@ mod web_input {
     enum WebEvent {
         KeyDown(KeyCode),
         KeyUp(KeyCode),
-        MouseDown { button: MouseButton, x: f32, y: f32 },
-        MouseUp { button: MouseButton, x: f32, y: f32 },
-        MouseMove { x: f32, y: f32, dx: f32, dy: f32 },
+        MouseDown {
+            button: MouseButton,
+            x: f32,
+            y: f32,
+        },
+        MouseUp {
+            button: MouseButton,
+            x: f32,
+            y: f32,
+        },
+        MouseMove {
+            x: f32,
+            y: f32,
+            delta_x: f32,
+            delta_y: f32,
+        },
     }
 
     thread_local! {
         static EVENT_QUEUE: RefCell<VecDeque<WebEvent>> = RefCell::new(VecDeque::new());
     }
 
-    /// push a key down event into the queue (called from JS)
     pub fn push_key_down(key: KeyCode) {
         EVENT_QUEUE.with(|q| q.borrow_mut().push_back(WebEvent::KeyDown(key)));
     }
 
-    /// push a key up event into the queue (called from JS)
     pub fn push_key_up(key: KeyCode) {
         EVENT_QUEUE.with(|q| q.borrow_mut().push_back(WebEvent::KeyUp(key)));
     }
 
-    /// push a mouse down event (called from JS)
     pub fn push_mouse_down(button: MouseButton, x: f32, y: f32) {
         EVENT_QUEUE.with(|q| {
             q.borrow_mut()
-                .push_back(WebEvent::MouseDown { button, x, y });
+                .push_back(WebEvent::MouseDown { button, x, y })
         });
     }
 
-    /// push a mouse up event (called from JS)
     pub fn push_mouse_up(button: MouseButton, x: f32, y: f32) {
-        EVENT_QUEUE.with(|q| {
-            q.borrow_mut().push_back(WebEvent::MouseUp { button, x, y });
-        });
+        EVENT_QUEUE.with(|q| q.borrow_mut().push_back(WebEvent::MouseUp { button, x, y }));
     }
 
-    /// push a mouse move event (called from JS)
-    pub fn push_mouse_move(x: f32, y: f32, dx: f32, dy: f32) {
+    pub fn push_mouse_move(x: f32, y: f32, delta_x: f32, delta_y: f32) {
         EVENT_QUEUE.with(|q| {
-            q.borrow_mut()
-                .push_back(WebEvent::MouseMove { x, y, dx, dy });
+            q.borrow_mut().push_back(WebEvent::MouseMove {
+                x,
+                y,
+                delta_x,
+                delta_y,
+            })
         });
     }
 
@@ -456,8 +459,13 @@ mod web_input {
                         input.set_mouse_position(x, y);
                         input.release_mouse_button(button);
                     }
-                    WebEvent::MouseMove { x, y, dx, dy } => {
-                        input.add_mouse_delta(dx, dy);
+                    WebEvent::MouseMove {
+                        x,
+                        y,
+                        delta_x,
+                        delta_y,
+                    } => {
+                        input.add_mouse_delta(delta_x, delta_y);
                         input.set_mouse_position(x, y);
                     }
                 }
@@ -532,30 +540,29 @@ mod web_input {
         }
     }
 
-    /// map a web mouse button to MouseButton
+    /// map a web mouse button index to MouseButton
+    /// button 0 = left, 1 = middle, 2 = right (browser API ordering)
     pub fn mouse_button_from_web(button: i16) -> Option<MouseButton> {
         match button {
             0 => Some(MouseButton::Left),
-            2 => Some(MouseButton::Right),
             1 => Some(MouseButton::Middle),
+            2 => Some(MouseButton::Right),
             _ => None,
         }
     }
 }
 
 /// process web events and update the input state (WASM target)
-/// call this each frame from your event callback in App::run_with_events
 #[cfg(target_arch = "wasm32")]
 pub fn process_events(_event_pump: &mut (), world: &mut bevy_ecs::prelude::World) {
-    // begin frame: clear just_pressed/just_released sets
     if let Some(mut input) = world.get_resource_mut::<InputState>() {
         input.begin_frame();
         web_input::drain_to_input(&mut input);
     }
 }
 
-/// set up web input event listeners on the given canvas element
-/// call this once during initialization on WASM target
+/// set up web input event listeners on the given canvas element.
+/// call this once during initialization on WASM target.
 #[cfg(target_arch = "wasm32")]
 pub fn setup_web_input(canvas: &web_sys::HtmlElement) {
     use wasm_bindgen::JsCast;
@@ -564,11 +571,11 @@ pub fn setup_web_input(canvas: &web_sys::HtmlElement) {
 
     let canvas_target: &EventTarget = canvas.as_ref();
 
-    // keyboard events
+    // keyboard events on document body (not canvas — canvas doesn't receive keyboard events)
     {
         let window = web_sys::window().expect("no window");
-        let doc = window.document().expect("no document");
-        let body = doc.body().expect("no body");
+        let document = window.document().expect("no document");
+        let body = doc_body(&document);
         let target: &EventTarget = body.as_ref();
 
         let keydown_closure =
@@ -648,4 +655,9 @@ pub fn setup_web_input(canvas: &web_sys::HtmlElement) {
             .expect("failed to add mousemove listener");
         mousemove_closure.forget();
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn doc_body(document: &web_sys::Document) -> web_sys::HtmlElement {
+    document.body().expect("no body element")
 }
