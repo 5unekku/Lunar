@@ -3,7 +3,9 @@
 //! handles keyboard, mouse, gamepad input. exposes state through clean interfaces.
 
 use bevy_ecs::prelude::*;
-use engine_core::{App, EngineState, GamePlugin};
+#[cfg(not(target_arch = "wasm32"))]
+use engine_core::EngineState;
+use engine_core::{App, GamePlugin};
 
 /// keyboard key codes mapped from SDL3
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -382,5 +384,268 @@ fn mouse_button_from_sdl(btn: sdl3::mouse::MouseButton) -> Option<MouseButton> {
         SdlBtn::Right => Some(MouseButton::Right),
         SdlBtn::Middle => Some(MouseButton::Middle),
         _ => None,
+    }
+}
+
+/// web input event queue (populated by JS callbacks via wasm-bindgen)
+#[cfg(target_arch = "wasm32")]
+mod web_input {
+    use super::{KeyCode, MouseButton};
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+
+    #[derive(Clone)]
+    enum WebEvent {
+        KeyDown(KeyCode),
+        KeyUp(KeyCode),
+        MouseDown { button: MouseButton, x: f32, y: f32 },
+        MouseUp { button: MouseButton, x: f32, y: f32 },
+        MouseMove { x: f32, y: f32, dx: f32, dy: f32 },
+    }
+
+    thread_local! {
+        static EVENT_QUEUE: RefCell<VecDeque<WebEvent>> = RefCell::new(VecDeque::new());
+    }
+
+    /// push a key down event into the queue (called from JS)
+    pub fn push_key_down(key: KeyCode) {
+        EVENT_QUEUE.with(|q| q.borrow_mut().push_back(WebEvent::KeyDown(key)));
+    }
+
+    /// push a key up event into the queue (called from JS)
+    pub fn push_key_up(key: KeyCode) {
+        EVENT_QUEUE.with(|q| q.borrow_mut().push_back(WebEvent::KeyUp(key)));
+    }
+
+    /// push a mouse down event (called from JS)
+    pub fn push_mouse_down(button: MouseButton, x: f32, y: f32) {
+        EVENT_QUEUE.with(|q| {
+            q.borrow_mut()
+                .push_back(WebEvent::MouseDown { button, x, y });
+        });
+    }
+
+    /// push a mouse up event (called from JS)
+    pub fn push_mouse_up(button: MouseButton, x: f32, y: f32) {
+        EVENT_QUEUE.with(|q| {
+            q.borrow_mut().push_back(WebEvent::MouseUp { button, x, y });
+        });
+    }
+
+    /// push a mouse move event (called from JS)
+    pub fn push_mouse_move(x: f32, y: f32, dx: f32, dy: f32) {
+        EVENT_QUEUE.with(|q| {
+            q.borrow_mut()
+                .push_back(WebEvent::MouseMove { x, y, dx, dy });
+        });
+    }
+
+    /// drain all queued events and apply them to the input state
+    pub fn drain_to_input(input: &mut super::InputState) {
+        EVENT_QUEUE.with(|q| {
+            let mut queue = q.borrow_mut();
+            while let Some(event) = queue.pop_front() {
+                match event {
+                    WebEvent::KeyDown(key) => input.press_key(key),
+                    WebEvent::KeyUp(key) => input.release_key(key),
+                    WebEvent::MouseDown { button, x, y } => {
+                        input.set_mouse_position(x, y);
+                        input.press_mouse_button(button);
+                    }
+                    WebEvent::MouseUp { button, x, y } => {
+                        input.set_mouse_position(x, y);
+                        input.release_mouse_button(button);
+                    }
+                    WebEvent::MouseMove { x, y, dx, dy } => {
+                        input.add_mouse_delta(dx, dy);
+                        input.set_mouse_position(x, y);
+                    }
+                }
+            }
+        });
+    }
+
+    /// map a web keyboard event key string to KeyCode
+    pub fn key_from_web(key: &str) -> Option<KeyCode> {
+        match key {
+            "a" | "A" => Some(KeyCode::A),
+            "b" | "B" => Some(KeyCode::B),
+            "c" | "C" => Some(KeyCode::C),
+            "d" | "D" => Some(KeyCode::D),
+            "e" | "E" => Some(KeyCode::E),
+            "f" | "F" => Some(KeyCode::F),
+            "g" | "G" => Some(KeyCode::G),
+            "h" | "H" => Some(KeyCode::H),
+            "i" | "I" => Some(KeyCode::I),
+            "j" | "J" => Some(KeyCode::J),
+            "k" | "K" => Some(KeyCode::K),
+            "l" | "L" => Some(KeyCode::L),
+            "m" | "M" => Some(KeyCode::M),
+            "n" | "N" => Some(KeyCode::N),
+            "o" | "O" => Some(KeyCode::O),
+            "p" | "P" => Some(KeyCode::P),
+            "q" | "Q" => Some(KeyCode::Q),
+            "r" | "R" => Some(KeyCode::R),
+            "s" | "S" => Some(KeyCode::S),
+            "t" | "T" => Some(KeyCode::T),
+            "u" | "U" => Some(KeyCode::U),
+            "v" | "V" => Some(KeyCode::V),
+            "w" | "W" => Some(KeyCode::W),
+            "x" | "X" => Some(KeyCode::X),
+            "y" | "Y" => Some(KeyCode::Y),
+            "z" | "Z" => Some(KeyCode::Z),
+            "0" => Some(KeyCode::Num0),
+            "1" => Some(KeyCode::Num1),
+            "2" => Some(KeyCode::Num2),
+            "3" => Some(KeyCode::Num3),
+            "4" => Some(KeyCode::Num4),
+            "5" => Some(KeyCode::Num5),
+            "6" => Some(KeyCode::Num6),
+            "7" => Some(KeyCode::Num7),
+            "8" => Some(KeyCode::Num8),
+            "9" => Some(KeyCode::Num9),
+            "F1" => Some(KeyCode::F1),
+            "F2" => Some(KeyCode::F2),
+            "F3" => Some(KeyCode::F3),
+            "F4" => Some(KeyCode::F4),
+            "F5" => Some(KeyCode::F5),
+            "F6" => Some(KeyCode::F6),
+            "F7" => Some(KeyCode::F7),
+            "F8" => Some(KeyCode::F8),
+            "F9" => Some(KeyCode::F9),
+            "F10" => Some(KeyCode::F10),
+            "F11" => Some(KeyCode::F11),
+            "F12" => Some(KeyCode::F12),
+            "Escape" => Some(KeyCode::Escape),
+            " " => Some(KeyCode::Space),
+            "Enter" => Some(KeyCode::Enter),
+            "Tab" => Some(KeyCode::Tab),
+            "Backspace" => Some(KeyCode::Backspace),
+            "ArrowLeft" => Some(KeyCode::Left),
+            "ArrowRight" => Some(KeyCode::Right),
+            "ArrowUp" => Some(KeyCode::Up),
+            "ArrowDown" => Some(KeyCode::Down),
+            "Shift" => Some(KeyCode::LShift),
+            "Control" => Some(KeyCode::LCtrl),
+            "Alt" => Some(KeyCode::LAlt),
+            _ => None,
+        }
+    }
+
+    /// map a web mouse button to MouseButton
+    pub fn mouse_button_from_web(button: i16) -> Option<MouseButton> {
+        match button {
+            0 => Some(MouseButton::Left),
+            2 => Some(MouseButton::Right),
+            1 => Some(MouseButton::Middle),
+            _ => None,
+        }
+    }
+}
+
+/// process web events and update the input state (WASM target)
+/// call this each frame from your event callback in App::run_with_events
+#[cfg(target_arch = "wasm32")]
+pub fn process_events(_event_pump: &mut (), world: &mut bevy_ecs::prelude::World) {
+    // begin frame: clear just_pressed/just_released sets
+    if let Some(mut input) = world.get_resource_mut::<InputState>() {
+        input.begin_frame();
+        web_input::drain_to_input(&mut input);
+    }
+}
+
+/// set up web input event listeners on the given canvas element
+/// call this once during initialization on WASM target
+#[cfg(target_arch = "wasm32")]
+pub fn setup_web_input(canvas: &web_sys::HtmlElement) {
+    use wasm_bindgen::JsCast;
+    use web_input::{key_from_web, mouse_button_from_web};
+    use web_sys::EventTarget;
+
+    let canvas_target: &EventTarget = canvas.as_ref();
+
+    // keyboard events
+    {
+        let window = web_sys::window().expect("no window");
+        let doc = window.document().expect("no document");
+        let body = doc.body().expect("no body");
+        let target: &EventTarget = body.as_ref();
+
+        let keydown_closure =
+            wasm_bindgen::closure::Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
+                event.prevent_default();
+                if let Some(code) = key_from_web(&event.key()) {
+                    web_input::push_key_down(code);
+                }
+            }) as Box<dyn FnMut(_)>);
+        target
+            .add_event_listener_with_callback("keydown", keydown_closure.as_ref().unchecked_ref())
+            .expect("failed to add keydown listener");
+        keydown_closure.forget();
+
+        let keyup_closure =
+            wasm_bindgen::closure::Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
+                event.prevent_default();
+                if let Some(code) = key_from_web(&event.key()) {
+                    web_input::push_key_up(code);
+                }
+            }) as Box<dyn FnMut(_)>);
+        target
+            .add_event_listener_with_callback("keyup", keyup_closure.as_ref().unchecked_ref())
+            .expect("failed to add keyup listener");
+        keyup_closure.forget();
+    }
+
+    // mouse events on canvas
+    {
+        let mousedown_closure =
+            wasm_bindgen::closure::Closure::wrap(Box::new(move |event: web_sys::MouseEvent| {
+                if let Some(button) = mouse_button_from_web(event.button()) {
+                    web_input::push_mouse_down(
+                        button,
+                        event.offset_x() as f32,
+                        event.offset_y() as f32,
+                    );
+                }
+            }) as Box<dyn FnMut(_)>);
+        canvas_target
+            .add_event_listener_with_callback(
+                "mousedown",
+                mousedown_closure.as_ref().unchecked_ref(),
+            )
+            .expect("failed to add mousedown listener");
+        mousedown_closure.forget();
+
+        let mouseup_closure =
+            wasm_bindgen::closure::Closure::wrap(Box::new(move |event: web_sys::MouseEvent| {
+                if let Some(button) = mouse_button_from_web(event.button()) {
+                    web_input::push_mouse_up(
+                        button,
+                        event.offset_x() as f32,
+                        event.offset_y() as f32,
+                    );
+                }
+            }) as Box<dyn FnMut(_)>);
+        canvas_target
+            .add_event_listener_with_callback("mouseup", mouseup_closure.as_ref().unchecked_ref())
+            .expect("failed to add mouseup listener");
+        mouseup_closure.forget();
+
+        let mousemove_closure =
+            wasm_bindgen::closure::Closure::wrap(Box::new(move |event: web_sys::MouseEvent| {
+                web_input::push_mouse_move(
+                    event.offset_x() as f32,
+                    event.offset_y() as f32,
+                    event.movement_x() as f32,
+                    event.movement_y() as f32,
+                );
+            }) as Box<dyn FnMut(_)>);
+        canvas_target
+            .add_event_listener_with_callback(
+                "mousemove",
+                mousemove_closure.as_ref().unchecked_ref(),
+            )
+            .expect("failed to add mousemove listener");
+        mousemove_closure.forget();
     }
 }
