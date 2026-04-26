@@ -89,25 +89,23 @@ impl Time {
     /// update the time resource, called once per frame
     pub fn tick(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        let now = Instant::now();
-        #[cfg(not(target_arch = "wasm32"))]
-        let delta = (now - self.last_frame).as_secs_f32();
-        #[cfg(not(target_arch = "wasm32"))]
-        {
+        let delta = {
+            let now = Instant::now();
+            let d = (now - self.last_frame).as_secs_f32();
             self.last_frame = now;
-        }
+            d
+        };
 
         #[cfg(target_arch = "wasm32")]
-        let now = web_sys::window()
-            .and_then(|w| w.performance())
-            .map(|p| p.now())
-            .unwrap_or(0.0);
-        #[cfg(target_arch = "wasm32")]
-        let delta = ((now - self.last_frame) / 1000.0) as f32;
-        #[cfg(target_arch = "wasm32")]
-        {
+        let delta = {
+            let now = web_sys::window()
+                .and_then(|w| w.performance())
+                .map(|p| p.now())
+                .unwrap_or(0.0);
+            let d = ((now - self.last_frame) / 1000.0) as f32;
             self.last_frame = now;
-        }
+            d
+        };
 
         self.raw_delta_seconds = delta;
         self.delta_seconds = delta * self.time_scale;

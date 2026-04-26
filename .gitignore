@@ -18,3 +18,13 @@ Cargo.lock
 # profiling
 *.profraw
 *.profdata
+
+# js
+node_modules/
+package-lock.json
+
+# wasm build output
+/dist/
+
+# test artifacts
+test-results/
