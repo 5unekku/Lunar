@@ -290,11 +290,12 @@ impl App {
 
     /// run a single frame tick (for use with external game loops like requestAnimationFrame)
     pub fn tick(&mut self) {
-        // update time
+        if !self.pending_plugins.is_empty() {
+            self.build_plugins();
+        }
         if let Some(mut time) = self.engine.world_mut().get_resource_mut::<Time>() {
             time.tick();
         }
-        // run systems
         self.engine.run();
     }
 }

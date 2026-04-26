@@ -265,7 +265,7 @@ impl RenderEngine {
                 compatible_surface: Some(&surface),
             })
             .await
-            .expect("failed to request adapter");
+            .expect("no WebGPU adapter found — in Firefox enable dom.webgpu.enabled in about:config, Chrome 113+ required");
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
