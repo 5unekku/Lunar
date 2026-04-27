@@ -8,3 +8,4 @@ license.workspace = true
 engine-core = { path = "../engine-core" }
 bevy_ecs = { workspace = true }
 log = { workspace = true }
+engine-image = { path = "../engine-image" }

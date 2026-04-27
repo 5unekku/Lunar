@@ -12,6 +12,7 @@ members = [
     "crates/engine-math",
     "crates/engine-api",
     "crates/engine-assets",
+    "crates/engine-image",
 ]
 resolver = "2"
 
@@ -51,6 +52,7 @@ engine-audio = { path = "crates/engine-audio" }
 engine-math = { path = "crates/engine-math" }
 engine-api = { path = "crates/engine-api" }
 engine-assets = { path = "crates/engine-assets" }
+engine-image = { path = "crates/engine-image" }
 env_logger = { workspace = true }
 log = { workspace = true }
 wgpu = { workspace = true, features = ["vulkan", "metal", "gles", "wgsl"] }
