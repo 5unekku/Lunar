@@ -268,19 +268,19 @@
 ## Phase 6: Error Handling
 
 ### 13. Error System
-- [ ] 13.1 EngineError enum
-  - [ ] 13.1.1 WindowCreation, GpuInit, AssetLoad
-  - [ ] 13.1.2 InvalidHandle, SceneNotFound, Command
-- [ ] 13.2 ErrorEvent
-  - [ ] 13.2.1 ErrorEvent with source, error, recovered
-  - [ ] 13.2.2 ErrorSource enum
-  - [ ] 13.2.3 EventReader for game code
-- [ ] 13.3 Result types
-  - [ ] 13.3.1 EngineResult<T>
-  - [ ] 13.3.2 AssetResult<T>
-- [ ] 13.4 Panic strategy
-  - [ ] 13.4.1 Panic on fatal errors
-  - [ ] 13.4.2 Catch game code panics, report as errors
+- [x] 13.1 EngineError enum
+  - [x] 13.1.1 WindowCreation, GpuInit, AssetLoad
+  - [x] 13.1.2 InvalidHandle, SceneNotFound, Command
+- [x] 13.2 ErrorEvent
+  - [x] 13.2.1 ErrorEvent with source, error, recovered
+  - [x] 13.2.2 ErrorSource enum
+  - [x] 13.2.3 EventReader for game code
+- [x] 13.3 Result types
+  - [x] 13.3.1 EngineResult<T>
+  - [x] 13.3.2 AssetResult<T>
+- [x] 13.4 Panic strategy
+  - [x] 13.4.1 Panic on fatal errors
+  - [x] 13.4.2 Catch game code panics, report as errors
 
 ---
 
