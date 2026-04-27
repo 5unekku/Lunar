@@ -42,8 +42,8 @@
   - [x] 2.2.3 insert_resource(), world_mut()
   - [x] 2.2.4 run() method that starts game loop
   - [x] 2.2.5 Topological sort by plugin dependencies
-- [ ] 2.3 Built-in engine plugins
-  - [ ] 2.3.1 LogPlugin (env_logger init) — handled by user code, not a plugin
+- [x] 2.3 Built-in engine plugins
+  - [x] 2.3.1 LogPlugin (env_logger init) — handled by user code, not a plugin
   - [x] 2.3.2 TimePlugin (delta time tracking) — Time resource in app.rs
   - [x] 2.3.3 InputPlugin (SDL3 input setup) — InputPlugin in engine-input
   - [x] 2.3.4 RenderPlugin (wgpu setup) — RenderPlugin in engine-render
