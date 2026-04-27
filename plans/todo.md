@@ -131,7 +131,7 @@
 ### 7. Audio System
 - note: audio is NOT a current requirement — Moonwalker (custom audio engine, cpal-based, WASM compatible) will integrate here
 - note: AudioPlugin stays as a stub until Moonwalker is ready to wire in
-- [x] 7.1 AudioEngine resource (stub — filled in by Moonwalker later)
+- [ ] 7.1 AudioEngine resource (stub — filled in by Moonwalker later)
   - [x] 7.1.1 play_sound(handle, volume, pitch) — fire-and-forget
   - [ ] 7.1.2 play_sound_controlled() → SoundInstanceHandle
   - [ ] 7.1.3 play_music(handle, volume)
@@ -139,7 +139,7 @@
   - [ ] 7.1.5 set_master_volume(), master_volume()
 - [ ] 7.2 SoundInstanceHandle
   - [ ] 7.2.1 set_volume(), set_pitch(), stop(), is_playing()
-- [x] 7.3 AudioPlugin
+- [ ] 7.3 AudioPlugin
   - [x] 7.3.1 Wire Moonwalker backend (cpal, WASM compatible) — stub only for now
   - [ ] 7.3.2 Process audio commands each frame
 
@@ -310,10 +310,10 @@
 ## Phase 8: Web/WASM Support
 
 ### 15. WASM Target
-- [ ] 15.1 Build configuration
+- [x] 15.1 Build configuration
   - [x] 15.1.1 Add wasm32-unknown-unknown target support (target in Cargo.toml, build script exists)
   - [x] 15.1.2 Conditional compilation gates (cfg(not(target_arch = "wasm32")) in engine-input)
-  - [ ] 15.1.3 Feature flags for native vs web
+  - [x] 15.1.3 Feature flags for native vs web
 - [ ] 15.2 Web-compatible async
   - [x] 15.2.1 Replace tokio with web-compatible async for wasm (src/web.rs uses wasm_bindgen)
   - [x] 15.2.2 No std::thread on wasm
