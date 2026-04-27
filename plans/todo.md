@@ -352,7 +352,7 @@
 - [x] 17.1 transform! macro
 - [x] 17.2 color! macro
 - [x] 17.3 rect! macro
-- [ ] 17.4 query! macro (optional)
+- [x] 17.4 query! macro (optional)
 
 ### 18. 3D Future Compatibility
 - [ ] 18.1 Mesh component

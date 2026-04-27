@@ -99,3 +99,62 @@ macro_rules! rect {
         }
     };
 }
+
+/// convenience wrapper for creating ecs query types.
+///
+/// this macro simplifies common query patterns by wrapping bevy_ecs query filters
+/// into a single expression. it is designed to be used in system function signatures.
+///
+/// # example
+///
+/// ```ignore
+/// use engine_math::query;
+/// use bevy_ecs::prelude::Query;
+///
+/// // query for entities with Position and Velocity
+/// fn my_system(query: query!(Position, Velocity)) {
+///     for (pos, vel) in query.iter() {
+///         // ...
+///     }
+/// }
+///
+/// // query with filters
+/// fn filtered(query: query!(Position, with: Player, without: Dead, changed: Velocity)) {
+///     // ...
+/// }
+/// ```
+#[macro_export]
+macro_rules! query {
+    // query!(A, B)
+    ($($component:ty),+ $(,)?) => {
+        bevy_ecs::prelude::Query<($(& $component),+)>
+    };
+    // query!(A, B, with: C)
+    ($($component:ty),+, with: $with:ty $(,)?) => {
+        bevy_ecs::prelude::Query<($(& $component),+), bevy_ecs::prelude::With<$with>>
+    };
+    // query!(A, B, without: C)
+    ($($component:ty),+, without: $without:ty $(,)?) => {
+        bevy_ecs::prelude::Query<($(& $component),+), bevy_ecs::prelude::Without<$without>>
+    };
+    // query!(A, B, changed: C)
+    ($($component:ty),+, changed: $changed:ty $(,)?) => {
+        bevy_ecs::prelude::Query<($(& $component),+), bevy_ecs::prelude::Changed<$changed>>
+    };
+    // query!(A, B, with: C, without: D)
+    ($($component:ty),+, with: $with:ty, without: $without:ty $(,)?) => {
+        bevy_ecs::prelude::Query<($(& $component),+), (bevy_ecs::prelude::With<$with>, bevy_ecs::prelude::Without<$without>)>
+    };
+    // query!(A, B, with: C, changed: D)
+    ($($component:ty),+, with: $with:ty, changed: $changed:ty $(,)?) => {
+        bevy_ecs::prelude::Query<($(& $component),+), (bevy_ecs::prelude::With<$with>, bevy_ecs::prelude::Changed<$changed>)>
+    };
+    // query!(A, B, without: C, changed: D)
+    ($($component:ty),+, without: $without:ty, changed: $changed:ty $(,)?) => {
+        bevy_ecs::prelude::Query<($(& $component),+), (bevy_ecs::prelude::Without<$without>, bevy_ecs::prelude::Changed<$changed>)>
+    };
+    // query!(A, B, with: C, without: D, changed: E)
+    ($($component:ty),+, with: $with:ty, without: $without:ty, changed: $changed:ty $(,)?) => {
+        bevy_ecs::prelude::Query<($(& $component),+), (bevy_ecs::prelude::With<$with>, bevy_ecs::prelude::Without<$without>, bevy_ecs::prelude::Changed<$changed>)>
+    };
+}
