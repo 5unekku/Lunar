@@ -81,7 +81,7 @@
   - [x] 5.1.2 is_key_held(), is_key_just_pressed(), is_key_just_released()
   - [x] 5.1.3 mouse_position(), mouse_delta()
   - [x] 5.1.4 mouse button methods
-  - [ ] 5.1.5 gamepad() method (stub for now)
+  - [x] 5.1.5 gamepad() method (GamepadState, GamepadButton, GamepadAxis added)
 - [x] 5.2 KeyCode and MouseButton enums
   - [x] 5.2.1 Map SDL3 keycodes to engine KeyCode (enum defined, mapping not wired)
   - [x] 5.2.2 Map SDL3 buttons to MouseButton (enum defined, mapping not wired)
