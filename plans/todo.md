@@ -220,10 +220,10 @@
   - [x] 9.1.1 App.run() creates GameLoop
   - [x] 9.1.2 GameLoop.tick() drives Schedule.execute()
   - [x] 9.1.3 Handle frame cap sleep
-- [ ] 9.2 Event processing
-  - [ ] 9.2.1 SDL3 event pump in game loop (exists in src/main.rs but not wired to App)
-  - [ ] 9.2.2 Forward events to InputPlugin
-  - [ ] 9.2.3 Handle quit event
+- [x] 9.2 Event processing
+  - [x] 9.2.1 SDL3 event pump in game loop (exists in src/main.rs but not wired to App)
+  - [x] 9.2.2 Forward events to InputPlugin
+  - [x] 9.2.3 Handle quit event
 - [x] 9.3 Render loop
   - [x] 9.3.1 begin_frame() before render stage (RenderEngine::begin_frame exists)
   - [x] 9.3.2 present() after render stage (RenderEngine::present exists)
