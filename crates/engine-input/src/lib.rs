@@ -37,6 +37,158 @@ const KEY_COUNT: usize = 64;
 /// number of distinct MouseButton variants
 const MOUSE_BUTTON_COUNT: usize = 4;
 
+/// a single input binding that can be a key, mouse button, gamepad button, or gamepad axis.
+///
+/// used by [`ActionMap`] to map named actions to physical inputs.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InputBinding {
+    /// a keyboard key
+    Key(KeyCode),
+    /// a mouse button
+    Mouse(MouseButton),
+    /// a gamepad button (gamepad index, button)
+    GamepadButton(usize, GamepadButton),
+    /// a gamepad axis with a deadzone threshold (gamepad index, axis, threshold)
+    /// the action is considered "pressed" when the absolute axis value exceeds the threshold.
+    GamepadAxis(usize, GamepadAxis, f32),
+}
+
+/// maps named action names to one or more [`InputBinding`]s.
+///
+/// this lets game code check actions like "jump" or "fire" instead of
+/// hardcoding specific keys. multiple bindings can map to the same action
+/// (e.g. both spacebar and a gamepad button can trigger "jump").
+///
+/// # example
+///
+/// ```ignore
+/// fn setup(mut action_map: ResMut<ActionMap>) {
+///     action_map.bind("jump", InputBinding::Key(KeyCode::Space));
+///     action_map.bind("jump", InputBinding::GamepadButton(0, GamepadButton::South));
+///     action_map.bind("fire", InputBinding::Mouse(MouseButton::Left));
+/// }
+///
+/// fn player_logic(input: Res<InputState>, actions: Res<ActionMap>) {
+///     if actions.is_action_just_pressed(&input, "jump") {
+///         // jump!
+///     }
+/// }
+/// ```
+#[derive(Resource)]
+pub struct ActionMap {
+    bindings: std::collections::HashMap<String, Vec<InputBinding>>,
+}
+
+impl ActionMap {
+    /// create a new empty action map
+    pub fn new() -> Self {
+        Self {
+            bindings: std::collections::HashMap::new(),
+        }
+    }
+
+    /// bind an input to an action name.
+    ///
+    /// multiple bindings can be added to the same action — any one of them
+    /// triggering will make the action active.
+    pub fn bind(&mut self, action: &str, binding: InputBinding) {
+        self.bindings
+            .entry(action.to_string())
+            .or_default()
+            .push(binding);
+    }
+
+    /// unbind all bindings for an action name.
+    pub fn unbind(&mut self, action: &str) {
+        self.bindings.remove(action);
+    }
+
+    /// check if an action is currently held (any of its bindings are active).
+    pub fn is_action_held(&self, input: &InputState, action: &str) -> bool {
+        let Some(bindings) = self.bindings.get(action) else {
+            return false;
+        };
+        bindings.iter().any(|b| b.is_held(input))
+    }
+
+    /// check if an action was just pressed this frame.
+    pub fn is_action_just_pressed(&self, input: &InputState, action: &str) -> bool {
+        let Some(bindings) = self.bindings.get(action) else {
+            return false;
+        };
+        bindings.iter().any(|b| b.is_just_pressed(input))
+    }
+
+    /// check if an action was just released this frame.
+    pub fn is_action_just_released(&self, input: &InputState, action: &str) -> bool {
+        let Some(bindings) = self.bindings.get(action) else {
+            return false;
+        };
+        bindings.iter().any(|b| b.is_just_released(input))
+    }
+
+    /// check if an action has any bindings registered.
+    pub fn has_action(&self, action: &str) -> bool {
+        self.bindings.contains_key(action)
+    }
+
+    /// list all registered action names.
+    pub fn actions(&self) -> impl Iterator<Item = &str> {
+        self.bindings.keys().map(|s| s.as_str())
+    }
+}
+
+impl Default for ActionMap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl InputBinding {
+    fn is_held(&self, input: &InputState) -> bool {
+        match self {
+            InputBinding::Key(key) => input.is_key_held(*key),
+            InputBinding::Mouse(button) => input.is_mouse_button_held(*button),
+            InputBinding::GamepadButton(index, button) => input
+                .gamepad(*index)
+                .is_some_and(|gp| gp.is_button_held(*button)),
+            InputBinding::GamepadAxis(index, axis, threshold) => input
+                .gamepad(*index)
+                .is_some_and(|gp| gp.axis(*axis).abs() > *threshold),
+        }
+    }
+
+    fn is_just_pressed(&self, input: &InputState) -> bool {
+        match self {
+            InputBinding::Key(key) => input.is_key_just_pressed(*key),
+            InputBinding::Mouse(button) => input.is_mouse_button_just_pressed(*button),
+            InputBinding::GamepadButton(index, button) => input
+                .gamepad(*index)
+                .is_some_and(|gp| gp.is_button_just_pressed(*button)),
+            InputBinding::GamepadAxis(index, axis, threshold) => {
+                // axis doesn't have edge-triggered press — treat as held check
+                input
+                    .gamepad(*index)
+                    .is_some_and(|gp| gp.axis(*axis).abs() > *threshold)
+            }
+        }
+    }
+
+    fn is_just_released(&self, input: &InputState) -> bool {
+        match self {
+            InputBinding::Key(key) => input.is_key_just_released(*key),
+            InputBinding::Mouse(button) => input.is_mouse_button_just_released(*button),
+            InputBinding::GamepadButton(index, button) => input
+                .gamepad(*index)
+                .is_some_and(|gp| gp.is_button_just_released(*button)),
+            InputBinding::GamepadAxis(_index, _axis, _threshold) => {
+                // axis doesn't have edge-triggered release
+                false
+            }
+        }
+    }
+}
+
 /// keyboard key codes mapped from SDL3.
 ///
 /// each variant represents a physical key on the keyboard.
@@ -469,7 +621,8 @@ impl GamePlugin for InputPlugin {
 
     fn build(&mut self, app: &mut App) {
         app.insert_resource(InputState::new());
-        log::info!("InputPlugin: input state resource registered");
+        app.insert_resource(ActionMap::new());
+        log::info!("InputPlugin: input state and action map resources registered");
     }
 }
 
@@ -915,4 +1068,131 @@ pub fn setup_web_input(canvas: &web_sys::HtmlElement) {
 #[cfg(target_arch = "wasm32")]
 fn doc_body(document: &web_sys::Document) -> web_sys::HtmlElement {
     document.body().expect("no body element")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_input() -> InputState {
+        InputState::new()
+    }
+
+    #[test]
+    fn action_map_bind_and_check_held() {
+        let mut input = make_input();
+        let mut actions = ActionMap::new();
+
+        actions.bind("jump", InputBinding::Key(KeyCode::Space));
+        input.press_key(KeyCode::Space);
+
+        assert!(actions.is_action_held(&input, "jump"));
+        assert!(actions.is_action_just_pressed(&input, "jump"));
+    }
+
+    #[test]
+    fn action_map_multiple_bindings() {
+        let mut input = make_input();
+        let mut actions = ActionMap::new();
+
+        actions.bind("fire", InputBinding::Mouse(MouseButton::Left));
+        actions.bind("fire", InputBinding::Key(KeyCode::F));
+
+        input.press_mouse_button(MouseButton::Left);
+        assert!(actions.is_action_held(&input, "fire"));
+        assert!(actions.is_action_just_pressed(&input, "fire"));
+    }
+
+    #[test]
+    fn action_map_no_bindings_returns_false() {
+        let input = make_input();
+        let actions = ActionMap::new();
+
+        assert!(!actions.is_action_held(&input, "nonexistent"));
+        assert!(!actions.is_action_just_pressed(&input, "nonexistent"));
+        assert!(!actions.is_action_just_released(&input, "nonexistent"));
+    }
+
+    #[test]
+    fn action_map_unbind() {
+        let mut input = make_input();
+        let mut actions = ActionMap::new();
+
+        actions.bind("jump", InputBinding::Key(KeyCode::Space));
+        actions.unbind("jump");
+
+        input.press_key(KeyCode::Space);
+        assert!(!actions.is_action_held(&input, "jump"));
+    }
+
+    #[test]
+    fn action_map_has_action() {
+        let mut actions = ActionMap::new();
+        assert!(!actions.has_action("jump"));
+
+        actions.bind("jump", InputBinding::Key(KeyCode::Space));
+        assert!(actions.has_action("jump"));
+
+        actions.unbind("jump");
+        assert!(!actions.has_action("jump"));
+    }
+
+    #[test]
+    fn action_map_list_actions() {
+        let mut actions = ActionMap::new();
+        actions.bind("jump", InputBinding::Key(KeyCode::Space));
+        actions.bind("fire", InputBinding::Mouse(MouseButton::Left));
+
+        let mut names: Vec<&str> = actions.actions().collect();
+        names.sort();
+        assert_eq!(names, vec!["fire", "jump"]);
+    }
+
+    #[test]
+    fn action_map_gamepad_button() {
+        let mut input = make_input();
+        let mut actions = ActionMap::new();
+
+        let gp_index = input.add_gamepad();
+        actions.bind(
+            "jump",
+            InputBinding::GamepadButton(gp_index, GamepadButton::South),
+        );
+
+        input.press_gamepad_button(gp_index, GamepadButton::South);
+        assert!(actions.is_action_held(&input, "jump"));
+        assert!(actions.is_action_just_pressed(&input, "jump"));
+    }
+
+    #[test]
+    fn action_map_gamepad_axis() {
+        let mut input = make_input();
+        let mut actions = ActionMap::new();
+
+        let gp_index = input.add_gamepad();
+        actions.bind(
+            "move_left",
+            InputBinding::GamepadAxis(gp_index, GamepadAxis::LeftStickX, 0.5),
+        );
+
+        input.set_gamepad_axis(gp_index, GamepadAxis::LeftStickX, -0.8);
+        assert!(actions.is_action_held(&input, "move_left"));
+
+        input.set_gamepad_axis(gp_index, GamepadAxis::LeftStickX, 0.3);
+        assert!(!actions.is_action_held(&input, "move_left"));
+    }
+
+    #[test]
+    fn action_map_key_release() {
+        let mut input = make_input();
+        let mut actions = ActionMap::new();
+
+        actions.bind("jump", InputBinding::Key(KeyCode::Space));
+        input.press_key(KeyCode::Space);
+        input.begin_frame();
+        input.release_key(KeyCode::Space);
+
+        assert!(!actions.is_action_held(&input, "jump"));
+        assert!(actions.is_action_just_released(&input, "jump"));
+    }
 }
