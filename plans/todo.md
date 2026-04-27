@@ -355,10 +355,10 @@
 - [x] 17.4 query! macro (optional)
 
 ### 18. 3D Future Compatibility
-- [ ] 18.1 Mesh component
-  - [ ] 18.1.1 Vertex/index buffers
-  - [ ] 18.1.2 Material component
-- [ ] 18.2 Light component
+- [x] 18.1 Mesh component
+  - [x] 18.1.1 Vertex/index buffers
+  - [x] 18.1.2 Material component
+- [x] 18.2 Light component
 - [ ] 18.3 3D render pass
   - [ ] 18.3.1 Alongside 2D render pass
   - [ ] 18.3.2 Perspective projection

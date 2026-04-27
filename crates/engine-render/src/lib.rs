@@ -28,6 +28,7 @@
 //! }
 //! ```
 
+pub mod mesh;
 mod text;
 pub mod textbox;
 
