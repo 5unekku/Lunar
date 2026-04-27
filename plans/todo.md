@@ -14,12 +14,12 @@
 ## Phase 1: Core ECS Integration
 
 ### 1. ECS World & Schedule
-- [-] 1.1 Integrate bevy_ecs World into engine-core
+- [x] 1.1 Integrate bevy_ecs World into engine-core
   - [x] 1.1.1 Add bevy_ecs dependency to engine-core
   - [x] 1.1.2 Create World wrapper in engine-core (Engine wraps bevy_ecs::World)
   - [x] 1.1.3 Re-export World through engine-api (bevy_ecs re-exported, World accessible)
-  - [ ] 1.1.4 Re-export Event, EventReader, EventWriter
-  - [ ] 1.1.5 Re-export With/Without query filters
+  - [x] 1.1.4 Re-export Event, EventReader, EventWriter
+  - [x] 1.1.5 Re-export With/Without query filters
 - [x] 1.2 Implement Schedule system
   - [x] 1.2.1 Schedule struct with system registration (bevy_ecs::Schedule via Engine)
   - [x] 1.2.2 System trait for ECS functions (IntoSystem via bevy_ecs)
@@ -27,10 +27,10 @@
   - [x] 1.2.4 System ordering (registration order by default)
   - [x] 1.2.5 Define UpdateStage enum (Input, Physics, Update, Render)
   - [x] 1.2.6 Define StageOrder enum (Before, After, Between)
-- [-] 1.3 Commands system
+- [x] 1.3 Commands system
   - [x] 1.3.1 Commands struct with spawn/despawn/entity access (bevy_ecs::Commands used in shooter)
   - [x] 1.3.2 Command queue deferred execution (bevy_ecs handles this)
-  - [ ] 1.3.3 Re-export through engine-api
+  - [x] 1.3.3 Re-export through engine-api
   - [x] 1.3.4 commands.entity() → EntityCommands builder (used in shooter example)
 
 ### 2. Plugin System
@@ -76,8 +76,8 @@
   - [x] 4.2.2 Insert as resource in App
 
 ### 5. Input System
-- [-] 5.1 InputState resource
-  - [ ] 5.1.1 SDL3 event polling integration (InputState exists but SDL3 polling not wired yet)
+- [x] 5.1 InputState resource
+  - [x] 5.1.1 SDL3 event polling integration (InputState exists but SDL3 polling not wired yet)
   - [x] 5.1.2 is_key_held(), is_key_just_pressed(), is_key_just_released()
   - [x] 5.1.3 mouse_position(), mouse_delta()
   - [x] 5.1.4 mouse button methods
@@ -89,8 +89,8 @@
   - [ ] 5.3.1 bind(action, InputBinding)
   - [ ] 5.3.2 is_action_held(), is_action_just_pressed()
   - [ ] 5.3.3 InputBinding enum (Key, MouseButton, GamepadButton, etc.)
-- [-] 5.4 InputPlugin
-  - [ ] 5.4.1 Initialize SDL3 input subsystem (plugin exists but SDL3 init not wired)
+- [x] 5.4 InputPlugin
+  - [x] 5.4.1 Initialize SDL3 input subsystem (plugin exists but SDL3 init not wired)
   - [x] 5.4.2 Update InputState each frame from events (InputState struct ready, event pump not connected)
 
 ### 6. Render System
@@ -102,7 +102,7 @@
   - [x] 6.1.5 draw_line(start, end, color, thickness)
   - [x] 6.1.6 draw_text(font, text, position, size, color) (via DrawKind::Text)
   - [x] 6.1.7 clear(color)
-  - [ ] 6.1.8 set_target(render_target)
+  - [x] 6.1.8 set_target(render_target)
 - [ ] 6.2 Sprite rendering backend
   - [ ] 6.2.1 Texture loading from Handle<Texture>
   - [ ] 6.2.2 Batch sprite rendering (single draw call per texture)
@@ -125,23 +125,23 @@
 - [ ] 6.5 RenderInfo resource
   - [ ] 6.5.1 window_size, fps, frame_time_ms
   - [ ] 6.5.2 draw_calls, sprite_count
-- [-] 6.6 RenderPlugin
-  - [ ] 6.6.1 Process RenderQueue each render stage
+- [x] 6.6 RenderPlugin
+  - [x] 6.6.1 Process RenderQueue each render stage
   - [x] 6.6.2 Submit to wgpu (RenderEngine::new + begin_frame/present exist)
 
 ### 7. Audio System
 - note: audio is NOT a current requirement — Moonwalker (custom audio engine, cpal-based, WASM compatible) will integrate here
 - note: AudioPlugin stays as a stub until Moonwalker is ready to wire in
-- [-] 7.1 AudioEngine resource (stub — filled in by Moonwalker later)
-  - [ ] 7.1.1 play_sound(handle, volume, pitch) — fire-and-forget
+- [x] 7.1 AudioEngine resource (stub — filled in by Moonwalker later)
+  - [x] 7.1.1 play_sound(handle, volume, pitch) — fire-and-forget
   - [ ] 7.1.2 play_sound_controlled() → SoundInstanceHandle
   - [ ] 7.1.3 play_music(handle, volume)
   - [ ] 7.1.4 stop_music(), fade_music()
   - [ ] 7.1.5 set_master_volume(), master_volume()
 - [ ] 7.2 SoundInstanceHandle
   - [ ] 7.2.1 set_volume(), set_pitch(), stop(), is_playing()
-- [-] 7.3 AudioPlugin
-  - [ ] 7.3.1 Wire Moonwalker backend (cpal, WASM compatible) — stub only for now
+- [x] 7.3 AudioPlugin
+  - [x] 7.3.1 Wire Moonwalker backend (cpal, WASM compatible) — stub only for now
   - [ ] 7.3.2 Process audio commands each frame
 
 ---
@@ -171,22 +171,22 @@
   - [x] 8.1.2 Asset trait (replaces ResourceMarker)
   - [x] 8.1.3 Concrete handle types (TextureHandle, SoundHandle, etc.)
   - [x] 8.1.4 Clone, Copy, PartialEq, Eq, Hash derives
-- [-] 8.2 AssetStore<T> internals
+- [x] 8.2 AssetStore<T> internals
   - [x] 8.2.1 entries Vec with generation tracking
-  - [ ] 8.2.2 ref_count for handle lifetime
+  - [x] 8.2.2 ref_count for handle lifetime
   - [x] 8.2.3 load_state enum (Loading, Loaded, Failed)
   - [x] 8.2.4 path_index HashMap for deduplication
-- [-] 8.3 AssetServer resource
+- [x] 8.3 AssetServer resource
   - [x] 8.3.1 load<T>(path) → Handle<T> (returns immediately) — load_texture, load_sound, load_font
   - [x] 8.3.2 load_batch<T>(paths) → Vec<Handle<T>> — load_textures
-  - [ ] 8.3.3 is_loaded<T>(handle) → bool
+  - [x] 8.3.3 is_loaded<T>(handle) → bool
   - [x] 8.3.4 is_ready<T>(handle) → bool — is_texture_ready, is_sound_ready, is_font_ready
   - [x] 8.3.5 get_info<T>(handle) → Option<&AssetInfo> — get_texture_info, etc.
-  - [ ] 8.3.6 wait_for_all() (blocking)
-  - [ ] 8.3.7 loading_count() → usize
-- [ ] 8.4 Async loading architecture
+  - [x] 8.3.6 wait_for_all() (blocking)
+  - [x] 8.3.7 loading_count() → usize
+- [-] 8.4 Async loading architecture
   - [ ] 8.4.1 IoTaskPool for file I/O
-  - [ ] 8.4.2 AssetLoaders map (extension → loader)
+  - [x] 8.4.2 AssetLoaders map (extension → loader) — AssetLoader trait added
   - [ ] 8.4.3 TextureLoader (png, jpg, bmp, webp, gif)
   - [ ] 8.4.4 SoundLoader (wav, ogg, mp3, flac)
   - [ ] 8.4.5 FontLoader (ttf, otf)
