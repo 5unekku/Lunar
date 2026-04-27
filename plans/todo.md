@@ -116,11 +116,11 @@
   - [ ] 6.3.2 Glyph rasterization → CPU-side bitmap, uploaded to a GPU atlas texture
   - [ ] 6.3.3 Text layout (simple left-to-right for now, baseline alignment)
   - [ ] 6.3.4 Render text as UV-mapped quads from the glyph atlas
-- [ ] 6.4 Camera resource (optional — not all games need it)
+- [x] 6.4 Camera resource (optional — not all games need it)
   - note: games like galaga/pacman use no camera; mario/contra need one — engine must work both ways
-  - [ ] 6.4.1 Camera with position, zoom, rotation, viewport
-  - [ ] 6.4.2 Camera affects render queue output (offset projection matrix)
-  - [ ] 6.4.3 When no Camera resource exists, render is world-space anchored at origin
+  - [x] 6.4.1 Camera with position, zoom, rotation, viewport
+  - [x] 6.4.2 Camera affects render queue output (offset projection matrix)
+  - [x] 6.4.3 When no Camera resource exists, render is world-space anchored at origin
 - [x] 6.5 RenderInfo resource
   - [x] 6.5.1 window_size, fps, frame_time_ms
   - [x] 6.5.2 draw_calls, sprite_count
