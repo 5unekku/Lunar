@@ -5,7 +5,20 @@
 use crate::{Vec2, Vec3};
 use bevy_ecs::prelude::Component;
 
-/// 2D transform component: position, rotation, scale
+/// 2D transform component: position, rotation, scale.
+///
+/// this is the primary way to represent an entity's placement in the world.
+/// it supports translation (x, y, z), rotation (radians), and scale (x, y).
+///
+/// # builder pattern
+///
+/// transforms can be constructed fluently:
+///
+/// ```ignore
+/// let transform = Transform::from_xy(100.0, 200.0)
+///     .with_rotation(std::f32::consts::PI / 4.0)
+///     .with_scale(Vec2::new(2.0, 2.0));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub struct Transform {
     /// x, y position + z layer for depth sorting
@@ -54,7 +67,17 @@ impl Default for Transform {
     }
 }
 
-/// RGBA color type
+/// RGBA color type.
+///
+/// all channels are normalized to the range 0.0 - 1.0.
+/// common colors are provided as associated constants.
+///
+/// # example
+///
+/// ```ignore
+/// let red = Color::rgb(1.0, 0.0, 0.0);
+/// let semi_transparent = Color::rgba(1.0, 1.0, 1.0, 0.5);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Color {
     /// red channel (0.0 - 1.0)
@@ -98,7 +121,19 @@ impl Default for Color {
     }
 }
 
-/// 2D rectangle: position + size
+/// 2D rectangle: position + size.
+///
+/// represents a bounding box with top-left corner at (x, y)
+/// and dimensions (w, h). useful for collision detection and UI layout.
+///
+/// # example
+///
+/// ```ignore
+/// let rect = Rect::new(0.0, 0.0, 100.0, 50.0);
+/// if rect.contains(mouse_pos) {
+///     // clicked!
+/// }
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rect {
     /// x coordinate of top-left corner

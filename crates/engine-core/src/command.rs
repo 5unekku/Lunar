@@ -2,10 +2,20 @@
 //!
 //! commands can be registered from anywhere and are executed by the engine.
 //! the actual console shell comes later, but the registry exists from day one.
+//!
+//! # usage
+//!
+//! implement the [`Command`] trait for any type and register it with
+//! the [`CommandRegistry`]. commands receive a list of string arguments
+//! and return a result string or error.
 
 use std::collections::HashMap;
 
-/// a command that can be executed by the engine
+/// a command that can be executed by the engine.
+///
+/// implement this trait to create a custom command.
+/// commands must be [`Send`] and [`Sync`] since they may be
+/// executed from any thread.
 pub trait Command: Send + Sync {
     /// execute the command with the given arguments
     fn execute(&self, args: &[String]) -> Result<String, String>;
@@ -14,7 +24,10 @@ pub trait Command: Send + Sync {
     fn description(&self) -> &str;
 }
 
-/// registry of all available commands
+/// registry of all available commands.
+///
+/// stores commands by name and provides execution and listing interfaces.
+/// the registry is initialized with built-in commands like `help` and `version`.
 pub struct CommandRegistry {
     commands: HashMap<String, Box<dyn Command>>,
 }

@@ -6,10 +6,19 @@
 //! - frame cap 121+: 240hz tick, ceiling regardless of frame cap
 //!
 //! rendering runs uncapped and should feel smooth at high framerates.
+//!
+//! # fixed timestep
+//!
+//! the game loop uses an accumulator-based fixed timestep to ensure
+//! deterministic physics and game logic. if the frame takes longer
+//! than the tick interval, multiple ticks may run (capped at 5 to
+//! prevent spiral of death).
 
 use std::time::{Duration, Instant};
 
-/// tick rate buckets based on frame cap
+/// tick rate buckets based on frame cap.
+///
+/// determines how often the ECS schedule runs, independent of render framerate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TickRate {
     /// 60hz tick for frame cap 1-60
@@ -40,7 +49,10 @@ impl TickRate {
     }
 }
 
-/// game loop configuration and state
+/// game loop configuration and state.
+///
+/// manages the fixed timestep accumulator and frame rate limiting.
+/// call [`GameLoop::tick`] each frame to get the number of ECS ticks to run.
 pub struct GameLoop {
     /// target frame cap (0 = uncapped)
     frame_cap: u32,

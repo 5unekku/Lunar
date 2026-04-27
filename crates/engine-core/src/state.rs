@@ -1,10 +1,16 @@
 //! engine state
 //!
 //! holds the current state of the engine, always inspectable from outside.
+//! the [`EngineState`] resource is updated by the engine to signal
+//! lifecycle transitions like pausing or shutting down.
 
 use bevy_ecs::prelude::Resource;
 
-/// engine running state
+/// engine running state.
+///
+/// this resource is checked each frame to determine if the game loop
+/// should continue running. set to [`Stopping`](EngineState::Stopping)
+/// to trigger a graceful shutdown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
 pub enum EngineState {
     /// engine is initializing

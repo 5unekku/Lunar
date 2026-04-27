@@ -1,6 +1,31 @@
 //! input subsystem via SDL3
 //!
 //! handles keyboard, mouse, gamepad input. exposes state through clean interfaces.
+//!
+//! # input model
+//!
+//! input state is tracked per-frame with three states for each key/button:
+//! - **held**: currently pressed down
+//! - **just pressed**: pressed this frame (edge-triggered)
+//! - **just released**: released this frame (edge-triggered)
+//!
+//! the [`InputState`] resource is updated each frame by [`process_events`],
+//! which polls SDL3 events and applies them to the state.
+//!
+//! # example
+//!
+//! ```ignore
+//! use engine_input::{InputState, KeyCode};
+//!
+//! fn player_movement(input: Res<InputState>, time: Res<Time>) {
+//!     if input.is_key_just_pressed(KeyCode::Space) {
+//!         // jump!
+//!     }
+//!     if input.is_key_held(KeyCode::Left) {
+//!         // move left
+//!     }
+//! }
+//! ```
 
 use bevy_ecs::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
@@ -12,7 +37,15 @@ const KEY_COUNT: usize = 64;
 /// number of distinct MouseButton variants
 const MOUSE_BUTTON_COUNT: usize = 4;
 
-/// keyboard key codes mapped from SDL3
+/// keyboard key codes mapped from SDL3.
+///
+/// each variant represents a physical key on the keyboard.
+/// the discriminant values are used as indices into the input state arrays
+/// for O(1) lookup.
+///
+/// # layout
+///
+/// keys are grouped: a-z (26), 0-9 (10), f1-f12 (12), special (9), modifiers (6) = 63 total.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyCode {
     /// a-z keys
@@ -85,7 +118,10 @@ pub enum KeyCode {
     RAlt,
 }
 
-/// mouse button codes
+/// mouse button codes.
+///
+/// represents the three standard mouse buttons.
+/// the discriminant values are used as indices into the input state arrays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MouseButton {
     /// left mouse button
@@ -228,7 +264,10 @@ impl Default for InputState {
     }
 }
 
-/// input plugin that initializes the SDL3 input subsystem
+/// input plugin that initializes the SDL3 input subsystem.
+///
+/// add this plugin to your [`App`] to enable input handling.
+/// it registers the [`InputState`] as an ECS resource.
 pub struct InputPlugin;
 
 impl GamePlugin for InputPlugin {
@@ -243,7 +282,19 @@ impl GamePlugin for InputPlugin {
 }
 
 /// process SDL3 events and update the input state.
-/// events are collected first so InputState is borrowed only once per frame.
+///
+/// this function should be called once per frame before the ECS tick.
+/// events are collected first so [`InputState`] is borrowed only once per frame,
+/// avoiding borrow conflicts.
+///
+/// # quit handling
+///
+/// if a quit event is received, the [`EngineState`] is set to [`EngineState::Stopping`].
+///
+/// # platform
+///
+/// this function is only available on non-WASM targets.
+/// use [`process_events`] on WASM for the web-compatible version.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn process_events(event_pump: &mut sdl3::EventPump, world: &mut bevy_ecs::prelude::World) {
     use sdl3::event::Event;

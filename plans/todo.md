@@ -108,13 +108,20 @@
   - [ ] 6.2.2 Batch sprite rendering (single draw call per texture)
   - [ ] 6.2.3 Orthographic projection matrix
   - [ ] 6.2.4 Vertex/instance buffers for sprites
+  - note: PNG/JPG are starting formats — more efficient packed formats (QOI, KTX2, custom) TBD later
 - [ ] 6.3 Text rendering
-  - [ ] 6.3.1 Font loading
-  - [ ] 6.3.2 Glyph rasterization (glyph_brain or similar)
-  - [ ] 6.3.3 Text layout and rendering to sprites
-- [ ] 6.4 Camera resource
+  - note: must bundle fonts with the game — no system font reliance (poor intersection across win/linux/mac/web)
+  - note: fonts are ttf/otf, linked statically or shipped alongside the binary
+  - note: fontdue is the preferred rasterizer (pure Rust, no system deps, WASM compatible)
+  - [ ] 6.3.1 Font loading (ttf/otf via fontdue)
+  - [ ] 6.3.2 Glyph rasterization → CPU-side bitmap, uploaded to a GPU atlas texture
+  - [ ] 6.3.3 Text layout (simple left-to-right for now, baseline alignment)
+  - [ ] 6.3.4 Render text as UV-mapped quads from the glyph atlas
+- [ ] 6.4 Camera resource (optional — not all games need it)
+  - note: games like galaga/pacman use no camera; mario/contra need one — engine must work both ways
   - [ ] 6.4.1 Camera with position, zoom, rotation, viewport
-  - [ ] 6.4.2 Camera affects render queue output
+  - [ ] 6.4.2 Camera affects render queue output (offset projection matrix)
+  - [ ] 6.4.3 When no Camera resource exists, render is world-space anchored at origin
 - [ ] 6.5 RenderInfo resource
   - [ ] 6.5.1 window_size, fps, frame_time_ms
   - [ ] 6.5.2 draw_calls, sprite_count
@@ -123,7 +130,9 @@
   - [x] 6.6.2 Submit to wgpu (RenderEngine::new + begin_frame/present exist)
 
 ### 7. Audio System
-- [-] 7.1 AudioEngine resource
+- note: audio is NOT a current requirement — Moonwalker (custom audio engine, cpal-based, WASM compatible) will integrate here
+- note: AudioPlugin stays as a stub until Moonwalker is ready to wire in
+- [-] 7.1 AudioEngine resource (stub — filled in by Moonwalker later)
   - [ ] 7.1.1 play_sound(handle, volume, pitch) — fire-and-forget
   - [ ] 7.1.2 play_sound_controlled() → SoundInstanceHandle
   - [ ] 7.1.3 play_music(handle, volume)
@@ -132,12 +141,29 @@
 - [ ] 7.2 SoundInstanceHandle
   - [ ] 7.2.1 set_volume(), set_pitch(), stop(), is_playing()
 - [-] 7.3 AudioPlugin
-  - [ ] 7.3.1 Initialize audio backend (miniaudio or similar) — stub only
+  - [ ] 7.3.1 Wire Moonwalker backend (cpal, WASM compatible) — stub only for now
   - [ ] 7.3.2 Process audio commands each frame
 
 ---
 
 ## Phase 3: Asset System
+
+---
+
+## Reference — Engine Research
+
+> Before designing or implementing major subsystems, study how established engines solve the same problem.
+> Steal concepts that are good, adapt them to Lunar's constraints (Rust, ECS, WASM target).
+
+- [ ] R.1 Unity — study component model, inspector workflow, scene serialization, asset pipeline
+- [ ] R.2 Godot — study node/scene tree model, signal system, built-in 2D physics, GDNative extension points
+- [ ] R.3 Unreal — study actor/component split, blueprint-to-code pathway, renderer architecture (passes, draw calls)
+- [ ] R.4 Bevy — closest in spirit, study render graph, asset server, ECS schedule stages
+- [ ] R.5 libGDX (Java) — practical 2D API design: SpriteBatch, TextureAtlas, BitmapFont, Stage/Actor UI
+- [ ] R.6 Pygame — minimal, immediate-mode 2D; good reference for keeping the API surface small
+- [ ] R.7 LÖVE2D — Lua but great API simplicity; how it handles text, sprites, audio without ceremony
+
+---
 
 ### 8. Asset Server
 - [x] 8.1 Handle<T> system

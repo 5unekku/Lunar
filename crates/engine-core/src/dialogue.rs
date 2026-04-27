@@ -3,12 +3,42 @@
 //! provides multi-stage conversations, speaker identification, branching choices,
 //! and narrator text. designed for RPG-style dialogue without requiring games
 //! to implement their own solutions.
+//!
+//! # architecture
+//!
+//! dialogue is structured as a graph of [`DialogueNode`]s:
+//! - each node contains a [`DialogueLine`] with optional speaker and text
+//! - nodes can auto-advance to a [`next`](DialogueNode::next) node
+//! - nodes can present [`choices`](DialogueLine::choices) for branching
+//!
+//! use [`DialogueBuilder`] to construct dialogues fluently, then
+//! register them with the [`DialogueManager`] resource.
+//!
+//! # example
+//!
+//! ```ignore
+//! use engine_core::dialogue::{DialogueBuilder, DialogueManager};
+//!
+//! let dialogue = DialogueBuilder::new("start")
+//!     .line("greeting", Some("NPC"), "hello there!", Some("farewell"))
+//!     .choice_line("farewell", None, "what do you do?", &[
+//!         ("leave", "end"),
+//!         ("ask more", "more_info"),
+//!     ])
+//!     .build();
+//!
+//! manager.register("intro", dialogue);
+//! manager.start("intro");
+//! ```
 
 use bevy_ecs::prelude::*;
 
 use crate::app::App;
 
-/// a dialogue line with optional speaker and choices
+/// a dialogue line with optional speaker and choices.
+///
+/// represents a single line of text in a conversation.
+/// if [`speaker`](DialogueLine::speaker) is `None`, the text is treated as narrator text.
 #[derive(Debug, Clone)]
 pub struct DialogueLine {
     /// speaker identifier, none for narrator text
@@ -21,7 +51,9 @@ pub struct DialogueLine {
     pub choices: Vec<DialogueChoice>,
 }
 
-/// a branching choice in a dialogue
+/// a branching choice in a dialogue.
+///
+/// presents the player with an option that leads to a different dialogue node.
 #[derive(Debug, Clone)]
 pub struct DialogueChoice {
     /// the text shown to the player
@@ -30,7 +62,11 @@ pub struct DialogueChoice {
     pub target: String,
 }
 
-/// a named dialogue node within a conversation
+/// a named dialogue node within a conversation.
+///
+/// each node represents a single step in the dialogue graph.
+/// if [`next`](DialogueNode::next) is set and there are no choices,
+/// the dialogue auto-advances to that node.
 #[derive(Debug, Clone)]
 pub struct DialogueNode {
     /// unique identifier within the conversation
@@ -41,7 +77,10 @@ pub struct DialogueNode {
     pub next: Option<String>,
 }
 
-/// a complete conversation or dialogue tree
+/// a complete conversation or dialogue tree.
+///
+/// contains all nodes and a [`start`](Dialogue::start) entry point.
+/// use [`DialogueBuilder`] to construct this fluently.
 #[derive(Debug, Clone)]
 pub struct Dialogue {
     /// the entry point node id
@@ -70,7 +109,10 @@ impl Dialogue {
     }
 }
 
-/// a builder for constructing dialogue nodes
+/// a builder for constructing dialogue trees.
+///
+/// provides a fluent interface for adding lines and choices.
+/// call [`build`](DialogueBuilder::build) when finished to get a [`Dialogue`].
 pub struct DialogueBuilder {
     dialogue: Dialogue,
 }
@@ -131,7 +173,10 @@ impl DialogueBuilder {
     }
 }
 
-/// dialogue state for an active conversation
+/// dialogue state for an active conversation.
+///
+/// tracks the current node and whether the dialogue is still active.
+/// managed internally by the [`DialogueManager`].
 #[derive(Debug, Clone)]
 pub struct DialogueState {
     /// the current dialogue definition
@@ -185,7 +230,10 @@ impl DialogueState {
     }
 }
 
-/// dialogue manager resource
+/// dialogue manager resource.
+///
+/// stores registered dialogues and manages the active conversation state.
+/// access this resource from systems to start, advance, and close dialogues.
 #[derive(Resource)]
 pub struct DialogueManager {
     /// registered dialogues by name
@@ -272,7 +320,9 @@ impl Default for DialogueManager {
     }
 }
 
-/// dialogue plugin, registers the dialogue manager resource
+/// dialogue plugin, registers the dialogue manager resource.
+///
+/// add this plugin to your [`App`] to enable the dialogue system.
 pub struct DialoguePlugin;
 
 impl crate::GamePlugin for DialoguePlugin {

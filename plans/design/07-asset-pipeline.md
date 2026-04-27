@@ -4,10 +4,10 @@
 
 | Type | Extensions | Notes |
 |------|-----------|
-| Texture | `.png`, `.jpg`, `.bmp`, `.webp`, `.gif` | Loaded as wgpu textures |
+| Texture | `.png`, `.jpg` | Starting formats — PNG/JPG are naive and bulky; efficient packed formats (QOI, KTX2, or custom) are a future concern |
 | Sprite Sheet | `.json` + image | JSON defines frames |
-| Sound | `.wav`, `.ogg`, `.mp3`, `.flac` | Via miniaudio |
-| Font | `.ttf`, `.otf` | For text rendering |
+| Sound | `.wav`, `.ogg`, `.mp3`, `.flac` | Via Moonwalker (cpal-based, WASM compatible custom audio engine) |
+| Font | `.ttf`, `.otf` | Must be bundled with the game — no system fonts (poor cross-platform intersection). Rasterized via fontdue (pure Rust, WASM compatible) |
 | Config | `.json`, `.toml`, `.yaml` | Game data files |
 | Scene | `.json` | Serialized scene data (future) |
 

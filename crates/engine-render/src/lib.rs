@@ -2,12 +2,40 @@
 //!
 //! decoupled from game logic. handles 2D rendering with wgpu.
 //! architecture allows future 3D expansion without breaking changes.
+//!
+//! # rendering model
+//!
+//! the render system uses a command-based approach:
+//! 1. game logic pushes [`DrawCommand`]s into the [`RenderQueue`]
+//! 2. the [`RenderEngine`] consumes all commands in a single batched draw call
+//! 3. all geometry is packed into one vertex buffer for efficiency
+//!
+//! # example
+//!
+//! ```ignore
+//! use engine_render::{RenderQueue, DrawCommand, DrawKind, Color};
+//! use engine_math::Vec2;
+//!
+//! fn render_system(mut queue: ResMut<RenderQueue>) {
+//!     queue.clear(); // clear last frame's commands
+//!     queue.push(DrawCommand {
+//!         kind: DrawKind::Rect {
+//!             position: Vec2::new(100.0, 100.0),
+//!             size: Vec2::new(50.0, 50.0),
+//!             color: Color::RED,
+//!         },
+//!     });
+//! }
+//! ```
 
 use bevy_ecs::prelude::*;
 use engine_core::{App, GamePlugin};
 use engine_math::{Color, Vec2};
 
-/// rendering configuration
+/// rendering configuration.
+///
+/// controls window size, vsync, and frame rate limiting.
+/// used when initializing the [`RenderEngine`].
 #[derive(Debug, Clone)]
 pub struct RenderConfig {
     /// window width
@@ -32,7 +60,10 @@ impl Default for RenderConfig {
 }
 
 /// render engine resource, owns all wgpu rendering state.
-/// Resource is only derived on native — WASM stores this in a static mut since WebGPU types are !Send.
+///
+/// manages the GPU device, queue, surface, and render pipelines.
+/// the [`Resource`] derive is only applied on native targets — on WASM,
+/// WebGPU types are `!Send`, so the engine is stored in a static instead.
 #[cfg_attr(not(target_arch = "wasm32"), derive(Resource))]
 pub struct RenderEngine {
     surface: wgpu::Surface<'static>,
@@ -414,20 +445,34 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// render queue resource, collects draw commands each frame
+/// render queue resource, collects draw commands each frame.
+///
+/// game logic pushes draw commands into the queue during the update phase.
+/// the render engine consumes the queue during the render phase.
+///
+/// # lifecycle
+///
+/// call [`RenderQueue::clear()`] at the start of each frame to remove
+/// last frame's commands before adding new ones.
 #[derive(Resource)]
 pub struct RenderQueue {
     commands: Vec<DrawCommand>,
 }
 
-/// a single draw command
+/// a single draw command.
+///
+/// wraps a [`DrawKind`] which specifies what to draw.
 #[derive(Debug, Clone)]
 pub struct DrawCommand {
     /// draw type
     pub kind: DrawKind,
 }
 
-/// type of draw command
+/// type of draw command.
+///
+/// each variant represents a different primitive that can be rendered.
+/// sprite rendering is currently stubbed and will be implemented
+/// when the asset pipeline is complete.
 #[derive(Debug, Clone)]
 pub enum DrawKind {
     /// draw a 2D sprite
@@ -483,7 +528,10 @@ impl Default for RenderQueue {
     }
 }
 
-/// render plugin, registers render systems and resources
+/// render plugin, registers render systems and resources.
+///
+/// add this plugin to your [`App`] to enable rendering.
+/// it registers the [`RenderQueue`] as an ECS resource.
 pub struct RenderPlugin;
 
 impl Default for RenderPlugin {

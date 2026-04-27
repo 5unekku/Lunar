@@ -127,7 +127,9 @@ impl RenderQueue {
     pub fn clear(&mut self, color: Color);
 }
 
-/// Camera resource — controls what the render queue renders
+/// Camera resource — controls what the render queue renders.
+/// Optional: if not present, rendering is anchored at world origin (screen-space).
+/// Needed for scrolling worlds (mario, contra). Not needed for fixed-screen games (galaga, pacman).
 #[derive(Resource)]
 pub struct Camera {
     pub position: Vec2,

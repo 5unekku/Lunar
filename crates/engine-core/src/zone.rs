@@ -2,6 +2,13 @@
 //!
 //! zones are collections of entities and systems that can be loaded/unloaded independently.
 //! the world persists across zone transitions, enabling seamless RPG-style area changes.
+//!
+//! # zone lifecycle
+//!
+//! 1. register zones with [`WorldManager::register_zone`]
+//! 2. enter a zone with [`WorldManager::enter_zone`] — triggers [`Zone::on_load`] and [`Zone::on_enter`]
+//! 3. define [`ZoneTransition`]s for automatic area changes
+//! 4. exit a zone — triggers [`Zone::on_exit`]
 
 use std::collections::HashMap;
 
@@ -10,7 +17,9 @@ use engine_math::{Color, Rect, Vec2};
 
 use crate::app::App;
 
-/// fade configuration for zone transitions
+/// fade configuration for zone transitions.
+///
+/// controls the visual effect when moving between zones.
 #[derive(Debug, Clone)]
 pub struct FadeConfig {
     /// transition duration in seconds
@@ -19,7 +28,10 @@ pub struct FadeConfig {
     pub color: Color,
 }
 
-/// a transition point that triggers when an entity enters the area
+/// a transition point that triggers when an entity enters the area.
+///
+/// define these in [`Zone::transitions`] to create automatic area changes
+/// when the player walks into a trigger zone.
 #[derive(Debug, Clone)]
 pub struct ZoneTransition {
     /// trigger area
@@ -32,7 +44,10 @@ pub struct ZoneTransition {
     pub fade: Option<FadeConfig>,
 }
 
-/// zone trait — implement to define a world zone
+/// zone trait — implement to define a world zone.
+///
+/// each zone type defines its own lifecycle hooks for loading,
+/// entering, and exiting. implement this trait to create custom zones.
 pub trait Zone: Send + Sync + 'static {
     /// called when the zone is being loaded (async asset loading)
     fn on_load(&mut self, _app: &mut App) {}
@@ -54,7 +69,11 @@ struct BoxedZone {
     zone: Box<dyn Zone>,
 }
 
-/// world manager resource, manages zone loading and transitions
+/// world manager resource, manages zone loading and transitions.
+///
+/// register zones with [`WorldManager::register_zone`] and transition
+/// between them with [`WorldManager::enter_zone`]. the world state
+/// persists across transitions, allowing seamless area changes.
 #[derive(Resource)]
 pub struct WorldManager {
     zones: HashMap<String, BoxedZone>,

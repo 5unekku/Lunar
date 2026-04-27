@@ -1,16 +1,21 @@
 //! engine wrapper around bevy_ecs world and schedule
 //!
 //! the engine owns the ECS world and manages system execution.
-//! game code interacts with the world through the App builder.
+//! game code interacts with the world through the [`App`] builder.
 
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::ScheduleLabel;
 
-/// default schedule label for the main update loop
+/// default schedule label for the main update loop.
+///
+/// all systems added via [`App::add_system`] are registered under this schedule.
 #[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Update;
 
-/// the engine owns the ECS world and schedule
+/// the engine owns the ECS world and schedule.
+///
+/// this is the low-level wrapper around bevy_ecs.
+/// most game code should interact with the engine through [`App`] instead.
 pub struct Engine {
     /// the ECS world containing all entities, components, and resources
     world: World,
