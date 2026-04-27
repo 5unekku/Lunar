@@ -9,6 +9,7 @@ wgpu = { workspace = true, features = ["vulkan", "metal", "gles", "wgsl"] }
 raw-window-handle = "0.6"
 engine-math = { path = "../engine-math" }
 engine-core = { path = "../engine-core" }
+engine-assets = { path = "../engine-assets" }
 bevy_ecs = { workspace = true }
 log = { workspace = true }
 bytemuck = "1.23"

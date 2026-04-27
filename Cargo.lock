@@ -921,6 +921,7 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "bytemuck",
+ "engine-assets",
  "engine-core",
  "engine-math",
  "log",

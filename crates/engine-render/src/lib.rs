@@ -28,9 +28,13 @@
 //! }
 //! ```
 
+use std::collections::HashMap;
+
 use bevy_ecs::prelude::*;
+use engine_assets::{Handle, Texture};
 use engine_core::{App, GamePlugin};
 use engine_math::{Color, Vec2};
+use wgpu::util::DeviceExt;
 
 /// rendering configuration.
 ///
@@ -71,9 +75,20 @@ pub struct RenderEngine {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     render_config: RenderConfig,
-    rect_pipeline: wgpu::RenderPipeline,
+    sprite_pipeline: wgpu::RenderPipeline,
     uniform_buf: wgpu::Buffer,
+    bind_group_layout: wgpu::BindGroupLayout,
+    #[allow(dead_code)]
     bind_group: wgpu::BindGroup,
+    sampler: wgpu::Sampler,
+    textures: HashMap<u32, GpuTexture>,
+}
+
+/// gpu-ready texture: texture + view + sampler
+#[allow(dead_code)]
+struct GpuTexture {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
 }
 
 impl RenderEngine {
@@ -174,49 +189,105 @@ impl RenderEngine {
             mapped_at_creation: false,
         });
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("projection bind group layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("sprite sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
         });
 
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("sprite bind group layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        // placeholder bind group (no texture yet — created per-frame)
+        let placeholder_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("placeholder"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let placeholder_view =
+            placeholder_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("projection bind group"),
+            label: Some("sprite bind group"),
             layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buf.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&placeholder_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
         });
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("rect shader"),
+            label: Some("sprite shader"),
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(SHADER_SOURCE)),
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("rect pipeline layout"),
+            label: Some("sprite pipeline layout"),
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
 
-        // vertex layout: [pos.x, pos.y, r, g, b, a] per vertex (stride 24 bytes)
-        let rect_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("rect pipeline"),
+        // vertex layout: [pos.x, pos.y, u, v, r, g, b, a] per vertex (stride 32 bytes)
+        let sprite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("sprite pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: 24,
+                    array_stride: 32,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &[
                         wgpu::VertexAttribute {
@@ -225,9 +296,14 @@ impl RenderEngine {
                             shader_location: 0,
                         },
                         wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x4,
+                            format: wgpu::VertexFormat::Float32x2,
                             offset: 8,
                             shader_location: 1,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 16,
+                            shader_location: 2,
                         },
                     ],
                 }],
@@ -238,7 +314,18 @@ impl RenderEngine {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_config.format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -276,9 +363,12 @@ impl RenderEngine {
             queue,
             config: surface_config,
             render_config: config,
-            rect_pipeline,
+            sprite_pipeline,
             uniform_buf,
+            bind_group_layout,
             bind_group,
+            sampler,
+            textures: HashMap::new(),
         }
     }
 
@@ -306,8 +396,61 @@ impl RenderEngine {
         self.render_config.height = height;
     }
 
+    /// upload a texture to the GPU, returns its handle id.
+    /// if the texture is already uploaded, this is a no-op.
+    pub fn upload_texture(&mut self, handle: &Handle<Texture>, texture: &Texture) {
+        if self.textures.contains_key(&handle.id()) {
+            return;
+        }
+
+        let gpu_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("sprite texture"),
+            size: wgpu::Extent3d {
+                width: texture.width,
+                height: texture.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &gpu_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &texture.pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * texture.width),
+                rows_per_image: Some(texture.height),
+            },
+            wgpu::Extent3d {
+                width: texture.width,
+                height: texture.height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let view = gpu_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.textures.insert(
+            handle.id(),
+            GpuTexture {
+                texture: gpu_texture,
+                view,
+            },
+        );
+    }
+
     /// render all draw commands for this frame.
-    /// all rects are packed into a single vertex buffer upload — one draw call for all geometry.
+    /// sprites are batched by texture — one draw call per unique texture.
+    /// rects (no texture) are drawn in a single additional draw call.
     pub fn render(&mut self, commands: &[DrawCommand]) {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
@@ -343,43 +486,27 @@ impl RenderEngine {
         self.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&projection));
 
-        // pack all rect vertices: [pos.x, pos.y, r, g, b, a] × 6 verts per rect
-        let mut vertices: Vec<f32> = Vec::with_capacity(commands.len() * 36);
+        // group sprite commands by texture id
+        let mut sprites_by_tex: HashMap<u32, Vec<&DrawCommand>> = HashMap::new();
+        let mut rect_commands: Vec<&DrawCommand> = Vec::new();
+
         for command in commands {
-            if let DrawKind::Rect {
-                position,
-                size,
-                color,
-            } = &command.kind
-            {
-                let (x, y, w, h) = (position.x, position.y, size.x, size.y);
-                for [px, py] in [
-                    [x, y],
-                    [x + w, y],
-                    [x, y + h],
-                    [x, y + h],
-                    [x + w, y],
-                    [x + w, y + h],
-                ] {
-                    vertices.extend_from_slice(&[px, py, color.r, color.g, color.b, color.a]);
+            match &command.kind {
+                DrawKind::Sprite {
+                    texture: Some(tex_id),
+                    ..
+                } => {
+                    sprites_by_tex
+                        .entry(*tex_id as u32)
+                        .or_default()
+                        .push(command);
                 }
+                DrawKind::Rect { .. } | DrawKind::Text { .. } => {
+                    rect_commands.push(command);
+                }
+                _ => {}
             }
         }
-
-        // create one vertex buffer for the whole frame (only if there's something to draw)
-        let vertex_buf = if !vertices.is_empty() {
-            use wgpu::util::DeviceExt;
-            Some(
-                self.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("rect vertices"),
-                        contents: bytemuck::cast_slice(&vertices),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    }),
-            )
-        } else {
-            None
-        };
 
         let mut encoder = self
             .device
@@ -410,12 +537,152 @@ impl RenderEngine {
                 multiview_mask: None,
             });
 
-            if let Some(buf) = &vertex_buf {
-                pass.set_pipeline(&self.rect_pipeline);
-                pass.set_bind_group(0, &self.bind_group, &[]);
-                pass.set_vertex_buffer(0, buf.slice(..));
-                // vertices.len() / 6 = total vertex count (each vertex is 6 floats)
-                pass.draw(0..(vertices.len() / 6) as u32, 0..1);
+            pass.set_pipeline(&self.sprite_pipeline);
+
+            // draw sprites batched by texture
+            for (tex_id, sprite_cmds) in &sprites_by_tex {
+                let Some(gpu_tex) = self.textures.get(tex_id) else {
+                    continue;
+                };
+
+                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("frame bind group"),
+                    layout: &self.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self.uniform_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&gpu_tex.view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                    ],
+                });
+
+                let mut vertices: Vec<f32> = Vec::with_capacity(sprite_cmds.len() * 48);
+                for command in sprite_cmds {
+                    if let DrawKind::Sprite {
+                        position,
+                        rotation,
+                        scale,
+                        tint,
+                        ..
+                    } = &command.kind
+                    {
+                        let hw = scale.x * 0.5;
+                        let hh = scale.y * 0.5;
+                        let cos = rotation.cos();
+                        let sin = rotation.sin();
+
+                        let corners = [
+                            [-hw, -hh],
+                            [hw, -hh],
+                            [-hw, hh],
+                            [-hw, hh],
+                            [hw, -hh],
+                            [hw, hh],
+                        ];
+                        let uvs = [
+                            [0.0, 0.0],
+                            [1.0, 0.0],
+                            [0.0, 1.0],
+                            [0.0, 1.0],
+                            [1.0, 0.0],
+                            [1.0, 1.0],
+                        ];
+
+                        for (i, [lx, ly]) in corners.iter().enumerate() {
+                            let rx = lx * cos - ly * sin;
+                            let ry = lx * sin + ly * cos;
+                            let px = position.x + rx;
+                            let py = position.y + ry;
+                            let [u, v] = uvs[i];
+                            vertices
+                                .extend_from_slice(&[px, py, u, v, tint.r, tint.g, tint.b, tint.a]);
+                        }
+                    }
+                }
+
+                if vertices.is_empty() {
+                    continue;
+                }
+
+                let vertex_buf =
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("sprite vertices"),
+                            contents: bytemuck::cast_slice(&vertices),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        });
+
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.set_vertex_buffer(0, vertex_buf.slice(..));
+                pass.draw(0..(vertices.len() / 8) as u32, 0..1);
+            }
+
+            // draw untextured commands (rects, text) as solid color
+            if !rect_commands.is_empty() {
+                let mut vertices: Vec<f32> = Vec::with_capacity(rect_commands.len() * 36);
+                for command in &rect_commands {
+                    match &command.kind {
+                        DrawKind::Rect {
+                            position,
+                            size,
+                            color,
+                        } => {
+                            let (x, y, w, h) = (position.x, position.y, size.x, size.y);
+                            for [px, py] in [
+                                [x, y],
+                                [x + w, y],
+                                [x, y + h],
+                                [x, y + h],
+                                [x + w, y],
+                                [x + w, y + h],
+                            ] {
+                                vertices.extend_from_slice(&[
+                                    px, py, 0.0, 0.0, color.r, color.g, color.b, color.a,
+                                ]);
+                            }
+                        }
+                        DrawKind::Text {
+                            position, color, ..
+                        } => {
+                            // stub: draw a small rect placeholder for text
+                            let (x, y) = (position.x, position.y);
+                            for [px, py] in [
+                                [x, y],
+                                [x + 50.0, y],
+                                [x, y + 16.0],
+                                [x, y + 16.0],
+                                [x + 50.0, y],
+                                [x + 50.0, y + 16.0],
+                            ] {
+                                vertices.extend_from_slice(&[
+                                    px, py, 0.0, 0.0, color.r, color.g, color.b, color.a,
+                                ]);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                if !vertices.is_empty() {
+                    let vertex_buf =
+                        self.device
+                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("rect vertices"),
+                                contents: bytemuck::cast_slice(&vertices),
+                                usage: wgpu::BufferUsages::VERTEX,
+                            });
+
+                    pass.set_vertex_buffer(0, vertex_buf.slice(..));
+                    pass.draw(0..(vertices.len() / 8) as u32, 0..1);
+                }
             }
         }
 
@@ -429,19 +696,31 @@ struct Uniforms { projection: mat4x4<f32> }
 
 struct VertexOut {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) color: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(1) var sprite_texture: texture_2d<f32>;
+@group(0) @binding(2) var sprite_sampler: sampler;
 
 @vertex
-fn vs_main(@location(0) pos: vec2<f32>, @location(1) color: vec4<f32>) -> VertexOut {
-    return VertexOut(uniforms.projection * vec4<f32>(pos, 0.0, 1.0), color);
+fn vs_main(
+    @location(0) pos: vec2<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) color: vec4<f32>,
+) -> VertexOut {
+    var out: VertexOut;
+    out.clip_position = uniforms.projection * vec4<f32>(pos, 0.0, 1.0);
+    out.uv = uv;
+    out.color = color;
+    return out;
 }
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    return in.color;
+    let tex_color = textureSample(sprite_texture, sprite_sampler, in.uv);
+    return tex_color * in.color;
 }
 "#;
 
@@ -457,8 +736,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 #[derive(Resource)]
 pub struct RenderQueue {
     commands: Vec<DrawCommand>,
-    /// optional render target (texture handle) for off-screen rendering
-    target: Option<u64>,
+    /// optional render target (texture handle id) for off-screen rendering
+    target: Option<u32>,
 }
 
 /// a single draw command.
@@ -517,12 +796,12 @@ impl RenderQueue {
 
     /// set the render target for subsequent draw commands.
     /// pass None to render to the main surface.
-    pub fn set_target(&mut self, target: Option<u64>) {
+    pub fn set_target(&mut self, target: Option<u32>) {
         self.target = target;
     }
 
     /// get the current render target
-    pub fn target(&self) -> Option<u64> {
+    pub fn target(&self) -> Option<u32> {
         self.target
     }
 
@@ -536,11 +815,11 @@ impl RenderQueue {
         &self.commands
     }
 
-    /// draw a sprite at the given position and size
-    pub fn draw_sprite(&mut self, texture: u64, position: Vec2, size: Vec2) {
+    /// draw a sprite at the given position and size using a texture handle
+    pub fn draw_sprite(&mut self, texture: &Handle<Texture>, position: Vec2, size: Vec2) {
         self.push(DrawCommand {
             kind: DrawKind::Sprite {
-                texture: Some(texture),
+                texture: Some(texture.id() as u64),
                 position,
                 rotation: 0.0,
                 scale: size,
@@ -549,10 +828,10 @@ impl RenderQueue {
         });
     }
 
-    /// draw a sprite with full transform control
+    /// draw a sprite with full transform control using a texture handle
     pub fn draw_sprite_transformed(
         &mut self,
-        texture: u64,
+        texture: &Handle<Texture>,
         position: Vec2,
         size: Vec2,
         rotation: f32,
@@ -561,7 +840,7 @@ impl RenderQueue {
     ) {
         self.push(DrawCommand {
             kind: DrawKind::Sprite {
-                texture: Some(texture),
+                texture: Some(texture.id() as u64),
                 position,
                 rotation,
                 scale: size,
