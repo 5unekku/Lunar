@@ -339,9 +339,9 @@
 ## Phase 9: Polish & Extras
 
 ### 16. Extensibility
-- [ ] 16.1 Custom render passes
-  - [ ] 16.1.1 RenderPass trait
-  - [ ] 16.1.2 add_render_pass()
+- [x] 16.1 Custom render passes
+  - [x] 16.1.1 RenderPass trait
+  - [x] 16.1.2 add_render_pass()
 - [x] 16.2 Custom asset loaders
   - [x] 16.2.1 register_asset_loader(extension, loader)
 - [ ] 16.3 Engine forking
