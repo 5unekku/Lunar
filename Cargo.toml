@@ -29,6 +29,7 @@ raw-window-handle = "0.6"
 sdl3 = "0.18"
 log = "0.4"
 env_logger = "0.11"
+pollster = "0.4"
 
 [package]
 name = "lunar"

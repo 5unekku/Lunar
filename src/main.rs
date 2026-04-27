@@ -2,6 +2,8 @@
 //!
 //! main entry point that wires up all subsystems and runs the game loop.
 
+mod app_macro;
+
 use engine_core::{CommandRegistry, EngineState, GameLoop};
 use engine_render::RenderConfig;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
