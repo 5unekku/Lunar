@@ -112,6 +112,8 @@ struct AssetEntry<T: Asset> {
     generation: u16,
     path: String,
     state: LoadState,
+    /// number of active handles referencing this entry
+    ref_count: u32,
 }
 
 /// a typed asset store that holds loaded resources
@@ -154,6 +156,7 @@ impl<T: Asset> AssetStore<T> {
             generation,
             path: path.clone(),
             state: LoadState::Loading,
+            ref_count: 1,
         });
         self.path_index.insert(path, id);
 
@@ -173,6 +176,25 @@ impl<T: Asset> AssetStore<T> {
         }
     }
 
+    fn increment_ref(&mut self, id: u32) {
+        if let Some(entry) = &mut self.entries[id as usize] {
+            entry.ref_count = entry.ref_count.saturating_add(1);
+        }
+    }
+
+    fn decrement_ref(&mut self, id: u32) {
+        if let Some(entry) = &mut self.entries[id as usize] {
+            entry.ref_count = entry.ref_count.saturating_sub(1);
+        }
+    }
+
+    fn is_unused(&self, id: u32) -> bool {
+        self.entries
+            .get(id as usize)
+            .and_then(|e| e.as_ref())
+            .is_some_and(|e| e.ref_count == 0)
+    }
+
     fn is_ready(&self, handle: &Handle<T>) -> bool {
         if let Some(entry) = &self
             .entries
@@ -183,6 +205,13 @@ impl<T: Asset> AssetStore<T> {
         } else {
             false
         }
+    }
+
+    fn is_loaded(&self, handle: &Handle<T>) -> bool {
+        self.entries
+            .get(handle.id as usize)
+            .and_then(|e| e.as_ref())
+            .is_some_and(|entry| entry.state == LoadState::Loaded)
     }
 
     fn get_info(&self, handle: &Handle<T>) -> Option<AssetInfo> {
@@ -268,6 +297,21 @@ impl AssetServer {
     /// check if a font handle is ready
     pub fn is_font_ready(&self, handle: &Handle<Font>) -> bool {
         self.font_store.is_ready(handle)
+    }
+
+    /// check if a texture is loaded
+    pub fn is_texture_loaded(&self, handle: &Handle<Texture>) -> bool {
+        self.texture_store.is_loaded(handle)
+    }
+
+    /// check if a sound is loaded
+    pub fn is_sound_loaded(&self, handle: &Handle<Sound>) -> bool {
+        self.sound_store.is_loaded(handle)
+    }
+
+    /// check if a font is loaded
+    pub fn is_font_loaded(&self, handle: &Handle<Font>) -> bool {
+        self.font_store.is_loaded(handle)
     }
 
     /// get texture info
