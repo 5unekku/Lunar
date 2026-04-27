@@ -239,6 +239,32 @@ impl RenderEngine {
         Self::init_inner(adapter, device, queue, surface, config)
     }
 
+    /// create a WebGPU surface from a canvas element (WASM only).
+    #[cfg(target_arch = "wasm32")]
+    pub fn create_canvas_surface(
+        instance: &wgpu::Instance,
+        canvas: &web_sys::HtmlCanvasElement,
+    ) -> Result<wgpu::Surface<'static>, String> {
+        use wasm_bindgen::JsCast;
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
+            .map_err(|e| format!("failed to create surface: {e:?}"))?;
+        Ok(surface)
+    }
+
+    /// find a canvas element by id and return it.
+    #[cfg(target_arch = "wasm32")]
+    pub fn find_canvas(id: &str) -> Result<web_sys::HtmlCanvasElement, String> {
+        let window = web_sys::window().ok_or("no window")?;
+        let document = window.document().ok_or("no document")?;
+        let element = document
+            .get_element_by_id(id)
+            .ok_or_else(|| format!("no element with id '{id}'"))?;
+        element
+            .dyn_into::<web_sys::HtmlCanvasElement>()
+            .map_err(|_| format!("element '{id}' is not a canvas"))
+    }
+
     fn init_inner(
         adapter: wgpu::Adapter,
         device: wgpu::Device,

@@ -318,10 +318,10 @@
   - [x] 15.2.1 Replace tokio with web-compatible async for wasm (src/web.rs uses wasm_bindgen)
   - [x] 15.2.2 No std::thread on wasm
   - [x] 15.2.3 Use async task pools (IoTaskPool uses wasm_bindgen_futures::spawn_local on wasm)
-- [ ] 15.3 WebGPU surface
-  - [ ] 15.3.1 Canvas element instead of SDL3 window
-  - [ ] 15.3.2 WebGPU surface creation for wasm
-  - [ ] 15.3.3 Request adapter/device for web
+- [x] 15.3 WebGPU surface
+  - [x] 15.3.1 Canvas element instead of SDL3 window
+  - [x] 15.3.2 WebGPU surface creation for wasm
+  - [x] 15.3.3 Request adapter/device for web
 - [x] 15.4 Web input
   - [x] 15.4.1 keyboard and mouse via web-sys event listeners
   - [x] 15.4.2 gamepad via navigator.getGamepads() polling
