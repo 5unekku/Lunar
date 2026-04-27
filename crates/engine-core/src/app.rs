@@ -9,10 +9,12 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use bevy_ecs::prelude::*;
+use bevy_ecs::schedule::ScheduleLabel;
 use bevy_ecs::system::RunSystemOnce;
 
 use crate::engine::Engine;
 use crate::game_loop::GameLoop;
+use crate::schedule::{StageOrder, UpdateStage};
 use crate::state::EngineState;
 
 /// time resource updated each frame
@@ -164,10 +166,34 @@ impl App {
         self
     }
 
+    /// add a system to a specific update stage
+    pub fn add_system_to_stage<M>(
+        &mut self,
+        stage: UpdateStage,
+        system: impl IntoSystem<(), (), M>,
+    ) -> &mut Self {
+        self.engine.schedule_mut().add_systems(system);
+        // note: bevy_ecs schedules don't support custom stage labels directly
+        // on a single Schedule; stage ordering is handled via multiple schedules.
+        // for now, systems are added to the default Update schedule.
+        // full stage support requires switching to bevy_ecs's ScheduleGraph.
+        let _ = stage;
+        self
+    }
+
     /// add a startup system that runs once before the main loop
     pub fn add_startup_system<M>(&mut self, system: impl IntoSystem<(), (), M>) -> &mut Self {
         // startup systems are tracked separately and run once before the main schedule
         let _ = self.engine.world_mut().run_system_once(system);
+        self
+    }
+
+    /// add a custom stage with the given ordering relative to built-in stages
+    pub fn add_stage<S: ScheduleLabel>(&mut self, stage: S, order: StageOrder) -> &mut Self {
+        // custom stages require a separate schedule; the engine currently
+        // uses a single Update schedule. this method is a placeholder
+        // for future expansion when bevy_ecs's full schedule graph is used.
+        let _ = (stage, order);
         self
     }
 

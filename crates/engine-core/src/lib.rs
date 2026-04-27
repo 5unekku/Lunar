@@ -57,7 +57,7 @@ pub use engine::Engine;
 /// game loop with fixed timestep
 pub use game_loop::{GameLoop, TickRate};
 /// system scheduling with stage ordering
-pub use schedule::{StageOrder, UpdateStage};
+pub use schedule::{StageLabelExt, StageOrder, UpdateStage};
 /// engine running state
 pub use state::EngineState;
 /// world zone management

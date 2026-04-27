@@ -11,10 +11,12 @@
 //! 3. [`Update`](UpdateStage::Update) — general game logic
 //! 4. [`Render`](UpdateStage::Render) — queue render commands
 
+use bevy_ecs::schedule::ScheduleLabel;
+
 /// built-in update stages for system ordering.
 ///
 /// use these to group systems into logical phases of the frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ScheduleLabel)]
 pub enum UpdateStage {
     /// poll input, update input state
     Input,
@@ -37,4 +39,14 @@ pub enum StageOrder {
     After(UpdateStage),
     /// run between two stages
     Between(UpdateStage, UpdateStage),
+}
+
+/// trait for custom stage labels.
+///
+/// implement this to define custom stages that can be ordered
+/// relative to the built-in [`UpdateStage`] variants.
+#[allow(dead_code)]
+pub trait StageLabelExt: ScheduleLabel {
+    /// get the ordering relative to built-in stages
+    fn stage_order(&self) -> StageOrder;
 }
