@@ -520,6 +520,117 @@ impl RenderQueue {
     pub fn commands(&self) -> &[DrawCommand] {
         &self.commands
     }
+
+    /// draw a sprite at the given position and size
+    pub fn draw_sprite(&mut self, texture: u64, position: Vec2, size: Vec2) {
+        self.push(DrawCommand {
+            kind: DrawKind::Sprite {
+                texture: Some(texture),
+                position,
+                rotation: 0.0,
+                scale: size,
+                tint: Color::WHITE,
+            },
+        });
+    }
+
+    /// draw a sprite with full transform control
+    pub fn draw_sprite_transformed(
+        &mut self,
+        texture: u64,
+        position: Vec2,
+        size: Vec2,
+        rotation: f32,
+        _origin: Vec2,
+        tint: Color,
+    ) {
+        self.push(DrawCommand {
+            kind: DrawKind::Sprite {
+                texture: Some(texture),
+                position,
+                rotation,
+                scale: size,
+                tint,
+            },
+        });
+    }
+
+    /// draw a colored rectangle
+    pub fn draw_rect(&mut self, position: Vec2, size: Vec2, color: Color) {
+        self.push(DrawCommand {
+            kind: DrawKind::Rect {
+                position,
+                size,
+                color,
+            },
+        });
+    }
+
+    /// draw a line between two points
+    pub fn draw_line(&mut self, start: Vec2, end: Vec2, color: Color, thickness: f32) {
+        let delta = end - start;
+        let length = delta.length();
+        if length < 0.001 {
+            return;
+        }
+        // draw a thin rect along the line
+        let angle = delta.y.atan2(delta.x);
+        let cos = angle.cos();
+        let sin = angle.sin();
+        let half_t = thickness * 0.5;
+
+        // compute the axis-aligned bounding box of the rotated line rect
+        let corners = [
+            [-sin * half_t, cos * half_t],
+            [cos * length - sin * half_t, sin * length + cos * half_t],
+            [cos * length + sin * half_t, sin * length - cos * half_t],
+            [sin * half_t, -cos * half_t],
+        ];
+
+        let min_x = corners.iter().map(|c| c[0]).fold(f32::INFINITY, f32::min);
+        let max_x = corners
+            .iter()
+            .map(|c| c[0])
+            .fold(f32::NEG_INFINITY, f32::max);
+        let min_y = corners.iter().map(|c| c[1]).fold(f32::INFINITY, f32::min);
+        let max_y = corners
+            .iter()
+            .map(|c| c[1])
+            .fold(f32::NEG_INFINITY, f32::max);
+
+        self.push(DrawCommand {
+            kind: DrawKind::Rect {
+                position: Vec2::new(start.x + min_x, start.y + min_y),
+                size: Vec2::new(max_x - min_x, max_y - min_y),
+                color,
+            },
+        });
+    }
+
+    /// clear the screen with the given color.
+    /// this is a convenience that draws a full-screen rect — the render engine's
+    /// default clear color is not affected.
+    pub fn clear_color(&mut self, color: Color) {
+        self.push(DrawCommand {
+            kind: DrawKind::Rect {
+                position: Vec2::ZERO,
+                size: Vec2::new(10000.0, 10000.0),
+                color,
+            },
+        });
+    }
+
+    /// draw text at the given position
+    pub fn draw_text(&mut self, content: &str, position: Vec2, font_size: f32, color: Color) {
+        self.push(DrawCommand {
+            kind: DrawKind::Text {
+                content: content.to_string(),
+                position,
+                font_size,
+                color,
+            },
+        });
+    }
 }
 
 impl Default for RenderQueue {
