@@ -36,6 +36,88 @@ use engine_core::{App, GamePlugin};
 use engine_math::{Color, Vec2};
 use wgpu::util::DeviceExt;
 
+/// camera resource, affects how the render queue is projected.
+///
+/// when no camera resource exists, rendering uses world-space anchored at origin.
+/// when present, the orthographic projection is offset and scaled accordingly.
+#[derive(Resource, Clone)]
+pub struct Camera {
+    /// camera position in world space
+    pub position: Vec2,
+    /// zoom level (1.0 = 1:1, 2.0 = 2x zoom)
+    pub zoom: f32,
+    /// rotation in radians
+    pub rotation: f32,
+    /// viewport size in pixels (None = full window)
+    pub viewport: Option<(u32, u32)>,
+}
+
+impl Camera {
+    /// create a new camera at the origin with default settings
+    pub fn new() -> Self {
+        Self {
+            position: Vec2::ZERO,
+            zoom: 1.0,
+            rotation: 0.0,
+            viewport: None,
+        }
+    }
+
+    /// create a camera at the given position
+    pub fn at_position(x: f32, y: f32) -> Self {
+        Self {
+            position: Vec2::new(x, y),
+            zoom: 1.0,
+            rotation: 0.0,
+            viewport: None,
+        }
+    }
+
+    /// compute the orthographic projection matrix incorporating camera transforms.
+    /// returns a 4x4 column-major matrix as a flat array of 16 f32s.
+    pub fn projection_matrix(&self, window_width: u32, window_height: u32) -> [f32; 16] {
+        let w = window_width as f32;
+        let h = window_height as f32;
+        let zoom = self.zoom.max(0.001);
+        let cos = self.rotation.cos();
+        let sin = self.rotation.sin();
+
+        // base orthographic scale
+        let sx = 2.0 / w * zoom;
+        let sy = -2.0 / h * zoom;
+
+        // camera translation (accounting for rotation)
+        let tx = -(self.position.x * cos - self.position.y * sin);
+        let ty = -(self.position.x * sin + self.position.y * cos);
+
+        // combined matrix: scale then translate, y-down
+        [
+            sx,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            sy,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            sx * tx - 1.0,
+            sy * ty + 1.0,
+            0.0,
+            1.0,
+        ]
+    }
+}
+
+impl Default for Camera {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// rendering configuration.
 ///
 /// controls window size, vsync, and frame rate limiting.
@@ -451,7 +533,7 @@ impl RenderEngine {
     /// render all draw commands for this frame.
     /// sprites are batched by texture — one draw call per unique texture.
     /// rects (no texture) are drawn in a single additional draw call.
-    pub fn render(&mut self, commands: &[DrawCommand]) {
+    pub fn render(&mut self, commands: &[DrawCommand], camera: Option<&Camera>) {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
@@ -462,27 +544,33 @@ impl RenderEngine {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // orthographic projection: y-down, maps [0, width] x [0, height] to NDC
-        let surface_width = self.config.width as f32;
-        let surface_height = self.config.height as f32;
-        let projection: [f32; 16] = [
-            2.0 / surface_width,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            -2.0 / surface_height,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            1.0,
-            0.0,
-            -1.0,
-            1.0,
-            0.0,
-            1.0,
-        ];
+        // compute projection matrix: use camera if provided, otherwise default orthographic
+        let projection = match camera {
+            Some(cam) => cam.projection_matrix(self.config.width, self.config.height),
+            None => {
+                // orthographic projection: y-down, maps [0, width] x [0, height] to NDC
+                let surface_width = self.config.width as f32;
+                let surface_height = self.config.height as f32;
+                [
+                    2.0 / surface_width,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    -2.0 / surface_height,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    -1.0,
+                    1.0,
+                    0.0,
+                    1.0,
+                ]
+            }
+        };
         self.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&projection));
 
