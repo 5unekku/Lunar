@@ -277,6 +277,17 @@ impl App {
     /// start the game loop with per-frame event processing
     /// the callback runs each frame before the ECS tick, giving you a chance to
     /// poll native events and update resources like InputState.
+    ///
+    /// # example
+    ///
+    /// ```ignore
+    /// use engine_input::{InputPlugin, process_events, init_sdl};
+    /// let mut event_pump = init_sdl();
+    /// app.add_plugin(InputPlugin);
+    /// app.run_with_events(60, |world| {
+    ///     process_events(&mut event_pump, world);
+    /// });
+    /// ```
     pub fn run_with_events<F>(&mut self, frame_cap: u32, mut process_events: F)
     where
         F: FnMut(&mut World),
