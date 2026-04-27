@@ -190,9 +190,9 @@
   - [x] 8.4.4 SoundLoader (wav, ogg, mp3, flac)
   - [x] 8.4.5 FontLoader (ttf, otf)
   - [x] 8.4.6 Loading flow: load → I/O task → parse → store → ready
-- [ ] 8.5 Asset paths
-  - [ ] 8.5.1 Resolve relative to game's assets/ directory
-  - [ ] 8.5.2 Handle both "path" and "./path" formats
+- [x] 8.5 Asset paths
+  - [x] 8.5.1 Resolve relative to game's assets/ directory
+  - [x] 8.5.2 Handle both "path" and "./path" formats
 - [ ] 8.6 Hot reloading (dev only)
   - [ ] 8.6.1 AssetWatcher resource
   - [ ] 8.6.2 File watching with notify crate
