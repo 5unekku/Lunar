@@ -29,6 +29,7 @@
 //! ```
 
 pub mod mesh;
+pub mod render_pass_3d;
 mod text;
 pub mod textbox;
 
