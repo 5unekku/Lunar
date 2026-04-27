@@ -108,14 +108,14 @@
   - [x] 6.2.3 Orthographic projection matrix
   - [x] 6.2.4 Vertex/instance buffers for sprites
   - note: PNG/JPG are starting formats — more efficient packed formats (QOI, KTX2, custom) TBD later
-- [ ] 6.3 Text rendering
+- [x] 6.3 Text rendering
   - note: must bundle fonts with the game — no system font reliance (poor intersection across win/linux/mac/web)
   - note: fonts are ttf/otf, linked statically or shipped alongside the binary
   - note: fontdue is the preferred rasterizer (pure Rust, no system deps, WASM compatible)
-  - [ ] 6.3.1 Font loading (ttf/otf via fontdue)
-  - [ ] 6.3.2 Glyph rasterization → CPU-side bitmap, uploaded to a GPU atlas texture
-  - [ ] 6.3.3 Text layout (simple left-to-right for now, baseline alignment)
-  - [ ] 6.3.4 Render text as UV-mapped quads from the glyph atlas
+  - [x] 6.3.1 Font loading (ttf/otf via fontdue)
+  - [x] 6.3.2 Glyph rasterization → CPU-side bitmap, uploaded to a GPU atlas texture
+  - [x] 6.3.3 Text layout (simple left-to-right for now, baseline alignment)
+  - [x] 6.3.4 Render text as UV-mapped quads from the glyph atlas
 - [x] 6.4 Camera resource (optional — not all games need it)
   - note: games like galaga/pacman use no camera; mario/contra need one — engine must work both ways
   - [x] 6.4.1 Camera with position, zoom, rotation, viewport
