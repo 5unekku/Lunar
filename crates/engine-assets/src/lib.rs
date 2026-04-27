@@ -588,12 +588,39 @@ fn font_loader_for(path: &str) -> Arc<dyn FontLoaderTrait> {
 ///     // handle is valid immediately, but the texture data loads in the background
 /// }
 /// ```
+/// loader entry for the extension-based dispatch registry.
+struct LoaderEntry {
+    extensions: Vec<String>,
+    loader: Arc<dyn AssetLoaderDyn>,
+}
+
+/// object-safe trait for type-erased asset loaders.
+trait AssetLoaderDyn: Send + Sync {
+    #[allow(dead_code)]
+    fn load(&self, bytes: Vec<u8>) -> Result<Box<dyn std::any::Any>, String>;
+}
+
+/// wrapper that makes a typed AssetLoader implement AssetLoaderDyn.
+struct AssetLoaderWrapper<L: AssetLoader> {
+    #[allow(dead_code)]
+    loader: L,
+}
+
+impl<L: AssetLoader> AssetLoaderDyn for AssetLoaderWrapper<L> {
+    fn load(&self, bytes: Vec<u8>) -> Result<Box<dyn std::any::Any>, String> {
+        let asset = self.loader.load(bytes)?;
+        Ok(Box::new(asset))
+    }
+}
+
 #[derive(Resource)]
 pub struct AssetServer {
     texture_store: AssetStore<Texture>,
     sound_store: AssetStore<Sound>,
     font_store: AssetStore<Font>,
     io_pool: IoTaskPool,
+    /// registered loaders keyed by file extension.
+    custom_loaders: Vec<LoaderEntry>,
 }
 
 impl AssetServer {
@@ -604,6 +631,7 @@ impl AssetServer {
             sound_store: AssetStore::new(),
             font_store: AssetStore::new(),
             io_pool: IoTaskPool::new(io_thread_count),
+            custom_loaders: Vec::new(),
         }
     }
 
@@ -613,9 +641,11 @@ impl AssetServer {
         extensions: &[&str],
         loader: L,
     ) {
-        let _ = (extensions, loader);
-        // note: custom loader registry is a stub. the default loader dispatch
-        // by extension already covers common formats.
+        let entry = LoaderEntry {
+            extensions: extensions.iter().map(|s| s.to_string()).collect(),
+            loader: Arc::new(AssetLoaderWrapper { loader }),
+        };
+        self.custom_loaders.push(entry);
     }
 
     /// register a custom sound loader for the given extensions.
@@ -624,7 +654,11 @@ impl AssetServer {
         extensions: &[&str],
         loader: L,
     ) {
-        let _ = (extensions, loader);
+        let entry = LoaderEntry {
+            extensions: extensions.iter().map(|s| s.to_string()).collect(),
+            loader: Arc::new(AssetLoaderWrapper { loader }),
+        };
+        self.custom_loaders.push(entry);
     }
 
     /// register a custom font loader for the given extensions.
@@ -633,7 +667,25 @@ impl AssetServer {
         extensions: &[&str],
         loader: L,
     ) {
-        let _ = (extensions, loader);
+        let entry = LoaderEntry {
+            extensions: extensions.iter().map(|s| s.to_string()).collect(),
+            loader: Arc::new(AssetLoaderWrapper { loader }),
+        };
+        self.custom_loaders.push(entry);
+    }
+
+    /// find a custom loader by file extension.
+    #[allow(dead_code)]
+    fn find_loader(&self, path: &str) -> Option<&Arc<dyn AssetLoaderDyn>> {
+        let ext = std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())?;
+        for entry in &self.custom_loaders {
+            if entry.extensions.iter().any(|e| e == ext) {
+                return Some(&entry.loader);
+            }
+        }
+        None
     }
 
     /// load an asset by path, returns immediately with a handle.
