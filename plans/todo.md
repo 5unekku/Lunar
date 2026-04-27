@@ -327,8 +327,8 @@
   - [x] 15.4.2 gamepad via navigator.getGamepads() polling
 - [x] 15.5 Web asset loading
   - [x] 15.5.1 Fetch API via web_fetch module (fetch_bytes, fetch_texture, fetch_sound, fetch_font)
-  - [ ] 15.5.2 Bundled assets at compile time
-  - [ ] 15.5.3 Asset bundles for web distribution
+  - [x] 15.5.2 Bundled assets at compile time
+  - [x] 15.5.3 Asset bundles for web distribution
 - [x] 15.6 Web build tooling
   - [x] 15.6.1 wasm-pack or trunk integration (wasm-bindgen-cli in build script)
   - [x] 15.6.2 HTML template with canvas
