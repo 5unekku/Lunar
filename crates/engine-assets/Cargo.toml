@@ -13,3 +13,4 @@ crossbeam-channel = "0.5"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "webp", "gif"] }
 rodio = { version = "0.20", default-features = false, features = ["wav", "vorbis"] }
 fontdue = "0.9"
+notify = { version = "7.0", default-features = false }

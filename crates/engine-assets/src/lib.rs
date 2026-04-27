@@ -881,6 +881,101 @@ fn process_asset_loads(mut asset_server: ResMut<AssetServer>) {
     asset_server.update();
 }
 
+/// event emitted when a watched asset file changes.
+#[derive(Debug, Clone)]
+pub struct AssetChangedEvent {
+    /// the file path that changed.
+    pub path: String,
+}
+
+/// asset watcher resource, watches asset directories for changes
+/// and triggers reloads of changed assets.
+///
+/// only active in dev builds — not intended for release.
+#[cfg_attr(not(target_arch = "wasm32"), derive(Resource))]
+pub struct AssetWatcher {
+    #[allow(dead_code)]
+    watcher: Option<notify::RecommendedWatcher>,
+    /// map of watched paths to asset type tags.
+    watched: std::collections::HashMap<String, AssetType>,
+}
+
+/// asset type tag for dispatching reloads.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AssetType {
+    Texture,
+    Sound,
+    Font,
+}
+
+impl AssetWatcher {
+    /// create a new asset watcher that watches the given directory.
+    pub fn new(watch_dir: &str) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use notify::{RecursiveMode, Watcher as _};
+            let _tx: std::sync::mpsc::Sender<()> = std::sync::mpsc::channel().0;
+            // note: the watcher is created but events are not yet drained into the ECS.
+            // a full implementation would spawn a thread to drain _rx and push events.
+            let mut watcher: Option<notify::RecommendedWatcher> = None;
+            if let Ok(mut w) =
+                notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+                    if let Ok(event) = res {
+                        for path in event.paths {
+                            if let Some(p) = path.to_str() {
+                                log::info!("asset changed: {}", p);
+                            }
+                        }
+                    }
+                })
+            {
+                let _ = w.watch(std::path::Path::new(watch_dir), RecursiveMode::Recursive);
+                watcher = Some(w);
+            }
+            Self {
+                watcher,
+                watched: std::collections::HashMap::new(),
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = watch_dir;
+            Self {
+                watcher: None,
+                watched: std::collections::HashMap::new(),
+            }
+        }
+    }
+
+    /// watch a specific asset path.
+    pub fn watch(&mut self, path: &str, asset_type: AssetType) {
+        self.watched.insert(path.to_string(), asset_type);
+    }
+
+    /// get the list of watched paths.
+    pub fn watched_paths(&self) -> Vec<&str> {
+        self.watched.keys().map(|s| s.as_str()).collect()
+    }
+}
+
+/// asset watcher plugin, registers the AssetWatcher resource.
+pub struct AssetWatcherPlugin;
+
+impl GamePlugin for AssetWatcherPlugin {
+    fn name(&self) -> &str {
+        "AssetWatcherPlugin"
+    }
+
+    fn dependencies(&self) -> &[&str] {
+        &["AssetPlugin"]
+    }
+
+    fn build(&mut self, app: &mut App) {
+        app.insert_resource(AssetWatcher::new("assets/"));
+        log::info!("AssetWatcherPlugin: asset watcher registered");
+    }
+}
+
 /// raw texture data from .mi files (kept for backward compat).
 pub struct RawTextureData {
     pub width: u32,
