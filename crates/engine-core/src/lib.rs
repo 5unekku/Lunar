@@ -37,6 +37,7 @@ pub use engine_math;
 mod app;
 mod command;
 mod dialogue;
+mod dialogue_parser;
 mod engine;
 mod error;
 mod game_loop;
@@ -54,6 +55,8 @@ pub use dialogue::{
     Dialogue, DialogueBuilder, DialogueChoice, DialogueLine, DialogueManager, DialogueNode,
     DialoguePlugin, DialogueState,
 };
+/// dialogue yaml parser
+pub use dialogue_parser::{parse_dialogue, parse_dialogue_file};
 /// engine wrapper around bevy_ecs world and schedule
 pub use engine::Engine;
 /// error handling types

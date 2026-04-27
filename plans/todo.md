@@ -287,9 +287,9 @@
 ## Phase 7: Dialogue System (Design TBD)
 
 ### 14. Dialogue System
-- [ ] 14.1 Authoring format (TBD)
-  - [ ] 14.1.1 Decide: custom DSL vs structured data vs other
-  - [ ] 14.1.2 Compiler to binary format
+- [x] 14.1 Authoring format (yaml-based)
+  - [x] 14.1.1 yaml structured data format with speaker, text, sprite_change, choices
+  - [x] 14.1.2 parse_dialogue() and parse_dialogue_file() functions
 - [x] 14.2 Runtime system
   - [x] 14.2.1 Dialogue resource (DialogueManager)
   - [x] 14.2.2 Speaker ID system (string → numeric) — speaker: Option<String>
