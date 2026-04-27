@@ -132,6 +132,143 @@ pub enum MouseButton {
     Middle,
 }
 
+/// number of gamepad buttons tracked (standard gamepad layout)
+const GAMEPAD_BUTTON_COUNT: usize = 16;
+/// number of gamepad axes tracked (left stick x/y, right stick x/y, triggers)
+const GAMEPAD_AXIS_COUNT: usize = 6;
+
+/// gamepad state, tracked per gamepad index.
+/// uses fixed-size arrays for O(1) lookup.
+#[derive(Debug, Clone)]
+pub struct GamepadState {
+    buttons_held: [bool; GAMEPAD_BUTTON_COUNT],
+    buttons_just_pressed: [bool; GAMEPAD_BUTTON_COUNT],
+    buttons_just_released: [bool; GAMEPAD_BUTTON_COUNT],
+    axes: [f32; GAMEPAD_AXIS_COUNT],
+}
+
+impl GamepadState {
+    /// create a new empty gamepad state
+    pub fn new() -> Self {
+        Self {
+            buttons_held: [false; GAMEPAD_BUTTON_COUNT],
+            buttons_just_pressed: [false; GAMEPAD_BUTTON_COUNT],
+            buttons_just_released: [false; GAMEPAD_BUTTON_COUNT],
+            axes: [0.0; GAMEPAD_AXIS_COUNT],
+        }
+    }
+
+    /// check if a button is currently held
+    pub fn is_button_held(&self, button: GamepadButton) -> bool {
+        self.buttons_held[button as usize]
+    }
+
+    /// check if a button was just pressed this frame
+    pub fn is_button_just_pressed(&self, button: GamepadButton) -> bool {
+        self.buttons_just_pressed[button as usize]
+    }
+
+    /// check if a button was just released this frame
+    pub fn is_button_just_released(&self, button: GamepadButton) -> bool {
+        self.buttons_just_released[button as usize]
+    }
+
+    /// get an axis value (-1.0 to 1.0)
+    pub fn axis(&self, axis: GamepadAxis) -> f32 {
+        self.axes[axis as usize]
+    }
+
+    /// press a button
+    pub fn press_button(&mut self, button: GamepadButton) {
+        let index = button as usize;
+        if !self.buttons_held[index] {
+            self.buttons_just_pressed[index] = true;
+        }
+        self.buttons_held[index] = true;
+    }
+
+    /// release a button
+    pub fn release_button(&mut self, button: GamepadButton) {
+        let index = button as usize;
+        if self.buttons_held[index] {
+            self.buttons_just_released[index] = true;
+        }
+        self.buttons_held[index] = false;
+    }
+
+    /// set an axis value
+    pub fn set_axis(&mut self, axis: GamepadAxis, value: f32) {
+        self.axes[axis as usize] = value.clamp(-1.0, 1.0);
+    }
+
+    /// begin frame: clear just_pressed/just_released sets
+    pub fn begin_frame(&mut self) {
+        self.buttons_just_pressed = [false; GAMEPAD_BUTTON_COUNT];
+        self.buttons_just_released = [false; GAMEPAD_BUTTON_COUNT];
+    }
+}
+
+impl Default for GamepadState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// standard gamepad button layout.
+/// maps to a typical xbox-style controller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GamepadButton {
+    /// face button south (A on xbox, cross on playstation)
+    South,
+    /// face button east (B on xbox, circle on playstation)
+    East,
+    /// face button west (X on xbox, square on playstation)
+    West,
+    /// face button north (Y on xbox, triangle on playstation)
+    North,
+    /// left bumper
+    LeftBumper,
+    /// right bumper
+    RightBumper,
+    /// left stick button
+    LeftStick,
+    /// right stick button
+    RightStick,
+    /// back / select / view button
+    Back,
+    /// start button
+    Start,
+    /// dpad up
+    DpadUp,
+    /// dpad down
+    DpadDown,
+    /// dpad left
+    DpadLeft,
+    /// dpad right
+    DpadRight,
+    /// home / guide button
+    Home,
+    /// share / capture button
+    Share,
+}
+
+/// standard gamepad axis layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GamepadAxis {
+    /// left stick horizontal (-1.0 left, 1.0 right)
+    LeftStickX,
+    /// left stick vertical (-1.0 up, 1.0 down)
+    LeftStickY,
+    /// right stick horizontal (-1.0 left, 1.0 right)
+    RightStickX,
+    /// right stick vertical (-1.0 up, 1.0 down)
+    RightStickY,
+    /// left trigger (0.0 to 1.0)
+    LeftTrigger,
+    /// right trigger (0.0 to 1.0)
+    RightTrigger,
+}
+
 /// input state resource, tracks current and previous frame input.
 /// uses fixed-size bool arrays indexed by discriminant value — O(1) lookup, no hashing.
 #[derive(Resource, Clone)]
@@ -144,6 +281,7 @@ pub struct InputState {
     mouse_buttons_held: [bool; MOUSE_BUTTON_COUNT],
     mouse_buttons_just_pressed: [bool; MOUSE_BUTTON_COUNT],
     mouse_buttons_just_released: [bool; MOUSE_BUTTON_COUNT],
+    gamepads: Vec<GamepadState>,
 }
 
 impl InputState {
@@ -158,6 +296,7 @@ impl InputState {
             mouse_buttons_held: [false; MOUSE_BUTTON_COUNT],
             mouse_buttons_just_pressed: [false; MOUSE_BUTTON_COUNT],
             mouse_buttons_just_released: [false; MOUSE_BUTTON_COUNT],
+            gamepads: Vec::new(),
         }
     }
 
@@ -208,6 +347,50 @@ impl InputState {
         self.mouse_buttons_just_pressed = [false; MOUSE_BUTTON_COUNT];
         self.mouse_buttons_just_released = [false; MOUSE_BUTTON_COUNT];
         self.mouse_delta = (0.0, 0.0);
+        for gamepad in &mut self.gamepads {
+            gamepad.begin_frame();
+        }
+    }
+
+    /// get gamepad state by index (0-based).
+    /// returns None if the gamepad is not connected.
+    pub fn gamepad(&self, index: usize) -> Option<&GamepadState> {
+        self.gamepads.get(index)
+    }
+
+    /// register a new gamepad, returns its index
+    pub fn add_gamepad(&mut self) -> usize {
+        let index = self.gamepads.len();
+        self.gamepads.push(GamepadState::new());
+        index
+    }
+
+    /// remove a gamepad by index
+    pub fn remove_gamepad(&mut self, index: usize) {
+        if index < self.gamepads.len() {
+            self.gamepads.remove(index);
+        }
+    }
+
+    /// press a gamepad button
+    pub fn press_gamepad_button(&mut self, gamepad_index: usize, button: GamepadButton) {
+        if let Some(gamepad) = self.gamepads.get_mut(gamepad_index) {
+            gamepad.press_button(button);
+        }
+    }
+
+    /// release a gamepad button
+    pub fn release_gamepad_button(&mut self, gamepad_index: usize, button: GamepadButton) {
+        if let Some(gamepad) = self.gamepads.get_mut(gamepad_index) {
+            gamepad.release_button(button);
+        }
+    }
+
+    /// set a gamepad axis
+    pub fn set_gamepad_axis(&mut self, gamepad_index: usize, axis: GamepadAxis, value: f32) {
+        if let Some(gamepad) = self.gamepads.get_mut(gamepad_index) {
+            gamepad.set_axis(axis, value);
+        }
     }
 
     /// press a key
@@ -348,6 +531,7 @@ pub fn process_events(event_pump: &mut sdl3::EventPump, world: &mut bevy_ecs::pr
                     input.add_mouse_delta(*xrel, *yrel);
                     input.set_mouse_position(*x, *y);
                 }
+                // gamepad events require hidapi feature — stubbed for now
                 Event::Quit { .. } => got_quit = true,
                 _ => {}
             }
@@ -430,6 +614,8 @@ fn mouse_button_from_sdl(button: sdl3::mouse::MouseButton) -> Option<MouseButton
         _ => None,
     }
 }
+
+// gamepad event mapping requires hidapi feature — stubbed for now
 
 /// web input event queue (populated by JS callbacks via wasm-bindgen)
 #[cfg(target_arch = "wasm32")]
