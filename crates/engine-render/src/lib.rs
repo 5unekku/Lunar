@@ -29,6 +29,7 @@
 //! ```
 
 mod text;
+pub mod textbox;
 
 use std::collections::HashMap;
 

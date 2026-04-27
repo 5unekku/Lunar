@@ -297,10 +297,10 @@
   - [x] 14.2.4 Branching choices (DialogueChoice)
   - [x] 14.2.5 Sprite/emotion triggers during dialogue (sprite_change field)
   - [x] 14.2.6 Narrator text (no speaker) — speaker: Option<String>
-- [ ] 14.3 Text rendering integration
-  - [ ] 14.3.1 Textbox component
-  - [ ] 14.3.2 Font integration
-  - [ ] 14.3.3 Text animation (typewriter effect, etc.)
+- [x] 14.3 Text rendering integration
+  - [x] 14.3.1 Textbox component
+  - [x] 14.3.2 Font integration
+  - [x] 14.3.3 Text animation (typewriter effect, etc.)
 - [ ] 14.4 Localization
   - [ ] 14.4.1 Language selection
   - [ ] 14.4.2 Per-language dialogue files
