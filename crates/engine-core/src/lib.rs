@@ -38,6 +38,7 @@ mod app;
 mod command;
 mod dialogue;
 mod engine;
+mod error;
 mod game_loop;
 mod scene;
 mod schedule;
@@ -55,6 +56,8 @@ pub use dialogue::{
 };
 /// engine wrapper around bevy_ecs world and schedule
 pub use engine::Engine;
+/// error handling types
+pub use error::{EngineError, EngineResult, ErrorEvent, ErrorSource};
 /// game loop with fixed timestep
 pub use game_loop::{GameLoop, TickRate};
 /// scene system for game state management
