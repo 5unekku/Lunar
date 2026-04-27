@@ -39,6 +39,7 @@ mod command;
 mod dialogue;
 mod engine;
 mod game_loop;
+mod scene;
 mod schedule;
 mod state;
 mod zone;
@@ -56,6 +57,8 @@ pub use dialogue::{
 pub use engine::Engine;
 /// game loop with fixed timestep
 pub use game_loop::{GameLoop, TickRate};
+/// scene system for game state management
+pub use scene::{Scene, SceneManager};
 /// system scheduling with stage ordering
 pub use schedule::{StageLabelExt, StageOrder, UpdateStage};
 /// engine running state
