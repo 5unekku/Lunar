@@ -349,9 +349,9 @@
   - [ ] 16.3.2 Document fork points
 
 ### 17. Macros & Convenience
-- [ ] 17.1 transform! macro
-- [ ] 17.2 color! macro
-- [ ] 17.3 rect! macro
+- [x] 17.1 transform! macro
+- [x] 17.2 color! macro
+- [x] 17.3 rect! macro
 - [ ] 17.4 query! macro (optional)
 
 ### 18. 3D Future Compatibility
