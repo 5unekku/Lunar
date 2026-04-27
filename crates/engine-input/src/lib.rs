@@ -451,6 +451,15 @@ impl Default for InputState {
 ///
 /// add this plugin to your [`App`] to enable input handling.
 /// it registers the [`InputState`] as an ECS resource.
+///
+/// # native setup
+///
+/// on native targets, call [`InputPlugin::init_sdl`] before creating the app,
+/// then pass the returned event pump to [`App::run_with_events`].
+///
+/// # web setup
+///
+/// on web, call [`setup_web_input`] with the canvas element before running.
 pub struct InputPlugin;
 
 impl GamePlugin for InputPlugin {
@@ -464,11 +473,20 @@ impl GamePlugin for InputPlugin {
     }
 }
 
+/// initialize SDL3 and return an event pump.
+///
+/// call this once at startup on native targets.
+/// the returned pump should be used with [`process_events`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn init_sdl() -> sdl3::EventPump {
+    let sdl = sdl3::init().expect("failed to initialize SDL3");
+    sdl.event_pump().expect("failed to get event pump")
+}
+
 /// process SDL3 events and update the input state.
 ///
 /// this function should be called once per frame before the ECS tick.
-/// events are collected first so [`InputState`] is borrowed only once per frame,
-/// avoiding borrow conflicts.
+/// pass the event pump returned from [`init_sdl`] to poll events.
 ///
 /// # quit handling
 ///
