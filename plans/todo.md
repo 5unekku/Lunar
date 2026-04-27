@@ -193,10 +193,10 @@
 - [x] 8.5 Asset paths
   - [x] 8.5.1 Resolve relative to game's assets/ directory
   - [x] 8.5.2 Handle both "path" and "./path" formats
-- [ ] 8.6 Hot reloading (dev only)
-  - [ ] 8.6.1 AssetWatcher resource
-  - [ ] 8.6.2 File watching with notify crate
-  - [ ] 8.6.3 Auto-reload on file change
+- [x] 8.6 Hot reloading (dev only)
+  - [x] 8.6.1 AssetWatcher resource
+  - [x] 8.6.2 File watching with notify crate
+  - [x] 8.6.3 Auto-reload on file change
 - [x] 8.7 impl_asset! macro
   - [x] 8.7.1 Macro to implement Asset trait only
 
