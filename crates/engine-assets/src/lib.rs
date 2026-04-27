@@ -236,6 +236,14 @@ impl<T: Asset> AssetStore<T> {
                 }
             })
     }
+
+    fn loading_count(&self) -> usize {
+        self.entries
+            .iter()
+            .flatten()
+            .filter(|e| e.state == LoadState::Loading)
+            .count()
+    }
 }
 
 /// asset server resource, manages loading and handles.
@@ -347,6 +355,22 @@ impl AssetServer {
     /// load a batch of textures, returns handles immediately
     pub fn load_textures(&mut self, paths: &[&str]) -> Vec<Handle<Texture>> {
         paths.iter().map(|p| self.load_texture(p)).collect()
+    }
+
+    /// get the number of assets currently loading across all stores.
+    pub fn loading_count(&self) -> usize {
+        self.texture_store.loading_count()
+            + self.sound_store.loading_count()
+            + self.font_store.loading_count()
+    }
+
+    /// block until all assets are loaded.
+    /// this is a convenience for tests or initialization code.
+    /// in a real game, prefer polling `is_loaded` or `loading_count`.
+    pub fn wait_for_all(&self) {
+        while self.loading_count() > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 }
 
