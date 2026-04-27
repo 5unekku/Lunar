@@ -257,11 +257,11 @@
   - [x] 11.3.2 fade config (duration, color)
 
 ### 12. Scene System
-- [ ] 12.1 Scene trait
-  - [ ] 12.1.1 on_enter(), on_update(), on_exit()
-- [ ] 12.2 SceneManager resource
-  - [ ] 12.2.1 switch_to(), current_scene()
-  - [ ] 12.2.2 push_overlay(), pop_overlay()
+- [x] 12.1 Scene trait
+  - [x] 12.1.1 on_enter(), on_update(), on_exit()
+- [x] 12.2 SceneManager resource
+  - [x] 12.2.1 switch_to(), current_scene()
+  - [x] 12.2.2 push_overlay(), pop_overlay()
 
 ---
 
