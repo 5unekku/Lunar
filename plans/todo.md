@@ -5,7 +5,6 @@
 
 ## Legend
 - [ ] Not started
-- [-] In progress
 - [x] Complete
 - Dependencies listed as `→ #item`
 
@@ -43,7 +42,7 @@
   - [x] 2.2.3 insert_resource(), world_mut()
   - [x] 2.2.4 run() method that starts game loop
   - [x] 2.2.5 Topological sort by plugin dependencies
-- [-] 2.3 Built-in engine plugins
+- [ ] 2.3 Built-in engine plugins
   - [ ] 2.3.1 LogPlugin (env_logger init) — handled by user code, not a plugin
   - [x] 2.3.2 TimePlugin (delta time tracking) — Time resource in app.rs
   - [x] 2.3.3 InputPlugin (SDL3 input setup) — InputPlugin in engine-input
@@ -85,10 +84,10 @@
 - [x] 5.2 KeyCode and MouseButton enums
   - [x] 5.2.1 Map SDL3 keycodes to engine KeyCode (enum defined, mapping not wired)
   - [x] 5.2.2 Map SDL3 buttons to MouseButton (enum defined, mapping not wired)
-- [ ] 5.3 ActionMap resource (optional convenience)
-  - [ ] 5.3.1 bind(action, InputBinding)
-  - [ ] 5.3.2 is_action_held(), is_action_just_pressed()
-  - [ ] 5.3.3 InputBinding enum (Key, MouseButton, GamepadButton, etc.)
+- [x] 5.3 ActionMap resource (optional convenience)
+  - [x] 5.3.1 bind(action, InputBinding)
+  - [x] 5.3.2 is_action_held(), is_action_just_pressed()
+  - [x] 5.3.3 InputBinding enum (Key, MouseButton, GamepadButton, etc.)
 - [x] 5.4 InputPlugin
   - [x] 5.4.1 Initialize SDL3 input subsystem (plugin exists but SDL3 init not wired)
   - [x] 5.4.2 Update InputState each frame from events (InputState struct ready, event pump not connected)
@@ -103,11 +102,11 @@
   - [x] 6.1.6 draw_text(font, text, position, size, color) (via DrawKind::Text)
   - [x] 6.1.7 clear(color)
   - [x] 6.1.8 set_target(render_target)
-- [ ] 6.2 Sprite rendering backend
-  - [ ] 6.2.1 Texture loading from Handle<Texture>
-  - [ ] 6.2.2 Batch sprite rendering (single draw call per texture)
-  - [ ] 6.2.3 Orthographic projection matrix
-  - [ ] 6.2.4 Vertex/instance buffers for sprites
+- [x] 6.2 Sprite rendering backend
+  - [x] 6.2.1 Texture loading from Handle<Texture>
+  - [x] 6.2.2 Batch sprite rendering (single draw call per texture)
+  - [x] 6.2.3 Orthographic projection matrix
+  - [x] 6.2.4 Vertex/instance buffers for sprites
   - note: PNG/JPG are starting formats — more efficient packed formats (QOI, KTX2, custom) TBD later
 - [ ] 6.3 Text rendering
   - note: must bundle fonts with the game — no system font reliance (poor intersection across win/linux/mac/web)
@@ -311,11 +310,11 @@
 ## Phase 8: Web/WASM Support
 
 ### 15. WASM Target
-- [-] 15.1 Build configuration
+- [ ] 15.1 Build configuration
   - [x] 15.1.1 Add wasm32-unknown-unknown target support (target in Cargo.toml, build script exists)
   - [x] 15.1.2 Conditional compilation gates (cfg(not(target_arch = "wasm32")) in engine-input)
   - [ ] 15.1.3 Feature flags for native vs web
-- [-] 15.2 Web-compatible async
+- [ ] 15.2 Web-compatible async
   - [x] 15.2.1 Replace tokio with web-compatible async for wasm (src/web.rs uses wasm_bindgen)
   - [x] 15.2.2 No std::thread on wasm
   - [ ] 15.2.3 Use async task pools
@@ -345,7 +344,7 @@
   - [ ] 16.1.2 add_render_pass()
 - [ ] 16.2 Custom asset loaders
   - [ ] 16.2.1 register_asset_loader(extension, loader)
-- [-] 16.3 Engine forking
+- [ ] 16.3 Engine forking
   - [x] 16.3.1 Ensure loose coupling between crates (workspace with separate crates)
   - [ ] 16.3.2 Document fork points
 
