@@ -791,7 +791,7 @@ fn mouse_button_from_sdl(button: sdl3::mouse::MouseButton) -> Option<MouseButton
 /// web input event queue (populated by JS callbacks via wasm-bindgen)
 #[cfg(target_arch = "wasm32")]
 mod web_input {
-    use super::{KeyCode, MouseButton};
+    use super::{GamepadAxis, GamepadButton, KeyCode, MouseButton};
     use std::cell::RefCell;
     use std::collections::VecDeque;
 
@@ -814,6 +814,19 @@ mod web_input {
             y: f32,
             delta_x: f32,
             delta_y: f32,
+        },
+        GamepadButtonPress {
+            gamepad_index: usize,
+            button: GamepadButton,
+        },
+        GamepadButtonRelease {
+            gamepad_index: usize,
+            button: GamepadButton,
+        },
+        GamepadAxisMove {
+            gamepad_index: usize,
+            axis: GamepadAxis,
+            value: f32,
         },
     }
 
@@ -876,8 +889,58 @@ mod web_input {
                         input.add_mouse_delta(delta_x, delta_y);
                         input.set_mouse_position(x, y);
                     }
+                    WebEvent::GamepadButtonPress {
+                        gamepad_index,
+                        button,
+                    } => {
+                        input.press_gamepad_button(gamepad_index, button);
+                    }
+                    WebEvent::GamepadButtonRelease {
+                        gamepad_index,
+                        button,
+                    } => {
+                        input.release_gamepad_button(gamepad_index, button);
+                    }
+                    WebEvent::GamepadAxisMove {
+                        gamepad_index,
+                        axis,
+                        value,
+                    } => {
+                        input.set_gamepad_axis(gamepad_index, axis, value);
+                    }
                 }
             }
+        });
+    }
+
+    /// push a gamepad button down event
+    pub fn push_gamepad_button(gamepad_index: usize, button: GamepadButton) {
+        EVENT_QUEUE.with(|q| {
+            q.borrow_mut().push_back(WebEvent::GamepadButtonPress {
+                gamepad_index,
+                button,
+            })
+        });
+    }
+
+    /// push a gamepad button up event
+    pub fn release_gamepad_button(gamepad_index: usize, button: GamepadButton) {
+        EVENT_QUEUE.with(|q| {
+            q.borrow_mut().push_back(WebEvent::GamepadButtonRelease {
+                gamepad_index,
+                button,
+            })
+        });
+    }
+
+    /// push a gamepad axis move event
+    pub fn push_gamepad_axis(gamepad_index: usize, axis: GamepadAxis, value: f32) {
+        EVENT_QUEUE.with(|q| {
+            q.borrow_mut().push_back(WebEvent::GamepadAxisMove {
+                gamepad_index,
+                axis,
+                value,
+            })
         });
     }
 
@@ -966,6 +1029,76 @@ pub fn process_events(_event_pump: &mut (), world: &mut bevy_ecs::prelude::World
     if let Some(mut input) = world.get_resource_mut::<InputState>() {
         input.begin_frame();
         web_input::drain_to_input(&mut input);
+        poll_gamepads(&mut input);
+    }
+}
+
+/// poll the gamepad API for connected gamepads (WASM target)
+#[cfg(target_arch = "wasm32")]
+fn poll_gamepads(input: &mut InputState) {
+    use web_input::{push_gamepad_axis, push_gamepad_button, release_gamepad_button};
+    use web_sys::Gamepad;
+
+    let window = match web_sys::window() {
+        Some(w) => w,
+        None => return,
+    };
+    let navigator = window.navigator();
+    let gamepads = match navigator.get_gamepads() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+
+    for (index, gamepad_opt) in gamepads.iter().enumerate() {
+        let gamepad: Gamepad = match gamepad_opt.dyn_into() {
+            Ok(g) => g,
+            Err(_) => continue,
+        };
+
+        // poll buttons
+        let buttons = gamepad.buttons();
+        for (btn_index, btn) in buttons.iter().enumerate() {
+            let pressed = btn.pressed();
+            let mapped = match btn_index {
+                0 => Some(GamepadButton::South),
+                1 => Some(GamepadButton::East),
+                2 => Some(GamepadButton::West),
+                3 => Some(GamepadButton::North),
+                4 => Some(GamepadButton::LeftShoulder),
+                5 => Some(GamepadButton::RightShoulder),
+                8 => Some(GamepadButton::Select),
+                9 => Some(GamepadButton::Start),
+                10 => Some(GamepadButton::LeftStick),
+                11 => Some(GamepadButton::RightStick),
+                12 => Some(GamepadButton::DPadUp),
+                13 => Some(GamepadButton::DPadDown),
+                14 => Some(GamepadButton::DPadLeft),
+                15 => Some(GamepadButton::DPadRight),
+                _ => None,
+            };
+            if let Some(button) = mapped {
+                if pressed {
+                    push_gamepad_button(index, button);
+                } else {
+                    release_gamepad_button(index, button);
+                }
+            }
+        }
+
+        // poll axes
+        let axes = gamepad.axes();
+        if axes.length() > 0 {
+            push_gamepad_axis(index, GamepadAxis::LeftStickX, axes.get(0) as f32);
+        }
+        if axes.length() > 1 {
+            push_gamepad_axis(index, GamepadAxis::LeftStickY, axes.get(1) as f32);
+        }
+        if axes.length() > 2 {
+            push_gamepad_axis(index, GamepadAxis::RightStickX, axes.get(2) as f32);
+        }
+        if axes.length() > 3 {
+            push_gamepad_axis(index, GamepadAxis::RightStickY, axes.get(3) as f32);
+        }
     }
 }
 

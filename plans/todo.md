@@ -322,9 +322,9 @@
   - [ ] 15.3.1 Canvas element instead of SDL3 window
   - [ ] 15.3.2 WebGPU surface creation for wasm
   - [ ] 15.3.3 Request adapter/device for web
-- [ ] 15.4 Web input
-  - [ ] 15.4.1 SDL3 Emscripten input or web-specific handling
-  - [ ] 15.4.2 Keyboard, mouse, gamepad on web
+- [x] 15.4 Web input
+  - [x] 15.4.1 keyboard and mouse via web-sys event listeners
+  - [x] 15.4.2 gamepad via navigator.getGamepads() polling
 - [ ] 15.5 Web asset loading
   - [ ] 15.5.1 Fetch API instead of file I/O
   - [ ] 15.5.2 Bundled assets at compile time
