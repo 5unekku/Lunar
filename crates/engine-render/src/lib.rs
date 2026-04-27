@@ -169,6 +169,7 @@ pub struct RenderEngine {
     glyph_atlas: text::GlyphAtlas,
     #[allow(dead_code)]
     glyph_atlas_texture: Option<GpuTexture>,
+    render_passes: Vec<Box<dyn RenderPass>>,
 }
 
 /// gpu-ready texture: texture + view + sampler
@@ -458,7 +459,14 @@ impl RenderEngine {
             textures: HashMap::new(),
             glyph_atlas: text::GlyphAtlas::new(1024, 1024),
             glyph_atlas_texture: None,
+            render_passes: Vec::new(),
         }
+    }
+
+    /// register a custom render pass.
+    /// passes are executed in registration order after the default 2D pass.
+    pub fn add_render_pass<P: RenderPass>(&mut self, pass: P) {
+        self.render_passes.push(Box::new(pass));
     }
 
     /// get the current render config
@@ -851,6 +859,27 @@ impl RenderEngine {
             }
         }
 
+        // execute custom render passes
+        for pass in &self.render_passes {
+            let mut custom_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(&format!("custom pass: {}", pass.name())),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.execute(&self.device, &self.queue, &mut custom_pass);
+        }
+
         self.queue.submit(Some(encoder.finish()));
         frame.present();
     }
@@ -1098,6 +1127,26 @@ impl RenderQueue {
                 color,
             },
         });
+    }
+}
+
+/// trait for custom render passes that can be executed by the render engine.
+///
+/// implement this trait to add custom rendering (e.g. post-processing, 3D passes).
+/// passes are executed in registration order after the default 2D pass.
+pub trait RenderPass: Send + Sync + 'static {
+    /// unique name for this pass.
+    fn name(&self) -> &str;
+
+    /// execute this render pass.
+    /// the pass receives a reference to the render engine and the current
+    /// render pass encoder. use these to issue draw commands.
+    fn execute(
+        &self,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        _pass: &mut wgpu::RenderPass<'_>,
+    ) {
     }
 }
 
