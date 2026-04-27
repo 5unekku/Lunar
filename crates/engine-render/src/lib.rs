@@ -933,10 +933,50 @@ impl Default for RenderQueue {
     }
 }
 
+/// render info resource, tracks rendering statistics.
+///
+/// updated each frame by the render system. game code can read
+/// this to display debug info or make performance decisions.
+#[derive(Resource)]
+pub struct RenderInfo {
+    /// window width in pixels
+    pub window_width: u32,
+    /// window height in pixels
+    pub window_height: u32,
+    /// current frames per second
+    pub fps: f32,
+    /// time to render last frame in milliseconds
+    pub frame_time_ms: f32,
+    /// number of draw calls issued last frame
+    pub draw_calls: u32,
+    /// number of sprites rendered last frame
+    pub sprite_count: u32,
+}
+
+impl RenderInfo {
+    /// create a new render info with default values
+    pub fn new() -> Self {
+        Self {
+            window_width: 0,
+            window_height: 0,
+            fps: 0.0,
+            frame_time_ms: 0.0,
+            draw_calls: 0,
+            sprite_count: 0,
+        }
+    }
+}
+
+impl Default for RenderInfo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// render plugin, registers render systems and resources.
 ///
 /// add this plugin to your [`App`] to enable rendering.
-/// it registers the [`RenderQueue`] as an ECS resource.
+/// it registers the [`RenderQueue`] and [`RenderInfo`] as ECS resources.
 pub struct RenderPlugin;
 
 impl Default for RenderPlugin {
@@ -952,6 +992,7 @@ impl GamePlugin for RenderPlugin {
 
     fn build(&mut self, app: &mut App) {
         app.insert_resource(RenderQueue::new());
+        app.insert_resource(RenderInfo::new());
         app.add_system_to_stage(engine_core::UpdateStage::Render, render_system);
     }
 }
