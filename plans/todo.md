@@ -325,8 +325,8 @@
 - [x] 15.4 Web input
   - [x] 15.4.1 keyboard and mouse via web-sys event listeners
   - [x] 15.4.2 gamepad via navigator.getGamepads() polling
-- [ ] 15.5 Web asset loading
-  - [ ] 15.5.1 Fetch API instead of file I/O
+- [x] 15.5 Web asset loading
+  - [x] 15.5.1 Fetch API via web_fetch module (fetch_bytes, fetch_texture, fetch_sound, fetch_font)
   - [ ] 15.5.2 Bundled assets at compile time
   - [ ] 15.5.3 Asset bundles for web distribution
 - [x] 15.6 Web build tooling

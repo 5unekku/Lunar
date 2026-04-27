@@ -31,6 +31,9 @@
 //! }
 //! ```
 
+#[cfg(target_arch = "wasm32")]
+pub mod web_fetch;
+
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::path::Path;
