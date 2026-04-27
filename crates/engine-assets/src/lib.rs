@@ -34,6 +34,9 @@
 #[cfg(target_arch = "wasm32")]
 pub mod web_fetch;
 
+#[cfg(target_arch = "wasm32")]
+pub mod bundled;
+
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::path::Path;
@@ -471,68 +474,117 @@ impl IoTaskPool {
         }
     }
 
-    /// submit a texture load task via fetch API
+    /// submit a texture load task, checking bundled assets first then fetch API.
     fn load_texture(&self, path: String, id: u32, _loader: Arc<dyn TextureLoaderTrait>) {
         let path_clone = path.clone();
         let send = self.texture_send.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let result = match crate::web_fetch::fetch_texture(&path_clone).await {
-                Ok(bytes) => LoadResult {
-                    id,
-                    path: path_clone.clone(),
-                    data: Ok(Texture {
-                        width: 0,
-                        height: 0,
-                        data: bytes,
-                    }),
-                },
-                Err(e) => LoadResult {
-                    id,
-                    path: path_clone,
-                    data: Err(e),
-                },
+            let result = if crate::bundled::contains(&path_clone) {
+                match crate::bundled::get(&path_clone) {
+                    Some(bytes) => LoadResult {
+                        id,
+                        path: path_clone.clone(),
+                        data: Ok(Texture {
+                            width: 0,
+                            height: 0,
+                            data: bytes,
+                        }),
+                    },
+                    None => LoadResult {
+                        id,
+                        path: path_clone,
+                        data: Err("bundled asset not found".to_string()),
+                    },
+                }
+            } else {
+                match crate::web_fetch::fetch_texture(&path_clone).await {
+                    Ok(bytes) => LoadResult {
+                        id,
+                        path: path_clone.clone(),
+                        data: Ok(Texture {
+                            width: 0,
+                            height: 0,
+                            data: bytes,
+                        }),
+                    },
+                    Err(e) => LoadResult {
+                        id,
+                        path: path_clone,
+                        data: Err(e),
+                    },
+                }
             };
             let _ = send.send(result);
         });
     }
 
-    /// submit a sound load task via fetch API
+    /// submit a sound load task, checking bundled assets first then fetch API.
     fn load_sound(&self, path: String, id: u32, _loader: Arc<dyn SoundLoaderTrait>) {
         let path_clone = path.clone();
         let send = self.sound_send.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let result = match crate::web_fetch::fetch_sound(&path_clone).await {
-                Ok(bytes) => LoadResult {
-                    id,
-                    path: path_clone.clone(),
-                    data: Ok(Sound { data: bytes }),
-                },
-                Err(e) => LoadResult {
-                    id,
-                    path: path_clone,
-                    data: Err(e),
-                },
+            let result = if crate::bundled::contains(&path_clone) {
+                match crate::bundled::get(&path_clone) {
+                    Some(bytes) => LoadResult {
+                        id,
+                        path: path_clone.clone(),
+                        data: Ok(Sound { data: bytes }),
+                    },
+                    None => LoadResult {
+                        id,
+                        path: path_clone,
+                        data: Err("bundled asset not found".to_string()),
+                    },
+                }
+            } else {
+                match crate::web_fetch::fetch_sound(&path_clone).await {
+                    Ok(bytes) => LoadResult {
+                        id,
+                        path: path_clone.clone(),
+                        data: Ok(Sound { data: bytes }),
+                    },
+                    Err(e) => LoadResult {
+                        id,
+                        path: path_clone,
+                        data: Err(e),
+                    },
+                }
             };
             let _ = send.send(result);
         });
     }
 
-    /// submit a font load task via fetch API
+    /// submit a font load task, checking bundled assets first then fetch API.
     fn load_font(&self, path: String, id: u32, _loader: Arc<dyn FontLoaderTrait>) {
         let path_clone = path.clone();
         let send = self.font_send.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let result = match crate::web_fetch::fetch_font(&path_clone).await {
-                Ok(bytes) => LoadResult {
-                    id,
-                    path: path_clone.clone(),
-                    data: Ok(Font { data: bytes }),
-                },
-                Err(e) => LoadResult {
-                    id,
-                    path: path_clone,
-                    data: Err(e),
-                },
+            let result = if crate::bundled::contains(&path_clone) {
+                match crate::bundled::get(&path_clone) {
+                    Some(bytes) => LoadResult {
+                        id,
+                        path: path_clone.clone(),
+                        data: Ok(Font { data: bytes }),
+                    },
+                    None => LoadResult {
+                        id,
+                        path: path_clone,
+                        data: Err("bundled asset not found".to_string()),
+                    },
+                }
+            } else {
+                match crate::web_fetch::fetch_font(&path_clone).await {
+                    Ok(bytes) => LoadResult {
+                        id,
+                        path: path_clone.clone(),
+                        data: Ok(Font { data: bytes }),
+                    },
+                    Err(e) => LoadResult {
+                        id,
+                        path: path_clone,
+                        data: Err(e),
+                    },
+                }
             };
             let _ = send.send(result);
         });
