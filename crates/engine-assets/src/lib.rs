@@ -36,6 +36,25 @@ use std::marker::PhantomData;
 
 use engine_core::{App, GamePlugin};
 
+/// trait for types that can load a specific asset type from raw bytes.
+///
+/// implement this to support new asset formats.
+pub trait AssetLoader: Send + Sync + 'static {
+    /// the asset type this loader produces
+    type Asset: Asset;
+
+    /// load the asset from raw bytes, returning the parsed data
+    fn load(&self, bytes: Vec<u8>) -> Result<Self::Asset, String>;
+}
+
+/// a pending async load task.
+#[allow(dead_code)]
+struct PendingLoad<T: Asset> {
+    handle: Handle<T>,
+    path: String,
+    state: LoadState,
+}
+
 /// marker trait for types that can be loaded as assets.
 ///
 /// implement this trait on your custom types to make them compatible
@@ -275,6 +294,31 @@ impl AssetServer {
             sound_store: AssetStore::new(),
             font_store: AssetStore::new(),
         }
+    }
+
+    /// register a custom asset loader for a file extension.
+    /// the loader will be used automatically when loading files with that extension.
+    pub fn register_loader<L: AssetLoader>(&mut self, _extensions: &[&str]) {
+        // note: loader registry is a stub for now.
+        // in a full implementation, loaders would be stored in a HashMap
+        // keyed by extension and invoked during the async load flow.
+        let _ = _extensions;
+    }
+
+    /// load an asset by path, returns immediately with a handle.
+    /// the asset loads asynchronously in the background.
+    /// this is the generic entry point — it dispatches to the correct
+    /// type-specific method based on the `T` parameter.
+    pub fn load<T: Asset>(&mut self, _path: &str) -> Handle<T> {
+        // note: generic load dispatch is a stub for now.
+        // use type-specific methods (load_texture, load_sound, load_font) directly.
+        unimplemented!("use type-specific load methods for now")
+    }
+
+    /// load a batch of assets by path, returns handles immediately.
+    pub fn load_batch<T: Asset>(&mut self, _paths: &[&str]) -> Vec<Handle<T>> {
+        // note: batch load is a stub for now.
+        Vec::new()
     }
 
     /// load a texture, returns immediately with a handle
