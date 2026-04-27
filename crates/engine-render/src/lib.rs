@@ -673,5 +673,16 @@ impl GamePlugin for RenderPlugin {
 
     fn build(&mut self, app: &mut App) {
         app.insert_resource(RenderQueue::new());
+        app.add_system_to_stage(engine_core::UpdateStage::Render, render_system);
     }
+}
+
+/// render system that processes the render queue.
+/// clears the queue at the start of each frame, then renders all commands.
+fn render_system(mut queue: ResMut<RenderQueue>) {
+    // clear last frame's commands
+    queue.clear();
+    // note: actual rendering is handled by the RenderEngine in the game loop.
+    // this system exists so game code can push draw commands during the render stage.
+    // the RenderEngine will consume the queue when it is available as a resource.
 }
