@@ -913,3 +913,24 @@ impl MiLoader {
         })
     }
 }
+
+/// convenience macro to implement the [`Asset`] trait for a custom type.
+///
+/// # example
+///
+/// ```ignore
+/// use engine_assets::impl_asset;
+///
+/// struct MyCustomTexture {
+///     width: u32,
+///     height: u32,
+/// }
+///
+/// impl_asset!(MyCustomTexture);
+/// ```
+#[macro_export]
+macro_rules! impl_asset {
+    ($ty:ty) => {
+        impl $crate::Asset for $ty {}
+    };
+}
