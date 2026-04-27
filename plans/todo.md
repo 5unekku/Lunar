@@ -184,13 +184,13 @@
   - [x] 8.3.5 get_info<T>(handle) → Option<&AssetInfo> — get_texture_info, etc.
   - [x] 8.3.6 wait_for_all() (blocking)
   - [x] 8.3.7 loading_count() → usize
-- [-] 8.4 Async loading architecture
-  - [ ] 8.4.1 IoTaskPool for file I/O
+- [x] 8.4 Async loading architecture
+  - [x] 8.4.1 IoTaskPool for file I/O
   - [x] 8.4.2 AssetLoaders map (extension → loader) — AssetLoader trait added
-  - [ ] 8.4.3 TextureLoader (png, jpg, bmp, webp, gif)
-  - [ ] 8.4.4 SoundLoader (wav, ogg, mp3, flac)
-  - [ ] 8.4.5 FontLoader (ttf, otf)
-  - [ ] 8.4.6 Loading flow: load → I/O task → parse → store → ready
+  - [x] 8.4.3 TextureLoader (png, jpg, bmp, webp, gif)
+  - [x] 8.4.4 SoundLoader (wav, ogg, mp3, flac)
+  - [x] 8.4.5 FontLoader (ttf, otf)
+  - [x] 8.4.6 Loading flow: load → I/O task → parse → store → ready
 - [ ] 8.5 Asset paths
   - [ ] 8.5.1 Resolve relative to game's assets/ directory
   - [ ] 8.5.2 Handle both "path" and "./path" formats
