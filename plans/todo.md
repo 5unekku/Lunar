@@ -342,8 +342,8 @@
 - [ ] 16.1 Custom render passes
   - [ ] 16.1.1 RenderPass trait
   - [ ] 16.1.2 add_render_pass()
-- [ ] 16.2 Custom asset loaders
-  - [ ] 16.2.1 register_asset_loader(extension, loader)
+- [x] 16.2 Custom asset loaders
+  - [x] 16.2.1 register_asset_loader(extension, loader)
 - [ ] 16.3 Engine forking
   - [x] 16.3.1 Ensure loose coupling between crates (workspace with separate crates)
   - [ ] 16.3.2 Document fork points
