@@ -41,6 +41,7 @@ mod dialogue_parser;
 mod engine;
 mod error;
 mod game_loop;
+mod localization;
 mod scene;
 mod schedule;
 mod state;
@@ -63,6 +64,8 @@ pub use engine::Engine;
 pub use error::{EngineError, EngineResult, ErrorEvent, ErrorSource};
 /// game loop with fixed timestep
 pub use game_loop::{GameLoop, TickRate};
+/// localization system
+pub use localization::{Localization, LocalizationPlugin};
 /// scene system for game state management
 pub use scene::{Scene, SceneManager};
 /// system scheduling with stage ordering

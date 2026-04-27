@@ -301,9 +301,9 @@
   - [x] 14.3.1 Textbox component
   - [x] 14.3.2 Font integration
   - [x] 14.3.3 Text animation (typewriter effect, etc.)
-- [ ] 14.4 Localization
-  - [ ] 14.4.1 Language selection
-  - [ ] 14.4.2 Per-language dialogue files
+- [x] 14.4 Localization
+  - [x] 14.4.1 Language selection (Localization resource, set_language)
+  - [x] 14.4.2 Per-language string tables (load_strings, get, get_or)
 
 ---
 
