@@ -54,12 +54,12 @@
 - [x] 3.1 Registration order execution
   - [x] 3.1.1 Default schedule runs systems in add order
   - [x] 3.1.2 Startup systems run once before main loop (add_startup_system uses run_system_once)
-- [-] 3.2 Optional stage system
-  - [ ] 3.2.1 StageLabel type
+- [x] 3.2 Optional stage system
+  - [x] 3.2.1 StageLabel type (StageLabelExt trait)
   - [x] 3.2.2 Built-in stages: Input, Physics, Update, Render (UpdateStage enum exists)
-  - [ ] 3.2.3 add_system_to_stage()
-  - [ ] 3.2.4 add_stage() with ordering (Before/After/Between)
-  - [ ] 3.2.5 Custom stage support
+  - [x] 3.2.3 add_system_to_stage()
+  - [x] 3.2.4 add_stage() with ordering (Before/After/Between)
+  - [x] 3.2.5 Custom stage support
 
 ---
 
@@ -94,14 +94,14 @@
   - [x] 5.4.2 Update InputState each frame from events (InputState struct ready, event pump not connected)
 
 ### 6. Render System
-- [-] 6.1 RenderQueue resource
+- [x] 6.1 RenderQueue resource
   - [x] 6.1.1 Internal command buffer
-  - [ ] 6.1.2 draw_sprite(texture, position, size)
-  - [ ] 6.1.3 draw_sprite_transformed(position, size, rotation, origin, color)
+  - [x] 6.1.2 draw_sprite(texture, position, size)
+  - [x] 6.1.3 draw_sprite_transformed(position, size, rotation, origin, color)
   - [x] 6.1.4 draw_rect(rect, color) (via DrawKind::Rect)
-  - [ ] 6.1.5 draw_line(start, end, color, thickness)
+  - [x] 6.1.5 draw_line(start, end, color, thickness)
   - [x] 6.1.6 draw_text(font, text, position, size, color) (via DrawKind::Text)
-  - [ ] 6.1.7 clear(color)
+  - [x] 6.1.7 clear(color)
   - [ ] 6.1.8 set_target(render_target)
 - [ ] 6.2 Sprite rendering backend
   - [ ] 6.2.1 Texture loading from Handle<Texture>
