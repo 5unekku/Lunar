@@ -230,15 +230,15 @@
   - [x] 9.3.3 Handle surface texture errors
 
 ### 10. lunar_app! Macro
-- [ ] 10.1 Basic macro
-  - [ ] 10.1.1 Expands to async main
-  - [ ] 10.1.2 SDL3 window creation
-  - [ ] 10.1.3 Add built-in plugins
-  - [ ] 10.1.4 Add game plugin
-  - [ ] 10.1.5 Call app.run()
-- [ ] 10.2 Config variant
-  - [ ] 10.2.1 Accept config expression
-  - [ ] 10.2.2 Pass config to plugins
+- [x] 10.1 Basic macro
+  - [x] 10.1.1 Expands to async main
+  - [x] 10.1.2 SDL3 window creation
+  - [x] 10.1.3 Add built-in plugins
+  - [x] 10.1.4 Add game plugin
+  - [x] 10.1.5 Call app.run()
+- [x] 10.2 Config variant
+  - [x] 10.2.1 Accept config expression
+  - [x] 10.2.2 Pass config to plugins
 
 ---
 
