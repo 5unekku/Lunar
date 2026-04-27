@@ -284,6 +284,7 @@ struct LoadResult<T: Asset> {
 /// spawns worker threads that read files from disk and parse them
 /// through the appropriate [`AssetLoader`]. results are sent back
 /// through a channel for the main thread to collect each frame.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct IoTaskPool {
     sender: Sender<LoadTask>,
     texture_receiver: Receiver<LoadResult<Texture>>,
@@ -292,6 +293,7 @@ pub struct IoTaskPool {
 }
 
 /// a task to be executed by the io task pool
+#[cfg(not(target_arch = "wasm32"))]
 enum LoadTask {
     Texture {
         path: String,
@@ -325,6 +327,7 @@ trait FontLoaderTrait: Send + Sync {
     fn load(&self, bytes: Vec<u8>) -> Result<Font, String>;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl IoTaskPool {
     /// create a new io task pool with the given number of worker threads
     pub fn new(thread_count: usize) -> Self {
@@ -427,6 +430,136 @@ impl IoTaskPool {
     fn drain_font_results(&self) -> Vec<LoadResult<Font>> {
         let mut results = Vec::new();
         while let Ok(result) = self.font_receiver.try_recv() {
+            results.push(result);
+        }
+        results
+    }
+}
+
+/// web-compatible io task pool using async fetch instead of threads.
+#[cfg(target_arch = "wasm32")]
+pub struct IoTaskPool {
+    pending_textures: std::collections::HashMap<u32, (String, wasm_bindgen_futures::JsFuture)>,
+    pending_sounds: std::collections::HashMap<u32, (String, wasm_bindgen_futures::JsFuture)>,
+    pending_fonts: std::collections::HashMap<u32, (String, wasm_bindgen_futures::JsFuture)>,
+    texture_results: crossbeam_channel::Receiver<LoadResult<Texture>>,
+    sound_results: crossbeam_channel::Receiver<LoadResult<Sound>>,
+    font_results: crossbeam_channel::Receiver<LoadResult<Font>>,
+    texture_send: crossbeam_channel::Sender<LoadResult<Texture>>,
+    sound_send: crossbeam_channel::Sender<LoadResult<Sound>>,
+    font_send: crossbeam_channel::Sender<LoadResult<Font>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl IoTaskPool {
+    /// create a new io task pool for web (thread_count is ignored).
+    pub fn new(_thread_count: usize) -> Self {
+        let (texture_send, texture_receiver) = crossbeam_channel::unbounded();
+        let (sound_send, sound_receiver) = crossbeam_channel::unbounded();
+        let (font_send, font_receiver) = crossbeam_channel::unbounded();
+
+        IoTaskPool {
+            pending_textures: std::collections::HashMap::new(),
+            pending_sounds: std::collections::HashMap::new(),
+            pending_fonts: std::collections::HashMap::new(),
+            texture_results: texture_receiver,
+            sound_results: sound_receiver,
+            font_results: font_receiver,
+            texture_send,
+            sound_send,
+            font_send,
+        }
+    }
+
+    /// submit a texture load task via fetch API
+    fn load_texture(&self, path: String, id: u32, _loader: Arc<dyn TextureLoaderTrait>) {
+        let path_clone = path.clone();
+        let send = self.texture_send.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = match crate::web_fetch::fetch_texture(&path_clone).await {
+                Ok(bytes) => LoadResult {
+                    id,
+                    path: path_clone.clone(),
+                    data: Ok(Texture {
+                        width: 0,
+                        height: 0,
+                        data: bytes,
+                    }),
+                },
+                Err(e) => LoadResult {
+                    id,
+                    path: path_clone,
+                    data: Err(e),
+                },
+            };
+            let _ = send.send(result);
+        });
+    }
+
+    /// submit a sound load task via fetch API
+    fn load_sound(&self, path: String, id: u32, _loader: Arc<dyn SoundLoaderTrait>) {
+        let path_clone = path.clone();
+        let send = self.sound_send.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = match crate::web_fetch::fetch_sound(&path_clone).await {
+                Ok(bytes) => LoadResult {
+                    id,
+                    path: path_clone.clone(),
+                    data: Ok(Sound { data: bytes }),
+                },
+                Err(e) => LoadResult {
+                    id,
+                    path: path_clone,
+                    data: Err(e),
+                },
+            };
+            let _ = send.send(result);
+        });
+    }
+
+    /// submit a font load task via fetch API
+    fn load_font(&self, path: String, id: u32, _loader: Arc<dyn FontLoaderTrait>) {
+        let path_clone = path.clone();
+        let send = self.font_send.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = match crate::web_fetch::fetch_font(&path_clone).await {
+                Ok(bytes) => LoadResult {
+                    id,
+                    path: path_clone.clone(),
+                    data: Ok(Font { data: bytes }),
+                },
+                Err(e) => LoadResult {
+                    id,
+                    path: path_clone,
+                    data: Err(e),
+                },
+            };
+            let _ = send.send(result);
+        });
+    }
+
+    /// drain all completed texture results
+    fn drain_texture_results(&self) -> Vec<LoadResult<Texture>> {
+        let mut results = Vec::new();
+        while let Ok(result) = self.texture_results.try_recv() {
+            results.push(result);
+        }
+        results
+    }
+
+    /// drain all completed sound results
+    fn drain_sound_results(&self) -> Vec<LoadResult<Sound>> {
+        let mut results = Vec::new();
+        while let Ok(result) = self.sound_results.try_recv() {
+            results.push(result);
+        }
+        results
+    }
+
+    /// drain all completed font results
+    fn drain_font_results(&self) -> Vec<LoadResult<Font>> {
+        let mut results = Vec::new();
+        while let Ok(result) = self.font_results.try_recv() {
             results.push(result);
         }
         results

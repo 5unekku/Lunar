@@ -314,10 +314,10 @@
   - [x] 15.1.1 Add wasm32-unknown-unknown target support (target in Cargo.toml, build script exists)
   - [x] 15.1.2 Conditional compilation gates (cfg(not(target_arch = "wasm32")) in engine-input)
   - [x] 15.1.3 Feature flags for native vs web
-- [ ] 15.2 Web-compatible async
+- [x] 15.2 Web-compatible async
   - [x] 15.2.1 Replace tokio with web-compatible async for wasm (src/web.rs uses wasm_bindgen)
   - [x] 15.2.2 No std::thread on wasm
-  - [ ] 15.2.3 Use async task pools
+  - [x] 15.2.3 Use async task pools (IoTaskPool uses wasm_bindgen_futures::spawn_local on wasm)
 - [ ] 15.3 WebGPU surface
   - [ ] 15.3.1 Canvas element instead of SDL3 window
   - [ ] 15.3.2 WebGPU surface creation for wasm
