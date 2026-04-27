@@ -40,6 +40,7 @@ pub type Mat3 = glam::Mat3;
 /// backed by [`glam::Mat4`], used for 3D transformations and projections.
 pub type Mat4 = glam::Mat4;
 
+mod macros;
 mod types;
 
 pub use types::{Color, Rect, Transform};
