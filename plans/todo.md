@@ -197,8 +197,8 @@
   - [ ] 8.6.1 AssetWatcher resource
   - [ ] 8.6.2 File watching with notify crate
   - [ ] 8.6.3 Auto-reload on file change
-- [ ] 8.7 impl_asset! macro
-  - [ ] 8.7.1 Macro to implement Asset trait only
+- [x] 8.7 impl_asset! macro
+  - [x] 8.7.1 Macro to implement Asset trait only
 
 ---
 
