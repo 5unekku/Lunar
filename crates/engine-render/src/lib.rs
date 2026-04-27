@@ -457,6 +457,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 #[derive(Resource)]
 pub struct RenderQueue {
     commands: Vec<DrawCommand>,
+    /// optional render target (texture handle) for off-screen rendering
+    target: Option<u64>,
 }
 
 /// a single draw command.
@@ -503,12 +505,25 @@ impl RenderQueue {
     pub fn new() -> Self {
         RenderQueue {
             commands: Vec::new(),
+            target: None,
         }
     }
 
     /// clear all pending draw commands
     pub fn clear(&mut self) {
         self.commands.clear();
+        self.target = None;
+    }
+
+    /// set the render target for subsequent draw commands.
+    /// pass None to render to the main surface.
+    pub fn set_target(&mut self, target: Option<u64>) {
+        self.target = target;
+    }
+
+    /// get the current render target
+    pub fn target(&self) -> Option<u64> {
+        self.target
     }
 
     /// add a draw command
