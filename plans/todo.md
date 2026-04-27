@@ -344,9 +344,9 @@
   - [x] 16.1.2 add_render_pass()
 - [x] 16.2 Custom asset loaders
   - [x] 16.2.1 register_asset_loader(extension, loader)
-- [ ] 16.3 Engine forking
+- [x] 16.3 Engine forking
   - [x] 16.3.1 Ensure loose coupling between crates (workspace with separate crates)
-  - [ ] 16.3.2 Document fork points
+  - [x] 16.3.2 Document fork points
 
 ### 17. Macros & Convenience
 - [x] 17.1 transform! macro
