@@ -28,10 +28,12 @@
 //! }
 //! ```
 
+mod text;
+
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
-use engine_assets::{Handle, Texture};
+use engine_assets::{Font, Handle, Texture};
 use engine_core::{App, GamePlugin};
 use engine_math::{Color, Vec2};
 use wgpu::util::DeviceExt;
@@ -164,6 +166,9 @@ pub struct RenderEngine {
     bind_group: wgpu::BindGroup,
     sampler: wgpu::Sampler,
     textures: HashMap<u32, GpuTexture>,
+    glyph_atlas: text::GlyphAtlas,
+    #[allow(dead_code)]
+    glyph_atlas_texture: Option<GpuTexture>,
 }
 
 /// gpu-ready texture: texture + view + sampler
@@ -451,6 +456,8 @@ impl RenderEngine {
             bind_group,
             sampler,
             textures: HashMap::new(),
+            glyph_atlas: text::GlyphAtlas::new(1024, 1024),
+            glyph_atlas_texture: None,
         }
     }
 
@@ -528,6 +535,52 @@ impl RenderEngine {
                 view,
             },
         );
+    }
+
+    /// upload the glyph atlas to the GPU as a texture.
+    #[allow(dead_code)]
+    fn upload_glyph_atlas(&mut self) {
+        let atlas = &self.glyph_atlas;
+        let gpu_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("glyph atlas texture"),
+            size: wgpu::Extent3d {
+                width: atlas.width,
+                height: atlas.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &gpu_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            atlas.pixels(),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * atlas.width),
+                rows_per_image: Some(atlas.height),
+            },
+            wgpu::Extent3d {
+                width: atlas.width,
+                height: atlas.height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let view = gpu_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.glyph_atlas_texture = Some(GpuTexture {
+            texture: gpu_texture,
+            view,
+        });
     }
 
     /// render all draw commands for this frame.
@@ -738,21 +791,45 @@ impl RenderEngine {
                             }
                         }
                         DrawKind::Text {
-                            position, color, ..
+                            font,
+                            content,
+                            position,
+                            font_size,
+                            color,
                         } => {
-                            // stub: draw a small rect placeholder for text
-                            let (x, y) = (position.x, position.y);
-                            for [px, py] in [
-                                [x, y],
-                                [x + 50.0, y],
-                                [x, y + 16.0],
-                                [x, y + 16.0],
-                                [x + 50.0, y],
-                                [x + 50.0, y + 16.0],
-                            ] {
-                                vertices.extend_from_slice(&[
-                                    px, py, 0.0, 0.0, color.r, color.g, color.b, color.a,
-                                ]);
+                            // layout text and generate quads
+                            let font_id = font.unwrap_or(0) as u32;
+                            // ensure all glyphs are in the atlas (rasterize on demand)
+                            // note: we don't have access to the Font resource here, so we skip rasterization
+                            // in a real implementation, fonts would be pre-rasterized
+                            let quads = text::layout_text(
+                                &self.glyph_atlas,
+                                font_id,
+                                content,
+                                *font_size,
+                                *position,
+                            );
+                            for quad in &quads {
+                                let x = quad.position.x;
+                                let y = quad.position.y;
+                                let w = quad.size.x;
+                                let h = quad.size.y;
+                                let u0 = quad.uv_min.x;
+                                let v0 = quad.uv_min.y;
+                                let u1 = quad.uv_max.x;
+                                let v1 = quad.uv_max.y;
+                                for [px, py, u, v] in [
+                                    [x, y, u0, v0],
+                                    [x + w, y, u1, v0],
+                                    [x, y + h, u0, v1],
+                                    [x, y + h, u0, v1],
+                                    [x + w, y, u1, v0],
+                                    [x + w, y + h, u1, v1],
+                                ] {
+                                    vertices.extend_from_slice(&[
+                                        px, py, u, v, color.r, color.g, color.b, color.a,
+                                    ]);
+                                }
                             }
                         }
                         _ => {}
@@ -860,6 +937,7 @@ pub enum DrawKind {
     },
     /// draw text
     Text {
+        font: Option<u64>,
         content: String,
         position: Vec2,
         font_size: f32,
@@ -1002,10 +1080,18 @@ impl RenderQueue {
         });
     }
 
-    /// draw text at the given position
-    pub fn draw_text(&mut self, content: &str, position: Vec2, font_size: f32, color: Color) {
+    /// draw text at the given position using the specified font handle
+    pub fn draw_text(
+        &mut self,
+        font: &Handle<Font>,
+        content: &str,
+        position: Vec2,
+        font_size: f32,
+        color: Color,
+    ) {
         self.push(DrawCommand {
             kind: DrawKind::Text {
+                font: Some(font.id() as u64),
                 content: content.to_string(),
                 position,
                 font_size,
