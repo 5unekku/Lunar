@@ -121,9 +121,9 @@
   - [ ] 6.4.1 Camera with position, zoom, rotation, viewport
   - [ ] 6.4.2 Camera affects render queue output (offset projection matrix)
   - [ ] 6.4.3 When no Camera resource exists, render is world-space anchored at origin
-- [ ] 6.5 RenderInfo resource
-  - [ ] 6.5.1 window_size, fps, frame_time_ms
-  - [ ] 6.5.2 draw_calls, sprite_count
+- [x] 6.5 RenderInfo resource
+  - [x] 6.5.1 window_size, fps, frame_time_ms
+  - [x] 6.5.2 draw_calls, sprite_count
 - [x] 6.6 RenderPlugin
   - [x] 6.6.1 Process RenderQueue each render stage
   - [x] 6.6.2 Submit to wgpu (RenderEngine::new + begin_frame/present exist)
