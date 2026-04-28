@@ -593,3 +593,191 @@ Part 2 (Post-Engine)
 ├── 27. Theme System → 26 (UI system)
 └── 28. Named Events → 1 (ECS events)
 ```
+
+---
+
+### 45. Cross-Compile Compatibility Checks
+- [x] 45.1 Create `tests/cross_compile.rs`
+  - [x] 45.1.1 Test for each target: linux, macos, windows, web
+  - [x] 45.1.2 Skips gracefully if target not installed
+  - [x] 45.1.3 Runs `cargo check --target <triple> --workspace`
+- [ ] 45.2 Add to CI pipeline (future)
+  - [ ] 45.2.1 Install all targets on CI runners
+  - [ ] 45.2.2 Run `cargo test cross_compile` on each push
+
+---
+
+## Part 3: Performance & API Audit Findings
+
+> Items from the codebase audit (plans/codebase-audit.md).
+> Organized by priority. P0 = critical performance, P1 = important improvements, P2 = nice-to-have, P3 = low priority.
+
+### P0: Critical Performance Fixes
+
+#### 29. Bind Group Caching
+- [ ] 29.1 Cache bind groups by texture ID
+  - [ ] 29.1.1 Add `HashMap<u32, wgpu::BindGroup>` to RenderEngine
+  - [ ] 29.1.2 Create bind group on texture upload, cache by texture ID
+  - [ ] 29.1.3 Look up cached bind group in render loop instead of creating new
+  - [ ] 29.1.4 Handle texture removal/invalidation (remove from cache)
+- **Impact:** Eliminates per-frame GPU object creation on Vulkan
+- **Effort:** Low
+
+#### 30. Persistent Vertex Buffer (Ring Buffer)
+- [ ] 30.1 Replace per-frame `create_buffer_init` with persistent buffer
+  - [ ] 30.1.1 Pre-allocate large vertex buffer at startup (`MAX_VERTICES * 32` bytes)
+  - [ ] 30.1.2 Use `write_buffer()` with `MAP_WRITE` + `UNMAP` each frame
+  - [ ] 30.1.3 Double-buffer or triple-buffer for frame overlap safety
+  - [ ] 30.1.4 Handle buffer overflow (split into multiple draw calls or grow)
+- **Impact:** Eliminates per-frame GPU memory allocation churn
+- **Effort:** Medium
+
+#### 31. StoreOp::Discard
+- [ ] 31.1 Change `store: Store` to `store: StoreOp::Discard` in render pass
+  - [ ] 31.1.1 Update color attachment operations
+  - [ ] 31.1.2 Update depth/stencil attachment if applicable
+- **Impact:** Free performance on tile-based GPUs (Apple Silicon, mobile)
+- **Effort:** Low
+
+### P1: Important Improvements
+
+#### 32. Vertex Format Packing
+- [ ] 32.1 Pack color into single `u32` (4 bytes instead of 16)
+  - [ ] 32.1.1 Change vertex from `[f32; 8]` (32 bytes) to `[f32; 4] + [u32; 1]` (20 bytes)
+  - [ ] 32.1.2 Update vertex shader to unpack `u32` color
+  - [ ] 32.1.3 Update vertex attribute format (`Uint32` instead of `Float32x4`)
+  - [ ] 32.1.4 Update all vertex generation code
+- **Impact:** 37.5% less vertex data per frame
+- **Effort:** Medium
+
+#### 33. Sort Commands by (Layer, Texture)
+- [ ] 33.1 Replace HashMap grouping with sorted Vec
+  - [ ] 33.1.1 Sort by `(layer, texture_id)` tuple
+  - [ ] 33.1.2 Iterate linearly — same-texture commands are contiguous
+  - [ ] 33.1.3 Remove HashMap allocation from render loop
+- **Impact:** Better cache locality, no HashMap overhead
+- **Effort:** Low
+
+#### 34. Stage-Based System Ordering
+- [ ] 34.1 Implement actual stage scheduling
+  - [ ] 34.1.1 Create bevy_ecs schedules for each stage (Input, Physics, Update, Render)
+  - [ ] 34.1.2 `add_system_to_stage()` adds to correct schedule
+  - [ ] 34.1.3 Run schedules in order each frame
+  - [ ] 34.1.4 Handle `apply_deferred` between stages
+- **Impact:** Game code can control system ordering
+- **Effort:** High
+
+#### 35. Fix Startup System Timing
+- [ ] 35.1 Track startup systems, run at start of `App::run()`
+  - [ ] 35.1.1 Store startup systems in Vec instead of running immediately
+  - [ ] 35.1.2 Run all startup systems in sequence at start of `run()`
+  - [ ] 35.1.3 Clear startup systems after first run
+- **Impact:** Startup systems run after all plugins/resources are ready
+- **Effort:** Low
+
+### P2: Nice-to-Have
+
+#### 36. Cache Text Layout Results
+- [ ] 36.1 Cache computed glyph quads per text element
+  - [ ] 36.1.1 Store layout result in text component
+  - [ ] 36.1.2 Only recompute when text content, font, or size changes
+  - [ ] 36.1.3 Invalidate cache on text change
+- **Impact:** Eliminates per-frame character iteration and glyph lookup
+- **Effort:** Low
+
+#### 37. Pre-allocate RenderQueue Commands
+- [ ] 37.1 Pre-allocate `Vec::with_capacity(1024)` for commands
+  - [ ] 37.1.2 Use `clear()` which retains capacity
+  - [ ] 37.1.3 Monitor typical command counts and adjust capacity
+- **Impact:** Eliminates mid-frame reallocation
+- **Effort:** Low
+
+#### 38. Rect Utility Extensions
+- [ ] 38.1 Add methods to Rect (see item 24)
+  - [ ] 38.1.1 `inflate(dx, dy)`
+  - [ ] 38.1.2 `clamp(within)`
+  - [ ] 38.1.3 `collide_point(x, y)`
+  - [ ] 38.1.4 `collide_rect(other)`
+  - [ ] 38.1.5 `center()`
+  - [ ] 38.1.6 `union(other)`
+- **Note:** Already tracked as item 24 in Part 2
+- **Effort:** Low
+
+#### 39. Fix SpriteParams Origin Usage
+- [ ] 39.1 Use origin parameter in vertex generation
+  - [ ] 39.1.1 Compute rotation/scaling around origin point
+  - [ ] 39.1.2 Or remove origin from API if not needed
+- **Impact:** Fixes confusing API behavior
+- **Effort:** Low
+
+### P3: Low Priority
+
+#### 40. Hybrid Input Key Array
+- [ ] 40.1 Expand KeyCode beyond 64 variants
+  - [ ] 40.1.1 Use array for common keys (0-127)
+  - [ ] 40.1.2 HashMap fallback for rare/international keys
+  - [ ] 40.1.3 Update `KEY_COUNT` and array sizes
+- **Impact:** Support for all SDL3 keys
+- **Effort:** Medium
+
+#### 41. DrawKind::Line Variant
+- [ ] 41.1 Add proper line rendering
+  - [ ] 41.1.1 `DrawKind::Line { start, end, color, thickness }`
+  - [ ] 41.1.2 Compute rotated rect vertices in shader or CPU
+  - [ ] 41.1.3 Or use line primitives if supported
+- **Impact:** Clean diagonal lines, more efficient than AABB rect
+- **Effort:** Medium
+
+#### 42. Glyph Atlas Row-Copy Optimization
+- [ ] 42.1 Replace per-pixel copy with row copy
+  - [ ] 42.1.1 Use `slice::copy_from_slice` for each row
+  - [ ] 42.1.2 Or use engine-image SIMD functions
+- **Impact:** Faster glyph rasterization
+- **Effort:** Low
+
+#### 43. Pipeline Cache Serialization (Vulkan)
+- [ ] 43.1 Serialize Vulkan pipeline cache to disk
+  - [ ] 43.1.1 Save cache on shutdown
+  - [ ] 43.1.2 Load cache on startup
+  - [ ] 43.1.3 Reduces pipeline compilation time on subsequent launches
+- **Impact:** Faster startup on Vulkan
+- **Effort:** Medium
+
+#### 44. Hybrid Frame Cap Sleep
+- [ ] 44.1 Improve frame timing precision
+  - [ ] 44.1.1 Sleep for most of wait time
+  - [ ] 44.1.2 Spin-wait last ~1ms with `std::hint::spin_loop()`
+  - [ ] 44.1.3 Reduces frame pacing jitter
+- **Impact:** Smoother frame timing
+- **Effort:** Low
+
+---
+
+## Dependency Graph (Part 3)
+
+```
+Part 3 (Performance & API Audit)
+├── P0 (Critical Performance)
+│   ├── 29. Bind Group Caching → 6 (render system)
+│   ├── 30. Persistent Vertex Buffer → 6 (render system)
+│   └── 31. StoreOp::Discard → 6 (render system)
+├── P1 (Important)
+│   ├── 32. Vertex Format Packing → 6 (render system)
+│   ├── 33. Sort Commands by (Layer, Texture) → 6, 20 (layer system)
+│   ├── 34. Stage-Based Ordering → 3 (system scheduling)
+│   └── 35. Fix Startup Timing → 2 (plugin system)
+├── P2 (Nice-to-Have)
+│   ├── 36. Cache Text Layout → 6.3 (text rendering)
+│   ├── 37. Pre-allocate RenderQueue → 6.1 (render queue)
+│   ├── 38. Rect Utilities → 9.3 / 24 (Rect type)
+│   └── 39. Fix Origin Usage → 6.1 (render queue)
+└── P3 (Low Priority)
+    ├── 40. Hybrid Input Array → 5 (input system)
+    ├── 41. DrawKind::Line → 6 (render system)
+    ├── 42. Glyph Row-Copy → 6.3 (text rendering)
+    ├── 43. Pipeline Cache → 6 (render system, Vulkan only)
+    └── 44. Hybrid Frame Cap → 9 (game loop)
+
+Part 4 (Infrastructure)
+└── 45. Cross-Compile Checks → all crates (workspace-wide)
+```
