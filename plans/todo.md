@@ -414,3 +414,182 @@ To run the shooter example from the design doc, we need:
 - [x] Phase 4: Game Loop Integration (9, 10)
 
 Everything else (zones, scenes, dialogue, web, 3D) can come after.
+
+---
+
+## Part 2: Post-Engine (UI & Polish Phase)
+
+> These items are deferred until the core engine is stable.
+> They are tracked here for planning purposes only — do NOT start work on these until Part 1 is complete.
+
+### 19. Texture Atlas System
+- [ ] 19.1 TextureAtlas resource
+  - [ ] 19.1.1 Bin-packing algorithm (shelf packing or maxrects)
+  - [ ] 19.1.2 Atlas builder (packs multiple textures into single GPU texture)
+  - [ ] 19.1.3 Region lookup by name
+- [ ] 19.2 Sprite atlas integration
+  - [ ] 19.2.1 Sprite component gains optional `atlas_region: Option<Rect>`
+  - [ ] 19.2.2 RenderQueue batches by atlas texture, not individual textures
+  - [ ] 19.2.3 UV coordinate remapping for atlas regions
+- [ ] 19.3 Asset pipeline support
+  - [ ] 19.3.1 Atlas definition format (JSON5 authoring → binary runtime)
+  - [ ] 19.3.2 Atlas compilation during asset bundling
+
+### 20. Layer-Based Rendering
+- [ ] 20.1 Layer component
+  - [ ] 20.1.1 `Layer { order: i32 }` component
+  - [ ] 20.1.2 Built-in layer constants (BACKGROUND, GAME, FOREGROUND, UI)
+- [ ] 20.2 RenderQueue layer sorting
+  - [ ] 20.2.1 Sort draw commands by layer before batching
+  - [ ] 20.2.2 Stable sort (preserve registration order within same layer)
+- [ ] 20.3 Camera per-layer offset
+  - [ ] 20.3.1 Optional parallax support (per-layer camera offset)
+
+### 21. Entity Hierarchies (Composition, NOT Inheritance)
+- [ ] 21.1 Parent/Child components
+  - [ ] 21.1.1 `Parent(pub Entity)` component
+  - [ ] 21.1.2 `Children(pub SmallVec<[Entity; 4]>)` component
+- [ ] 21.2 Transform propagation system
+  - [ ] 21.2.1 Compute world transforms from local + parent
+  - [ ] 21.2.2 Run in Update stage, before render
+- [ ] 21.3 LocalTransform vs WorldTransform
+  - [ ] 21.3.1 LocalTransform: position relative to parent
+  - [ ] 21.3.2 WorldTransform: absolute position (computed)
+
+### 22. Scene Definition Format
+- [ ] 22.1 Authoring format (JSON5)
+  - [ ] 22.1.1 JSON5 scene schema definition
+  - [ ] 22.1.2 Scene parser and validator
+- [ ] 22.2 Runtime format (binary)
+  - [ ] 22.2.1 Binary scene serialization (bincode/rkyv/custom)
+  - [ ] 22.2.2 Compile-time conversion: JSON5 → binary
+- [ ] 22.3 Scene loader
+  - [ ] 22.3.1 Load binary scene → spawn entities via Commands
+  - [ ] 22.3.2 SceneHandle for runtime reference
+  - [ ] 22.3.3 Scene instancing (nest scenes within scenes)
+
+### 23. Gameplay Framework (Optional)
+- [ ] 23.1 GameMode resource
+  - [ ] 23.1.1 Game rules, zone transitions, scene management
+- [ ] 23.2 PlayerController resource
+  - [ ] 23.2.1 Input routing, camera control, UI interaction
+- [ ] 23.3 Pawn component
+  - [ ] 23.3.1 Physical representation of player/AI
+- [ ] 23.4 GameState/PlayerState resources
+  - [ ] 23.4.1 Per-game and per-player data tracking
+
+### 24. Rect Utility Extensions
+- [ ] 24.1 Add methods to Rect
+  - [ ] 24.1.1 `inflate(dx, dy)` — expand/shrink rect
+  - [ ] 24.1.2 `clamp(within)` — constrain rect inside another
+  - [ ] 24.1.3 `collide_point(x, y)` — point collision check
+  - [ ] 24.1.4 `collide_rect(other)` — rect collision check
+  - [ ] 24.1.5 `center()` — get center point
+  - [ ] 24.1.6 `union(other)` — bounding box of two rects
+
+### 25. Immediate Mode Render API (Optional)
+- [ ] 25.1 Immediate mode API
+  - [ ] 25.1.1 `draw_immediate(|draw| { ... })` closure
+  - [ ] 25.1.2 Debug drawing helpers (lines, circles, text)
+- [ ] 25.2 Debug overlay
+  - [ ] 25.2.1 FPS counter, entity count, collision visualization
+
+---
+
+### 26. UI System (engine-ui crate) — DEFERRED
+> Full UI system implementation. Requires texture atlas, layer system, and entity hierarchies to be complete first.
+
+- [ ] 26.1 engine-ui crate structure
+  - [ ] 26.1.1 `node/` — Node + Style components (ECS)
+  - [ ] 26.1.2 `layout/` — Taffy integration (flexbox layout)
+  - [ ] 26.1.3 `widget/` — Button, Label, Panel bundles
+  - [ ] 26.1.4 `interaction/` — Hover/press/focus tracking
+  - [ ] 26.1.5 `events/` — UI event types (pressed, changed, focused)
+- [ ] 26.2 Layout system
+  - [ ] 26.2.1 Taffy integration (pure Rust flexbox, WASM compatible)
+  - [ ] 26.2.2 Lazy recomputation — only on style/content change, NOT every frame
+  - [ ] 26.2.3 Dirty region tracking — mark only changed nodes for re-layout
+- [ ] 26.3 Widget bundles
+  - [ ] 26.3.1 Button (with Interaction component)
+  - [ ] 26.3.2 Label (text display)
+  - [ ] 26.3.3 Panel (container with background)
+  - [ ] 26.3.4 Image (texture display)
+  - [ ] 26.3.5 Containers: VBox, HBox, Grid, Margin, Center
+- [ ] 26.4 Focus management
+  - [ ] 26.4.1 Focus stack for keyboard/gamepad navigation
+  - [ ] 26.4.2 Tab order, directional navigation
+- [ ] 26.5 UI → DrawCommand conversion
+  - [ ] 26.5.1 UI entities produce DrawCommands (decoupled from render crate)
+  - [ ] 26.5.2 UI render pass (runs after game objects, on UI layer)
+
+### 27. Theme System — DEFERRED
+- [ ] 27.1 Theme resource
+  - [ ] 27.1.1 `Theme { colors, fonts, font_sizes, style_boxes }`
+  - [ ] 27.1.2 Theme loading from JSON5
+  - [ ] 27.1.3 Runtime theme swapping (for skinning/accessibility)
+- [ ] 27.2 StyleBox
+  - [ ] 27.2.1 Flat, textured, bordered backgrounds
+  - [ ] 27.2.2 Nine-patch scaling
+
+### 28. Named Event System (Optional) — DEFERRED
+- [ ] 28.1 EventBus resource
+  - [ ] 28.1.1 Named event dispatch (`events.dispatch("player_died", event)`)
+  - [ ] 28.1.2 Event subscription by name
+  - [ ] 28.1.3 Event priority ordering
+- [ ] 28.2 Integration with ECS events
+  - [ ] 28.2.1 Named events wrap bevy_ecs events under the hood
+  - [ ] 28.2.2 Raw ECS events still available for performance-critical paths
+
+---
+
+## Dependency Graph (Updated)
+
+```
+Phase 1 (Core ECS)
+├── 1. ECS World & Schedule
+├── 2. Plugin System → 1
+└── 3. System Scheduling → 1, 2
+
+Phase 2 (Subsystems)
+├── 4. Time System → 1, 2, 3
+├── 5. Input System → 1, 2, 3
+├── 6. Render System → 1, 2, 3, 8 (Asset Server for textures)
+└── 7. Audio System → 1, 2, 3, 8 (Asset Server for sounds)
+
+Phase 3 (Assets)
+└── 8. Asset Server → 1
+
+Phase 4 (Game Loop)
+├── 9. App.run() Integration → 1, 2, 3, 4, 5, 6, 7, 8
+└── 10. lunar_app! Macro → 9
+
+Phase 5 (World/Scenes)
+├── 11. Zone System → 10
+└── 12. Scene System → 10
+
+Phase 6 (Errors)
+└── 13. Error System → 10
+
+Phase 7 (Dialogue)
+└── 14. Dialogue System → 10, 6 (text rendering)
+
+Phase 8 (Web)
+└── 15. WASM Target → 9, 10 (all core systems working natively first)
+
+Phase 9 (Polish)
+├── 16. Extensibility → 10
+├── 17. Macros → 10
+└── 18. 3D Future → 6 (render system)
+
+Part 2 (Post-Engine)
+├── 19. Texture Atlas → 6 (render system), 8 (asset server)
+├── 20. Layer System → 6 (render system)
+├── 21. Entity Hierarchies → 9.1 (Transform component)
+├── 22. Scene Format → 8 (asset server), 12 (scene system)
+├── 23. Gameplay Framework → 10 (app.run), 11 (zone system)
+├── 24. Rect Utilities → 9.3 (Rect type)
+├── 25. Immediate Mode → 6 (render system)
+├── 26. UI System → 19 (atlas), 20 (layers), 21 (hierarchies)
+├── 27. Theme System → 26 (UI system)
+└── 28. Named Events → 1 (ECS events)
+```

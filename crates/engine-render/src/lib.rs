@@ -41,6 +41,23 @@ use engine_core::{App, GamePlugin};
 use engine_math::{Color, Vec2};
 use wgpu::util::DeviceExt;
 
+/// parameters for drawing a transformed sprite.
+/// used with [`RenderQueue::draw_sprite_transformed_on_layer`] to avoid
+/// too many function arguments.
+#[derive(Debug, Clone, Copy)]
+pub struct SpriteParams {
+    /// position in world space
+    pub position: Vec2,
+    /// size (width, height)
+    pub scale: Vec2,
+    /// rotation in radians
+    pub rotation: f32,
+    /// origin point for rotation and scaling
+    pub origin: Vec2,
+    /// color tint (RGBA)
+    pub tint: Color,
+}
+
 /// camera resource, affects how the render queue is projected.
 ///
 /// when no camera resource exists, rendering uses world-space anchored at origin.
@@ -664,11 +681,19 @@ impl RenderEngine {
         self.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&projection));
 
+        // sort commands by layer first (stable sort preserves order within same layer)
+        let mut sorted_commands: Vec<&DrawCommand> = commands.iter().collect();
+        sorted_commands.sort_by_key(|cmd| match &cmd.kind {
+            DrawKind::Sprite { layer, .. } => *layer,
+            DrawKind::Rect { layer, .. } => *layer,
+            DrawKind::Text { layer, .. } => *layer,
+        });
+
         // group sprite commands by texture id
         let mut sprites_by_tex: HashMap<u32, Vec<&DrawCommand>> = HashMap::new();
         let mut rect_commands: Vec<&DrawCommand> = Vec::new();
 
-        for command in commands {
+        for command in sorted_commands {
             match &command.kind {
                 DrawKind::Sprite {
                     texture: Some(tex_id),
@@ -812,6 +837,7 @@ impl RenderEngine {
                             position,
                             size,
                             color,
+                            ..
                         } => {
                             let (x, y, w, h) = (position.x, position.y, size.x, size.y);
                             for [px, py] in [
@@ -833,6 +859,7 @@ impl RenderEngine {
                             position,
                             font_size,
                             color,
+                            ..
                         } => {
                             // layout text and generate quads
                             let font_id = font.unwrap_or(0) as u32;
@@ -986,12 +1013,14 @@ pub enum DrawKind {
         rotation: f32,
         scale: Vec2,
         tint: Color,
+        layer: i32,
     },
     /// draw a 2D rectangle
     Rect {
         position: Vec2,
         size: Vec2,
         color: Color,
+        layer: i32,
     },
     /// draw text
     Text {
@@ -1000,7 +1029,21 @@ pub enum DrawKind {
         position: Vec2,
         font_size: f32,
         color: Color,
+        layer: i32,
     },
+}
+
+/// built-in layer constants for common rendering needs.
+/// lower values are drawn first (behind), higher values are drawn last (in front).
+pub mod layers {
+    /// background layer — static backgrounds, parallax layers
+    pub const BACKGROUND: i32 = 0;
+    /// game layer — game objects, characters, projectiles
+    pub const GAME: i32 = 100;
+    /// foreground layer — effects, overlays, weather
+    pub const FOREGROUND: i32 = 200;
+    /// UI layer — HUD, menus, dialogue boxes
+    pub const UI: i32 = 300;
 }
 
 impl RenderQueue {
@@ -1041,6 +1084,17 @@ impl RenderQueue {
 
     /// draw a sprite at the given position and size using a texture handle
     pub fn draw_sprite(&mut self, texture: &Handle<Texture>, position: Vec2, size: Vec2) {
+        self.draw_sprite_on_layer(texture, position, size, layers::GAME);
+    }
+
+    /// draw a sprite on a specific layer
+    pub fn draw_sprite_on_layer(
+        &mut self,
+        texture: &Handle<Texture>,
+        position: Vec2,
+        size: Vec2,
+        layer: i32,
+    ) {
         self.push(DrawCommand {
             kind: DrawKind::Sprite {
                 texture: Some(texture.id() as u64),
@@ -1048,38 +1102,48 @@ impl RenderQueue {
                 rotation: 0.0,
                 scale: size,
                 tint: Color::WHITE,
+                layer,
             },
         });
     }
 
     /// draw a sprite with full transform control using a texture handle
-    pub fn draw_sprite_transformed(
+    pub fn draw_sprite_transformed(&mut self, texture: &Handle<Texture>, params: SpriteParams) {
+        self.draw_sprite_transformed_on_layer(texture, params, layers::GAME);
+    }
+
+    /// draw a sprite with full transform control on a specific layer
+    pub fn draw_sprite_transformed_on_layer(
         &mut self,
         texture: &Handle<Texture>,
-        position: Vec2,
-        size: Vec2,
-        rotation: f32,
-        _origin: Vec2,
-        tint: Color,
+        params: SpriteParams,
+        layer: i32,
     ) {
         self.push(DrawCommand {
             kind: DrawKind::Sprite {
                 texture: Some(texture.id() as u64),
-                position,
-                rotation,
-                scale: size,
-                tint,
+                position: params.position,
+                rotation: params.rotation,
+                scale: params.scale,
+                tint: params.tint,
+                layer,
             },
         });
     }
 
     /// draw a colored rectangle
     pub fn draw_rect(&mut self, position: Vec2, size: Vec2, color: Color) {
+        self.draw_rect_on_layer(position, size, color, layers::GAME);
+    }
+
+    /// draw a colored rectangle on a specific layer
+    pub fn draw_rect_on_layer(&mut self, position: Vec2, size: Vec2, color: Color, layer: i32) {
         self.push(DrawCommand {
             kind: DrawKind::Rect {
                 position,
                 size,
                 color,
+                layer,
             },
         });
     }
@@ -1121,6 +1185,7 @@ impl RenderQueue {
                 position: Vec2::new(start.x + min_x, start.y + min_y),
                 size: Vec2::new(max_x - min_x, max_y - min_y),
                 color,
+                layer: layers::GAME,
             },
         });
     }
@@ -1134,6 +1199,7 @@ impl RenderQueue {
                 position: Vec2::ZERO,
                 size: Vec2::new(10000.0, 10000.0),
                 color,
+                layer: layers::BACKGROUND,
             },
         });
     }
@@ -1147,6 +1213,19 @@ impl RenderQueue {
         font_size: f32,
         color: Color,
     ) {
+        self.draw_text_on_layer(font, content, position, font_size, color, layers::GAME);
+    }
+
+    /// draw text on a specific layer
+    pub fn draw_text_on_layer(
+        &mut self,
+        font: &Handle<Font>,
+        content: &str,
+        position: Vec2,
+        font_size: f32,
+        color: Color,
+        layer: i32,
+    ) {
         self.push(DrawCommand {
             kind: DrawKind::Text {
                 font: Some(font.id() as u64),
@@ -1154,6 +1233,7 @@ impl RenderQueue {
                 position,
                 font_size,
                 color,
+                layer,
             },
         });
     }
