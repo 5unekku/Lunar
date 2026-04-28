@@ -15,8 +15,6 @@ use std::collections::HashMap;
 use bevy_ecs::prelude::*;
 use engine_math::{Color, Rect, Vec2};
 
-use crate::app::App;
-
 /// fade configuration for zone transitions.
 ///
 /// controls the visual effect when moving between zones.
@@ -50,13 +48,13 @@ pub struct ZoneTransition {
 /// entering, and exiting. implement this trait to create custom zones.
 pub trait Zone: Send + Sync + 'static {
     /// called when the zone is being loaded (async asset loading)
-    fn on_load(&mut self, _app: &mut App) {}
+    fn on_load(&mut self, _world: &mut World) {}
 
     /// called when the zone becomes active
-    fn on_enter(&mut self, _app: &mut App) {}
+    fn on_enter(&mut self, _world: &mut World) {}
 
     /// called when the zone is being unloaded
-    fn on_exit(&mut self, _app: &mut App) {}
+    fn on_exit(&mut self, _world: &mut World) {}
 
     /// optional: define transition points
     fn transitions(&self) -> Vec<ZoneTransition> {
@@ -103,7 +101,7 @@ impl WorldManager {
     }
 
     /// transition to a zone (keeps world state)
-    pub fn enter_zone(&mut self, name: &str) {
+    pub fn enter_zone(&mut self, name: &str, world: &mut World) {
         if let Some(current) = &self.current_zone
             && current == name
         {
@@ -119,13 +117,13 @@ impl WorldManager {
         if let Some(current_name) = self.current_zone.take()
             && let Some(current_boxed) = self.zones.get_mut(&current_name)
         {
-            current_boxed.zone.on_exit(&mut App::new());
+            current_boxed.zone.on_exit(world);
         }
 
         // load and enter new zone
         if let Some(boxed) = self.zones.get_mut(name) {
-            boxed.zone.on_load(&mut App::new());
-            boxed.zone.on_enter(&mut App::new());
+            boxed.zone.on_load(world);
+            boxed.zone.on_enter(world);
         }
         self.current_zone = Some(name.to_string());
         log::info!("WorldManager: entered zone '{}'", name);
@@ -152,9 +150,9 @@ impl WorldManager {
     }
 
     /// process pending transitions
-    pub fn process_transitions(&mut self) {
+    pub fn process_transitions(&mut self, world: &mut World) {
         if let Some(transition) = self.pending_transition.take() {
-            self.enter_zone(&transition.target_zone);
+            self.enter_zone(&transition.target_zone, world);
         }
     }
 }
