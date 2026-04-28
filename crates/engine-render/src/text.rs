@@ -134,15 +134,16 @@ impl GlyphAtlas {
             return false;
         }
 
-        // copy bitmap into atlas pixels
+        // copy bitmap into atlas pixels using row-copy for better performance
         for gy in 0..gh {
-            for gx in 0..gw {
-                let src_idx = (gy * gw + gx) as usize;
-                let dst_x = self.cursor_x + gx;
-                let dst_y = self.cursor_y + gy;
-                let dst_idx = ((dst_y * self.width + dst_x) * 4) as usize;
+            let src_row_start = (gy * gw) as usize;
+            let src_row = &bitmap[src_row_start..src_row_start + gw as usize];
+            let dst_y = self.cursor_y + gy;
+            let dst_x = self.cursor_x;
+            let dst_row_start = ((dst_y * self.width + dst_x) * 4) as usize;
 
-                let alpha = bitmap[src_idx];
+            for (gx, &alpha) in src_row.iter().enumerate() {
+                let dst_idx = dst_row_start + gx * 4;
                 self.pixels[dst_idx] = 0xff; // r
                 self.pixels[dst_idx + 1] = 0xff; // g
                 self.pixels[dst_idx + 2] = 0xff; // b
