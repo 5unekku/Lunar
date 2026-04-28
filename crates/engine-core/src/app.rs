@@ -10,7 +10,6 @@ use std::time::Instant;
 
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::ScheduleLabel;
-use bevy_ecs::system::RunSystemOnce;
 
 use crate::engine::Engine;
 use crate::game_loop::GameLoop;
@@ -132,6 +131,8 @@ pub struct App {
     pending_plugins: Vec<Box<dyn GamePlugin>>,
     /// names of plugins already built (for cycle detection)
     built_plugins: Vec<String>,
+    /// whether startup systems have been run
+    startup_run: bool,
 }
 
 impl App {
@@ -146,6 +147,7 @@ impl App {
             engine,
             pending_plugins: Vec::new(),
             built_plugins: Vec::new(),
+            startup_run: false,
         }
     }
 
@@ -186,8 +188,7 @@ impl App {
 
     /// add a startup system that runs once before the main loop
     pub fn add_startup_system<M>(&mut self, system: impl IntoSystem<(), (), M>) -> &mut Self {
-        // startup systems are tracked separately and run once before the main schedule
-        let _ = self.engine.world_mut().run_system_once(system);
+        self.engine.startup_schedule_mut().add_systems(system);
         self
     }
 
@@ -297,6 +298,12 @@ impl App {
     {
         // build all pending plugins before starting
         self.build_plugins();
+
+        // run startup systems once before the main loop
+        if !self.startup_run {
+            self.engine.run_startup();
+            self.startup_run = true;
+        }
 
         let mut game_loop = GameLoop::new(frame_cap);
 

@@ -12,6 +12,10 @@ use bevy_ecs::schedule::ScheduleLabel;
 #[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Update;
 
+/// schedule for startup systems that run once before the main loop
+#[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Startup;
+
 /// the engine owns the ECS world and schedule.
 ///
 /// this is the low-level wrapper around bevy_ecs.
@@ -19,7 +23,9 @@ pub struct Update;
 pub struct Engine {
     /// the ECS world containing all entities, components, and resources
     world: World,
-    /// the schedule containing all systems
+    /// the startup schedule (run once before main loop)
+    startup_schedule: Schedule,
+    /// the main update schedule
     schedule: Schedule,
 }
 
@@ -28,6 +34,7 @@ impl Engine {
     pub fn new() -> Self {
         Self {
             world: World::new(),
+            startup_schedule: Schedule::new(Startup),
             schedule: Schedule::new(Update),
         }
     }
@@ -42,6 +49,11 @@ impl Engine {
         &self.world
     }
 
+    /// get mutable access to the startup schedule
+    pub fn startup_schedule_mut(&mut self) -> &mut Schedule {
+        &mut self.startup_schedule
+    }
+
     /// get mutable access to the schedule
     pub fn schedule_mut(&mut self) -> &mut Schedule {
         &mut self.schedule
@@ -50,6 +62,11 @@ impl Engine {
     /// get a reference to the schedule
     pub fn schedule(&self) -> &Schedule {
         &self.schedule
+    }
+
+    /// run all startup systems once
+    pub fn run_startup(&mut self) {
+        self.startup_schedule.run(&mut self.world);
     }
 
     /// run all systems in the schedule

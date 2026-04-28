@@ -667,10 +667,10 @@ Part 2 (Post-Engine)
 - **Effort:** High
 
 #### 35. Fix Startup System Timing
-- [ ] 35.1 Track startup systems, run at start of `App::run()`
-  - [ ] 35.1.1 Store startup systems in Vec instead of running immediately
-  - [ ] 35.1.2 Run all startup systems in sequence at start of `run()`
-  - [ ] 35.1.3 Clear startup systems after first run
+- [x] 35.1 Track startup systems, run at start of `App::run()`
+  - [x] 35.1.1 Add `Startup` schedule to Engine
+  - [x] 35.1.2 `add_startup_system()` adds to startup schedule instead of running immediately
+  - [x] 35.1.3 Run startup schedule at start of `run_with_events()` before main loop
 - **Impact:** Startup systems run after all plugins/resources are ready
 - **Effort:** Low
 
