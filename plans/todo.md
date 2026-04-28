@@ -615,10 +615,10 @@ Part 2 (Post-Engine)
 ### P0: Critical Performance Fixes
 
 #### 29. Bind Group Caching
-- [ ] 29.1 Cache bind groups by texture ID
-  - [ ] 29.1.1 Add `HashMap<u32, wgpu::BindGroup>` to RenderEngine
-  - [ ] 29.1.2 Create bind group on texture upload, cache by texture ID
-  - [ ] 29.1.3 Look up cached bind group in render loop instead of creating new
+- [x] 29.1 Cache bind groups by texture ID
+  - [x] 29.1.1 Add `HashMap<u32, wgpu::BindGroup>` to RenderEngine
+  - [x] 29.1.2 Create bind group on texture upload, cache by texture ID
+  - [x] 29.1.3 Look up cached bind group in render loop instead of creating new
   - [ ] 29.1.4 Handle texture removal/invalidation (remove from cache)
 - **Impact:** Eliminates per-frame GPU object creation on Vulkan
 - **Effort:** Low
@@ -633,9 +633,8 @@ Part 2 (Post-Engine)
 - **Effort:** Medium
 
 #### 31. StoreOp::Discard
-- [ ] 31.1 Change `store: Store` to `store: StoreOp::Discard` in render pass
-  - [ ] 31.1.1 Update color attachment operations
-  - [ ] 31.1.2 Update depth/stencil attachment if applicable
+- [x] 31.1 Change `store: Store` to `store: StoreOp::Discard` in render pass
+  - [x] 31.1.1 Update color attachment operations
 - **Impact:** Free performance on tile-based GPUs (Apple Silicon, mobile)
 - **Effort:** Low
 
@@ -651,10 +650,10 @@ Part 2 (Post-Engine)
 - **Effort:** Medium
 
 #### 33. Sort Commands by (Layer, Texture)
-- [ ] 33.1 Replace HashMap grouping with sorted Vec
-  - [ ] 33.1.1 Sort by `(layer, texture_id)` tuple
-  - [ ] 33.1.2 Iterate linearly — same-texture commands are contiguous
-  - [ ] 33.1.3 Remove HashMap allocation from render loop
+- [x] 33.1 Replace HashMap grouping with sorted Vec
+  - [x] 33.1.1 Sort by `(layer, texture_id)` tuple
+  - [x] 33.1.2 Iterate linearly — same-texture commands are contiguous
+  - [x] 33.1.3 Remove HashMap allocation from render loop
 - **Impact:** Better cache locality, no HashMap overhead
 - **Effort:** Low
 

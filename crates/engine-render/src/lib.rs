@@ -186,6 +186,7 @@ pub struct RenderEngine {
     bind_group: wgpu::BindGroup,
     sampler: wgpu::Sampler,
     textures: HashMap<u32, GpuTexture>,
+    bind_groups: HashMap<u32, wgpu::BindGroup>,
     glyph_atlas: text::GlyphAtlas,
     #[allow(dead_code)]
     glyph_atlas_texture: Option<GpuTexture>,
@@ -503,6 +504,7 @@ impl RenderEngine {
             bind_group,
             sampler,
             textures: HashMap::new(),
+            bind_groups: HashMap::new(),
             glyph_atlas: text::GlyphAtlas::new(1024, 1024),
             glyph_atlas_texture: None,
             render_passes: Vec::new(),
@@ -582,8 +584,31 @@ impl RenderEngine {
         );
 
         let view = gpu_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let tex_id = handle.id();
+
+        // create and cache bind group for this texture
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("sprite bind group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.uniform_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
+        self.bind_groups.insert(tex_id, bind_group);
+
         self.textures.insert(
-            handle.id(),
+            tex_id,
             GpuTexture {
                 texture: gpu_texture,
                 view,
@@ -681,29 +706,27 @@ impl RenderEngine {
         self.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&projection));
 
-        // sort commands by layer first (stable sort preserves order within same layer)
+        // sort by (layer, texture_id) — same-texture commands are contiguous, no HashMap needed
         let mut sorted_commands: Vec<&DrawCommand> = commands.iter().collect();
-        sorted_commands.sort_by_key(|cmd| match &cmd.kind {
-            DrawKind::Sprite { layer, .. } => *layer,
-            DrawKind::Rect { layer, .. } => *layer,
-            DrawKind::Text { layer, .. } => *layer,
+        sorted_commands.sort_by_key(|cmd| {
+            let layer = match &cmd.kind {
+                DrawKind::Sprite { layer, .. } => *layer,
+                DrawKind::Rect { layer, .. } => *layer,
+                DrawKind::Text { layer, .. } => *layer,
+            };
+            let tex = match &cmd.kind {
+                DrawKind::Sprite {
+                    texture: Some(id), ..
+                } => *id as u32,
+                _ => u32::MAX,
+            };
+            (layer, tex)
         });
 
-        // group sprite commands by texture id
-        let mut sprites_by_tex: HashMap<u32, Vec<&DrawCommand>> = HashMap::new();
+        // collect rect and text commands (no texture)
         let mut rect_commands: Vec<&DrawCommand> = Vec::new();
-
-        for command in sorted_commands {
+        for command in &sorted_commands {
             match &command.kind {
-                DrawKind::Sprite {
-                    texture: Some(tex_id),
-                    ..
-                } => {
-                    sprites_by_tex
-                        .entry(*tex_id as u32)
-                        .or_default()
-                        .push(command);
-                }
                 DrawKind::Rect { .. } | DrawKind::Text { .. } => {
                     rect_commands.push(command);
                 }
@@ -730,7 +753,7 @@ impl RenderEngine {
                             b: 0.07,
                             a: 1.0,
                         }),
-                        store: wgpu::StoreOp::Store,
+                        store: wgpu::StoreOp::Discard,
                     },
                     depth_slice: None,
                 })],
@@ -742,94 +765,77 @@ impl RenderEngine {
 
             pass.set_pipeline(&self.sprite_pipeline);
 
-            // draw sprites batched by texture
-            for (tex_id, sprite_cmds) in &sprites_by_tex {
-                let Some(gpu_tex) = self.textures.get(tex_id) else {
+            // draw sprites batched by texture (sorted order means same-tex commands are contiguous)
+            let mut current_tex: Option<u32> = None;
+            let mut vertices: Vec<f32> = Vec::with_capacity(1024);
+
+            for command in &sorted_commands {
+                let DrawKind::Sprite {
+                    texture: Some(tex_id),
+                    position,
+                    rotation,
+                    scale,
+                    tint,
+                    uv_rect,
+                    ..
+                } = &command.kind
+                else {
                     continue;
                 };
 
-                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("frame bind group"),
-                    layout: &self.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: self.uniform_buf.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(&gpu_tex.view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::Sampler(&self.sampler),
-                        },
-                    ],
-                });
+                let tex_id = *tex_id as u32;
 
-                let mut vertices: Vec<f32> = Vec::with_capacity(sprite_cmds.len() * 48);
-                for command in sprite_cmds {
-                    if let DrawKind::Sprite {
-                        position,
-                        rotation,
-                        scale,
-                        tint,
-                        uv_rect,
-                        ..
-                    } = &command.kind
+                // flush and switch texture when it changes
+                if current_tex != Some(tex_id) {
+                    if !vertices.is_empty()
+                        && let Some(prev_tex) = current_tex
                     {
-                        let hw = scale.x * 0.5;
-                        let hh = scale.y * 0.5;
-                        let cos = rotation.cos();
-                        let sin = rotation.sin();
-
-                        let corners = [
-                            [-hw, -hh],
-                            [hw, -hh],
-                            [-hw, hh],
-                            [-hw, hh],
-                            [hw, -hh],
-                            [hw, hh],
-                        ];
-
-                        // use atlas UVs if provided, otherwise default [0,0,1,1]
-                        let (uv_min, uv_max) = uv_rect.unwrap_or((Vec2::ZERO, Vec2::new(1.0, 1.0)));
-                        let uvs = [
-                            [uv_min.x, uv_min.y],
-                            [uv_max.x, uv_min.y],
-                            [uv_min.x, uv_max.y],
-                            [uv_min.x, uv_max.y],
-                            [uv_max.x, uv_min.y],
-                            [uv_max.x, uv_max.y],
-                        ];
-
-                        for (i, [lx, ly]) in corners.iter().enumerate() {
-                            let rx = lx * cos - ly * sin;
-                            let ry = lx * sin + ly * cos;
-                            let px = position.x + rx;
-                            let py = position.y + ry;
-                            let [u, v] = uvs[i];
-                            vertices
-                                .extend_from_slice(&[px, py, u, v, tint.r, tint.g, tint.b, tint.a]);
-                        }
+                        self.draw_vertex_batch(&mut pass, prev_tex, &vertices);
                     }
+                    vertices.clear();
+                    current_tex = Some(tex_id);
                 }
 
-                if vertices.is_empty() {
-                    continue;
+                // accumulate vertices
+                let hw = scale.x * 0.5;
+                let hh = scale.y * 0.5;
+                let cos = rotation.cos();
+                let sin = rotation.sin();
+
+                let corners = [
+                    [-hw, -hh],
+                    [hw, -hh],
+                    [-hw, hh],
+                    [-hw, hh],
+                    [hw, -hh],
+                    [hw, hh],
+                ];
+
+                let (uv_min, uv_max) = uv_rect.unwrap_or((Vec2::ZERO, Vec2::new(1.0, 1.0)));
+                let uvs = [
+                    [uv_min.x, uv_min.y],
+                    [uv_max.x, uv_min.y],
+                    [uv_min.x, uv_max.y],
+                    [uv_min.x, uv_max.y],
+                    [uv_max.x, uv_min.y],
+                    [uv_max.x, uv_max.y],
+                ];
+
+                for (i, [lx, ly]) in corners.iter().enumerate() {
+                    let rx = lx * cos - ly * sin;
+                    let ry = lx * sin + ly * cos;
+                    let px = position.x + rx;
+                    let py = position.y + ry;
+                    let [u, v] = uvs[i];
+                    vertices.extend_from_slice(&[px, py, u, v, tint.r, tint.g, tint.b, tint.a]);
                 }
+            }
 
-                let vertex_buf =
-                    self.device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("sprite vertices"),
-                            contents: bytemuck::cast_slice(&vertices),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        });
-
-                pass.set_bind_group(0, &bind_group, &[]);
-                pass.set_vertex_buffer(0, vertex_buf.slice(..));
-                pass.draw(0..(vertices.len() / 8) as u32, 0..1);
+            // flush final sprite batch
+            if !vertices.is_empty()
+                && let Some(tex_id) = current_tex
+            {
+                self.draw_vertex_batch(&mut pass, tex_id, &vertices);
             }
 
             // draw untextured commands (rects, text) as solid color
@@ -942,6 +948,23 @@ impl RenderEngine {
 
         self.queue.submit(Some(encoder.finish()));
         frame.present();
+    }
+
+    /// draw a batch of vertices using the cached bind group for the given texture.
+    fn draw_vertex_batch(&self, pass: &mut wgpu::RenderPass<'_>, tex_id: u32, vertices: &[f32]) {
+        let Some(bind_group) = self.bind_groups.get(&tex_id) else {
+            return;
+        };
+        let vertex_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("sprite vertices"),
+                contents: bytemuck::cast_slice(vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        pass.set_bind_group(0, bind_group, &[]);
+        pass.set_vertex_buffer(0, vertex_buf.slice(..));
+        pass.draw(0..(vertices.len() / 8) as u32, 0..1);
     }
 }
 
