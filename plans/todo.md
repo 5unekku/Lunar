@@ -624,9 +624,9 @@ Part 2 (Post-Engine)
 - **Effort:** Low
 
 #### 30. Persistent Vertex Buffer (Ring Buffer)
-- [ ] 30.1 Replace per-frame `create_buffer_init` with persistent buffer
-  - [ ] 30.1.1 Pre-allocate large vertex buffer at startup (`MAX_VERTICES * 32` bytes)
-  - [ ] 30.1.2 Use `write_buffer()` with `MAP_WRITE` + `UNMAP` each frame
+- [x] 30.1 Replace per-frame `create_buffer_init` with persistent buffer
+  - [x] 30.1.1 Pre-allocate large vertex buffer at startup (`MAX_VERTICES * 20` bytes)
+  - [x] 30.1.2 Use `write_buffer()` with `MAP_WRITE` + `COPY_DST` each frame
   - [ ] 30.1.3 Double-buffer or triple-buffer for frame overlap safety
   - [ ] 30.1.4 Handle buffer overflow (split into multiple draw calls or grow)
 - **Impact:** Eliminates per-frame GPU memory allocation churn
@@ -641,11 +641,11 @@ Part 2 (Post-Engine)
 ### P1: Important Improvements
 
 #### 32. Vertex Format Packing
-- [ ] 32.1 Pack color into single `u32` (4 bytes instead of 16)
-  - [ ] 32.1.1 Change vertex from `[f32; 8]` (32 bytes) to `[f32; 4] + [u32; 1]` (20 bytes)
-  - [ ] 32.1.2 Update vertex shader to unpack `u32` color
-  - [ ] 32.1.3 Update vertex attribute format (`Uint32` instead of `Float32x4`)
-  - [ ] 32.1.4 Update all vertex generation code
+- [x] 32.1 Pack color into single `u32` (4 bytes instead of 16)
+  - [x] 32.1.1 Change vertex from `[f32; 8]` (32 bytes) to `[f32; 4] + [u32; 1]` (20 bytes)
+  - [x] 32.1.2 Update vertex shader to use `Unorm8x4` color
+  - [x] 32.1.3 Update vertex attribute format (`Unorm8x4` instead of `Float32x4`)
+  - [x] 32.1.4 Update all vertex generation code
 - **Impact:** 37.5% less vertex data per frame
 - **Effort:** Medium
 
@@ -658,10 +658,10 @@ Part 2 (Post-Engine)
 - **Effort:** Low
 
 #### 34. Stage-Based System Ordering
-- [ ] 34.1 Implement actual stage scheduling
-  - [ ] 34.1.1 Create bevy_ecs schedules for each stage (Input, Physics, Update, Render)
-  - [ ] 34.1.2 `add_system_to_stage()` adds to correct schedule
-  - [ ] 34.1.3 Run schedules in order each frame
+- [x] 34.1 Implement actual stage scheduling
+  - [x] 34.1.1 Create bevy_ecs schedules for each stage (Input, Physics, Update, Render)
+  - [x] 34.1.2 `add_system_to_stage()` adds to correct schedule
+  - [x] 34.1.3 Run schedules in order each frame via `run_stages()`
   - [ ] 34.1.4 Handle `apply_deferred` between stages
 - **Impact:** Game code can control system ordering
 - **Effort:** High
@@ -677,9 +677,9 @@ Part 2 (Post-Engine)
 ### P2: Nice-to-Have
 
 #### 36. Cache Text Layout Results
-- [ ] 36.1 Cache computed glyph quads per text element
-  - [ ] 36.1.1 Store layout result in text component
-  - [ ] 36.1.2 Only recompute when text content, font, or size changes
+- [x] 36.1 Cache computed glyph quads per text element
+  - [x] 36.1.1 Store layout result in `RenderEngine.text_layout_cache`
+  - [x] 36.1.2 Only recompute when text content, font, or size changes
   - [ ] 36.1.3 Invalidate cache on text change
 - **Impact:** Eliminates per-frame character iteration and glyph lookup
 - **Effort:** Low
@@ -701,9 +701,8 @@ Part 2 (Post-Engine)
 - **Effort:** Low
 
 #### 39. Fix SpriteParams Origin Usage
-- [ ] 39.1 Use origin parameter in vertex generation
-  - [ ] 39.1.1 Compute rotation/scaling around origin point
-  - [ ] 39.1.2 Or remove origin from API if not needed
+- [x] 39.1 Use origin parameter in vertex generation
+  - [x] 39.1.1 Compute rotation/scaling around origin point
 - **Impact:** Fixes confusing API behavior
 - **Effort:** Low
 
@@ -718,17 +717,15 @@ Part 2 (Post-Engine)
 - **Effort:** Medium
 
 #### 41. DrawKind::Line Variant
-- [ ] 41.1 Add proper line rendering
-  - [ ] 41.1.1 `DrawKind::Line { start, end, color, thickness }`
-  - [ ] 41.1.2 Compute rotated rect vertices in shader or CPU
-  - [ ] 41.1.3 Or use line primitives if supported
+- [x] 41.1 Add proper line rendering
+  - [x] 41.1.1 `DrawKind::Line { start, end, color, thickness, layer }`
+  - [x] 41.1.2 Compute rotated rect vertices on CPU
 - **Impact:** Clean diagonal lines, more efficient than AABB rect
 - **Effort:** Medium
 
 #### 42. Glyph Atlas Row-Copy Optimization
-- [ ] 42.1 Replace per-pixel copy with row copy
-  - [ ] 42.1.1 Use `slice::copy_from_slice` for each row
-  - [ ] 42.1.2 Or use engine-image SIMD functions
+- [x] 42.1 Replace per-pixel copy with row copy
+  - [x] 42.1.1 Use row-based iteration with slice access
 - **Impact:** Faster glyph rasterization
 - **Effort:** Low
 
@@ -741,10 +738,10 @@ Part 2 (Post-Engine)
 - **Effort:** Medium
 
 #### 44. Hybrid Frame Cap Sleep
-- [ ] 44.1 Improve frame timing precision
-  - [ ] 44.1.1 Sleep for most of wait time
-  - [ ] 44.1.2 Spin-wait last ~1ms with `std::hint::spin_loop()`
-  - [ ] 44.1.3 Reduces frame pacing jitter
+- [x] 44.1 Improve frame timing precision
+  - [x] 44.1.1 Sleep for most of wait time
+  - [x] 44.1.2 Spin-wait last ~1ms with `std::hint::spin_loop()`
+  - [x] 44.1.3 Reduces frame pacing jitter
 - **Impact:** Smoother frame timing
 - **Effort:** Low
 
