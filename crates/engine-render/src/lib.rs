@@ -774,6 +774,7 @@ impl RenderEngine {
                         rotation,
                         scale,
                         tint,
+                        uv_rect,
                         ..
                     } = &command.kind
                     {
@@ -790,13 +791,16 @@ impl RenderEngine {
                             [hw, -hh],
                             [hw, hh],
                         ];
+
+                        // use atlas UVs if provided, otherwise default [0,0,1,1]
+                        let (uv_min, uv_max) = uv_rect.unwrap_or((Vec2::ZERO, Vec2::new(1.0, 1.0)));
                         let uvs = [
-                            [0.0, 0.0],
-                            [1.0, 0.0],
-                            [0.0, 1.0],
-                            [0.0, 1.0],
-                            [1.0, 0.0],
-                            [1.0, 1.0],
+                            [uv_min.x, uv_min.y],
+                            [uv_max.x, uv_min.y],
+                            [uv_min.x, uv_max.y],
+                            [uv_min.x, uv_max.y],
+                            [uv_max.x, uv_min.y],
+                            [uv_max.x, uv_max.y],
                         ];
 
                         for (i, [lx, ly]) in corners.iter().enumerate() {
@@ -1007,6 +1011,7 @@ pub struct DrawCommand {
 #[derive(Debug, Clone)]
 pub enum DrawKind {
     /// draw a 2D sprite
+    /// uv_rect overrides the default [0,0,1,1] UV range (used for texture atlases).
     Sprite {
         texture: Option<u64>,
         position: Vec2,
@@ -1014,6 +1019,7 @@ pub enum DrawKind {
         scale: Vec2,
         tint: Color,
         layer: i32,
+        uv_rect: Option<(Vec2, Vec2)>,
     },
     /// draw a 2D rectangle
     Rect {
@@ -1103,6 +1109,7 @@ impl RenderQueue {
                 scale: size,
                 tint: Color::WHITE,
                 layer,
+                uv_rect: None,
             },
         });
     }
@@ -1127,6 +1134,7 @@ impl RenderQueue {
                 scale: params.scale,
                 tint: params.tint,
                 layer,
+                uv_rect: None,
             },
         });
     }

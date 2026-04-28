@@ -13,6 +13,7 @@ members = [
     "crates/engine-api",
     "crates/engine-assets",
     "crates/engine-image",
+    "crates/engine-atlas",
 ]
 resolver = "2"
 

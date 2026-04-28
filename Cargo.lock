@@ -868,6 +868,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine-atlas"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "engine-assets",
+ "engine-image",
+ "engine-math",
+ "log",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "engine-audio"
 version = "0.1.0"
 dependencies = [
