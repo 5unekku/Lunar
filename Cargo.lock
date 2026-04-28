@@ -898,6 +898,7 @@ dependencies = [
  "log",
  "serde",
  "serde_yaml",
+ "smallvec",
  "wasm-bindgen",
  "web-sys",
 ]

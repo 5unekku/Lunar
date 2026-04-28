@@ -41,6 +41,7 @@ mod dialogue_parser;
 mod engine;
 mod error;
 mod game_loop;
+mod hierarchy;
 mod localization;
 mod scene;
 mod schedule;
@@ -64,6 +65,10 @@ pub use engine::Engine;
 pub use error::{EngineError, EngineResult, ErrorEvent, ErrorSource};
 /// game loop with fixed timestep
 pub use game_loop::{GameLoop, TickRate};
+/// entity hierarchy components and transform propagation
+pub use hierarchy::{
+    Children, HierarchyPlugin, Parent, PostUpdate, propagate_transforms, sync_children,
+};
 /// localization system
 pub use localization::{Localization, LocalizationPlugin};
 /// scene system for game state management

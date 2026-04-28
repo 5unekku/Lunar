@@ -43,4 +43,4 @@ pub type Mat4 = glam::Mat4;
 mod macros;
 mod types;
 
-pub use types::{Color, Rect, Transform};
+pub use types::{Color, LocalTransform, Rect, Transform, WorldTransform};

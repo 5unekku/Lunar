@@ -75,6 +75,104 @@ impl Default for Transform {
     }
 }
 
+/// local transform: position, rotation, and scale relative to the parent entity.
+///
+/// when an entity has no parent, this is equivalent to world space.
+/// used in entity hierarchies for parent-child transform propagation.
+#[derive(Debug, Clone, Copy, PartialEq, Component)]
+pub struct LocalTransform {
+    /// x, y position relative to parent + z for depth sorting
+    pub translation: Vec3,
+    /// rotation in radians relative to parent
+    pub rotation: f32,
+    /// x, y scale relative to parent
+    pub scale: Vec2,
+}
+
+impl LocalTransform {
+    /// create a local transform from a 2D translation.
+    #[must_use]
+    pub const fn from_translation(translation: Vec2) -> Self {
+        Self {
+            translation: Vec3::new(translation.x, translation.y, 0.0),
+            rotation: 0.0,
+            scale: Vec2::ONE,
+        }
+    }
+
+    /// create a local transform from x, y coordinates.
+    #[must_use]
+    pub const fn from_xy(x: f32, y: f32) -> Self {
+        Self::from_translation(Vec2::new(x, y))
+    }
+
+    /// set the rotation in radians.
+    #[must_use]
+    pub const fn with_rotation(mut self, rotation: f32) -> Self {
+        self.rotation = rotation;
+        self
+    }
+
+    /// set the scale.
+    #[must_use]
+    pub const fn with_scale(mut self, scale: Vec2) -> Self {
+        self.scale = scale;
+        self
+    }
+}
+
+impl Default for LocalTransform {
+    fn default() -> Self {
+        Self {
+            translation: Vec3::ZERO,
+            rotation: 0.0,
+            scale: Vec2::ONE,
+        }
+    }
+}
+
+/// world transform: absolute position, rotation, and scale in world space.
+///
+/// this component is computed automatically from [`LocalTransform`] and
+/// parent hierarchy. do not modify directly — use [`LocalTransform`] instead.
+#[derive(Debug, Clone, Copy, PartialEq, Component)]
+pub struct WorldTransform {
+    /// absolute x, y position + z for depth sorting
+    pub translation: Vec3,
+    /// absolute rotation in radians
+    pub rotation: f32,
+    /// absolute scale
+    pub scale: Vec2,
+}
+
+impl WorldTransform {
+    /// create a world transform at the origin.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            translation: Vec3::ZERO,
+            rotation: 0.0,
+            scale: Vec2::ONE,
+        }
+    }
+
+    /// create a world transform from x, y coordinates.
+    #[must_use]
+    pub const fn from_xy(x: f32, y: f32) -> Self {
+        Self {
+            translation: Vec3::new(x, y, 0.0),
+            rotation: 0.0,
+            scale: Vec2::ONE,
+        }
+    }
+}
+
+impl Default for WorldTransform {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// RGBA color type.
 ///
 /// all channels are normalized to the range 0.0 - 1.0.

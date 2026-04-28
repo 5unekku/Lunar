@@ -11,6 +11,7 @@ engine-api = { path = "../engine-api" }
 log = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
+smallvec = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
