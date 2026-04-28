@@ -43,7 +43,8 @@ pub struct AtlasPacker {
 
 impl AtlasPacker {
     /// create a new packer with the given maximum atlas dimensions.
-    pub fn new(max_width: u32, max_height: u32) -> Self {
+    #[must_use]
+    pub const fn new(max_width: u32, max_height: u32) -> Self {
         Self {
             max_width,
             max_height,
@@ -51,6 +52,10 @@ impl AtlasPacker {
     }
 
     /// pack source images into a single atlas image.
+    ///
+    /// # Errors
+    ///
+    /// returns an error string if an image cannot fit in the atlas.
     pub fn pack(&self, sources: &[SourceImage]) -> Result<PackedAtlas, String> {
         // sort by height descending (tallest first)
         let mut sorted: Vec<&SourceImage> = sources.iter().collect();

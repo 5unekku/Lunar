@@ -91,8 +91,9 @@ pub struct Dialogue {
 
 impl Dialogue {
     /// create a new dialogue with a start node
+    #[must_use]
     pub fn new(start: &str) -> Self {
-        Dialogue {
+        Self {
             start: start.to_string(),
             nodes: Vec::new(),
         }
@@ -104,6 +105,7 @@ impl Dialogue {
     }
 
     /// get a node by id
+    #[must_use]
     pub fn get_node(&self, id: &str) -> Option<&DialogueNode> {
         self.nodes.iter().find(|n| n.id == id)
     }
@@ -119,13 +121,15 @@ pub struct DialogueBuilder {
 
 impl DialogueBuilder {
     /// create a new dialogue builder with the given start node id
+    #[must_use]
     pub fn new(start: &str) -> Self {
-        DialogueBuilder {
+        Self {
             dialogue: Dialogue::new(start),
         }
     }
 
     /// add a simple line with auto-advance
+    #[must_use]
     pub fn line(mut self, id: &str, speaker: Option<&str>, text: &str, next: Option<&str>) -> Self {
         self.dialogue.nodes.push(DialogueNode {
             id: id.to_string(),
@@ -141,6 +145,7 @@ impl DialogueBuilder {
     }
 
     /// add a line with choices
+    #[must_use]
     pub fn choice_line(
         mut self,
         id: &str,
@@ -168,6 +173,7 @@ impl DialogueBuilder {
     }
 
     /// finish building
+    #[must_use]
     pub fn build(self) -> Dialogue {
         self.dialogue
     }
@@ -189,9 +195,10 @@ pub struct DialogueState {
 
 impl DialogueState {
     /// create a new dialogue state from a dialogue
+    #[must_use]
     pub fn new(dialogue: Dialogue) -> Self {
         let start = dialogue.start.clone();
-        DialogueState {
+        Self {
             dialogue,
             current_node: start,
             active: true,
@@ -199,6 +206,7 @@ impl DialogueState {
     }
 
     /// get the current line
+    #[must_use]
     pub fn current_line(&self) -> Option<&DialogueLine> {
         self.dialogue.get_node(&self.current_node).map(|n| &n.line)
     }
@@ -224,6 +232,7 @@ impl DialogueState {
     }
 
     /// check if there are choices available
+    #[must_use]
     pub fn has_choices(&self) -> bool {
         self.current_line()
             .is_some_and(|line| !line.choices.is_empty())
@@ -244,8 +253,9 @@ pub struct DialogueManager {
 
 impl DialogueManager {
     /// create a new dialogue manager
+    #[must_use]
     pub fn new() -> Self {
-        DialogueManager {
+        Self {
             dialogues: std::collections::HashMap::new(),
             active_dialogue: None,
         }
@@ -254,20 +264,21 @@ impl DialogueManager {
     /// register a dialogue by name
     pub fn register(&mut self, name: &str, dialogue: Dialogue) {
         self.dialogues.insert(name.to_string(), dialogue);
-        log::info!("DialogueManager: registered dialogue '{}'", name);
+        log::info!("DialogueManager: registered dialogue '{name}'");
     }
 
     /// start a dialogue by name
     pub fn start(&mut self, name: &str) {
         if let Some(dialogue) = self.dialogues.get(name).cloned() {
             self.active_dialogue = Some(DialogueState::new(dialogue));
-            log::info!("DialogueManager: started dialogue '{}'", name);
+            log::info!("DialogueManager: started dialogue '{name}'");
         } else {
-            log::warn!("DialogueManager: dialogue '{}' not found", name);
+            log::warn!("DialogueManager: dialogue '{name}' not found");
         }
     }
 
     /// get the current line if a dialogue is active
+    #[must_use]
     pub fn current_line(&self) -> Option<&DialogueLine> {
         self.active_dialogue.as_ref().and_then(|s| s.current_line())
     }
@@ -290,18 +301,21 @@ impl DialogueManager {
     }
 
     /// check if a dialogue is active
+    #[must_use]
     pub fn is_active(&self) -> bool {
         self.active_dialogue.as_ref().is_some_and(|s| s.active)
     }
 
     /// check if the current line has choices
+    #[must_use]
     pub fn has_choices(&self) -> bool {
         self.active_dialogue
             .as_ref()
-            .is_some_and(|s| s.has_choices())
+            .is_some_and(DialogueState::has_choices)
     }
 
     /// get the choice labels for the current line
+    #[must_use]
     pub fn choice_labels(&self) -> Vec<&str> {
         self.current_line()
             .map(|line| line.choices.iter().map(|c| c.label.as_str()).collect())
@@ -326,7 +340,7 @@ impl Default for DialogueManager {
 pub struct DialoguePlugin;
 
 impl crate::GamePlugin for DialoguePlugin {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "DialoguePlugin"
     }
 

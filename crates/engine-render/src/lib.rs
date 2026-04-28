@@ -41,6 +41,8 @@ use engine_core::{App, GamePlugin};
 use engine_math::{Color, Vec2};
 
 /// internal parameters for writing sprite vertices.
+#[allow(dead_code)]
+#[derive(Clone, Copy)]
 struct SpriteDrawParams {
     position: Vec2,
     rotation: f32,
@@ -85,7 +87,8 @@ pub struct Camera {
 
 impl Camera {
     /// create a new camera at the origin with default settings
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             position: Vec2::ZERO,
             zoom: 1.0,
@@ -95,7 +98,8 @@ impl Camera {
     }
 
     /// create a camera at the given position
-    pub fn at_position(x: f32, y: f32) -> Self {
+    #[must_use]
+    pub const fn at_position(x: f32, y: f32) -> Self {
         Self {
             position: Vec2::new(x, y),
             zoom: 1.0,
@@ -106,8 +110,11 @@ impl Camera {
 
     /// compute the orthographic projection matrix incorporating camera transforms.
     /// returns a 4x4 column-major matrix as a flat array of 16 f32s.
+    #[must_use]
     pub fn projection_matrix(&self, window_width: u32, window_height: u32) -> [f32; 16] {
+        #[allow(clippy::cast_precision_loss)]
         let w = window_width as f32;
+        #[allow(clippy::cast_precision_loss)]
         let h = window_height as f32;
         let zoom = self.zoom.max(0.001);
         let cos = self.rotation.cos();
@@ -118,8 +125,8 @@ impl Camera {
         let sy = -2.0 / h * zoom;
 
         // camera translation (accounting for rotation)
-        let tx = -(self.position.x * cos - self.position.y * sin);
-        let ty = -(self.position.x * sin + self.position.y * cos);
+        let tx = -self.position.y.mul_add(-sin, self.position.x * cos);
+        let ty = -self.position.y.mul_add(cos, self.position.x * sin);
 
         // combined matrix: scale then translate, y-down
         [
@@ -167,7 +174,7 @@ pub struct RenderConfig {
 
 impl Default for RenderConfig {
     fn default() -> Self {
-        RenderConfig {
+        Self {
             width: 1280,
             height: 720,
             vsync: true,
@@ -177,7 +184,7 @@ impl Default for RenderConfig {
 }
 
 /// max vertices per frame before buffer overflow (64k vertices = ~16k sprites with packed color)
-/// vertex format: [pos.x, pos.y, u, v] (16 bytes) + [color_u32] (4 bytes) = 20 bytes per vertex
+/// vertex format: [pos.x, pos.y, u, v] (16 bytes) + [`color_u32`] (4 bytes) = 20 bytes per vertex
 const MAX_VERTICES: usize = 65536;
 
 /// number of vertex buffers for double-buffering (prevents GPU read/write conflicts)
@@ -215,7 +222,7 @@ pub struct RenderEngine {
     glyph_atlas: text::GlyphAtlas,
     #[allow(dead_code)]
     glyph_atlas_texture: Option<GpuTexture>,
-    /// cache of text layout results keyed by (font_id, text, font_size_bits)
+    /// cache of text layout results keyed by (`font_id`, text, `font_size_bits`)
     text_layout_cache: HashMap<(u32, String, u32), Vec<text::TextGlyphQuad>>,
     render_passes: Vec<Box<dyn RenderPass>>,
     /// vulkan pipeline cache for faster startup on subsequent launches
@@ -232,6 +239,10 @@ struct GpuTexture {
 
 impl RenderEngine {
     /// create render engine from a surface (native, blocking)
+    ///
+    /// # Panics
+    ///
+    /// panics if no adapter or device can be created.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn from_surface(
         instance: &wgpu::Instance,
@@ -255,7 +266,7 @@ impl RenderEngine {
         }))
         .expect("failed to request device");
 
-        Self::init_inner(adapter, device, queue, surface, config)
+        Self::init_inner(&adapter, &device, queue, surface, config)
     }
 
     /// create render engine from a surface (WASM, async)
@@ -286,7 +297,7 @@ impl RenderEngine {
             .await
             .expect("failed to request device");
 
-        Self::init_inner(adapter, device, queue, surface, config)
+        Self::init_inner(&adapter, &device, queue, surface, config)
     }
 
     /// create a WebGPU surface from a canvas element (WASM only).
@@ -315,14 +326,15 @@ impl RenderEngine {
             .map_err(|_| format!("element '{id}' is not a canvas"))
     }
 
+    #[allow(clippy::too_many_lines)]
     fn init_inner(
-        adapter: wgpu::Adapter,
-        device: wgpu::Device,
+        adapter: &wgpu::Adapter,
+        device: &wgpu::Device,
         queue: wgpu::Queue,
         surface: wgpu::Surface<'static>,
         config: RenderConfig,
     ) -> Self {
-        let caps = surface.get_capabilities(&adapter);
+        let caps = surface.get_capabilities(adapter);
         let format = caps
             .formats
             .first()
@@ -344,7 +356,7 @@ impl RenderEngine {
             desired_maximum_frame_latency: 2,
         };
 
-        surface.configure(&device, &surface_config);
+        surface.configure(device, &surface_config);
 
         // projection matrix uniform (4x4 f32 = 64 bytes)
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -534,7 +546,7 @@ impl RenderEngine {
             })
         });
 
-        RenderEngine {
+        Self {
             surface,
             device: device.clone(),
             queue,
@@ -555,7 +567,7 @@ impl RenderEngine {
             text_layout_cache: HashMap::new(),
             render_passes: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
-            pipeline_cache: Self::load_pipeline_cache(&device),
+            pipeline_cache: Self::load_pipeline_cache(device),
         }
     }
 
@@ -610,17 +622,17 @@ impl RenderEngine {
     }
 
     /// get the current render config
-    pub fn config(&self) -> &RenderConfig {
+    pub const fn config(&self) -> &RenderConfig {
         &self.render_config
     }
 
     /// get the wgpu device
-    pub fn device(&self) -> &wgpu::Device {
+    pub const fn device(&self) -> &wgpu::Device {
         &self.device
     }
 
     /// get the wgpu queue
-    pub fn queue(&self) -> &wgpu::Queue {
+    pub const fn queue(&self) -> &wgpu::Queue {
         &self.queue
     }
 
@@ -651,7 +663,7 @@ impl RenderEngine {
         self.text_layout_cache.retain(|key, _| key.0 != font_id);
     }
 
-    /// get cached text layout for (font_id, text, font_size).
+    /// get cached text layout for (`font_id`, text, `font_size`).
     /// computes and caches the result on first use.
     fn get_cached_text_layout(
         &mut self,
@@ -790,11 +802,12 @@ impl RenderEngine {
     /// render all draw commands for this frame.
     /// sprites are batched by texture — one draw call per unique texture.
     /// rects (no texture) are drawn in a single additional draw call.
+    #[allow(clippy::too_many_lines)]
     pub fn render(&mut self, commands: &[DrawCommand], camera: Option<&Camera>) {
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame) => frame,
-            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-            _ => return,
+        let (wgpu::CurrentSurfaceTexture::Success(frame)
+        | wgpu::CurrentSurfaceTexture::Suboptimal(frame)) = self.surface.get_current_texture()
+        else {
+            return;
         };
 
         let view = frame
@@ -802,31 +815,32 @@ impl RenderEngine {
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         // compute projection matrix: use camera if provided, otherwise default orthographic
-        let projection = match camera {
-            Some(cam) => cam.projection_matrix(self.config.width, self.config.height),
-            None => {
-                // orthographic projection: y-down, maps [0, width] x [0, height] to NDC
-                let surface_width = self.config.width as f32;
-                let surface_height = self.config.height as f32;
-                [
-                    2.0 / surface_width,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    -2.0 / surface_height,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    1.0,
-                    0.0,
-                    -1.0,
-                    1.0,
-                    0.0,
-                    1.0,
-                ]
-            }
+        let projection = if let Some(cam) = camera {
+            cam.projection_matrix(self.config.width, self.config.height)
+        } else {
+            // orthographic projection: y-down, maps [0, width] x [0, height] to NDC
+            #[allow(clippy::cast_precision_loss)]
+            let surface_width = self.config.width as f32;
+            #[allow(clippy::cast_precision_loss)]
+            let surface_height = self.config.height as f32;
+            [
+                2.0 / surface_width,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                -2.0 / surface_height,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                -1.0,
+                1.0,
+                0.0,
+                1.0,
+            ]
         };
         self.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&projection));
@@ -835,15 +849,15 @@ impl RenderEngine {
         let mut sorted_commands: Vec<&DrawCommand> = commands.iter().collect();
         sorted_commands.sort_by_key(|cmd| {
             let layer = match &cmd.kind {
-                DrawKind::Sprite { layer, .. } => *layer,
-                DrawKind::Rect { layer, .. } => *layer,
-                DrawKind::Line { layer, .. } => *layer,
-                DrawKind::Text { layer, .. } => *layer,
+                DrawKind::Sprite { layer, .. }
+                | DrawKind::Rect { layer, .. }
+                | DrawKind::Line { layer, .. }
+                | DrawKind::Text { layer, .. } => *layer,
             };
             let tex = match &cmd.kind {
                 DrawKind::Sprite {
                     texture: Some(id), ..
-                } => *id as u32,
+                } => u32::try_from(*id).unwrap_or(u32::MAX),
                 _ => u32::MAX,
             };
             (layer, tex)
@@ -852,11 +866,11 @@ impl RenderEngine {
         // collect untextured commands (rects, lines, text)
         let mut rect_commands: Vec<&DrawCommand> = Vec::new();
         for command in &sorted_commands {
-            match &command.kind {
-                DrawKind::Rect { .. } | DrawKind::Line { .. } | DrawKind::Text { .. } => {
-                    rect_commands.push(command);
-                }
-                _ => {}
+            if matches!(
+                &command.kind,
+                DrawKind::Rect { .. } | DrawKind::Line { .. } | DrawKind::Text { .. }
+            ) {
+                rect_commands.push(command);
             }
         }
 
@@ -915,7 +929,7 @@ impl RenderEngine {
                     continue;
                 };
 
-                let tex_id = *tex_id as u32;
+                let tex_id = u32::try_from(*tex_id).unwrap_or(u32::MAX);
 
                 // flush and switch texture when it changes
                 if current_tex != Some(tex_id) {
@@ -936,7 +950,7 @@ impl RenderEngine {
                 }
 
                 // write vertices directly into persistent buffer
-                self.write_sprite_vertices(SpriteDrawParams {
+                self.write_sprite_vertices(&SpriteDrawParams {
                     position: *position,
                     rotation: *rotation,
                     scale: *scale,
@@ -990,7 +1004,7 @@ impl RenderEngine {
                             color,
                             ..
                         } => {
-                            let font_id = font.unwrap_or(0) as u32;
+                            let font_id = u32::try_from(font.unwrap_or(0)).unwrap_or(u32::MAX);
                             let quads = self
                                 .get_cached_text_layout(font_id, content, *font_size)
                                 .to_vec();
@@ -1002,7 +1016,7 @@ impl RenderEngine {
                                 self.write_text_quad(&offset_quad, *color);
                             }
                         }
-                        _ => {}
+                        DrawKind::Sprite { .. } => {}
                     }
                 }
 
@@ -1055,14 +1069,14 @@ impl RenderEngine {
             0,
             buf.slice(offset as u64..(offset + vertex_count * VERTEX_STRIDE) as u64),
         );
-        pass.draw(0..vertex_count as u32, 0..1);
+        pass.draw(0..u32::try_from(vertex_count).unwrap_or(0), 0..1);
     }
 
     /// write a sprite's 6 vertices into the persistent vertex buffer.
     /// vertex format: [pos.x, pos.y, u, v] (f32) + [packed rgba] (u32) = 20 bytes
     /// origin is the pivot point for rotation/scaling, relative to the sprite's top-left.
-    fn write_sprite_vertices(&mut self, params: SpriteDrawParams) {
-        let SpriteDrawParams {
+    fn write_sprite_vertices(&mut self, params: &SpriteDrawParams) {
+        let &SpriteDrawParams {
             position,
             rotation,
             scale,
@@ -1152,7 +1166,7 @@ impl RenderEngine {
     fn write_line_vertices(&mut self, start: Vec2, end: Vec2, color: Color, thickness: f32) {
         let dx = end.x - start.x;
         let dy = end.y - start.y;
-        let len = (dx * dx + dy * dy).sqrt();
+        let len = dx.hypot(dy);
         if len < 0.001 {
             return;
         }
@@ -1162,10 +1176,10 @@ impl RenderEngine {
         let half_t = thickness * 0.5;
         // 4 corners of the line rectangle
         let corners = [
-            (start.x + nx * half_t, start.y + ny * half_t),
-            (start.x - nx * half_t, start.y - ny * half_t),
-            (end.x + nx * half_t, end.y + ny * half_t),
-            (end.x - nx * half_t, end.y - ny * half_t),
+            (nx.mul_add(half_t, start.x), ny.mul_add(half_t, start.y)),
+            (nx.mul_add(-half_t, start.x), ny.mul_add(-half_t, start.y)),
+            (nx.mul_add(half_t, end.x), ny.mul_add(half_t, end.y)),
+            (nx.mul_add(-half_t, end.x), ny.mul_add(-half_t, end.y)),
         ];
         let packed_color = pack_color(color);
         // 6 vertices (2 triangles) * 5 components = 30 u32s
@@ -1235,9 +1249,13 @@ impl Drop for RenderEngine {
 
 /// pack an rgba color into a single u32 (r in lowest byte, a in highest).
 fn pack_color(color: Color) -> u32 {
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let r = (color.r * 255.0).clamp(0.0, 255.0) as u32;
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let g = (color.g * 255.0).clamp(0.0, 255.0) as u32;
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let b = (color.b * 255.0).clamp(0.0, 255.0) as u32;
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let a = (color.a * 255.0).clamp(0.0, 255.0) as u32;
     (a << 24) | (b << 16) | (g << 8) | r
 }
@@ -1247,7 +1265,7 @@ fn f32_to_u32(value: f32) -> u32 {
     bytemuck::cast(value)
 }
 
-const SHADER_SOURCE: &str = r#"
+const SHADER_SOURCE: &str = r"
 struct Uniforms { projection: mat4x4<f32> }
 
 struct VertexOut {
@@ -1278,7 +1296,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let tex_color = textureSample(sprite_texture, sprite_sampler, in.uv);
     return tex_color * in.color;
 }
-"#;
+";
 
 /// render queue resource, collects draw commands each frame.
 ///
@@ -1313,7 +1331,7 @@ pub struct DrawCommand {
 #[derive(Debug, Clone)]
 pub enum DrawKind {
     /// draw a 2D sprite
-    /// uv_rect overrides the default [0,0,1,1] UV range (used for texture atlases).
+    /// `uv_rect` overrides the default [0,0,1,1] UV range (used for texture atlases).
     /// origin is the pivot point for rotation and scaling, relative to the sprite's top-left.
     Sprite {
         texture: Option<u64>,
@@ -1366,8 +1384,9 @@ pub mod layers {
 
 impl RenderQueue {
     /// create a new empty render queue
+    #[must_use]
     pub fn new() -> Self {
-        RenderQueue {
+        Self {
             commands: Vec::with_capacity(1024),
             target: None,
         }
@@ -1381,12 +1400,13 @@ impl RenderQueue {
 
     /// set the render target for subsequent draw commands.
     /// pass None to render to the main surface.
-    pub fn set_target(&mut self, target: Option<u32>) {
+    pub const fn set_target(&mut self, target: Option<u32>) {
         self.target = target;
     }
 
     /// get the current render target
-    pub fn target(&self) -> Option<u32> {
+    #[must_use]
+    pub const fn target(&self) -> Option<u32> {
         self.target
     }
 
@@ -1396,6 +1416,7 @@ impl RenderQueue {
     }
 
     /// get all pending draw commands
+    #[must_use]
     pub fn commands(&self) -> &[DrawCommand] {
         &self.commands
     }
@@ -1415,7 +1436,7 @@ impl RenderQueue {
     ) {
         self.push(DrawCommand {
             kind: DrawKind::Sprite {
-                texture: Some(texture.id() as u64),
+                texture: Some(u64::from(texture.id())),
                 position,
                 rotation: 0.0,
                 scale: size,
@@ -1441,7 +1462,7 @@ impl RenderQueue {
     ) {
         self.push(DrawCommand {
             kind: DrawKind::Sprite {
-                texture: Some(texture.id() as u64),
+                texture: Some(u64::from(texture.id())),
                 position: params.position,
                 rotation: params.rotation,
                 scale: params.scale,
@@ -1534,7 +1555,7 @@ impl RenderQueue {
     ) {
         self.push(DrawCommand {
             kind: DrawKind::Text {
-                font: Some(font.id() as u64),
+                font: Some(u64::from(font.id())),
                 content: content.to_string(),
                 position,
                 font_size,
@@ -1593,7 +1614,8 @@ pub struct RenderInfo {
 
 impl RenderInfo {
     /// create a new render info with default values
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             window_width: 0,
             window_height: 0,
@@ -1624,7 +1646,7 @@ impl Default for RenderPlugin {
 }
 
 impl GamePlugin for RenderPlugin {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "RenderPlugin"
     }
 

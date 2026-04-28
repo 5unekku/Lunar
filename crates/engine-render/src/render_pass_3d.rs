@@ -22,7 +22,7 @@ pub struct Camera3DUniform {
     /// camera position in world space.
     pub camera_position: [f32; 3],
     /// padding for 16-byte alignment.
-    pub _padding: f32,
+    padding: f32,
 }
 
 /// uniform data for a single 3D light, packed into a storage buffer.
@@ -66,6 +66,7 @@ pub struct RenderPass3D {
 impl RenderPass3D {
     /// create a new 3D render pass with the given light capacity.
     /// initializes camera and light uniform buffers.
+    #[must_use]
     pub fn new(
         device: &wgpu::Device,
         _config: &wgpu::SurfaceConfiguration,
@@ -77,20 +78,21 @@ impl RenderPass3D {
                 view_matrix: [0.0; 16],
                 projection_matrix: [0.0; 16],
                 camera_position: [0.0; 3],
-                _padding: 0.0,
+                padding: 0.0,
             }]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let light_uniform_size = (std::mem::size_of::<LightUniform>() * max_lights) as u64;
+        let light_uniform_size =
+            u64::try_from(std::mem::size_of::<LightUniform>() * max_lights).unwrap_or(u64::MAX);
         let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("3d light buffer"),
-            contents: vec![0u8; light_uniform_size as usize].leak(),
+            contents: vec![0u8; usize::try_from(light_uniform_size).unwrap_or(usize::MAX)].leak(),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
         // pipeline is None until 3D shaders are implemented
-        RenderPass3D {
+        Self {
             pipeline: None,
             camera_buffer,
             light_buffer,
@@ -133,7 +135,7 @@ impl RenderPass3D {
     /// this is a stub — currently does not render meshes.
     /// when implemented, it will bind the pipeline, set uniforms,
     /// and draw all meshes with their world matrices.
-    pub fn execute(
+    pub const fn execute(
         &self,
         _encoder: &mut wgpu::CommandEncoder,
         _view: &wgpu::TextureView,
@@ -151,6 +153,7 @@ impl RenderPass3D {
 ///
 /// `fov` is the vertical field of view in radians, `aspect` is
 /// width/height, and `near`/`far` define the clipping planes.
+#[must_use]
 pub fn perspective_projection(fov: f32, aspect: f32, near: f32, far: f32) -> [f32; 16] {
     let f = 1.0 / (fov / 2.0).tan();
     let nf = 1.0 / (near - far);
@@ -178,23 +181,24 @@ pub fn perspective_projection(fov: f32, aspect: f32, near: f32, far: f32) -> [f3
 ///
 /// `eye` is the camera position, `target` is the point being looked at,
 /// and `up` defines the world up direction.
+#[must_use]
 pub fn look_at(eye: [f32; 3], target: [f32; 3], up: [f32; 3]) -> [f32; 16] {
     let zx = eye[0] - target[0];
     let zy = eye[1] - target[1];
     let zz = eye[2] - target[2];
-    let len = (zx * zx + zy * zy + zz * zz).sqrt();
+    let len = zz.mul_add(zz, zy.mul_add(zy, zx * zx)).sqrt();
     let z = [zx / len, zy / len, zz / len];
 
-    let xx = up[1] * z[2] - up[2] * z[1];
-    let xy = up[2] * z[0] - up[0] * z[2];
-    let xz = up[0] * z[1] - up[1] * z[0];
-    let len2 = (xx * xx + xy * xy + xz * xz).sqrt();
+    let xx = up[2].mul_add(-z[1], up[1] * z[2]);
+    let xy = up[0].mul_add(-z[2], up[2] * z[0]);
+    let xz = up[1].mul_add(-z[0], up[0] * z[1]);
+    let len2 = xz.mul_add(xz, xy.mul_add(xy, xx * xx)).sqrt();
     let x = [xx / len2, xy / len2, xz / len2];
 
     let y = [
-        z[1] * x[2] - z[2] * x[1],
-        z[2] * x[0] - z[0] * x[2],
-        z[0] * x[1] - z[1] * x[0],
+        z[2].mul_add(-x[1], z[1] * x[2]),
+        z[0].mul_add(-x[2], z[2] * x[0]),
+        z[1].mul_add(-x[0], z[0] * x[1]),
     ];
 
     [
@@ -210,9 +214,9 @@ pub fn look_at(eye: [f32; 3], target: [f32; 3], up: [f32; 3]) -> [f32; 16] {
         y[2],
         z[2],
         0.0,
-        -(x[0] * eye[0] + x[1] * eye[1] + x[2] * eye[2]),
-        -(y[0] * eye[0] + y[1] * eye[1] + y[2] * eye[2]),
-        -(z[0] * eye[0] + z[1] * eye[1] + z[2] * eye[2]),
+        -x[2].mul_add(eye[2], x[1].mul_add(eye[1], x[0] * eye[0])),
+        -y[2].mul_add(eye[2], y[1].mul_add(eye[1], y[0] * eye[0])),
+        -z[2].mul_add(eye[2], z[1].mul_add(eye[1], z[0] * eye[0])),
         1.0,
     ]
 }

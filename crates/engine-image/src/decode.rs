@@ -17,6 +17,7 @@ pub struct Image {
 
 impl Image {
     /// create a new blank image filled with transparent black pixels.
+    #[must_use]
     pub fn new(width: u32, height: u32) -> Self {
         Self {
             width,
@@ -26,35 +27,38 @@ impl Image {
     }
 
     /// get the number of pixels in the image.
-    pub fn len(&self) -> usize {
+    #[must_use]
+    pub const fn len(&self) -> usize {
         (self.width as usize) * (self.height as usize)
     }
 
     /// check if the image has zero width or height.
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.width == 0 || self.height == 0
     }
 
     /// get the total byte count of the pixel buffer.
-    pub fn byte_len(&self) -> usize {
+    #[must_use]
+    pub const fn byte_len(&self) -> usize {
         self.pixels.len()
     }
 
     /// check if a pixel coordinate is within the image bounds.
-    pub fn contains(&self, x: u32, y: u32) -> bool {
+    #[must_use]
+    pub const fn contains(&self, x: u32, y: u32) -> bool {
         x < self.width && y < self.height
     }
 
     /// get the RGBA value at a pixel coordinate.
     ///
-    /// # panics
+    /// # Panics
     /// panics if the coordinate is out of bounds.
+    #[must_use]
     pub fn get_pixel(&self, x: u32, y: u32) -> [u8; 4] {
         assert!(
             self.contains(x, y),
-            "pixel coordinate ({}, {}) out of bounds",
-            x,
-            y
+            "pixel coordinate ({x}, {y}) out of bounds"
         );
         let idx = ((y * self.width + x) as usize) * 4;
         [
@@ -67,14 +71,12 @@ impl Image {
 
     /// set the RGBA value at a pixel coordinate.
     ///
-    /// # panics
+    /// # Panics
     /// panics if the coordinate is out of bounds.
     pub fn set_pixel(&mut self, x: u32, y: u32, rgba: [u8; 4]) {
         assert!(
             self.contains(x, y),
-            "pixel coordinate ({}, {}) out of bounds",
-            x,
-            y
+            "pixel coordinate ({x}, {y}) out of bounds"
         );
         let idx = ((y * self.width + x) as usize) * 4;
         self.pixels[idx] = rgba[0];
@@ -88,6 +90,10 @@ impl Image {
 ///
 /// parses the file header and decompresses the pixel data.
 /// returns an error if the file is malformed or incomplete.
+///
+/// # Errors
+/// returns an error if the data is not a valid .mi file, if pixel data is missing,
+/// or if decompression fails.
 pub fn decode(data: &[u8]) -> Result<Image, DecodeError> {
     // Parse header
     let header = Header::parse(data)?;
@@ -96,8 +102,8 @@ pub fn decode(data: &[u8]) -> Result<Image, DecodeError> {
     // Walk chunks starting after header
     let mut offset = format::HEADER_SIZE;
     let mut pixels: Option<Vec<u8>> = None;
-    let mut _metadata: Option<String> = None;
-    let mut _icc: Option<Vec<u8>> = None;
+    let mut metadata: Option<String> = None;
+    let mut icc: Option<Vec<u8>> = None;
 
     while offset < data.len() {
         let chunk_header = format::ChunkHeader::parse(&data[offset..])?;
@@ -132,17 +138,18 @@ pub fn decode(data: &[u8]) -> Result<Image, DecodeError> {
             ChunkType::Metadata => {
                 let decompressed = zstd::decode_all(std::io::Cursor::new(compressed))
                     .map_err(DecodeError::ZstdError)?;
-                _metadata = Some(String::from_utf8_lossy(&decompressed).into_owned());
+                metadata = Some(String::from_utf8_lossy(&decompressed).into_owned());
             }
             ChunkType::IccProfile => {
                 let decompressed = zstd::decode_all(std::io::Cursor::new(compressed))
                     .map_err(DecodeError::ZstdError)?;
-                _icc = Some(decompressed);
+                icc = Some(decompressed);
             }
         }
     }
 
     let pixels = pixels.ok_or(DecodeError::MissingPixelData)?;
+    let _ = (metadata, icc); // unused for now but parsed for future use
 
     Ok(Image {
         width: header.width,

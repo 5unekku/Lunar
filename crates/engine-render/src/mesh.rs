@@ -30,13 +30,16 @@ pub struct Mesh {
 
 impl Mesh {
     /// create a new mesh from vertex and index data.
-    pub fn new(vertices: Vec<MeshVertex>, indices: Vec<u32>) -> Self {
-        Mesh { vertices, indices }
+    #[must_use]
+    pub const fn new(vertices: Vec<MeshVertex>, indices: Vec<u32>) -> Self {
+        Self { vertices, indices }
     }
 
     /// create a unit cube mesh centered at the origin with side length 1.
     /// generates 24 vertices (4 per face, with separate normals)
     /// and 36 indices (6 faces x 2 triangles x 3 vertices).
+    #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn unit_cube() -> Self {
         let vertices = vec![
             // front face
@@ -174,7 +177,7 @@ impl Mesh {
             16, 17, 18, 18, 19, 16, // right
             20, 21, 22, 22, 23, 20, // left
         ];
-        Mesh::new(vertices, indices)
+        Self::new(vertices, indices)
     }
 }
 
@@ -220,8 +223,9 @@ impl Light {
     /// create a new directional light (e.g. sunlight).
     ///
     /// the direction vector points from the light toward the scene.
-    pub fn directional(color: [f32; 3], intensity: f32, direction: [f32; 3]) -> Self {
-        Light {
+    #[must_use]
+    pub const fn directional(color: [f32; 3], intensity: f32, direction: [f32; 3]) -> Self {
+        Self {
             light_type: LightType::Directional,
             color,
             intensity,
@@ -235,8 +239,9 @@ impl Light {
     /// create a new point light (omnidirectional).
     ///
     /// the range determines how far the light reaches before fading to zero.
-    pub fn point(color: [f32; 3], intensity: f32, range: f32) -> Self {
-        Light {
+    #[must_use]
+    pub const fn point(color: [f32; 3], intensity: f32, range: f32) -> Self {
+        Self {
             light_type: LightType::Point,
             color,
             intensity,
@@ -251,7 +256,8 @@ impl Light {
     ///
     /// `spot_inner` and `spot_outer` define the cone angles in radians,
     /// controlling the sharpness of the edge falloff.
-    pub fn spot(
+    #[must_use]
+    pub const fn spot(
         color: [f32; 3],
         intensity: f32,
         direction: [f32; 3],
@@ -259,7 +265,7 @@ impl Light {
         spot_inner: f32,
         spot_outer: f32,
     ) -> Self {
-        Light {
+        Self {
             light_type: LightType::Spot,
             color,
             intensity,
@@ -273,7 +279,7 @@ impl Light {
 
 impl Default for Light {
     fn default() -> Self {
-        Light::directional([1.0, 1.0, 1.0], 1.0, [0.0, -1.0, 0.0])
+        Self::directional([1.0, 1.0, 1.0], 1.0, [0.0, -1.0, 0.0])
     }
 }
 

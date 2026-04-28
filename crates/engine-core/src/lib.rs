@@ -27,7 +27,7 @@
 //! }
 //! ```
 
-/// re-export bevy_ecs for direct ECS access
+/// re-export `bevy_ecs` for direct ECS access
 pub use bevy_ecs;
 /// re-export engine-api for game logic interfaces
 pub use engine_api;
@@ -58,7 +58,7 @@ pub use dialogue::{
 };
 /// dialogue yaml parser
 pub use dialogue_parser::{parse_dialogue, parse_dialogue_file};
-/// engine wrapper around bevy_ecs world and schedule
+/// engine wrapper around `bevy_ecs` world and schedule
 pub use engine::Engine;
 /// error handling types
 pub use error::{EngineError, EngineResult, ErrorEvent, ErrorSource};

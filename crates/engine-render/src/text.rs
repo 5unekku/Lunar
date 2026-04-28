@@ -56,7 +56,7 @@ pub struct GlyphAtlas {
     pub height: u32,
     /// packed RGBA pixel data.
     pub pixels: Vec<u8>,
-    /// cached glyphs keyed by (font_id, character, quantized font size).
+    /// cached glyphs keyed by (`font_id`, character, quantized font size).
     pub glyphs: HashMap<GlyphKey, GlyphInfo>,
     /// current x position for the next glyph insertion.
     cursor_x: u32,
@@ -96,7 +96,8 @@ impl GlyphAtlas {
         let key = GlyphKey {
             font_id,
             char_code,
-            font_size: font_size.round() as u16,
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            font_size: font_size.round().max(0.0).min(f32::from(u16::MAX)) as u16,
         };
         if self.glyphs.contains_key(&key) {
             return true;
@@ -104,8 +105,8 @@ impl GlyphAtlas {
 
         let (metrics, bitmap) = font.rasterize(char_code, font_size);
 
-        let gw = metrics.width as u32;
-        let gh = metrics.height as u32;
+        let gw = u32::try_from(metrics.width).unwrap_or(0);
+        let gh = u32::try_from(metrics.height).unwrap_or(0);
 
         if gw == 0 || gh == 0 {
             // space or invisible glyph
@@ -114,7 +115,9 @@ impl GlyphAtlas {
                 y: 0,
                 width: 0,
                 height: 0,
+                #[allow(clippy::cast_precision_loss)]
                 bearing_x: metrics.xmin as f32,
+                #[allow(clippy::cast_precision_loss)]
                 bearing_y: -(metrics.ymin as f32),
                 advance: metrics.advance_width,
             };
@@ -156,7 +159,9 @@ impl GlyphAtlas {
             y: self.cursor_y,
             width: gw,
             height: gh,
+            #[allow(clippy::cast_precision_loss)]
             bearing_x: metrics.xmin as f32,
+            #[allow(clippy::cast_precision_loss)]
             bearing_y: -(metrics.ymin as f32),
             advance: metrics.advance_width,
         };
@@ -176,7 +181,8 @@ impl GlyphAtlas {
         let key = GlyphKey {
             font_id,
             char_code,
-            font_size: font_size.round() as u16,
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            font_size: font_size.round().max(0.0).min(f32::from(u16::MAX)) as u16,
         };
         self.glyphs.get(&key)
     }
@@ -207,9 +213,13 @@ pub fn layout_text(
     for ch in text.chars() {
         if let Some(info) = atlas.get_glyph(font_id, ch, font_size) {
             if info.width > 0 && info.height > 0 {
+                #[allow(clippy::cast_precision_loss)]
                 let uv_x = info.x as f32 / atlas.width as f32;
+                #[allow(clippy::cast_precision_loss)]
                 let uv_y = info.y as f32 / atlas.height as f32;
+                #[allow(clippy::cast_precision_loss)]
                 let uv_w = info.width as f32 / atlas.width as f32;
+                #[allow(clippy::cast_precision_loss)]
                 let uv_h = info.height as f32 / atlas.height as f32;
 
                 let glyph_x = cursor_x + info.bearing_x;
@@ -217,6 +227,7 @@ pub fn layout_text(
 
                 quads.push(TextGlyphQuad {
                     position: Vec2::new(glyph_x, glyph_y),
+                    #[allow(clippy::cast_precision_loss)]
                     size: Vec2::new(info.width as f32, info.height as f32),
                     uv_min: Vec2::new(uv_x, uv_y),
                     uv_max: Vec2::new(uv_x + uv_w, uv_y + uv_h),

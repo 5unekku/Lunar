@@ -76,12 +76,26 @@ pub struct AtlasManifest {
 
 impl AtlasManifest {
     /// parse a manifest from binary data.
+    ///
+    /// # Errors
+    ///
+    /// returns [`ManifestError`] if the data is truncated, has an invalid magic number,
+    /// unsupported version, or contains invalid utf-8.
     pub fn from_bytes(data: &[u8]) -> Result<Self, ManifestError> {
         let mut cursor = io::Cursor::new(data);
         Self::read_from(&mut cursor)
     }
 
     /// read a manifest from a reader.
+    ///
+    /// # Errors
+    ///
+    /// returns [`ManifestError`] if the data is truncated, has an invalid magic number,
+    /// unsupported version, or contains invalid utf-8.
+    ///
+    /// # Panics
+    ///
+    /// panics if internal slice indexing fails (should never happen with valid input).
     pub fn read_from<R: Read>(mut reader: R) -> Result<Self, ManifestError> {
         // read header
         let mut magic = [0u8; 4];
@@ -148,6 +162,10 @@ impl AtlasManifest {
     }
 
     /// serialize this manifest to binary bytes.
+    /// # Panics
+    ///
+    /// panics if writing to the internal buffer fails (should never happen for `Vec<u8>`).
+    #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         self.write_to(&mut buf).expect("failed to write manifest");
@@ -155,16 +173,28 @@ impl AtlasManifest {
     }
 
     /// write this manifest to a writer.
+    ///
+    /// # Errors
+    ///
+    /// returns [`io::Error`] if the underlying writer fails.
     pub fn write_to<W: Write>(&self, mut writer: W) -> io::Result<()> {
         writer.write_all(&MAGIC)?;
         writer.write_all(&VERSION.to_le_bytes())?;
         writer.write_all(&self.atlas_width.to_le_bytes())?;
         writer.write_all(&self.atlas_height.to_le_bytes())?;
-        writer.write_all(&(self.regions.len() as u32).to_le_bytes())?;
+        writer.write_all(
+            &u32::try_from(self.regions.len())
+                .unwrap_or(u32::MAX)
+                .to_le_bytes(),
+        )?;
 
         for (name, region) in &self.regions {
             let name_bytes = name.as_bytes();
-            writer.write_all(&(name_bytes.len() as u16).to_le_bytes())?;
+            writer.write_all(
+                &u16::try_from(name_bytes.len())
+                    .unwrap_or(u16::MAX)
+                    .to_le_bytes(),
+            )?;
             writer.write_all(name_bytes)?;
             writer.write_all(&region.x.to_le_bytes())?;
             writer.write_all(&region.y.to_le_bytes())?;
@@ -176,6 +206,7 @@ impl AtlasManifest {
     }
 
     /// resolve all regions into [`AtlasRegion`]s with computed UV coordinates.
+    #[must_use]
     pub fn resolve_regions(&self) -> HashMap<String, AtlasRegion> {
         self.regions
             .iter()

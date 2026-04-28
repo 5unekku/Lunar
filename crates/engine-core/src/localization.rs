@@ -33,6 +33,7 @@ pub struct Localization {
 
 impl Localization {
     /// create a new localization manager with the given default language.
+    #[must_use]
     pub fn new(default_language: &str) -> Self {
         let mut available = HashMap::new();
         available.insert(default_language.to_string(), default_language.to_string());
@@ -60,17 +61,22 @@ impl Localization {
     }
 
     /// get the list of available languages.
-    pub fn available_languages(&self) -> &HashMap<String, String> {
+    #[must_use]
+    pub const fn available_languages(&self) -> &HashMap<String, String> {
         &self.available_languages
     }
 
     /// get the current language code.
+    #[must_use]
     pub fn current_language(&self) -> &str {
         &self.current_language
     }
 
     /// switch to a different language.
     /// returns an error if the language is not registered.
+    ///
+    /// # Errors
+    /// returns an error if the language code is not available.
     pub fn set_language(&mut self, code: &str) -> Result<(), String> {
         if !self.available_languages.contains_key(code) {
             return Err(format!("language '{code}' is not available"));
@@ -80,12 +86,13 @@ impl Localization {
     }
 
     /// load a string table for a language from a yaml file.
-    ///
     /// the file should contain key-value pairs:
     /// ```yaml
     /// greeting: "hello"
     /// farewell: "goodbye"
     /// ```
+    /// # Errors
+    /// returns an error if the file cannot be read or if the yaml is invalid.
     pub fn load_strings_from_file(&mut self, lang: &str, path: &str) -> Result<(), String> {
         let source = std::fs::read_to_string(path)
             .map_err(|e| format!("failed to read strings file '{path}': {e}"))?;
@@ -93,6 +100,8 @@ impl Localization {
     }
 
     /// load a string table for a language from a yaml string.
+    /// # Errors
+    /// returns an error if the yaml source is invalid.
     pub fn load_strings(&mut self, lang: &str, source: &str) -> Result<(), String> {
         let strings: HashMap<String, String> =
             serde_yaml::from_str(source).map_err(|e| format!("yaml parse error: {e}"))?;
@@ -105,6 +114,7 @@ impl Localization {
 
     /// get a localized string by key.
     /// falls back to the key itself if the string is not found.
+    #[must_use]
     pub fn get(&self, key: &str) -> String {
         self.string_tables
             .get(&self.current_language)
@@ -114,6 +124,7 @@ impl Localization {
     }
 
     /// get a localized string by key with a fallback.
+    #[must_use]
     pub fn get_or(&self, key: &str, fallback: &str) -> String {
         self.string_tables
             .get(&self.current_language)
@@ -136,6 +147,7 @@ pub struct LocalizationPlugin {
 
 impl LocalizationPlugin {
     /// create a new localization plugin with the given default language.
+    #[must_use]
     pub fn new(default_language: &str) -> Self {
         Self {
             default_language: default_language.to_string(),
@@ -144,7 +156,7 @@ impl LocalizationPlugin {
 }
 
 impl crate::GamePlugin for LocalizationPlugin {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "LocalizationPlugin"
     }
 

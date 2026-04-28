@@ -32,7 +32,8 @@ pub struct Transform {
 impl Transform {
     /// create a transform from a 2D translation.
     /// sets z to 0.0, rotation to 0, and scale to (1, 1).
-    pub fn from_translation(translation: Vec2) -> Self {
+    #[must_use]
+    pub const fn from_translation(translation: Vec2) -> Self {
         Self {
             translation: Vec3::new(translation.x, translation.y, 0.0),
             rotation: 0.0,
@@ -42,20 +43,23 @@ impl Transform {
 
     /// create a transform from x, y coordinates.
     /// shorthand for [`from_translation`](Transform::from_translation).
-    pub fn from_xy(x: f32, y: f32) -> Self {
+    #[must_use]
+    pub const fn from_xy(x: f32, y: f32) -> Self {
         Self::from_translation(Vec2::new(x, y))
     }
 
     /// set the rotation in radians.
     /// returns self for builder-style chaining.
-    pub fn with_rotation(mut self, rotation: f32) -> Self {
+    #[must_use]
+    pub const fn with_rotation(mut self, rotation: f32) -> Self {
         self.rotation = rotation;
         self
     }
 
     /// set the scale.
     /// returns self for builder-style chaining.
-    pub fn with_scale(mut self, scale: Vec2) -> Self {
+    #[must_use]
+    pub const fn with_scale(mut self, scale: Vec2) -> Self {
         self.scale = scale;
         self
     }
@@ -109,11 +113,13 @@ impl Color {
     pub const TRANSPARENT: Self = Self::rgba(0.0, 0.0, 0.0, 0.0);
 
     /// create an RGB color with full opacity (alpha = 1.0).
+    #[must_use]
     pub const fn rgb(r: f32, g: f32, b: f32) -> Self {
         Self { r, g, b, a: 1.0 }
     }
 
     /// create an RGBA color with explicit alpha.
+    #[must_use]
     pub const fn rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
         Self { r, g, b, a }
     }
@@ -152,11 +158,13 @@ pub struct Rect {
 
 impl Rect {
     /// create a new rectangle from top-left corner and size.
-    pub fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
+    #[must_use]
+    pub const fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
         Self { x, y, w, h }
     }
 
     /// create a rectangle from center point and half-size extents.
+    #[must_use]
     pub fn from_center(center: Vec2, half_size: Vec2) -> Self {
         Self {
             x: center.x - half_size.x,
@@ -167,6 +175,7 @@ impl Rect {
     }
 
     /// check if a point lies inside this rectangle (inclusive of edges).
+    #[must_use]
     pub fn contains(&self, point: Vec2) -> bool {
         point.x >= self.x
             && point.x <= self.x + self.w
@@ -175,6 +184,7 @@ impl Rect {
     }
 
     /// check if this rectangle overlaps another (exclusive of touching edges).
+    #[must_use]
     pub fn intersects(&self, other: &Self) -> bool {
         self.x < other.x + other.w
             && self.x + self.w > other.x
@@ -183,16 +193,19 @@ impl Rect {
     }
 
     /// get the center point of this rectangle.
+    #[must_use]
     pub fn center(&self) -> Vec2 {
         Vec2::new(self.x + self.w / 2.0, self.y + self.h / 2.0)
     }
 
     /// get the top-left corner position.
-    pub fn top_left(&self) -> Vec2 {
+    #[must_use]
+    pub const fn top_left(&self) -> Vec2 {
         Vec2::new(self.x, self.y)
     }
 
     /// get the bottom-right corner position.
+    #[must_use]
     pub fn bottom_right(&self) -> Vec2 {
         Vec2::new(self.x + self.w, self.y + self.h)
     }
@@ -201,8 +214,8 @@ impl Rect {
     pub fn inflate(&mut self, dx: f32, dy: f32) {
         self.x -= dx;
         self.y -= dy;
-        self.w += dx * 2.0;
-        self.h += dy * 2.0;
+        self.w = dx.mul_add(2.0, self.w);
+        self.h = dy.mul_add(2.0, self.h);
     }
 
     /// constrain this rect to lie fully within another rect.
@@ -217,16 +230,19 @@ impl Rect {
     }
 
     /// alias for [`Rect::contains`] — point collision check.
+    #[must_use]
     pub fn collide_point(&self, point: Vec2) -> bool {
         self.contains(point)
     }
 
     /// alias for [`Rect::intersects`] — rect collision check.
+    #[must_use]
     pub fn collide_rect(&self, other: &Self) -> bool {
         self.intersects(other)
     }
 
     /// return the smallest rect that contains both this rect and another.
+    #[must_use]
     pub fn union(&self, other: &Self) -> Self {
         let x = self.x.min(other.x);
         let y = self.y.min(other.y);

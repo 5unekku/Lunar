@@ -1,4 +1,4 @@
-//! engine wrapper around bevy_ecs world and schedule
+//! engine wrapper around `bevy_ecs` world and schedule
 //!
 //! the engine owns the ECS world and manages system execution.
 //! game code interacts with the world through the [`App`] builder.
@@ -18,7 +18,7 @@ pub struct Startup;
 
 /// the engine owns the ECS world and schedules.
 ///
-/// this is the low-level wrapper around bevy_ecs.
+/// this is the low-level wrapper around `bevy_ecs`.
 /// most game code should interact with the engine through [`App`] instead.
 pub struct Engine {
     /// the ECS world containing all entities, components, and resources
@@ -31,6 +31,7 @@ pub struct Engine {
 
 impl Engine {
     /// create a new empty engine
+    #[must_use]
     pub fn new() -> Self {
         use crate::schedule::UpdateStage;
         Self {
@@ -46,22 +47,25 @@ impl Engine {
     }
 
     /// get mutable access to the world
-    pub fn world_mut(&mut self) -> &mut World {
+    pub const fn world_mut(&mut self) -> &mut World {
         &mut self.world
     }
 
     /// get a reference to the world
-    pub fn world(&self) -> &World {
+    pub const fn world(&self) -> &World {
         &self.world
     }
 
     /// get mutable access to the startup schedule
-    pub fn startup_schedule_mut(&mut self) -> &mut Schedule {
+    pub const fn startup_schedule_mut(&mut self) -> &mut Schedule {
         &mut self.startup_schedule
     }
 
     /// get mutable access to a stage schedule
-    pub fn stage_schedule_mut(&mut self, stage: crate::schedule::UpdateStage) -> &mut Schedule {
+    pub const fn stage_schedule_mut(
+        &mut self,
+        stage: crate::schedule::UpdateStage,
+    ) -> &mut Schedule {
         &mut self.stage_schedules[stage as usize]
     }
 

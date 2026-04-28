@@ -28,7 +28,7 @@ pub struct Time {
     /// total elapsed time since engine start in seconds
     elapsed_seconds: f32,
     /// time multiplier (1.0 = normal, 0.5 = half speed, 2.0 = double speed)
-    time_scale: f32,
+    scale: f32,
     /// total frame count since engine start
     frame_count: u64,
     /// timestamp of the last frame in milliseconds
@@ -40,12 +40,13 @@ pub struct Time {
 
 impl Time {
     /// create a new time resource
+    #[must_use]
     pub fn new() -> Self {
         Self {
             delta_seconds: 0.0,
             raw_delta_seconds: 0.0,
             elapsed_seconds: 0.0,
-            time_scale: 1.0,
+            scale: 1.0,
             frame_count: 0,
             #[cfg(not(target_arch = "wasm32"))]
             last_frame: Instant::now(),
@@ -58,32 +59,37 @@ impl Time {
     }
 
     /// get delta time in seconds (scaled)
-    pub fn delta_seconds(&self) -> f32 {
+    #[must_use]
+    pub const fn delta_seconds(&self) -> f32 {
         self.delta_seconds
     }
 
     /// get raw delta time in seconds (unscaled)
-    pub fn raw_delta_seconds(&self) -> f32 {
+    #[must_use]
+    pub const fn raw_delta_seconds(&self) -> f32 {
         self.raw_delta_seconds
     }
 
     /// get total elapsed time in seconds
-    pub fn elapsed_seconds(&self) -> f32 {
+    #[must_use]
+    pub const fn elapsed_seconds(&self) -> f32 {
         self.elapsed_seconds
     }
 
     /// get the time scale multiplier
-    pub fn time_scale(&self) -> f32 {
-        self.time_scale
+    #[must_use]
+    pub const fn time_scale(&self) -> f32 {
+        self.scale
     }
 
     /// set the time scale multiplier
-    pub fn set_time_scale(&mut self, scale: f32) {
-        self.time_scale = scale.max(0.0);
+    pub const fn set_time_scale(&mut self, scale: f32) {
+        self.scale = scale.max(0.0);
     }
 
     /// get the total frame count
-    pub fn frame_count(&self) -> u64 {
+    #[must_use]
+    pub const fn frame_count(&self) -> u64 {
         self.frame_count
     }
 
@@ -109,7 +115,7 @@ impl Time {
         };
 
         self.raw_delta_seconds = delta;
-        self.delta_seconds = delta * self.time_scale;
+        self.delta_seconds = delta * self.scale;
         self.elapsed_seconds += self.delta_seconds;
         self.frame_count += 1;
     }
@@ -123,7 +129,7 @@ impl Default for Time {
 
 /// app builder for configuring the engine
 ///
-/// use the app to register systems, resources, and plugins before calling run().
+/// use the app to register systems, resources, and plugins before calling `run()`.
 pub struct App {
     /// the engine instance
     engine: Engine,
@@ -137,6 +143,7 @@ pub struct App {
 
 impl App {
     /// create a new app with default setup
+    #[must_use]
     pub fn new() -> Self {
         let mut engine = Engine::new();
         // insert the time resource
@@ -152,7 +159,7 @@ impl App {
     }
 
     /// get mutable access to the world for direct manipulation
-    pub fn world_mut(&mut self) -> &mut World {
+    pub const fn world_mut(&mut self) -> &mut World {
         self.engine.world_mut()
     }
 
@@ -187,7 +194,7 @@ impl App {
 
     /// add a custom stage with the given ordering relative to built-in stages.
     /// **note:** custom stages are not yet implemented — this is a no-op placeholder.
-    /// full stage support requires bevy_ecs's schedule graph, which is a planned upgrade.
+    /// full stage support requires `bevy_ecs`'s schedule graph, which is a planned upgrade.
     pub fn add_stage<S: ScheduleLabel>(&mut self, _stage: S, _order: StageOrder) -> &mut Self {
         log::warn!("add_stage: custom stages not yet implemented, call ignored");
         self
@@ -217,8 +224,6 @@ impl App {
             }
         }
 
-        let mut built_indices = Vec::new();
-
         while let Some(idx) = queue.pop_front() {
             let mut plugin = pending.remove(idx);
             let name = plugin.name().to_string();
@@ -232,7 +237,6 @@ impl App {
 
             plugin.build(self);
             built.push(name.clone());
-            built_indices.push(idx);
 
             // check if any pending plugins now have all deps met
             for (i, p) in pending.iter().enumerate() {
@@ -256,12 +260,12 @@ impl App {
     }
 
     /// get a reference to the engine
-    pub fn engine(&self) -> &Engine {
+    pub const fn engine(&self) -> &Engine {
         &self.engine
     }
 
     /// get mutable access to the engine
-    pub fn engine_mut(&mut self) -> &mut Engine {
+    pub const fn engine_mut(&mut self) -> &mut Engine {
         &mut self.engine
     }
 
@@ -272,7 +276,7 @@ impl App {
 
     /// start the game loop with per-frame event processing
     /// the callback runs each frame before the ECS tick, giving you a chance to
-    /// poll native events and update resources like InputState.
+    /// poll native events and update resources like `InputState`.
     /// # example
     /// ```ignore
     /// use engine_input::{InputPlugin, process_events, init_sdl};

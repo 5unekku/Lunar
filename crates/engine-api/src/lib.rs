@@ -32,11 +32,11 @@ pub use engine_math;
 /// re-export common types for convenience
 pub use engine_math::{Color, Mat2, Mat3, Mat4, Rect, Transform, Vec2, Vec3, Vec4};
 
-/// re-export bevy_ecs prelude for convenience
+/// re-export `bevy_ecs` prelude for convenience
 pub use bevy_ecs::prelude::*;
 
 /// re-export event system types explicitly
-/// note: bevy_ecs 0.18 uses MessageReader/MessageWriter instead of EventReader/EventWriter
+/// note: `bevy_ecs` 0.18 uses MessageReader/MessageWriter instead of EventReader/EventWriter
 pub use bevy_ecs::event::Event;
 pub use bevy_ecs::message::{MessageReader, MessageWriter, Messages};
 

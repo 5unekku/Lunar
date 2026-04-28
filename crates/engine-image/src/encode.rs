@@ -37,19 +37,26 @@ impl Default for EncodeOptions {
 ///
 /// the pixel buffer must contain exactly `width * height * 4` bytes
 /// in RGBA order. returns the encoded .mi file data on success.
+///
+/// # Errors
+/// returns an error if the pixel buffer size does not match `width * height * 4`.
 pub fn encode(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, EncodeError> {
-    encode_with_opts(width, height, rgba, EncodeOptions::default())
+    encode_with_opts(width, height, rgba, &EncodeOptions::default())
 }
 
 /// encode RGBA pixels to .mi format bytes with custom options.
 ///
 /// the pixel buffer must contain exactly `width * height * 4` bytes
 /// in RGBA order. returns the encoded .mi file data on success.
+///
+/// # Errors
+/// returns an error if the pixel buffer size does not match `width * height * 4`,
+/// or if zstd compression fails.
 pub fn encode_with_opts(
     width: u32,
     height: u32,
     rgba: &[u8],
-    opts: EncodeOptions,
+    opts: &EncodeOptions,
 ) -> Result<Vec<u8>, EncodeError> {
     let expected_bytes = (width as usize) * (height as usize) * 4;
     if rgba.len() != expected_bytes {
@@ -69,7 +76,7 @@ pub fn encode_with_opts(
     if opts.premultiplied {
         flags |= format::FLAG_PREMULTIPLIED;
     }
-    let has_metadata = opts.metadata.is_some();
+    let has_metadata = opts.metadata.as_ref().is_some();
     if has_metadata {
         flags |= format::FLAG_HAS_METADATA;
     }
@@ -85,22 +92,22 @@ pub fn encode_with_opts(
     format::ChunkHeader::write(
         &mut out,
         ChunkType::PixelData,
-        expected_bytes as u32,
-        compressed.len() as u32,
+        u32::try_from(expected_bytes).unwrap_or(u32::MAX),
+        u32::try_from(compressed.len()).unwrap_or(u32::MAX),
         0, // no dictionary
     );
     out.extend_from_slice(&compressed);
 
     // Write metadata chunk if present
-    if let Some(ref meta) = opts.metadata {
+    if let Some(meta) = &opts.metadata {
         let meta_bytes = meta.as_bytes();
         let compressed_meta =
             zstd::encode_all(meta_bytes, opts.compression_level).map_err(EncodeError::ZstdError)?;
         format::ChunkHeader::write(
             &mut out,
             ChunkType::Metadata,
-            meta_bytes.len() as u32,
-            compressed_meta.len() as u32,
+            u32::try_from(meta_bytes.len()).unwrap_or(u32::MAX),
+            u32::try_from(compressed_meta.len()).unwrap_or(u32::MAX),
             0,
         );
         out.extend_from_slice(&compressed_meta);

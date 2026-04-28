@@ -31,20 +31,22 @@ pub enum TickRate {
 
 impl TickRate {
     /// get the tick interval for this rate
+    #[must_use]
     pub fn interval(&self) -> Duration {
         match self {
-            TickRate::Low => Duration::from_secs_f64(1.0 / 60.0),
-            TickRate::Medium => Duration::from_secs_f64(1.0 / 120.0),
-            TickRate::High => Duration::from_secs_f64(1.0 / 240.0),
+            Self::Low => Duration::from_secs_f64(1.0 / 60.0),
+            Self::Medium => Duration::from_secs_f64(1.0 / 120.0),
+            Self::High => Duration::from_secs_f64(1.0 / 240.0),
         }
     }
 
     /// determine tick rate from frame cap
-    pub fn from_frame_cap(frame_cap: u32) -> Self {
+    #[must_use]
+    pub const fn from_frame_cap(frame_cap: u32) -> Self {
         match frame_cap {
-            0..=60 => TickRate::Low,
-            61..=120 => TickRate::Medium,
-            _ => TickRate::High,
+            0..=60 => Self::Low,
+            61..=120 => Self::Medium,
+            _ => Self::High,
         }
     }
 }
@@ -68,14 +70,11 @@ pub struct GameLoop {
 
 impl GameLoop {
     /// create a new game loop with the given frame cap
+    #[must_use]
     pub fn new(frame_cap: u32) -> Self {
         let tick_rate = TickRate::from_frame_cap(frame_cap);
-        log::info!(
-            "game loop initialized: frame_cap={}, tick_rate={:?}",
-            frame_cap,
-            tick_rate
-        );
-        GameLoop {
+        log::info!("game loop initialized: frame_cap={frame_cap}, tick_rate={tick_rate:?}");
+        Self {
             frame_cap,
             tick_rate,
             accumulator: Duration::ZERO,
@@ -85,7 +84,8 @@ impl GameLoop {
     }
 
     /// get the current frame cap
-    pub fn frame_cap(&self) -> u32 {
+    #[must_use]
+    pub const fn frame_cap(&self) -> u32 {
         self.frame_cap
     }
 
@@ -101,17 +101,19 @@ impl GameLoop {
     }
 
     /// get the current tick rate
-    pub fn tick_rate(&self) -> TickRate {
+    #[must_use]
+    pub const fn tick_rate(&self) -> TickRate {
         self.tick_rate
     }
 
     /// check if the loop should continue
-    pub fn is_running(&self) -> bool {
+    #[must_use]
+    pub const fn is_running(&self) -> bool {
         self.running
     }
 
     /// stop the game loop
-    pub fn stop(&mut self) {
+    pub const fn stop(&mut self) {
         self.running = false;
     }
 
@@ -139,19 +141,22 @@ impl GameLoop {
     /// apply frame rate limiting if frame cap is set.
     /// uses a hybrid approach: sleep for most of the wait time, then spin-wait
     /// the last ~1ms for better precision and reduced frame pacing jitter.
+    ///
+    /// # Panics
+    /// panics if the elapsed time exceeds the frame duration unexpectedly during frame cap calculation.
     pub fn apply_frame_cap(&self) {
         if self.frame_cap == 0 {
             return;
         }
 
-        let frame_duration = Duration::from_secs_f64(1.0 / self.frame_cap as f64);
+        let frame_duration = Duration::from_secs_f64(1.0 / f64::from(self.frame_cap));
         let elapsed = self.last_frame.elapsed();
 
         if elapsed < frame_duration {
-            let remaining = frame_duration - elapsed;
+            let remaining = frame_duration.checked_sub(elapsed).unwrap();
             // sleep for all but the last 1ms, then spin-wait for precision
             if remaining > Duration::from_millis(1) {
-                std::thread::sleep(remaining - Duration::from_millis(1));
+                std::thread::sleep(remaining.checked_sub(Duration::from_millis(1)).unwrap());
             }
             // spin-wait the remaining time
             while self.last_frame.elapsed() < frame_duration {

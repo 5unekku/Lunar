@@ -95,6 +95,9 @@ struct RawChoice {
 /// validates that the start node exists, all `next` references are valid,
 /// and all choice targets point to existing nodes.
 /// returns an error if the yaml is malformed or references invalid nodes.
+///
+/// # Errors
+/// returns an error if the yaml is invalid or contains references to non-existent nodes.
 pub fn parse_dialogue(source: &str) -> Result<Dialogue, String> {
     let raw: RawDialogue =
         serde_yaml::from_str(source).map_err(|e| format!("yaml parse error: {e}"))?;
@@ -154,6 +157,9 @@ pub fn parse_dialogue(source: &str) -> Result<Dialogue, String> {
 ///
 /// reads the file at the given path and parses it as yaml.
 /// returns an error if the file can't be read or contains invalid content.
+///
+/// # Errors
+/// returns an error if the file cannot be read or if its contents are invalid.
 pub fn parse_dialogue_file(path: &str) -> Result<Dialogue, String> {
     let source = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read dialogue file '{path}': {e}"))?;

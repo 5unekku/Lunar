@@ -18,17 +18,23 @@ pub struct AtlasRegion {
 
 impl AtlasRegion {
     /// create a new atlas region from pixel coordinates and atlas dimensions.
+    #[must_use]
     pub fn from_pixels(x: u32, y: u32, w: u32, h: u32, atlas_w: u32, atlas_h: u32) -> Self {
+        #[allow(clippy::cast_precision_loss)]
         let aw = atlas_w as f32;
+        #[allow(clippy::cast_precision_loss)]
         let ah = atlas_h as f32;
         Self {
+            #[allow(clippy::cast_precision_loss)]
             uv_min: Vec2::new(x as f32 / aw, y as f32 / ah),
+            #[allow(clippy::cast_precision_loss)]
             uv_max: Vec2::new((x + w) as f32 / aw, (y + h) as f32 / ah),
         }
     }
 
     /// create a new atlas region from UV coordinates directly.
-    pub fn from_uv(uv_min: Vec2, uv_max: Vec2) -> Self {
+    #[must_use]
+    pub const fn from_uv(uv_min: Vec2, uv_max: Vec2) -> Self {
         Self { uv_min, uv_max }
     }
 }

@@ -102,7 +102,7 @@ macro_rules! rect {
 
 /// convenience wrapper for creating ecs query types.
 ///
-/// this macro simplifies common query patterns by wrapping bevy_ecs query filters
+/// this macro simplifies common query patterns by wrapping `bevy_ecs` query filters
 /// into a single expression. it is designed to be used in system function signatures.
 ///
 /// # example

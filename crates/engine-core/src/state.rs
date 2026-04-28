@@ -25,12 +25,14 @@ pub enum EngineState {
 
 impl EngineState {
     /// check if the engine is running
-    pub fn is_running(&self) -> bool {
-        matches!(self, EngineState::Running)
+    #[must_use]
+    pub const fn is_running(&self) -> bool {
+        matches!(self, Self::Running)
     }
 
     /// check if the engine should stop
-    pub fn is_stopping(&self) -> bool {
-        matches!(self, EngineState::Stopping)
+    #[must_use]
+    pub const fn is_stopping(&self) -> bool {
+        matches!(self, Self::Stopping)
     }
 }

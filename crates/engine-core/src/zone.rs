@@ -81,8 +81,9 @@ pub struct WorldManager {
 
 impl WorldManager {
     /// create a new world manager
+    #[must_use]
     pub fn new() -> Self {
-        WorldManager {
+        Self {
             zones: HashMap::new(),
             current_zone: None,
             pending_transition: None,
@@ -97,7 +98,7 @@ impl WorldManager {
                 zone: Box::new(zone),
             },
         );
-        log::info!("WorldManager: registered zone '{}'", name);
+        log::info!("WorldManager: registered zone '{name}'");
     }
 
     /// transition to a zone (keeps world state)
@@ -109,7 +110,7 @@ impl WorldManager {
         }
 
         if !self.zones.contains_key(name) {
-            log::warn!("WorldManager: zone '{}' not registered", name);
+            log::warn!("WorldManager: zone '{name}' not registered");
             return;
         }
 
@@ -126,15 +127,17 @@ impl WorldManager {
             boxed.zone.on_enter(world);
         }
         self.current_zone = Some(name.to_string());
-        log::info!("WorldManager: entered zone '{}'", name);
+        log::info!("WorldManager: entered zone '{name}'");
     }
 
     /// get the current zone name
+    #[must_use]
     pub fn current_zone(&self) -> Option<&str> {
         self.current_zone.as_deref()
     }
 
     /// get transitions for the current zone
+    #[must_use]
     pub fn current_transitions(&self) -> Vec<ZoneTransition> {
         if let Some(name) = &self.current_zone
             && let Some(boxed) = self.zones.get(name)

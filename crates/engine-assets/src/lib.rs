@@ -64,6 +64,8 @@ pub trait AssetLoader: Send + Sync + 'static {
     type Asset: Asset;
 
     /// load the asset from raw bytes, returning the parsed data
+    /// # Errors
+    /// returns an error string if the bytes cannot be parsed into the asset type.
     fn load(&self, bytes: Vec<u8>) -> Result<Self::Asset, String>;
 }
 
@@ -106,8 +108,9 @@ pub struct Handle<T: Asset> {
 
 impl<T: Asset> Handle<T> {
     /// create a new handle with the given id and generation
-    pub fn new(id: u32, generation: u16) -> Self {
-        Handle {
+    #[must_use]
+    pub const fn new(id: u32, generation: u16) -> Self {
+        Self {
             id,
             generation,
             _marker: PhantomData,
@@ -115,12 +118,14 @@ impl<T: Asset> Handle<T> {
     }
 
     /// get the internal id
-    pub fn id(&self) -> u32 {
+    #[must_use]
+    pub const fn id(&self) -> u32 {
         self.id
     }
 
     /// get the generation
-    pub fn generation(&self) -> u16 {
+    #[must_use]
+    pub const fn generation(&self) -> u16 {
         self.generation
     }
 }
@@ -156,7 +161,7 @@ struct AssetStore<T: Asset> {
 #[allow(dead_code)]
 impl<T: Asset> AssetStore<T> {
     fn new() -> Self {
-        AssetStore {
+        Self {
             entries: Vec::new(),
             path_index: HashMap::new(),
         }
@@ -173,17 +178,17 @@ impl<T: Asset> AssetStore<T> {
         }
 
         // find a free slot or append
+        #[allow(clippy::cast_possible_truncation)]
         let id = self
             .entries
             .iter()
-            .position(|e| e.is_none())
+            .position(std::option::Option::is_none)
             .unwrap_or(self.entries.len()) as u32;
         let generation = self
             .entries
             .get(id as usize)
             .and_then(|e| e.as_ref())
-            .map(|e| e.generation.wrapping_add(1))
-            .unwrap_or(0u16);
+            .map_or(0u16, |e| e.generation.wrapping_add(1));
 
         if id as usize == self.entries.len() {
             self.entries.push(None);
@@ -234,15 +239,12 @@ impl<T: Asset> AssetStore<T> {
     }
 
     fn is_ready(&self, handle: &Handle<T>) -> bool {
-        if let Some(entry) = &self
-            .entries
+        self.entries
             .get(handle.id as usize)
             .and_then(|e| e.as_ref())
-        {
-            entry.generation == handle.generation && entry.state == LoadState::Loaded
-        } else {
-            false
-        }
+            .is_some_and(|entry| {
+                entry.generation == handle.generation && entry.state == LoadState::Loaded
+            })
     }
 
     fn is_loaded(&self, handle: &Handle<T>) -> bool {
@@ -342,6 +344,7 @@ trait FontLoaderTrait: Send + Sync {
 #[cfg(not(target_arch = "wasm32"))]
 impl IoTaskPool {
     /// create a new io task pool with the given number of worker threads
+    #[must_use]
     pub fn new(thread_count: usize) -> Self {
         let (task_send, task_recv) = crossbeam_channel::unbounded::<LoadTask>();
         let (texture_send, texture_receiver) = crossbeam_channel::unbounded();
@@ -397,7 +400,7 @@ impl IoTaskPool {
             });
         }
 
-        IoTaskPool {
+        Self {
             sender: task_send,
             texture_receiver,
             sound_receiver,
@@ -596,7 +599,7 @@ impl SoundLoaderTrait for WavSoundLoader {
         let source =
             rodio::Decoder::new_wav(cursor).map_err(|e| format!("failed to decode wav: {e}"))?;
         let sample_rate = source.sample_rate();
-        let samples: Vec<f32> = source.map(|s| s as f32 / i16::MAX as f32).collect();
+        let samples: Vec<f32> = source.map(|s| f32::from(s) / f32::from(i16::MAX)).collect();
         Ok(Sound {
             samples,
             sample_rate,
@@ -616,7 +619,7 @@ impl SoundLoaderTrait for OggSoundLoader {
         let source =
             rodio::Decoder::new_vorbis(cursor).map_err(|e| format!("failed to decode ogg: {e}"))?;
         let sample_rate = source.sample_rate();
-        let samples: Vec<f32> = source.map(|s| s as f32 / i16::MAX as f32).collect();
+        let samples: Vec<f32> = source.map(|s| f32::from(s) / f32::from(i16::MAX)).collect();
         Ok(Sound {
             samples,
             sample_rate,
@@ -663,8 +666,7 @@ fn texture_loader_for(path: &str) -> Arc<dyn TextureLoaderTrait> {
 
     match ext.as_str() {
         "mi" => Arc::new(MiTextureLoader),
-        "png" | "jpg" | "jpeg" | "bmp" | "webp" | "gif" => Arc::new(ImageTextureLoader),
-        _ => Arc::new(ImageTextureLoader), // default to image loader
+        _ => Arc::new(ImageTextureLoader),
     }
 }
 
@@ -676,11 +678,8 @@ fn sound_loader_for(path: &str) -> Arc<dyn SoundLoaderTrait> {
         .unwrap_or("")
         .to_lowercase();
 
-    match ext.as_str() {
-        "wav" => Arc::new(WavSoundLoader),
-        "ogg" => Arc::new(OggSoundLoader),
-        _ => Arc::new(WavSoundLoader), // default to wav loader
-    }
+    let _ = ext;
+    Arc::new(WavSoundLoader)
 }
 
 /// determine the appropriate font loader for a file extension.
@@ -691,10 +690,8 @@ fn font_loader_for(path: &str) -> Arc<dyn FontLoaderTrait> {
         .unwrap_or("")
         .to_lowercase();
 
-    match ext.as_str() {
-        "ttf" | "otf" => Arc::new(TtfFontLoader),
-        _ => Arc::new(TtfFontLoader), // default to ttf loader
-    }
+    let _ = ext;
+    Arc::new(TtfFontLoader)
 }
 
 /// per-type entry in the custom loader registry.
@@ -754,8 +751,9 @@ pub struct AssetServer {
 
 impl AssetServer {
     /// create a new asset server with the given number of io threads.
+    #[must_use]
     pub fn new(io_thread_count: usize) -> Self {
-        AssetServer {
+        Self {
             texture_store: AssetStore::new(),
             sound_store: AssetStore::new(),
             font_store: AssetStore::new(),
@@ -776,7 +774,10 @@ impl AssetServer {
         loader: L,
     ) {
         self.custom_texture_loaders.push(CustomLoaderEntry {
-            extensions: extensions.iter().map(|s| s.to_string()).collect(),
+            extensions: extensions
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
             loader: Arc::new(TextureLoaderAdapter(loader)),
         });
     }
@@ -790,7 +791,10 @@ impl AssetServer {
         loader: L,
     ) {
         self.custom_sound_loaders.push(CustomLoaderEntry {
-            extensions: extensions.iter().map(|s| s.to_string()).collect(),
+            extensions: extensions
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
             loader: Arc::new(SoundLoaderAdapter(loader)),
         });
     }
@@ -804,7 +808,10 @@ impl AssetServer {
         loader: L,
     ) {
         self.custom_font_loaders.push(CustomLoaderEntry {
-            extensions: extensions.iter().map(|s| s.to_string()).collect(),
+            extensions: extensions
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
             loader: Arc::new(FontLoaderAdapter(loader)),
         });
     }
@@ -891,61 +898,73 @@ impl AssetServer {
     }
 
     /// check if a texture handle is ready
+    #[must_use]
     pub fn is_texture_ready(&self, handle: &Handle<Texture>) -> bool {
         self.texture_store.is_ready(handle)
     }
 
     /// check if a sound handle is ready
+    #[must_use]
     pub fn is_sound_ready(&self, handle: &Handle<Sound>) -> bool {
         self.sound_store.is_ready(handle)
     }
 
     /// check if a font handle is ready
+    #[must_use]
     pub fn is_font_ready(&self, handle: &Handle<Font>) -> bool {
         self.font_store.is_ready(handle)
     }
 
     /// check if a texture is loaded
+    #[must_use]
     pub fn is_texture_loaded(&self, handle: &Handle<Texture>) -> bool {
         self.texture_store.is_loaded(handle)
     }
 
     /// check if a sound is loaded
+    #[must_use]
     pub fn is_sound_loaded(&self, handle: &Handle<Sound>) -> bool {
         self.sound_store.is_loaded(handle)
     }
 
     /// check if a font is loaded
+    #[must_use]
     pub fn is_font_loaded(&self, handle: &Handle<Font>) -> bool {
         self.font_store.is_loaded(handle)
     }
 
     /// get texture info
+    #[must_use]
     pub fn get_texture_info(&self, handle: &Handle<Texture>) -> Option<AssetInfo> {
         self.texture_store.get_info(handle)
     }
 
     /// get sound info
+    #[must_use]
     pub fn get_sound_info(&self, handle: &Handle<Sound>) -> Option<AssetInfo> {
         self.sound_store.get_info(handle)
     }
 
     /// get font info
+    #[must_use]
     pub fn get_font_info(&self, handle: &Handle<Font>) -> Option<AssetInfo> {
         self.font_store.get_info(handle)
     }
 
     /// get a loaded texture reference
+    #[must_use]
     pub fn get_texture(&self, handle: &Handle<Texture>) -> Option<&Texture> {
         self.texture_store.get(handle)
     }
 
     /// get a loaded sound reference
+    #[must_use]
     pub fn get_sound(&self, handle: &Handle<Sound>) -> Option<&Sound> {
         self.sound_store.get(handle)
     }
 
     /// get a loaded font reference
+    #[must_use]
     pub fn get_font(&self, handle: &Handle<Font>) -> Option<&Font> {
         self.font_store.get(handle)
     }
@@ -956,6 +975,7 @@ impl AssetServer {
     }
 
     /// get the number of assets currently loading across all stores.
+    #[must_use]
     pub fn loading_count(&self) -> usize {
         self.texture_store.loading_count()
             + self.sound_store.loading_count()
@@ -1071,7 +1091,7 @@ pub type FontHandle = Handle<Font>;
 pub struct AssetPlugin;
 
 impl GamePlugin for AssetPlugin {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "AssetPlugin"
     }
 
@@ -1104,7 +1124,7 @@ pub struct AssetChangedEvent {
 
 /// asset type tag for dispatching hot-reload events.
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssetType {
     Texture,
     Sound,
@@ -1127,11 +1147,11 @@ pub struct AssetWatcher {
 #[cfg(not(target_arch = "wasm32"))]
 impl AssetWatcher {
     /// create a new asset watcher that recursively watches the given directory.
+    #[must_use]
     pub fn new(watch_dir: &str) -> Self {
         use notify::{RecursiveMode, Watcher as _};
         // TODO: route events into ECS via a channel instead of just logging.
-        let mut watcher: Option<notify::RecommendedWatcher> = None;
-        if let Ok(mut w) =
+        let mut watcher =
             notify::recommended_watcher(|res: Result<notify::Event, notify::Error>| {
                 if let Ok(event) = res {
                     for path in event.paths {
@@ -1141,9 +1161,9 @@ impl AssetWatcher {
                     }
                 }
             })
-        {
+            .ok();
+        if let Some(ref mut w) = watcher {
             let _ = w.watch(std::path::Path::new(watch_dir), RecursiveMode::Recursive);
-            watcher = Some(w);
         }
         Self {
             watcher,
@@ -1157,8 +1177,12 @@ impl AssetWatcher {
     }
 
     /// list all registered watch paths.
+    #[must_use]
     pub fn watched_paths(&self) -> Vec<&str> {
-        self.watched.keys().map(|s| s.as_str()).collect()
+        self.watched
+            .keys()
+            .map(std::string::String::as_str)
+            .collect()
     }
 }
 
@@ -1171,7 +1195,7 @@ pub struct AssetWatcherPlugin;
 
 #[cfg(not(target_arch = "wasm32"))]
 impl GamePlugin for AssetWatcherPlugin {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "AssetWatcherPlugin"
     }
 
@@ -1208,6 +1232,8 @@ pub struct MiLoader;
 
 impl MiLoader {
     /// decode .mi bytes into raw texture data
+    /// # Errors
+    /// returns an error if the bytes are not a valid .mi file.
     pub fn load(&self, bytes: &[u8]) -> Result<RawTextureData, engine_image::DecodeError> {
         let image = engine_image::decode(bytes)?;
         Ok(RawTextureData {

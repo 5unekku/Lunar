@@ -18,6 +18,9 @@ use std::collections::HashMap;
 /// executed from any thread.
 pub trait Command: Send + Sync {
     /// execute the command with the given arguments
+    ///
+    /// # Errors
+    /// returns an error string if the command fails to execute.
     fn execute(&self, args: &[String]) -> Result<String, String>;
 
     /// get a brief description of the command
@@ -34,8 +37,9 @@ pub struct CommandRegistry {
 
 impl CommandRegistry {
     /// create a new empty command registry
+    #[must_use]
     pub fn new() -> Self {
-        let mut registry = CommandRegistry {
+        let mut registry = Self {
             commands: HashMap::new(),
         };
 
@@ -52,16 +56,23 @@ impl CommandRegistry {
     }
 
     /// execute a command by name
+    ///
+    /// # Errors
+    /// returns an error if the command is not registered or if execution fails.
     pub fn execute(&self, name: &str, args: &[String]) -> Result<String, String> {
-        match self.commands.get(name) {
-            Some(command) => command.execute(args),
-            None => Err(format!("unknown command: {}", name)),
-        }
+        self.commands.get(name).map_or_else(
+            || Err(format!("unknown command: {name}")),
+            |cmd| cmd.execute(args),
+        )
     }
 
     /// list all registered commands
+    #[must_use]
     pub fn list_commands(&self) -> Vec<&str> {
-        self.commands.keys().map(|s| s.as_str()).collect()
+        self.commands
+            .keys()
+            .map(std::string::String::as_str)
+            .collect()
     }
 }
 
@@ -78,11 +89,11 @@ struct HelpCommand {
 
 impl HelpCommand {
     fn new(registry: &CommandRegistry) -> Self {
-        HelpCommand {
+        Self {
             registry_snapshot: registry
                 .list_commands()
                 .iter()
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
                 .collect(),
         }
     }
@@ -93,7 +104,7 @@ impl Command for HelpCommand {
         Ok(format!("available commands: {:?}", self.registry_snapshot))
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "show available commands"
     }
 }
@@ -106,7 +117,7 @@ impl Command for VersionCommand {
         Ok(env!("CARGO_PKG_VERSION").to_string())
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "show engine version"
     }
 }

@@ -60,6 +60,7 @@ pub struct TypewriterState {
 
 impl Textbox {
     /// create a new textbox.
+    #[must_use]
     pub fn new(text: &str, position: Vec2, size: Vec2) -> Self {
         Self {
             text: text.to_string(),
@@ -75,29 +76,29 @@ impl Textbox {
     }
 
     /// set the font for this textbox.
-    pub fn set_font(&mut self, font_id: u32, font_size: f32) {
+    pub const fn set_font(&mut self, font_id: u32, font_size: f32) {
         self.font_id = font_id;
         self.font_size = font_size;
     }
 
     /// set the text color.
-    pub fn set_color(&mut self, color: Color) {
+    pub const fn set_color(&mut self, color: Color) {
         self.color = color;
     }
 
     /// set the background color.
-    pub fn set_background(&mut self, color: Color) {
+    pub const fn set_background(&mut self, color: Color) {
         self.background_color = Some(color);
     }
 
     /// set the padding.
-    pub fn set_padding(&mut self, padding: f32) {
+    pub const fn set_padding(&mut self, padding: f32) {
         self.padding = padding;
     }
 
     /// start the typewriter animation.
     /// `interval` is the time in seconds between each character reveal.
-    pub fn start_typewriter(&mut self, interval: f32) {
+    pub const fn start_typewriter(&mut self, interval: f32) {
         self.typewriter = Some(TypewriterState {
             visible_chars: 0,
             interval,
@@ -133,7 +134,7 @@ impl Textbox {
     }
 
     /// skip the typewriter animation and show all text.
-    pub fn skip_typewriter(&mut self) {
+    pub const fn skip_typewriter(&mut self) {
         if let Some(state) = &mut self.typewriter {
             state.visible_chars = self.text.len();
             state.complete = true;
@@ -141,14 +142,14 @@ impl Textbox {
     }
 
     /// get the currently visible text (for typewriter animation).
+    #[must_use]
     pub fn visible_text(&self) -> &str {
         if let Some(state) = &self.typewriter {
             let char_count = state.visible_chars;
             self.text
                 .char_indices()
                 .nth(char_count)
-                .map(|(idx, _)| &self.text[..idx])
-                .unwrap_or(&self.text)
+                .map_or(&self.text, |(idx, _)| &self.text[..idx])
         } else {
             &self.text
         }

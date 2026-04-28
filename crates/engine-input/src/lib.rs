@@ -35,7 +35,7 @@ use std::collections::HashMap;
 
 /// size of the fast-path key array (covers common keys 0-127)
 const KEY_ARRAY_SIZE: usize = 128;
-/// number of distinct MouseButton variants
+/// number of distinct `MouseButton` variants
 const MOUSE_BUTTON_COUNT: usize = 4;
 
 /// a single input binding that can be a key, mouse button, gamepad button, or gamepad axis.
@@ -82,6 +82,7 @@ pub struct ActionMap {
 
 impl ActionMap {
     /// create a new empty action map
+    #[must_use]
     pub fn new() -> Self {
         Self {
             bindings: std::collections::HashMap::new(),
@@ -105,6 +106,7 @@ impl ActionMap {
     }
 
     /// check if an action is currently held (any of its bindings are active).
+    #[must_use]
     pub fn is_action_held(&self, input: &InputState, action: &str) -> bool {
         let Some(bindings) = self.bindings.get(action) else {
             return false;
@@ -113,6 +115,7 @@ impl ActionMap {
     }
 
     /// check if an action was just pressed this frame.
+    #[must_use]
     pub fn is_action_just_pressed(&self, input: &InputState, action: &str) -> bool {
         let Some(bindings) = self.bindings.get(action) else {
             return false;
@@ -121,6 +124,7 @@ impl ActionMap {
     }
 
     /// check if an action was just released this frame.
+    #[must_use]
     pub fn is_action_just_released(&self, input: &InputState, action: &str) -> bool {
         let Some(bindings) = self.bindings.get(action) else {
             return false;
@@ -129,13 +133,14 @@ impl ActionMap {
     }
 
     /// check if an action has any bindings registered.
+    #[must_use]
     pub fn has_action(&self, action: &str) -> bool {
         self.bindings.contains_key(action)
     }
 
     /// list all registered action names.
     pub fn actions(&self) -> impl Iterator<Item = &str> {
-        self.bindings.keys().map(|s| s.as_str())
+        self.bindings.keys().map(std::string::String::as_str)
     }
 }
 
@@ -148,12 +153,12 @@ impl Default for ActionMap {
 impl InputBinding {
     fn is_held(&self, input: &InputState) -> bool {
         match self {
-            InputBinding::Key(key) => input.is_key_held(*key),
-            InputBinding::Mouse(button) => input.is_mouse_button_held(*button),
-            InputBinding::GamepadButton(index, button) => input
+            Self::Key(key) => input.is_key_held(*key),
+            Self::Mouse(button) => input.is_mouse_button_held(*button),
+            Self::GamepadButton(index, button) => input
                 .gamepad(*index)
                 .is_some_and(|gp| gp.is_button_held(*button)),
-            InputBinding::GamepadAxis(index, axis, threshold) => input
+            Self::GamepadAxis(index, axis, threshold) => input
                 .gamepad(*index)
                 .is_some_and(|gp| gp.axis(*axis).abs() > *threshold),
         }
@@ -161,12 +166,12 @@ impl InputBinding {
 
     fn is_just_pressed(&self, input: &InputState) -> bool {
         match self {
-            InputBinding::Key(key) => input.is_key_just_pressed(*key),
-            InputBinding::Mouse(button) => input.is_mouse_button_just_pressed(*button),
-            InputBinding::GamepadButton(index, button) => input
+            Self::Key(key) => input.is_key_just_pressed(*key),
+            Self::Mouse(button) => input.is_mouse_button_just_pressed(*button),
+            Self::GamepadButton(index, button) => input
                 .gamepad(*index)
                 .is_some_and(|gp| gp.is_button_just_pressed(*button)),
-            InputBinding::GamepadAxis(index, axis, threshold) => {
+            Self::GamepadAxis(index, axis, threshold) => {
                 // axis doesn't have edge-triggered press — treat as held check
                 input
                     .gamepad(*index)
@@ -177,12 +182,12 @@ impl InputBinding {
 
     fn is_just_released(&self, input: &InputState) -> bool {
         match self {
-            InputBinding::Key(key) => input.is_key_just_released(*key),
-            InputBinding::Mouse(button) => input.is_mouse_button_just_released(*button),
-            InputBinding::GamepadButton(index, button) => input
+            Self::Key(key) => input.is_key_just_released(*key),
+            Self::Mouse(button) => input.is_mouse_button_just_released(*button),
+            Self::GamepadButton(index, button) => input
                 .gamepad(*index)
                 .is_some_and(|gp| gp.is_button_just_released(*button)),
-            InputBinding::GamepadAxis(_index, _axis, _threshold) => {
+            Self::GamepadAxis(_index, _axis, _threshold) => {
                 // axis doesn't have edge-triggered release
                 false
             }
@@ -302,7 +307,8 @@ pub struct GamepadState {
 
 impl GamepadState {
     /// create a new empty gamepad state
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             buttons_held: [false; GAMEPAD_BUTTON_COUNT],
             buttons_just_pressed: [false; GAMEPAD_BUTTON_COUNT],
@@ -312,27 +318,31 @@ impl GamepadState {
     }
 
     /// check if a button is currently held
-    pub fn is_button_held(&self, button: GamepadButton) -> bool {
+    #[must_use]
+    pub const fn is_button_held(&self, button: GamepadButton) -> bool {
         self.buttons_held[button as usize]
     }
 
     /// check if a button was just pressed this frame
-    pub fn is_button_just_pressed(&self, button: GamepadButton) -> bool {
+    #[must_use]
+    pub const fn is_button_just_pressed(&self, button: GamepadButton) -> bool {
         self.buttons_just_pressed[button as usize]
     }
 
     /// check if a button was just released this frame
-    pub fn is_button_just_released(&self, button: GamepadButton) -> bool {
+    #[must_use]
+    pub const fn is_button_just_released(&self, button: GamepadButton) -> bool {
         self.buttons_just_released[button as usize]
     }
 
     /// get an axis value (-1.0 to 1.0)
-    pub fn axis(&self, axis: GamepadAxis) -> f32 {
+    #[must_use]
+    pub const fn axis(&self, axis: GamepadAxis) -> f32 {
         self.axes[axis as usize]
     }
 
     /// press a button
-    pub fn press_button(&mut self, button: GamepadButton) {
+    pub const fn press_button(&mut self, button: GamepadButton) {
         let index = button as usize;
         if !self.buttons_held[index] {
             self.buttons_just_pressed[index] = true;
@@ -341,7 +351,7 @@ impl GamepadState {
     }
 
     /// release a button
-    pub fn release_button(&mut self, button: GamepadButton) {
+    pub const fn release_button(&mut self, button: GamepadButton) {
         let index = button as usize;
         if self.buttons_held[index] {
             self.buttons_just_released[index] = true;
@@ -350,12 +360,12 @@ impl GamepadState {
     }
 
     /// set an axis value
-    pub fn set_axis(&mut self, axis: GamepadAxis, value: f32) {
+    pub const fn set_axis(&mut self, axis: GamepadAxis, value: f32) {
         self.axes[axis as usize] = value.clamp(-1.0, 1.0);
     }
 
-    /// begin frame: clear just_pressed/just_released sets
-    pub fn begin_frame(&mut self) {
+    /// begin frame: clear `just_pressed/just_released` sets
+    pub const fn begin_frame(&mut self) {
         self.buttons_just_pressed = [false; GAMEPAD_BUTTON_COUNT];
         self.buttons_just_released = [false; GAMEPAD_BUTTON_COUNT];
     }
@@ -426,7 +436,7 @@ pub enum GamepadAxis {
 /// uses fixed-size bool arrays indexed by discriminant value — O(1) lookup, no hashing.
 #[derive(Resource, Clone)]
 pub struct InputState {
-    /// fast-path array for common keys (indices 0..KEY_ARRAY_SIZE)
+    /// fast-path array for common keys (indices `0..KEY_ARRAY_SIZE`)
     keys_held: [bool; KEY_ARRAY_SIZE],
     keys_just_pressed: [bool; KEY_ARRAY_SIZE],
     keys_just_released: [bool; KEY_ARRAY_SIZE],
@@ -444,6 +454,7 @@ pub struct InputState {
 
 impl InputState {
     /// create a new empty input state
+    #[must_use]
     pub fn new() -> Self {
         Self {
             keys_held: [false; KEY_ARRAY_SIZE],
@@ -462,6 +473,7 @@ impl InputState {
     }
 
     /// check if a key is currently held down
+    #[must_use]
     pub fn is_key_held(&self, key: KeyCode) -> bool {
         let idx = key as usize;
         if idx < KEY_ARRAY_SIZE {
@@ -472,6 +484,7 @@ impl InputState {
     }
 
     /// check if a key was just pressed this frame
+    #[must_use]
     pub fn is_key_just_pressed(&self, key: KeyCode) -> bool {
         let idx = key as usize;
         if idx < KEY_ARRAY_SIZE {
@@ -485,6 +498,7 @@ impl InputState {
     }
 
     /// check if a key was just released this frame
+    #[must_use]
     pub fn is_key_just_released(&self, key: KeyCode) -> bool {
         let idx = key as usize;
         if idx < KEY_ARRAY_SIZE {
@@ -498,31 +512,36 @@ impl InputState {
     }
 
     /// get the current mouse position
-    pub fn mouse_position(&self) -> (f32, f32) {
+    #[must_use]
+    pub const fn mouse_position(&self) -> (f32, f32) {
         self.mouse_position
     }
 
     /// get the mouse movement delta this frame
-    pub fn mouse_delta(&self) -> (f32, f32) {
+    #[must_use]
+    pub const fn mouse_delta(&self) -> (f32, f32) {
         self.mouse_delta
     }
 
     /// check if a mouse button is currently held down
-    pub fn is_mouse_button_held(&self, button: MouseButton) -> bool {
+    #[must_use]
+    pub const fn is_mouse_button_held(&self, button: MouseButton) -> bool {
         self.mouse_buttons_held[button as usize]
     }
 
     /// check if a mouse button was just pressed this frame
-    pub fn is_mouse_button_just_pressed(&self, button: MouseButton) -> bool {
+    #[must_use]
+    pub const fn is_mouse_button_just_pressed(&self, button: MouseButton) -> bool {
         self.mouse_buttons_just_pressed[button as usize]
     }
 
     /// check if a mouse button was just released this frame
-    pub fn is_mouse_button_just_released(&self, button: MouseButton) -> bool {
+    #[must_use]
+    pub const fn is_mouse_button_just_released(&self, button: MouseButton) -> bool {
         self.mouse_buttons_just_released[button as usize]
     }
 
-    /// begin frame: clear just_pressed/just_released sets
+    /// begin frame: clear `just_pressed/just_released` sets
     pub fn begin_frame(&mut self) {
         self.keys_just_pressed = [false; KEY_ARRAY_SIZE];
         self.keys_just_released = [false; KEY_ARRAY_SIZE];
@@ -538,6 +557,7 @@ impl InputState {
 
     /// get gamepad state by index (0-based).
     /// returns None if the gamepad is not connected.
+    #[must_use]
     pub fn gamepad(&self, index: usize) -> Option<&GamepadState> {
         self.gamepads.get(index)
     }
@@ -578,7 +598,7 @@ impl InputState {
     }
 
     /// press a key
-    pub fn press_key(&mut self, key: KeyCode) {
+    pub const fn press_key(&mut self, key: KeyCode) {
         let index = key as usize;
         if index < KEY_ARRAY_SIZE {
             if !self.keys_held[index] {
@@ -589,7 +609,7 @@ impl InputState {
     }
 
     /// release a key
-    pub fn release_key(&mut self, key: KeyCode) {
+    pub const fn release_key(&mut self, key: KeyCode) {
         let index = key as usize;
         if index < KEY_ARRAY_SIZE {
             if self.keys_held[index] {
@@ -611,7 +631,7 @@ impl InputState {
     }
 
     /// press a mouse button
-    pub fn press_mouse_button(&mut self, button: MouseButton) {
+    pub const fn press_mouse_button(&mut self, button: MouseButton) {
         let index = button as usize;
         if !self.mouse_buttons_held[index] {
             self.mouse_buttons_just_pressed[index] = true;
@@ -620,7 +640,7 @@ impl InputState {
     }
 
     /// release a mouse button
-    pub fn release_mouse_button(&mut self, button: MouseButton) {
+    pub const fn release_mouse_button(&mut self, button: MouseButton) {
         let index = button as usize;
         if self.mouse_buttons_held[index] {
             self.mouse_buttons_just_released[index] = true;
@@ -651,7 +671,7 @@ impl Default for InputState {
 pub struct InputPlugin;
 
 impl GamePlugin for InputPlugin {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "InputPlugin"
     }
 
@@ -666,7 +686,11 @@ impl GamePlugin for InputPlugin {
 ///
 /// call this once at startup on native targets.
 /// the returned pump should be used with [`process_events`].
+///
+/// # Panics
+/// panics if SDL3 cannot be initialized or if the event pump cannot be created.
 #[cfg(not(target_arch = "wasm32"))]
+#[must_use]
 pub fn init_sdl() -> sdl3::EventPump {
     let sdl = sdl3::init().expect("failed to initialize SDL3");
     sdl.event_pump().expect("failed to get event pump")
@@ -751,7 +775,7 @@ pub fn process_events(event_pump: &mut sdl3::EventPump, world: &mut bevy_ecs::pr
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn keycode_from_sdl(key: sdl3::keyboard::Keycode) -> Option<KeyCode> {
+const fn keycode_from_sdl(key: sdl3::keyboard::Keycode) -> Option<KeyCode> {
     use sdl3::keyboard::Keycode;
     match key {
         Keycode::A => Some(KeyCode::A),
@@ -812,7 +836,7 @@ fn keycode_from_sdl(key: sdl3::keyboard::Keycode) -> Option<KeyCode> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn mouse_button_from_sdl(button: sdl3::mouse::MouseButton) -> Option<MouseButton> {
+const fn mouse_button_from_sdl(button: sdl3::mouse::MouseButton) -> Option<MouseButton> {
     use sdl3::mouse::MouseButton as SdlBtn;
     match button {
         SdlBtn::Left => Some(MouseButton::Left),

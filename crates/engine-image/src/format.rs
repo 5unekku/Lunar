@@ -4,7 +4,7 @@
 //! compressed chunks. each chunk has a 16-byte header and compressed payload.
 
 /// magic bytes identifying a .mi file: `b'MRIF'`.
-pub const MAGIC: [u8; 4] = [0x4D, 0x52, 0x49, 0x46];
+pub const MAGIC: [u8; 4] = *b"MRIF";
 
 /// current format version. only version 1 is supported.
 pub const VERSION: u16 = 1;
@@ -32,11 +32,11 @@ pub enum ChunkType {
 impl ChunkType {
     /// convert a raw byte value into a chunk type variant.
     /// returns `None` if the value doesn't match any known chunk type.
-    pub fn from_u8(value: u8) -> Option<Self> {
+    pub const fn from_u8(value: u8) -> Option<Self> {
         match value {
-            0x00 => Some(ChunkType::PixelData),
-            0x01 => Some(ChunkType::Metadata),
-            0x02 => Some(ChunkType::IccProfile),
+            0x00 => Some(Self::PixelData),
+            0x01 => Some(Self::Metadata),
+            0x02 => Some(Self::IccProfile),
             _ => None,
         }
     }
@@ -99,7 +99,7 @@ impl Header {
         let width = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
         let height = u32::from_le_bytes([data[12], data[13], data[14], data[15]]);
 
-        Ok(Header {
+        Ok(Self {
             version,
             flags,
             width,
@@ -110,7 +110,7 @@ impl Header {
     /// calculate the expected number of bytes for pixel data.
     ///
     /// returns `width * height * 4` (RGBA8).
-    pub fn expected_pixel_bytes(&self) -> usize {
+    pub const fn expected_pixel_bytes(&self) -> usize {
         (self.width as usize) * (self.height as usize) * 4
     }
 }
@@ -159,7 +159,7 @@ impl ChunkHeader {
         let compressed_size = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
         let dict_id = u32::from_le_bytes([data[12], data[13], data[14], data[15]]);
 
-        Ok(ChunkHeader {
+        Ok(Self {
             chunk_type,
             uncompressed_size,
             compressed_size,

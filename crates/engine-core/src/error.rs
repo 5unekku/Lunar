@@ -27,17 +27,17 @@ pub enum EngineError {
 impl fmt::Display for EngineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EngineError::WindowCreation(msg) => write!(f, "window creation failed: {msg}"),
-            EngineError::GpuInit(msg) => write!(f, "GPU initialization failed: {msg}"),
-            EngineError::AssetLoad { path, reason } => {
+            Self::WindowCreation(msg) => write!(f, "window creation failed: {msg}"),
+            Self::GpuInit(msg) => write!(f, "GPU initialization failed: {msg}"),
+            Self::AssetLoad { path, reason } => {
                 write!(f, "failed to load asset '{path}': {reason}")
             }
-            EngineError::InvalidHandle(msg) => write!(f, "invalid handle: {msg}"),
-            EngineError::SceneNotFound(name) => write!(f, "scene not found: '{name}'"),
-            EngineError::Command { name, reason } => {
+            Self::InvalidHandle(msg) => write!(f, "invalid handle: {msg}"),
+            Self::SceneNotFound(name) => write!(f, "scene not found: '{name}'"),
+            Self::Command { name, reason } => {
                 write!(f, "command '{name}' failed: {reason}")
             }
-            EngineError::Other(msg) => write!(f, "error: {msg}"),
+            Self::Other(msg) => write!(f, "error: {msg}"),
         }
     }
 }
@@ -80,7 +80,8 @@ pub struct ErrorEvent {
 
 impl ErrorEvent {
     /// create a new error event
-    pub fn new(source: ErrorSource, error: EngineError) -> Self {
+    #[must_use]
+    pub const fn new(source: ErrorSource, error: EngineError) -> Self {
         Self {
             source,
             error,
@@ -89,7 +90,8 @@ impl ErrorEvent {
     }
 
     /// mark the error as recovered
-    pub fn recovered(mut self) -> Self {
+    #[must_use]
+    pub const fn recovered(mut self) -> Self {
         self.recovered = true;
         self
     }

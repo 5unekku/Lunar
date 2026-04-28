@@ -45,8 +45,9 @@ pub struct SceneManager {
 
 impl SceneManager {
     /// create a new scene manager
+    #[must_use]
     pub fn new() -> Self {
-        SceneManager {
+        Self {
             scenes: std::collections::HashMap::new(),
             scene_stack: Vec::new(),
         }
@@ -60,14 +61,14 @@ impl SceneManager {
                 scene: Box::new(scene),
             },
         );
-        log::info!("SceneManager: registered scene '{}'", name);
+        log::info!("SceneManager: registered scene '{name}'");
     }
 
     /// switch to a scene, replacing all current scenes.
-    /// triggers on_exit on the current scene (if any), then on_enter on the new one.
+    /// triggers `on_exit` on the current scene (if any), then `on_enter` on the new one.
     pub fn switch_to(&mut self, name: &str, world: &mut World) {
         if !self.scenes.contains_key(name) {
-            log::warn!("SceneManager: scene '{}' not registered", name);
+            log::warn!("SceneManager: scene '{name}' not registered");
             return;
         }
 
@@ -83,14 +84,14 @@ impl SceneManager {
             boxed.scene.on_enter(world);
         }
         self.scene_stack.push(name.to_string());
-        log::info!("SceneManager: switched to scene '{}'", name);
+        log::info!("SceneManager: switched to scene '{name}'");
     }
 
     /// push an overlay scene on top of the current scene stack.
-    /// the current scene stays active underneath; the overlay's on_enter is called.
+    /// the current scene stays active underneath; the overlay's `on_enter` is called.
     pub fn push_overlay(&mut self, name: &str, world: &mut World) {
         if !self.scenes.contains_key(name) {
-            log::warn!("SceneManager: scene '{}' not registered", name);
+            log::warn!("SceneManager: scene '{name}' not registered");
             return;
         }
 
@@ -98,11 +99,11 @@ impl SceneManager {
             boxed.scene.on_enter(world);
         }
         self.scene_stack.push(name.to_string());
-        log::info!("SceneManager: pushed overlay '{}'", name);
+        log::info!("SceneManager: pushed overlay '{name}'");
     }
 
     /// pop the top overlay scene.
-    /// triggers on_exit on the overlay, then removes it from the stack.
+    /// triggers `on_exit` on the overlay, then removes it from the stack.
     /// does nothing if only one scene is active.
     pub fn pop_overlay(&mut self, world: &mut World) {
         if self.scene_stack.len() <= 1 {
@@ -113,13 +114,14 @@ impl SceneManager {
             if let Some(boxed) = self.scenes.get_mut(&name) {
                 boxed.scene.on_exit(world);
             }
-            log::info!("SceneManager: popped overlay '{}'", name);
+            log::info!("SceneManager: popped overlay '{name}'");
         }
     }
 
     /// get the current (top) scene name
+    #[must_use]
     pub fn current_scene(&self) -> Option<&str> {
-        self.scene_stack.last().map(|s| s.as_str())
+        self.scene_stack.last().map(std::string::String::as_str)
     }
 
     /// update all active scenes from bottom to top
