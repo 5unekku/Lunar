@@ -580,19 +580,23 @@ impl InputState {
     /// press a key
     pub fn press_key(&mut self, key: KeyCode) {
         let index = key as usize;
-        if !self.keys_held[index] {
-            self.keys_just_pressed[index] = true;
+        if index < KEY_ARRAY_SIZE {
+            if !self.keys_held[index] {
+                self.keys_just_pressed[index] = true;
+            }
+            self.keys_held[index] = true;
         }
-        self.keys_held[index] = true;
     }
 
     /// release a key
     pub fn release_key(&mut self, key: KeyCode) {
         let index = key as usize;
-        if self.keys_held[index] {
-            self.keys_just_released[index] = true;
+        if index < KEY_ARRAY_SIZE {
+            if self.keys_held[index] {
+                self.keys_just_released[index] = true;
+            }
+            self.keys_held[index] = false;
         }
-        self.keys_held[index] = false;
     }
 
     /// set mouse position
@@ -1096,9 +1100,9 @@ fn poll_gamepads(input: &mut InputState) {
                 1 => Some(GamepadButton::East),
                 2 => Some(GamepadButton::West),
                 3 => Some(GamepadButton::North),
-                4 => Some(GamepadButton::LeftShoulder),
-                5 => Some(GamepadButton::RightShoulder),
-                8 => Some(GamepadButton::Select),
+                4 => Some(GamepadButton::LeftBumper),
+                5 => Some(GamepadButton::RightBumper),
+                8 => Some(GamepadButton::Back),
                 9 => Some(GamepadButton::Start),
                 10 => Some(GamepadButton::LeftStick),
                 11 => Some(GamepadButton::RightStick),
