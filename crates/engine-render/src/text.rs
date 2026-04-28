@@ -1,36 +1,52 @@
-//! text rendering via a glyph atlas texture
+//! text rendering via a glyph atlas texture.
+//!
+//! provides a glyph atlas for rasterizing and caching font characters,
+//! plus layout functions for positioning text on screen.
 
 use engine_math::Vec2;
 use std::collections::HashMap;
 
-/// a single glyph in the atlas.
+/// metrics for a single rasterized glyph in the atlas.
+///
+/// stores the position, size, and bearing information needed to
+/// correctly place and render a character.
 #[derive(Debug, Clone)]
 pub struct GlyphInfo {
-    /// x offset within the atlas texture.
+    /// x offset of the glyph within the atlas texture.
     pub x: u32,
-    /// y offset within the atlas texture.
+    /// y offset of the glyph within the atlas texture.
     pub y: u32,
     /// glyph width in pixels.
     pub width: u32,
     /// glyph height in pixels.
     pub height: u32,
-    /// horizontal bearing (offset from cursor to glyph left edge).
+    /// horizontal bearing: offset from cursor to glyph left edge.
     pub bearing_x: f32,
-    /// vertical bearing (offset from baseline to glyph top edge).
+    /// vertical bearing: offset from baseline to glyph top edge.
     pub bearing_y: f32,
-    /// how far to advance the cursor after this glyph.
+    /// how far to advance the cursor after rendering this glyph.
     pub advance: f32,
 }
 
-/// key for the glyph cache — uses a quantized font size to avoid f32 hash issues.
+/// cache key for looking up rasterized glyphs.
+///
+/// uses a quantized (rounded) font size to avoid floating-point
+/// hash issues. uniquely identifies a glyph by font, character, and size.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GlyphKey {
+    /// font identifier.
     font_id: u32,
+    /// the unicode character.
     char_code: char,
+    /// font size in pixels (rounded to nearest integer).
     font_size: u16,
 }
 
-/// a glyph atlas texture managed on the GPU.
+/// a packed glyph atlas texture.
+///
+/// stores rasterized glyphs in a single 2D pixel buffer.
+/// glyphs are placed sequentially, wrapping to new rows as needed.
+/// the atlas is uploaded to the GPU as a texture for rendering.
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct GlyphAtlas {
@@ -38,18 +54,21 @@ pub struct GlyphAtlas {
     pub width: u32,
     /// atlas texture height in pixels.
     pub height: u32,
-    /// packed pixel data (rgba).
+    /// packed RGBA pixel data.
     pub pixels: Vec<u8>,
-    /// cached glyphs by (font_id, char, quantized_font_size).
+    /// cached glyphs keyed by (font_id, character, quantized font size).
     pub glyphs: HashMap<GlyphKey, GlyphInfo>,
-    /// current insertion cursor in the atlas.
+    /// current x position for the next glyph insertion.
     cursor_x: u32,
+    /// current y position for the next glyph insertion.
     cursor_y: u32,
+    /// height of the current row in the atlas.
     row_height: u32,
 }
 
 impl GlyphAtlas {
-    /// create a new empty atlas at the given size.
+    /// create a new empty atlas with the given dimensions.
+    /// the pixel buffer is initialized to transparent black.
     pub fn new(width: u32, height: u32) -> Self {
         Self {
             width,
@@ -62,7 +81,10 @@ impl GlyphAtlas {
         }
     }
 
-    /// rasterize a glyph and insert it into the atlas. returns false if the atlas is full.
+    /// rasterize a glyph and insert it into the atlas.
+    ///
+    /// returns `false` if the atlas doesn't have enough space for the glyph.
+    /// if the glyph is already cached, this is a no-op and returns `true`.
     #[allow(dead_code)]
     pub fn rasterize_glyph(
         &mut self,
@@ -147,7 +169,8 @@ impl GlyphAtlas {
         true
     }
 
-    /// get glyph info for a character.
+    /// look up cached glyph info for a character.
+    /// returns `None` if the glyph hasn't been rasterized yet.
     pub fn get_glyph(&self, font_id: u32, char_code: char, font_size: f32) -> Option<&GlyphInfo> {
         let key = GlyphKey {
             font_id,
@@ -157,15 +180,18 @@ impl GlyphAtlas {
         self.glyphs.get(&key)
     }
 
-    /// get the atlas pixel data for GPU upload.
+    /// get the raw pixel data for uploading to the GPU.
     #[allow(dead_code)]
     pub fn pixels(&self) -> &[u8] {
         &self.pixels
     }
 }
 
-/// layout a string of text and return the positioned glyph quads.
-/// each quad is (uv_min, uv_max, position, size).
+/// layout a string of text and return positioned glyph quads.
+///
+/// iterates over each character, looks up its glyph in the atlas,
+/// and computes screen-space positions and UV coordinates.
+/// each quad contains the position, size, and UV bounds for rendering.
 pub fn layout_text(
     atlas: &GlyphAtlas,
     font_id: u32,
@@ -203,19 +229,25 @@ pub fn layout_text(
 }
 
 /// a single positioned glyph quad for rendering.
+///
+/// contains the screen-space position, pixel size, and UV coordinates
+/// within the glyph atlas. used to generate vertex data for text rendering.
 #[derive(Debug, Clone)]
 pub struct TextGlyphQuad {
     /// top-left position in screen space.
     pub position: Vec2,
     /// size in pixels.
     pub size: Vec2,
-    /// minimum UV in the atlas.
+    /// minimum UV coordinate in the atlas (top-left of glyph).
     pub uv_min: Vec2,
-    /// maximum UV in the atlas.
+    /// maximum UV coordinate in the atlas (bottom-right of glyph).
     pub uv_max: Vec2,
 }
 
-/// measure the width of a text string at a given font size.
+/// measure the total advance width of a text string at a given font size.
+///
+/// sums the advance values of all rasterized glyphs in the string.
+/// invisible or uncached glyphs are skipped.
 #[allow(dead_code)]
 pub fn measure_text(atlas: &GlyphAtlas, font_id: u32, text: &str, font_size: f32) -> f32 {
     let mut width = 0.0f32;

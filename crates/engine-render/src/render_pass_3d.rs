@@ -8,39 +8,64 @@ use wgpu::util::DeviceExt;
 
 use crate::mesh::{Light, LightType, Mesh};
 
-/// uniform data for the 3D camera.
+/// uniform data for the 3D camera, uploaded to a GPU buffer each frame.
+///
+/// contains the view and projection matrices plus the camera position
+/// for use in the vertex shader.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Camera3DUniform {
+    /// 4x4 view matrix (column-major).
     pub view_matrix: [f32; 16],
+    /// 4x4 projection matrix (column-major).
     pub projection_matrix: [f32; 16],
+    /// camera position in world space.
     pub camera_position: [f32; 3],
+    /// padding for 16-byte alignment.
     pub _padding: f32,
 }
 
-/// uniform data for a 3D light.
+/// uniform data for a single 3D light, packed into a storage buffer.
+///
+/// contains all parameters needed by the fragment shader for lighting
+/// calculations.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LightUniform {
+    /// light type (0 = directional, 1 = point, 2 = spot).
     pub light_type: u32,
+    /// RGB color (0.0 - 1.0 per channel).
     pub color: [f32; 3],
+    /// brightness multiplier.
     pub intensity: f32,
+    /// direction vector for directional/spot lights.
     pub direction: [f32; 3],
+    /// world-space position for point/spot lights.
     pub position: [f32; 3],
+    /// maximum range for point/spot lights.
     pub range: f32,
+    /// inner and outer cone angles for spot lights (radians).
     pub spot_angles: [f32; 2],
 }
 
 /// a 3D render pass that can be executed alongside the 2D pass.
+///
+/// manages GPU buffers for camera and light uniforms. the actual
+/// mesh rendering pipeline is not yet implemented (pipeline is `None`).
 pub struct RenderPass3D {
+    /// the render pipeline (None until 3D shaders are implemented).
     pub pipeline: Option<wgpu::RenderPipeline>,
+    /// uniform buffer for camera data.
     pub camera_buffer: wgpu::Buffer,
+    /// storage buffer for light data (supports up to `max_lights`).
     pub light_buffer: wgpu::Buffer,
+    /// maximum number of lights supported.
     pub max_lights: usize,
 }
 
 impl RenderPass3D {
-    /// create a new 3D render pass.
+    /// create a new 3D render pass with the given light capacity.
+    /// initializes camera and light uniform buffers.
     pub fn new(
         device: &wgpu::Device,
         _config: &wgpu::SurfaceConfiguration,
@@ -73,12 +98,13 @@ impl RenderPass3D {
         }
     }
 
-    /// update the camera uniform buffer.
+    /// upload camera data to the GPU uniform buffer.
     pub fn update_camera(&self, queue: &wgpu::Queue, camera: &Camera3DUniform) {
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[*camera]));
     }
 
-    /// update the light uniform buffer with an array of lights.
+    /// upload light data to the GPU storage buffer.
+    /// only the first `max_lights` lights are uploaded.
     pub fn update_lights(&self, queue: &wgpu::Queue, lights: &[Light]) {
         let light_uniforms: Vec<LightUniform> = lights
             .iter()
@@ -103,7 +129,10 @@ impl RenderPass3D {
     }
 
     /// execute the 3D render pass.
-    /// this is a stub — it clears the depth buffer but does not render meshes yet.
+    ///
+    /// this is a stub — currently does not render meshes.
+    /// when implemented, it will bind the pipeline, set uniforms,
+    /// and draw all meshes with their world matrices.
     pub fn execute(
         &self,
         _encoder: &mut wgpu::CommandEncoder,
@@ -118,7 +147,10 @@ impl RenderPass3D {
     }
 }
 
-/// create a perspective projection matrix.
+/// create a perspective projection matrix (column-major, 16 elements).
+///
+/// `fov` is the vertical field of view in radians, `aspect` is
+/// width/height, and `near`/`far` define the clipping planes.
 pub fn perspective_projection(fov: f32, aspect: f32, near: f32, far: f32) -> [f32; 16] {
     let f = 1.0 / (fov / 2.0).tan();
     let nf = 1.0 / (near - far);
@@ -142,7 +174,10 @@ pub fn perspective_projection(fov: f32, aspect: f32, near: f32, far: f32) -> [f3
     ]
 }
 
-/// create a look-at view matrix.
+/// create a look-at view matrix (column-major, 16 elements).
+///
+/// `eye` is the camera position, `target` is the point being looked at,
+/// and `up` defines the world up direction.
 pub fn look_at(eye: [f32; 3], target: [f32; 3], up: [f32; 3]) -> [f32; 16] {
     let zx = eye[0] - target[0];
     let zy = eye[1] - target[1];

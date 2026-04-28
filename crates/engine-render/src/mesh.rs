@@ -4,27 +4,39 @@
 //! even though the 3D render pass is not yet implemented.
 
 /// a vertex with position, normal, and UV coordinates.
+///
+/// used by the 3D render pass for mesh geometry.
 #[derive(Clone, Copy, Debug)]
 pub struct MeshVertex {
+    /// position in model space (x, y, z).
     pub position: [f32; 3],
+    /// surface normal for lighting calculations (x, y, z).
     pub normal: [f32; 3],
+    /// texture coordinates (u, v).
     pub uv: [f32; 2],
 }
 
 /// a mesh resource containing vertex and index data.
+///
+/// stores geometry as a list of [`MeshVertex`] elements and
+/// an index buffer for triangle definitions.
 #[derive(Clone)]
 pub struct Mesh {
+    /// vertex data for the mesh.
     pub vertices: Vec<MeshVertex>,
+    /// triangle indices (groups of 3).
     pub indices: Vec<u32>,
 }
 
 impl Mesh {
-    /// create a new mesh from vertices and indices.
+    /// create a new mesh from vertex and index data.
     pub fn new(vertices: Vec<MeshVertex>, indices: Vec<u32>) -> Self {
         Mesh { vertices, indices }
     }
 
-    /// create a unit cube mesh centered at origin.
+    /// create a unit cube mesh centered at the origin with side length 1.
+    /// generates 24 vertices (4 per face, with separate normals)
+    /// and 36 indices (6 faces x 2 triangles x 3 vertices).
     pub fn unit_cube() -> Self {
         let vertices = vec![
             // front face
@@ -167,33 +179,47 @@ impl Mesh {
 }
 
 /// type of light source.
+///
+/// determines how the light affects the scene and how it attenuates.
 #[derive(Clone, Copy, Debug)]
 pub enum LightType {
-    /// directional light (infinite distance, parallel rays)
+    /// directional light: infinite distance, parallel rays, no attenuation.
+    /// useful for sunlight or moonlight.
     Directional,
-    /// point light (omnidirectional, attenuates with distance)
+    /// point light: omnidirectional, attenuates with distance.
+    /// useful for lamps, explosions, etc.
     Point,
-    /// spot light (cone-shaped, directional with angle)
+    /// spot light: cone-shaped, directional with inner/outer angle falloff.
+    /// useful for flashlights, stage lights, etc.
     Spot,
 }
 
 /// a light component for 3D scenes.
+///
+/// stores the type, color, intensity, and geometric parameters
+/// for a single light source.
 #[derive(Clone, Copy, Debug)]
 pub struct Light {
+    /// the type of light (directional, point, spot).
     pub light_type: LightType,
+    /// RGB color of the light (0.0 - 1.0 per channel).
     pub color: [f32; 3],
+    /// brightness multiplier.
     pub intensity: f32,
-    /// direction for directional/spot lights
+    /// direction vector for directional and spot lights.
     pub direction: [f32; 3],
-    /// range for point/spot lights
+    /// maximum reach for point and spot lights (0 = infinite for directional).
     pub range: f32,
-    /// inner/outer cone angles for spot lights (in radians)
+    /// inner cone angle in radians for spot lights (full brightness inside).
     pub spot_inner: f32,
+    /// outer cone angle in radians for spot lights (falloff boundary).
     pub spot_outer: f32,
 }
 
 impl Light {
-    /// create a new directional light.
+    /// create a new directional light (e.g. sunlight).
+    ///
+    /// the direction vector points from the light toward the scene.
     pub fn directional(color: [f32; 3], intensity: f32, direction: [f32; 3]) -> Self {
         Light {
             light_type: LightType::Directional,
@@ -206,7 +232,9 @@ impl Light {
         }
     }
 
-    /// create a new point light.
+    /// create a new point light (omnidirectional).
+    ///
+    /// the range determines how far the light reaches before fading to zero.
     pub fn point(color: [f32; 3], intensity: f32, range: f32) -> Self {
         Light {
             light_type: LightType::Point,
@@ -219,7 +247,10 @@ impl Light {
         }
     }
 
-    /// create a new spot light.
+    /// create a new spot light (cone-shaped beam).
+    ///
+    /// `spot_inner` and `spot_outer` define the cone angles in radians,
+    /// controlling the sharpness of the edge falloff.
     pub fn spot(
         color: [f32; 3],
         intensity: f32,

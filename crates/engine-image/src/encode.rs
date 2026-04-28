@@ -1,12 +1,24 @@
 use crate::error::EncodeError;
 use crate::format::{self, ChunkType};
 
-/// Encode options
+/// options for encoding an image to .mi format.
+///
+/// controls compression, alpha handling, and optional metadata.
+/// use [`EncodeOptions::default()`] for sensible defaults, then override
+/// specific fields as needed.
 #[derive(Debug, Clone)]
 pub struct EncodeOptions {
+    /// zstd compression level (1-22, default 3).
+    /// higher levels produce smaller files but take longer to compress.
     pub compression_level: i32,
+    /// whether the image contains alpha channel data.
+    /// when false, the alpha channel is assumed to be fully opaque.
     pub has_alpha: bool,
+    /// whether the pixel data has premultiplied alpha.
+    /// this affects how the image is composited during rendering.
     pub premultiplied: bool,
+    /// optional metadata string (e.g. json) embedded in the file.
+    /// stored in a separate compressed chunk.
     pub metadata: Option<String>,
 }
 
@@ -21,12 +33,18 @@ impl Default for EncodeOptions {
     }
 }
 
-/// Encode RGBA pixels to .mi format bytes.
+/// encode RGBA pixels to .mi format bytes using default options.
+///
+/// the pixel buffer must contain exactly `width * height * 4` bytes
+/// in RGBA order. returns the encoded .mi file data on success.
 pub fn encode(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, EncodeError> {
     encode_with_opts(width, height, rgba, EncodeOptions::default())
 }
 
-/// Encode with options.
+/// encode RGBA pixels to .mi format bytes with custom options.
+///
+/// the pixel buffer must contain exactly `width * height * 4` bytes
+/// in RGBA order. returns the encoded .mi file data on success.
 pub fn encode_with_opts(
     width: u32,
     height: u32,

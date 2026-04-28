@@ -31,9 +31,18 @@
 //! }
 //! ```
 
+/// web asset loading via the browser fetch API (WASM only).
+///
+/// provides [`web_fetch::fetch_bytes`] for downloading raw asset data over HTTP.
+/// the [`IoTaskPool`] calls this automatically; you rarely need to use it directly.
 #[cfg(target_arch = "wasm32")]
 pub mod web_fetch;
 
+/// compile-time bundled assets for WASM targets.
+///
+/// embed assets directly in the WASM binary with [`bundled::register`] so the
+/// asset server never needs network requests for them. call [`bundled::register`]
+/// (or [`bundled::register_many`]) at startup before any asset loads.
 #[cfg(target_arch = "wasm32")]
 pub mod bundled;
 
@@ -588,7 +597,10 @@ impl SoundLoaderTrait for WavSoundLoader {
             rodio::Decoder::new_wav(cursor).map_err(|e| format!("failed to decode wav: {e}"))?;
         let sample_rate = source.sample_rate();
         let samples: Vec<f32> = source.map(|s| s as f32 / i16::MAX as f32).collect();
-        Ok(Sound { samples, sample_rate })
+        Ok(Sound {
+            samples,
+            sample_rate,
+        })
     }
 }
 
@@ -605,7 +617,10 @@ impl SoundLoaderTrait for OggSoundLoader {
             rodio::Decoder::new_vorbis(cursor).map_err(|e| format!("failed to decode ogg: {e}"))?;
         let sample_rate = source.sample_rate();
         let samples: Vec<f32> = source.map(|s| s as f32 / i16::MAX as f32).collect();
-        Ok(Sound { samples, sample_rate })
+        Ok(Sound {
+            samples,
+            sample_rate,
+        })
     }
 }
 

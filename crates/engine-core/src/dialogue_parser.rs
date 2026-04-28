@@ -53,43 +53,47 @@ use crate::dialogue::{Dialogue, DialogueChoice, DialogueLine, DialogueNode};
 use serde::Deserialize;
 
 /// raw yaml representation of a dialogue file.
+///
+/// deserialized directly from the yaml source before validation.
 #[derive(Debug, Deserialize)]
 struct RawDialogue {
-    /// the entry point node id
+    /// the entry point node id.
     start: String,
-    /// all nodes in this dialogue, keyed by id
+    /// all nodes in this dialogue, keyed by their unique id.
     nodes: std::collections::HashMap<String, RawNode>,
 }
 
 /// raw yaml representation of a single dialogue node.
 #[derive(Debug, Deserialize)]
 struct RawNode {
-    /// optional speaker identifier (none for narrator text)
+    /// optional speaker identifier (none for narrator text).
     speaker: Option<String>,
-    /// the text content
+    /// the displayed text content.
     text: String,
-    /// optional sprite change trigger
+    /// optional sprite change trigger for the speaker.
     #[serde(default)]
     sprite_change: Option<String>,
-    /// optional next node id for auto-advance
+    /// optional next node id for auto-advance (none if choices are present).
     #[serde(default)]
     next: Option<String>,
-    /// optional branching choices
+    /// optional branching choices for player selection.
     #[serde(default)]
     choices: Vec<RawChoice>,
 }
 
-/// raw yaml representation of a choice.
+/// raw yaml representation of a dialogue choice.
 #[derive(Debug, Deserialize)]
 struct RawChoice {
-    /// the label shown to the player
+    /// the text label shown to the player.
     label: String,
-    /// the target node id if chosen
+    /// the target node id to jump to if selected.
     target: String,
 }
 
-/// parse a yaml dialogue string into a [`Dialogue`].
+/// parse a yaml dialogue string into a [`Dialogue`](crate::dialogue::Dialogue).
 ///
+/// validates that the start node exists, all `next` references are valid,
+/// and all choice targets point to existing nodes.
 /// returns an error if the yaml is malformed or references invalid nodes.
 pub fn parse_dialogue(source: &str) -> Result<Dialogue, String> {
     let raw: RawDialogue =
@@ -149,6 +153,7 @@ pub fn parse_dialogue(source: &str) -> Result<Dialogue, String> {
 /// parse a dialogue file from disk.
 ///
 /// reads the file at the given path and parses it as yaml.
+/// returns an error if the file can't be read or contains invalid content.
 pub fn parse_dialogue_file(path: &str) -> Result<Dialogue, String> {
     let source = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read dialogue file '{path}': {e}"))?;

@@ -1,14 +1,30 @@
-/// SIMD capability level detected at runtime
+//! SIMD utility functions for image processing.
+//!
+//! provides runtime-detected SIMD acceleration for common image operations.
+//! falls back to scalar implementations when SIMD is unavailable.
+
+/// SIMD capability level detected at runtime.
+///
+/// used to select the optimal implementation for image processing
+/// operations. detected automatically via [`SimdLevel::detect`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SimdLevel {
+    /// no SIMD support, scalar fallback.
     Scalar,
+    /// x86 SSE2 (128-bit vectors).
     Sse2,
+    /// x86 AVX2 (256-bit vectors).
     Avx2,
+    /// ARM NEON (128-bit vectors).
     Neon,
+    /// WebAssembly SIMD128 (128-bit vectors).
     WasmSimd128,
 }
 
 impl SimdLevel {
+    /// detect the best available SIMD level for the current platform.
+    /// checks CPU features on x86_64, assumes NEON on aarch64,
+    /// and checks for wasm simd128 on WebAssembly.
     pub fn detect() -> Self {
         #[cfg(target_arch = "x86_64")]
         {
@@ -31,7 +47,11 @@ impl SimdLevel {
     }
 }
 
-/// Convert sRGB bytes to linear f32 values.
+/// convert sRGB byte values to linear f32 color values.
+///
+/// each input byte (0-255) is normalized to 0.0-1.0 and converted
+/// using the standard sRGB transfer function. the output array must
+/// be exactly 4 times the input length (one f32 per channel per pixel).
 pub fn srgb_to_linear_simd(input: &[u8], output: &mut [f32], _level: SimdLevel) {
     assert_eq!(
         input.len() * 4,
@@ -48,7 +68,10 @@ pub fn srgb_to_linear_simd(input: &[u8], output: &mut [f32], _level: SimdLevel) 
     }
 }
 
-/// Premultiply alpha in-place.
+/// premultiply RGB channels by the alpha value in-place.
+///
+/// converts RGBA pixel data so that RGB values are scaled by alpha.
+/// the buffer must be a multiple of 4 bytes (complete RGBA pixels).
 pub fn premultiply_alpha_simd(rgba: &mut [u8], _level: SimdLevel) {
     assert_eq!(
         rgba.len() % 4,
@@ -63,7 +86,10 @@ pub fn premultiply_alpha_simd(rgba: &mut [u8], _level: SimdLevel) {
     }
 }
 
-/// Swap RGBA to BGRA in-place (byte swap per pixel).
+/// convert RGBA pixel data to BGRA order by swapping red and blue channels.
+///
+/// both input and output buffers must be the same size and a multiple
+/// of 4 bytes (complete RGBA pixels).
 pub fn rgba_to_bgra_simd(input: &[u8], output: &mut [u8], _level: SimdLevel) {
     assert_eq!(input.len(), output.len());
     assert_eq!(input.len() % 4, 0);

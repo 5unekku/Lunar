@@ -25,7 +25,9 @@ static BUNDLED_ASSETS: Mutex<Option<HashMap<String, Vec<u8>>>> = Mutex::new(None
 /// this should be called during initialization before any asset loading.
 pub fn register(path: &str, data: Vec<u8>) {
     let mut guard = BUNDLED_ASSETS.lock().unwrap();
-    guard.get_or_insert_with(HashMap::new).insert(path.to_string(), data);
+    guard
+        .get_or_insert_with(HashMap::new)
+        .insert(path.to_string(), data);
 }
 
 /// register multiple assets from a hashmap.

@@ -1,25 +1,37 @@
-/// Magic bytes: b'MRIF'
+//! Lunar Image Format (MRIF) binary layout constants.
+//!
+//! the .mi file format consists of a 16-byte header followed by one or more
+//! compressed chunks. each chunk has a 16-byte header and compressed payload.
+
+/// magic bytes identifying a .mi file: `b'MRIF'`.
 pub const MAGIC: [u8; 4] = [0x4D, 0x52, 0x49, 0x46];
 
-/// Current format version
+/// current format version. only version 1 is supported.
 pub const VERSION: u16 = 1;
 
-/// Header size in bytes
+/// size of the file header in bytes.
 pub const HEADER_SIZE: usize = 16;
 
-/// Chunk header size in bytes
+/// size of a chunk header in bytes.
 pub const CHUNK_HEADER_SIZE: usize = 16;
 
-/// Chunk type identifiers
+/// chunk type identifiers.
+///
+/// each chunk stores its type as a single byte in the chunk header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ChunkType {
+    /// raw pixel data (zstd-compressed RGBA).
     PixelData = 0x00,
+    /// optional metadata string (zstd-compressed UTF-8).
     Metadata = 0x01,
+    /// optional ICC color profile (zstd-compressed).
     IccProfile = 0x02,
 }
 
 impl ChunkType {
+    /// convert a raw byte value into a chunk type variant.
+    /// returns `None` if the value doesn't match any known chunk type.
     pub fn from_u8(value: u8) -> Option<Self> {
         match value {
             0x00 => Some(ChunkType::PixelData),
@@ -30,25 +42,38 @@ impl ChunkType {
     }
 }
 
-/// Flag bits
+/// flag bit: image contains alpha channel data.
 pub const FLAG_HAS_ALPHA: u16 = 1 << 0;
+/// flag bit: file contains a metadata chunk.
 pub const FLAG_HAS_METADATA: u16 = 1 << 1;
+/// flag bit: file contains an ICC color profile chunk.
 pub const FLAG_HAS_ICC: u16 = 1 << 2;
+/// flag bit: pixel data uses premultiplied alpha.
 pub const FLAG_PREMULTIPLIED: u16 = 1 << 3;
+/// mask of all known flag bits.
 pub const FLAG_ALL_KNOWN: u16 =
     FLAG_HAS_ALPHA | FLAG_HAS_METADATA | FLAG_HAS_ICC | FLAG_PREMULTIPLIED;
 
-/// Parsed header from a .mi file
+/// parsed header from a .mi file.
+///
+/// contains the format version, feature flags, and image dimensions.
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct Header {
+    /// format version number (currently 1).
     pub version: u16,
+    /// feature flags (alpha, metadata, ICC, premultiplied).
     pub flags: u16,
+    /// image width in pixels.
     pub width: u32,
+    /// image height in pixels.
     pub height: u32,
 }
 
 impl Header {
+    /// parse a header from raw file bytes.
+    /// validates the magic bytes, version, and flag bits.
+    /// returns an error if the data is too short or invalid.
     pub fn parse(data: &[u8]) -> Result<Self, crate::error::DecodeError> {
         use crate::error::DecodeError;
 
@@ -82,12 +107,17 @@ impl Header {
         })
     }
 
+    /// calculate the expected number of bytes for pixel data.
+    ///
+    /// returns `width * height * 4` (RGBA8).
     pub fn expected_pixel_bytes(&self) -> usize {
         (self.width as usize) * (self.height as usize) * 4
     }
 }
 
-/// Write a header into a buffer (assumes buffer has at least HEADER_SIZE bytes)
+/// write a header into a buffer.
+///
+/// appends exactly [`HEADER_SIZE`] bytes to the output buffer.
 pub fn write_header(buf: &mut Vec<u8>, width: u32, height: u32, flags: u16) {
     buf.extend_from_slice(&MAGIC);
     buf.extend_from_slice(&VERSION.to_le_bytes());
@@ -96,17 +126,27 @@ pub fn write_header(buf: &mut Vec<u8>, width: u32, height: u32, flags: u16) {
     buf.extend_from_slice(&height.to_le_bytes());
 }
 
-/// Parsed chunk header
+/// parsed chunk header.
+///
+/// each chunk header identifies the chunk type and stores both
+/// compressed and uncompressed sizes for validation.
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct ChunkHeader {
+    /// the type of data in this chunk.
     pub chunk_type: ChunkType,
+    /// size of the data after decompression.
     pub uncompressed_size: u32,
+    /// size of the compressed payload in the file.
     pub compressed_size: u32,
+    /// zstd dictionary ID (0 = no dictionary).
     pub dict_id: u32,
 }
 
 impl ChunkHeader {
+    /// parse a chunk header from raw bytes.
+    ///
+    /// expects at least [`CHUNK_HEADER_SIZE`] bytes of data.
     pub fn parse(data: &[u8]) -> Result<Self, crate::error::DecodeError> {
         use crate::error::DecodeError;
 
@@ -127,6 +167,9 @@ impl ChunkHeader {
         })
     }
 
+    /// write a chunk header into a buffer.
+    ///
+    /// appends exactly [`CHUNK_HEADER_SIZE`] bytes to the output buffer.
     pub fn write(
         buf: &mut Vec<u8>,
         chunk_type: ChunkType,

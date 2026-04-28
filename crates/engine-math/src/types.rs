@@ -30,7 +30,8 @@ pub struct Transform {
 }
 
 impl Transform {
-    /// create a transform from a 2D translation
+    /// create a transform from a 2D translation.
+    /// sets z to 0.0, rotation to 0, and scale to (1, 1).
     pub fn from_translation(translation: Vec2) -> Self {
         Self {
             translation: Vec3::new(translation.x, translation.y, 0.0),
@@ -39,18 +40,21 @@ impl Transform {
         }
     }
 
-    /// create a transform from x, y coordinates
+    /// create a transform from x, y coordinates.
+    /// shorthand for [`from_translation`](Transform::from_translation).
     pub fn from_xy(x: f32, y: f32) -> Self {
         Self::from_translation(Vec2::new(x, y))
     }
 
-    /// set the rotation in radians
+    /// set the rotation in radians.
+    /// returns self for builder-style chaining.
     pub fn with_rotation(mut self, rotation: f32) -> Self {
         self.rotation = rotation;
         self
     }
 
-    /// set the scale
+    /// set the scale.
+    /// returns self for builder-style chaining.
     pub fn with_scale(mut self, scale: Vec2) -> Self {
         self.scale = scale;
         self
@@ -91,25 +95,25 @@ pub struct Color {
 }
 
 impl Color {
-    /// pure black
+    /// pure black (0, 0, 0, 1).
     pub const BLACK: Self = Self::rgb(0.0, 0.0, 0.0);
-    /// pure white
+    /// pure white (1, 1, 1, 1).
     pub const WHITE: Self = Self::rgb(1.0, 1.0, 1.0);
-    /// pure red
+    /// pure red (1, 0, 0, 1).
     pub const RED: Self = Self::rgb(1.0, 0.0, 0.0);
-    /// pure green
+    /// pure green (0, 1, 0, 1).
     pub const GREEN: Self = Self::rgb(0.0, 1.0, 0.0);
-    /// pure blue
+    /// pure blue (0, 0, 1, 1).
     pub const BLUE: Self = Self::rgb(0.0, 0.0, 1.0);
-    /// transparent
+    /// fully transparent black (0, 0, 0, 0).
     pub const TRANSPARENT: Self = Self::rgba(0.0, 0.0, 0.0, 0.0);
 
-    /// create an RGB color (alpha defaults to 1.0)
+    /// create an RGB color with full opacity (alpha = 1.0).
     pub const fn rgb(r: f32, g: f32, b: f32) -> Self {
         Self { r, g, b, a: 1.0 }
     }
 
-    /// create an RGBA color
+    /// create an RGBA color with explicit alpha.
     pub const fn rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
         Self { r, g, b, a }
     }
@@ -147,12 +151,12 @@ pub struct Rect {
 }
 
 impl Rect {
-    /// create a new rectangle
+    /// create a new rectangle from top-left corner and size.
     pub fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
         Self { x, y, w, h }
     }
 
-    /// create a rectangle from center point and half-size
+    /// create a rectangle from center point and half-size extents.
     pub fn from_center(center: Vec2, half_size: Vec2) -> Self {
         Self {
             x: center.x - half_size.x,
@@ -162,7 +166,7 @@ impl Rect {
         }
     }
 
-    /// check if a point is inside this rectangle
+    /// check if a point lies inside this rectangle (inclusive of edges).
     pub fn contains(&self, point: Vec2) -> bool {
         point.x >= self.x
             && point.x <= self.x + self.w
@@ -170,7 +174,7 @@ impl Rect {
             && point.y <= self.y + self.h
     }
 
-    /// check if this rectangle intersects another
+    /// check if this rectangle overlaps another (exclusive of touching edges).
     pub fn intersects(&self, other: &Self) -> bool {
         self.x < other.x + other.w
             && self.x + self.w > other.x
@@ -178,17 +182,17 @@ impl Rect {
             && self.y + self.h > other.y
     }
 
-    /// get the center point of this rectangle
+    /// get the center point of this rectangle.
     pub fn center(&self) -> Vec2 {
         Vec2::new(self.x + self.w / 2.0, self.y + self.h / 2.0)
     }
 
-    /// get the top-left corner
+    /// get the top-left corner position.
     pub fn top_left(&self) -> Vec2 {
         Vec2::new(self.x, self.y)
     }
 
-    /// get the bottom-right corner
+    /// get the bottom-right corner position.
     pub fn bottom_right(&self) -> Vec2 {
         Vec2::new(self.x + self.w, self.y + self.h)
     }

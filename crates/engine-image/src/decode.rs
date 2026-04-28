@@ -1,15 +1,22 @@
 use crate::error::DecodeError;
 use crate::format::{self, ChunkType, Header};
 
-/// A decoded image in RGBA format.
+/// a decoded image in RGBA format.
+///
+/// contains the image dimensions and raw pixel data (RGBA8 order).
+/// use [`decode`] to load a .mi file into this type.
 #[derive(Debug, Clone)]
 pub struct Image {
+    /// image width in pixels.
     pub width: u32,
+    /// image height in pixels.
     pub height: u32,
+    /// raw pixel data in RGBA order, `width * height * 4` bytes.
     pub pixels: Vec<u8>,
 }
 
 impl Image {
+    /// create a new blank image filled with transparent black pixels.
     pub fn new(width: u32, height: u32) -> Self {
         Self {
             width,
@@ -18,22 +25,30 @@ impl Image {
         }
     }
 
+    /// get the number of pixels in the image.
     pub fn len(&self) -> usize {
         (self.width as usize) * (self.height as usize)
     }
 
+    /// check if the image has zero width or height.
     pub fn is_empty(&self) -> bool {
         self.width == 0 || self.height == 0
     }
 
+    /// get the total byte count of the pixel buffer.
     pub fn byte_len(&self) -> usize {
         self.pixels.len()
     }
 
+    /// check if a pixel coordinate is within the image bounds.
     pub fn contains(&self, x: u32, y: u32) -> bool {
         x < self.width && y < self.height
     }
 
+    /// get the RGBA value at a pixel coordinate.
+    ///
+    /// # panics
+    /// panics if the coordinate is out of bounds.
     pub fn get_pixel(&self, x: u32, y: u32) -> [u8; 4] {
         assert!(
             self.contains(x, y),
@@ -50,6 +65,10 @@ impl Image {
         ]
     }
 
+    /// set the RGBA value at a pixel coordinate.
+    ///
+    /// # panics
+    /// panics if the coordinate is out of bounds.
     pub fn set_pixel(&mut self, x: u32, y: u32, rgba: [u8; 4]) {
         assert!(
             self.contains(x, y),
@@ -65,7 +84,10 @@ impl Image {
     }
 }
 
-/// Decode .mi format bytes to an RGBA image.
+/// decode .mi format bytes to an RGBA image.
+///
+/// parses the file header and decompresses the pixel data.
+/// returns an error if the file is malformed or incomplete.
 pub fn decode(data: &[u8]) -> Result<Image, DecodeError> {
     // Parse header
     let header = Header::parse(data)?;
