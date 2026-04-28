@@ -774,4 +774,180 @@ Part 3 (Performance & API Audit)
 
 Part 4 (Infrastructure)
 └── 45. Cross-Compile Checks → all crates (workspace-wide)
+
+Part 5 (Distribution)
+├── 46. wgpu Patch → vendor/wgpu
+├── 47. Public API Surface → engine-api
+├── 48. Crate Metadata → all crates
+└── 49. Shooter Example → all core systems
+
+Part 6 (Engine Editor)
+├── 50. Editor Foundation → 49 (working example proves API)
+├── 51. Editor Panels → 50
+├── 52. Scene Editing → 50, 51
+└── 53. Editor Build & Distribution → 50
 ```
+
+---
+
+## Part 4: Distribution
+
+> Make the engine usable as a dependency in any external Rust project.
+> Blocker: the vendored wgpu patch does not propagate to downstream workspaces — must be resolved before external users can consume the engine.
+
+### 46. wgpu WASM Patch
+- [ ] 46.1 Upstream the fix to wgpu
+  - [ ] 46.1.1 Submit PR to gfx-rs/wgpu — change `instanceof` check to `unchecked_into` for `GPUCanvasContext` in the WebGPU backend
+  - [ ] 46.1.2 Track PR status; keep vendored patch until merged and released
+- [ ] 46.2 Short-term workaround for git consumers
+  - [ ] 46.2.1 Document in README: users must add `[patch.crates-io] wgpu = { git = "...", rev = "..." }` to their own workspace until upstream merges
+  - [ ] 46.2.2 Pin the vendored wgpu to a specific commit so the patch stays stable
+
+### 47. Public API Surface
+- [ ] 47.1 Audit engine-api re-exports
+  - [ ] 47.1.1 Every type a user needs (Transform, Color, Rect, RenderQueue, InputState, AssetServer, Time, App, Schedule, etc.) must be accessible via `use engine_api::*` — no reaching into sub-crates
+  - [ ] 47.1.2 Identify any types currently leaking from engine-core/engine-render that aren't in engine-api and add re-exports
+  - [ ] 47.1.3 Identify any engine-api re-exports that expose internal implementation details and remove/hide them
+- [ ] 47.2 Prelude module
+  - [ ] 47.2.1 Add `engine_api::prelude` that re-exports the most common items (App, Transform, Color, Rect, Vec2, Vec3, KeyCode, Time, RenderQueue, AssetServer, Commands, Query, Res, ResMut, Entity)
+  - [ ] 47.2.2 Users should be able to `use engine_api::prelude::*` and write a full game without any further imports
+- [ ] 47.3 Rename engine-api to lunar (or create lunar facade crate)
+  - [ ] 47.3.1 Evaluate: rename the crate vs add a thin `lunar` crate that re-exports engine-api — pick one
+  - [ ] 47.3.2 External users should write `lunar = { git = "..." }` not `engine-api = { git = "..." }`
+
+### 48. Crate Metadata
+- [ ] 48.1 Workspace-level Cargo.toml
+  - [ ] 48.1.1 Add `description`, `repository`, `homepage`, `keywords`, `categories` to `[workspace.package]`
+  - [ ] 48.1.2 Add `readme = "README.md"` pointing to project README
+- [ ] 48.2 Per-crate metadata
+  - [ ] 48.2.1 Each crate's Cargo.toml inherits workspace metadata where appropriate
+  - [ ] 48.2.2 Each crate has a meaningful `description` of its role
+- [ ] 48.3 Documentation
+  - [ ] 48.3.1 Run `cargo doc --no-deps` and fix every broken doc link
+  - [ ] 48.3.2 Each `lib.rs` has a crate-level doc comment explaining what the crate does and when to use it
+  - [ ] 48.3.3 Key public types (App, RenderQueue, InputState, AssetServer) have usage examples in doc comments
+  - [ ] 48.3.4 Add `#[doc(hidden)]` to internal types that are pub only for cross-crate visibility
+
+### 49. Shooter Example
+> Proves the full API end-to-end and serves as the canonical "hello world" for new users.
+- [ ] 49.1 Project setup
+  - [ ] 49.1.1 Add `examples/shooter/` directory with its own Cargo.toml depending only on `engine-api` (or `lunar`)
+  - [ ] 49.1.2 Provides a realistic test of the external-user experience — no reaching into internals
+- [ ] 49.2 Assets
+  - [ ] 49.2.1 Add placeholder pixel-art sprites for player, bullet, enemy (shipped in `examples/shooter/assets/`)
+  - [ ] 49.2.2 Add a placeholder font for score display
+- [ ] 49.3 Systems
+  - [ ] 49.3.1 `spawn_player` startup system — entity with Transform + Sprite
+  - [ ] 49.3.2 `move_player` system — WASD/arrow key movement via InputState
+  - [ ] 49.3.3 `fire_bullet` system — spacebar spawns bullet entity, one per press
+  - [ ] 49.3.4 `move_bullets` system — translate bullets forward each frame, despawn off-screen
+  - [ ] 49.3.5 `spawn_enemies` system — periodic enemy spawning at random x positions
+  - [ ] 49.3.6 `move_enemies` system — enemies move downward
+  - [ ] 49.3.7 `check_collisions` system — bullet/enemy AABB collision, despawn both, increment score
+  - [ ] 49.3.8 `draw_scene` system — issue draw_sprite and draw_text calls via RenderQueue
+- [ ] 49.4 Plugin structure
+  - [ ] 49.4.1 Wrap all systems in a `ShooterPlugin` implementing `GamePlugin`
+  - [ ] 49.4.2 Wire up with `lunar_app!` macro
+
+---
+
+## Part 5: Engine Editor
+
+> A Unity-style editor tool — a separate application that runs alongside (or wraps) the engine,
+> providing a viewport, scene hierarchy, inspector, and asset browser.
+>
+> **Framework: egui** — immediate mode, egui-wgpu backend shares the existing wgpu device/queue,
+> battle-tested in Rust editor tooling. Slint/iced/taffy are not suitable (wrong paradigm or integration model).
+>
+> **Architecture: in-process** — the editor is a separate binary that hosts the engine's ECS world
+> internally, renders the game scene to an offscreen texture, and displays that texture inside an egui viewport panel.
+> The game's systems run at editor tick rate (not real-time) while paused.
+
+### 50. Editor Foundation
+- [ ] 50.1 `engine-editor` crate
+  - [ ] 50.1.1 Add `engine-editor` to the workspace under `crates/engine-editor/`
+  - [ ] 50.1.2 Binary target: `editor` (the editor application itself)
+  - [ ] 50.1.3 Dependencies: `engine-api`, `engine-render`, `egui`, `egui-wgpu`, `egui-winit`
+  - [ ] 50.1.4 Replace SDL3 window creation with winit for the editor window (egui-winit handles events)
+- [ ] 50.2 egui + wgpu integration
+  - [ ] 50.2.1 Initialize wgpu device/queue/surface for the editor window via winit
+  - [ ] 50.2.2 Initialize `egui_wgpu::Renderer` sharing the same device
+  - [ ] 50.2.3 Each frame: run egui, collect paint jobs, render game scene, composite egui on top
+  - [ ] 50.2.4 Implement `EditorApp` struct holding: `egui::Context`, `egui_wgpu::Renderer`, engine `World`, engine `RenderEngine`
+- [ ] 50.3 Offscreen game viewport
+  - [ ] 50.3.1 Create a wgpu texture for the game scene render target (not the swap chain)
+  - [ ] 50.3.2 Render the game world into that texture each frame
+  - [ ] 50.3.3 Register the texture with egui-wgpu so it can be displayed as an `egui::Image`
+  - [ ] 50.3.4 Resize the render texture when the viewport panel is resized
+- [ ] 50.4 Editor event loop
+  - [ ] 50.4.1 winit event loop drives the editor (not SDL3)
+  - [ ] 50.4.2 Forward keyboard/mouse events to egui first; unfocused viewport events go to the engine input system
+  - [ ] 50.4.3 Play mode: engine runs at full tick rate. Pause mode: engine systems frozen, only editor systems run
+
+### 51. Editor Panels
+- [ ] 51.1 Main layout
+  - [ ] 51.1.1 Top menu bar (File, Edit, View, Help)
+  - [ ] 51.1.2 Left panel: scene hierarchy
+  - [ ] 51.1.3 Center panel: game viewport
+  - [ ] 51.1.4 Right panel: inspector
+  - [ ] 51.1.5 Bottom panel: asset browser + log output
+  - [ ] 51.1.6 Panels are resizable (egui `SidePanel`, `CentralPanel`, `TopBottomPanel`)
+- [ ] 51.2 Toolbar
+  - [ ] 51.2.1 Play / Pause / Stop buttons — toggles engine tick mode
+  - [ ] 51.2.2 Transform gizmo mode selector: Translate / Rotate / Scale
+  - [ ] 51.2.3 FPS counter and frame time display
+- [ ] 51.3 Scene hierarchy panel
+  - [ ] 51.3.1 Query all entities in the world and list them by id
+  - [ ] 51.3.2 Show `Name` component value if present, otherwise show entity id
+  - [ ] 51.3.3 Click to select an entity — selection stored in `EditorState` resource
+  - [ ] 51.3.4 Right-click context menu: "Spawn empty entity", "Despawn"
+  - [ ] 51.3.5 Indentation for parent/child hierarchy (once item 21 entity hierarchies are done)
+- [ ] 51.4 Inspector panel
+  - [ ] 51.4.1 Display all components on the selected entity
+  - [ ] 51.4.2 `Transform`: editable x/y/z position, rotation (degrees), scale x/y fields
+  - [ ] 51.4.3 `Color` fields rendered as egui color picker
+  - [ ] 51.4.4 `Handle<Texture>` fields show texture preview thumbnail
+  - [ ] 51.4.5 Unknown components show component type name and "not inspectable" placeholder
+  - [ ] 51.4.6 Implement `Inspectable` trait — components opt-in to custom inspector UI by implementing it
+  - [ ] 51.4.7 Changes made in the inspector write back to the ECS world immediately
+- [ ] 51.5 Asset browser panel
+  - [ ] 51.5.1 Walk the `assets/` directory and list files grouped by type (textures, fonts, sounds)
+  - [ ] 51.5.2 Show texture thumbnails (small preview rendered via wgpu)
+  - [ ] 51.5.3 Click to select asset — shows metadata (dimensions, file size, load state)
+  - [ ] 51.5.4 Double-click to open in external app (image editor, etc.) via `open` crate
+  - [ ] 51.5.5 Refresh button to re-scan directory (hot reload already handles live changes)
+- [ ] 51.6 Log panel
+  - [ ] 51.6.1 Capture `log` crate output in-editor (custom `log::Log` impl that buffers to a `Vec<LogEntry>`)
+  - [ ] 51.6.2 Display log entries with level color coding (error=red, warn=yellow, info=white, debug=gray)
+  - [ ] 51.6.3 Filter by log level, search by text
+  - [ ] 51.6.4 Auto-scroll to bottom unless user has scrolled up
+
+### 52. Scene Editing
+- [ ] 52.1 Entity manipulation
+  - [ ] 52.1.1 Click in the viewport to select an entity (ray-pick by AABB against Transform + sprite bounds)
+  - [ ] 52.1.2 Translate gizmo: drag X/Y axis handles to move the selected entity
+  - [ ] 52.1.3 Rotate gizmo: drag arc handle to rotate around Z axis
+  - [ ] 52.1.4 Scale gizmo: drag corner handles to scale X/Y
+  - [ ] 52.1.5 Gizmos are rendered as overlays on top of the game scene (drawn after scene, before egui)
+- [ ] 52.2 Spawn / despawn
+  - [ ] 52.2.1 Drag asset from asset browser into viewport → spawn entity with that texture at drop position
+  - [ ] 52.2.2 Delete key despawns selected entity
+  - [ ] 52.2.3 Ctrl+Z / Ctrl+Y undo/redo for spawn, despawn, and transform changes
+- [ ] 52.3 Scene save/load
+  - [ ] 52.3.1 Serialize current world state to JSON (entity list, components per entity) — simple custom format, not bevy_scene
+  - [ ] 52.3.2 Load JSON scene: clear world, spawn entities from file, restore components
+  - [ ] 52.3.3 File > Save Scene (Ctrl+S) and File > Open Scene
+  - [ ] 52.3.4 Mark scene as dirty (unsaved changes) and prompt on close
+
+### 53. Editor Build & Distribution
+- [ ] 53.1 Standalone editor binary
+  - [ ] 53.1.1 `cargo build --bin editor --release` produces a standalone editor executable
+  - [ ] 53.1.2 Editor binary is self-contained — no runtime dependencies beyond system GPU drivers
+- [ ] 53.2 Project model
+  - [ ] 53.2.1 Editor opens a "project" directory (contains `assets/`, `src/`, `Cargo.toml`)
+  - [ ] 53.2.2 File > New Project creates the directory structure with a template game plugin
+  - [ ] 53.2.3 File > Open Project sets the working directory and scans assets
+- [ ] 53.3 Game plugin hot reload (stretch goal)
+  - [ ] 53.3.1 Compile game plugin as a dylib (`cdylib`) on save
+  - [ ] 53.3.2 Editor unloads old dylib, loads new one, re-runs startup systems
+  - [ ] 53.3.3 Enables edit-without-restart workflow (significant complexity — evaluate after basics work)
