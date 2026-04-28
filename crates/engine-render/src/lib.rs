@@ -210,6 +210,8 @@ pub struct RenderEngine {
     glyph_atlas: text::GlyphAtlas,
     #[allow(dead_code)]
     glyph_atlas_texture: Option<GpuTexture>,
+    /// cache of text layout results keyed by (font_id, text, font_size_bits)
+    text_layout_cache: HashMap<(u32, String, u32), Vec<text::TextGlyphQuad>>,
     render_passes: Vec<Box<dyn RenderPass>>,
 }
 
@@ -539,6 +541,7 @@ impl RenderEngine {
             vertex_offset: 0,
             glyph_atlas: text::GlyphAtlas::new(1024, 1024),
             glyph_atlas_texture: None,
+            text_layout_cache: HashMap::new(),
             render_passes: Vec::new(),
         }
     }
@@ -571,6 +574,21 @@ impl RenderEngine {
         self.surface.configure(&self.device, &self.config);
         self.render_config.width = width;
         self.render_config.height = height;
+    }
+
+    /// get cached text layout for (font_id, text, font_size).
+    /// computes and caches the result on first use.
+    fn get_cached_text_layout(
+        &mut self,
+        font_id: u32,
+        text: &str,
+        font_size: f32,
+    ) -> &[text::TextGlyphQuad] {
+        // use f32::to_bits() for hashable key since f32 doesn't implement Hash/Eq
+        let key = (font_id, text.to_string(), font_size.to_bits());
+        self.text_layout_cache.entry(key).or_insert_with(|| {
+            text::layout_text(&self.glyph_atlas, font_id, text, font_size, Vec2::ZERO)
+        })
     }
 
     /// upload a texture to the GPU, returns its handle id.
@@ -888,15 +906,15 @@ impl RenderEngine {
                             ..
                         } => {
                             let font_id = font.unwrap_or(0) as u32;
-                            let quads = text::layout_text(
-                                &self.glyph_atlas,
-                                font_id,
-                                content,
-                                *font_size,
-                                *position,
-                            );
-                            for quad in &quads {
-                                self.write_text_quad(quad, *color);
+                            let quads = self
+                                .get_cached_text_layout(font_id, content, *font_size)
+                                .to_vec();
+                            for quad in quads {
+                                let offset_quad = text::TextGlyphQuad {
+                                    position: quad.position + *position,
+                                    ..quad
+                                };
+                                self.write_text_quad(&offset_quad, *color);
                             }
                         }
                         _ => {}
