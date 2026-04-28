@@ -71,9 +71,15 @@ impl Engine {
     }
 
     /// run all stage schedules in order: Input → Physics → Update → Render
+    /// applies deferred commands between each stage so entity changes are visible.
     pub fn run_stages(&mut self) {
-        for schedule in &mut self.stage_schedules {
-            schedule.run(&mut self.world);
+        const STAGE_COUNT: usize = 4;
+        for i in 0..STAGE_COUNT {
+            self.stage_schedules[i].run(&mut self.world);
+            // apply deferred commands between stages (but not after the last one)
+            if i < STAGE_COUNT - 1 {
+                self.world.flush();
+            }
         }
     }
 }

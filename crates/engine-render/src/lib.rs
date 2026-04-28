@@ -517,7 +517,7 @@ impl RenderEngine {
         // persistent vertex buffer — no per-frame allocation
         let vertex_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("persistent vertex buffer"),
-            size: (MAX_VERTICES * 32) as u64,
+            size: (MAX_VERTICES * VERTEX_STRIDE) as u64,
             usage: wgpu::BufferUsages::VERTEX
                 | wgpu::BufferUsages::MAP_WRITE
                 | wgpu::BufferUsages::COPY_DST,
@@ -574,6 +574,24 @@ impl RenderEngine {
         self.surface.configure(&self.device, &self.config);
         self.render_config.width = width;
         self.render_config.height = height;
+    }
+
+    /// remove a texture and its cached bind group.
+    /// call this when a texture is no longer needed to free GPU memory.
+    pub fn remove_texture(&mut self, tex_id: u32) {
+        self.textures.remove(&tex_id);
+        self.bind_groups.remove(&tex_id);
+    }
+
+    /// invalidate all cached text layouts.
+    /// call this when font data changes or text content changes dynamically.
+    pub fn invalidate_text_cache(&mut self) {
+        self.text_layout_cache.clear();
+    }
+
+    /// invalidate cached text layouts matching a specific font id.
+    pub fn invalidate_text_cache_for_font(&mut self, font_id: u32) {
+        self.text_layout_cache.retain(|key, _| key.0 != font_id);
     }
 
     /// get cached text layout for (font_id, text, font_size).
@@ -852,6 +870,19 @@ impl RenderEngine {
                     current_tex = Some(tex_id);
                 }
 
+                // flush if buffer is about to overflow (6 vertices per sprite)
+                if self.vertex_offset + 6 * VERTEX_STRIDE > MAX_VERTICES * VERTEX_STRIDE {
+                    if self.vertex_offset > batch_start
+                        && let Some(tex) = current_tex
+                    {
+                        let vertex_count = (self.vertex_offset - batch_start) / VERTEX_STRIDE;
+                        self.draw_vertex_batch(&mut pass, tex, batch_start, vertex_count);
+                    }
+                    batch_start = 0;
+                    self.vertex_offset = 0;
+                    current_tex = None;
+                }
+
                 // write vertices directly into persistent buffer
                 self.write_sprite_vertices(
                     tex_id,
@@ -876,8 +907,17 @@ impl RenderEngine {
 
             // draw untextured commands (rects, lines, text) as solid color
             if !rect_commands.is_empty() {
-                let rect_start = self.vertex_offset;
+                let mut rect_start = self.vertex_offset;
                 for command in &rect_commands {
+                    // flush if buffer is about to overflow (6 vertices per rect/line/text quad)
+                    if self.vertex_offset + 6 * VERTEX_STRIDE > MAX_VERTICES * VERTEX_STRIDE {
+                        if self.vertex_offset > rect_start {
+                            let vertex_count = (self.vertex_offset - rect_start) / VERTEX_STRIDE;
+                            self.draw_vertex_batch(&mut pass, 0, rect_start, vertex_count);
+                        }
+                        rect_start = self.vertex_offset;
+                    }
+
                     match &command.kind {
                         DrawKind::Rect {
                             position,
