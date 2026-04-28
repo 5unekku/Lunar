@@ -51,8 +51,6 @@ pub enum ManifestError {
 /// a single region entry in the manifest
 #[derive(Debug, Clone)]
 pub struct ManifestRegion {
-    /// name of the region
-    pub name: String,
     /// pixel x within atlas
     pub x: u32,
     /// pixel y within atlas
@@ -139,7 +137,7 @@ impl AtlasManifest {
             let w = u32::from_le_bytes(coords_buf[8..12].try_into().unwrap());
             let h = u32::from_le_bytes(coords_buf[12..16].try_into().unwrap());
 
-            regions.insert(name.clone(), ManifestRegion { name, x, y, w, h });
+            regions.insert(name, ManifestRegion { x, y, w, h });
         }
 
         Ok(Self {
@@ -164,8 +162,8 @@ impl AtlasManifest {
         writer.write_all(&self.atlas_height.to_le_bytes())?;
         writer.write_all(&(self.regions.len() as u32).to_le_bytes())?;
 
-        for region in self.regions.values() {
-            let name_bytes = region.name.as_bytes();
+        for (name, region) in &self.regions {
+            let name_bytes = name.as_bytes();
             writer.write_all(&(name_bytes.len() as u16).to_le_bytes())?;
             writer.write_all(name_bytes)?;
             writer.write_all(&region.x.to_le_bytes())?;
@@ -180,8 +178,8 @@ impl AtlasManifest {
     /// resolve all regions into [`AtlasRegion`]s with computed UV coordinates.
     pub fn resolve_regions(&self) -> HashMap<String, AtlasRegion> {
         self.regions
-            .values()
-            .map(|r| {
+            .iter()
+            .map(|(name, r)| {
                 let region = AtlasRegion::from_pixels(
                     r.x,
                     r.y,
@@ -190,7 +188,7 @@ impl AtlasManifest {
                     self.atlas_width,
                     self.atlas_height,
                 );
-                (r.name.clone(), region)
+                (name.clone(), region)
             })
             .collect()
     }

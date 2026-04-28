@@ -206,11 +206,14 @@ impl Rect {
     }
 
     /// constrain this rect to lie fully within another rect.
+    /// clamps both position and size so the right/bottom edges don't exceed the boundary.
     pub fn clamp(&mut self, within: &Self) {
+        let x2 = (self.x + self.w).min(within.x + within.w);
+        let y2 = (self.y + self.h).min(within.y + within.h);
         self.x = self.x.max(within.x);
         self.y = self.y.max(within.y);
-        self.w = self.w.min(within.w);
-        self.h = self.h.min(within.h);
+        self.w = (x2 - self.x).max(0.0);
+        self.h = (y2 - self.y).max(0.0);
     }
 
     /// alias for [`Rect::contains`] — point collision check.

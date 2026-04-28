@@ -85,16 +85,7 @@ impl AtlasPacker {
                     used_w = used_w.max(x + w);
                     used_h = used_h.max(y + h);
 
-                    regions.insert(
-                        source.name.clone(),
-                        ManifestRegion {
-                            name: source.name.clone(),
-                            x,
-                            y,
-                            w,
-                            h,
-                        },
-                    );
+                    regions.insert(source.name.clone(), ManifestRegion { x, y, w, h });
                     placed = true;
                     break;
                 }
@@ -122,16 +113,7 @@ impl AtlasPacker {
                 used_w = used_w.max(w);
                 used_h = used_h.max(y + h);
 
-                regions.insert(
-                    source.name.clone(),
-                    ManifestRegion {
-                        name: source.name.clone(),
-                        x,
-                        y,
-                        w,
-                        h,
-                    },
-                );
+                regions.insert(source.name.clone(), ManifestRegion { x, y, w, h });
             }
         }
 
@@ -147,16 +129,14 @@ impl AtlasPacker {
             });
         }
 
-        // trim to actual used dimensions
+        // trim to actual used dimensions — row-copy is much faster than pixel-by-pixel
         let mut packed = Image::new(used_w, used_h);
+        let row_bytes = (used_w * 4) as usize;
         for y in 0..used_h {
-            let src_row = y * self.max_width;
-            let dst_row = y * used_w;
-            for x in 0..used_w {
-                let src_idx = ((src_row + x) * 4) as usize;
-                let dst_idx = ((dst_row + x) * 4) as usize;
-                packed.pixels[dst_idx..dst_idx + 4].copy_from_slice(&canvas[src_idx..src_idx + 4]);
-            }
+            let src_start = (y * self.max_width * 4) as usize;
+            let dst_start = (y * used_w * 4) as usize;
+            packed.pixels[dst_start..dst_start + row_bytes]
+                .copy_from_slice(&canvas[src_start..src_start + row_bytes]);
         }
 
         let manifest = AtlasManifest {
@@ -174,14 +154,12 @@ impl AtlasPacker {
     fn blit(canvas: &mut [u8], canvas_w: u32, dst_x: u32, dst_y: u32, src: &Image) {
         let w = src.width;
         let h = src.height;
+        let row_bytes = (w * 4) as usize;
         for y in 0..h {
-            let src_row = y * w;
-            let dst_row = (dst_y + y) * canvas_w + dst_x;
-            for x in 0..w {
-                let src_idx = ((src_row + x) * 4) as usize;
-                let dst_idx = ((dst_row + x) * 4) as usize;
-                canvas[dst_idx..dst_idx + 4].copy_from_slice(&src.pixels[src_idx..src_idx + 4]);
-            }
+            let src_start = (y * w * 4) as usize;
+            let dst_start = ((dst_y + y) * canvas_w + dst_x) as usize * 4;
+            canvas[dst_start..dst_start + row_bytes]
+                .copy_from_slice(&src.pixels[src_start..src_start + row_bytes]);
         }
     }
 }

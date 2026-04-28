@@ -929,31 +929,21 @@ impl RenderEngine {
                     current_tex = Some(tex_id);
                 }
 
-                // flush if buffer is about to overflow (6 vertices per sprite)
+                // drop this sprite if the buffer is full — 64K vertices handles ~16K sprites per frame
                 if self.vertex_offset + 6 * VERTEX_STRIDE > MAX_VERTICES * VERTEX_STRIDE {
-                    if self.vertex_offset > batch_start
-                        && let Some(tex) = current_tex
-                    {
-                        let vertex_count = (self.vertex_offset - batch_start) / VERTEX_STRIDE;
-                        self.draw_vertex_batch(&mut pass, tex, batch_start, vertex_count);
-                    }
-                    batch_start = 0;
-                    self.vertex_offset = 0;
-                    current_tex = None;
+                    log::warn!("vertex buffer full: dropping sprite");
+                    continue;
                 }
 
                 // write vertices directly into persistent buffer
-                self.write_sprite_vertices(
-                    tex_id,
-                    SpriteDrawParams {
-                        position: *position,
-                        rotation: *rotation,
-                        scale: *scale,
-                        tint: *tint,
-                        uv_rect: *uv_rect,
-                        origin: *origin,
-                    },
-                );
+                self.write_sprite_vertices(SpriteDrawParams {
+                    position: *position,
+                    rotation: *rotation,
+                    scale: *scale,
+                    tint: *tint,
+                    uv_rect: *uv_rect,
+                    origin: *origin,
+                });
             }
 
             // flush final sprite batch
@@ -966,15 +956,12 @@ impl RenderEngine {
 
             // draw untextured commands (rects, lines, text) as solid color
             if !rect_commands.is_empty() {
-                let mut rect_start = self.vertex_offset;
+                let rect_start = self.vertex_offset;
                 for command in &rect_commands {
-                    // flush if buffer is about to overflow (6 vertices per rect/line/text quad)
+                    // drop this command if the buffer is full
                     if self.vertex_offset + 6 * VERTEX_STRIDE > MAX_VERTICES * VERTEX_STRIDE {
-                        if self.vertex_offset > rect_start {
-                            let vertex_count = (self.vertex_offset - rect_start) / VERTEX_STRIDE;
-                            self.draw_vertex_batch(&mut pass, 0, rect_start, vertex_count);
-                        }
-                        rect_start = self.vertex_offset;
+                        log::warn!("vertex buffer full: dropping draw command");
+                        continue;
                     }
 
                     match &command.kind {
@@ -1074,7 +1061,7 @@ impl RenderEngine {
     /// write a sprite's 6 vertices into the persistent vertex buffer.
     /// vertex format: [pos.x, pos.y, u, v] (f32) + [packed rgba] (u32) = 20 bytes
     /// origin is the pivot point for rotation/scaling, relative to the sprite's top-left.
-    fn write_sprite_vertices(&mut self, _tex_id: u32, params: SpriteDrawParams) {
+    fn write_sprite_vertices(&mut self, params: SpriteDrawParams) {
         let SpriteDrawParams {
             position,
             rotation,
@@ -1235,6 +1222,14 @@ impl RenderEngine {
         self.queue
             .write_buffer(buf, self.vertex_offset as u64, bytes);
         self.vertex_offset += 6 * VERTEX_STRIDE;
+    }
+}
+
+/// save the pipeline cache on shutdown so the next launch benefits from it.
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for RenderEngine {
+    fn drop(&mut self) {
+        self.save_pipeline_cache();
     }
 }
 
