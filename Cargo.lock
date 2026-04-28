@@ -942,6 +942,7 @@ dependencies = [
  "bevy_ecs",
  "bytemuck",
  "engine-assets",
+ "engine-atlas",
  "engine-core",
  "engine-math",
  "fontdue",

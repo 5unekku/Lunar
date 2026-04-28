@@ -28,6 +28,7 @@
 //! }
 //! ```
 
+pub mod atlas;
 pub mod mesh;
 pub mod render_pass_3d;
 mod text;
@@ -1450,6 +1451,41 @@ impl RenderQueue {
                 tint: Color::WHITE,
                 layer,
                 uv_rect: None,
+                origin: Vec2::new(size.x * 0.5, size.y * 0.5),
+            },
+        });
+    }
+
+    /// draw a sprite from a texture atlas by region name.
+    /// the `uv_rect` is automatically set from the atlas region's UV coordinates.
+    pub fn draw_sprite_atlas(
+        &mut self,
+        texture: &Handle<Texture>,
+        position: Vec2,
+        size: Vec2,
+        region: (Vec2, Vec2),
+    ) {
+        self.draw_sprite_atlas_on_layer(texture, position, size, region, layers::GAME);
+    }
+
+    /// draw a sprite from a texture atlas on a specific layer.
+    pub fn draw_sprite_atlas_on_layer(
+        &mut self,
+        texture: &Handle<Texture>,
+        position: Vec2,
+        size: Vec2,
+        region: (Vec2, Vec2),
+        layer: i32,
+    ) {
+        self.push(DrawCommand {
+            kind: DrawKind::Sprite {
+                texture: Some(u64::from(texture.id())),
+                position,
+                rotation: 0.0,
+                scale: size,
+                tint: Color::WHITE,
+                layer,
+                uv_rect: Some(region),
                 origin: Vec2::new(size.x * 0.5, size.y * 0.5),
             },
         });
