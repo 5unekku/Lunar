@@ -44,6 +44,7 @@ mod game_loop;
 mod hierarchy;
 mod localization;
 mod scene;
+mod scene_format;
 mod schedule;
 mod state;
 mod zone;
@@ -73,6 +74,11 @@ pub use hierarchy::{
 pub use localization::{Localization, LocalizationPlugin};
 /// scene system for game state management
 pub use scene::{Scene, SceneManager};
+/// scene definition format: JSON authoring and binary runtime
+pub use scene_format::{
+    EntityDefinition, SceneData, SceneDefinition, SceneEntity, SceneLayer, SceneLoader,
+    SceneSprite, SceneTags, SceneText, SpriteDef, TextDef, TransformDef,
+};
 /// system scheduling with stage ordering
 pub use schedule::{StageLabelExt, StageOrder, UpdateStage};
 /// engine running state
