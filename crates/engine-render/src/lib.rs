@@ -40,6 +40,16 @@ use engine_assets::{Font, Handle, Texture};
 use engine_core::{App, GamePlugin};
 use engine_math::{Color, Vec2};
 
+/// internal parameters for writing sprite vertices.
+struct SpriteDrawParams {
+    position: Vec2,
+    rotation: f32,
+    scale: Vec2,
+    tint: Color,
+    uv_rect: Option<(Vec2, Vec2)>,
+    origin: Vec2,
+}
+
 /// parameters for drawing a transformed sprite.
 /// used with [`RenderQueue::draw_sprite_transformed_on_layer`] to avoid
 /// too many function arguments.
@@ -756,6 +766,17 @@ impl RenderEngine {
             }
         }
 
+        // collect rect and text commands (no texture)
+        let mut rect_commands: Vec<&DrawCommand> = Vec::new();
+        for command in &sorted_commands {
+            match &command.kind {
+                DrawKind::Rect { .. } | DrawKind::Text { .. } => {
+                    rect_commands.push(command);
+                }
+                _ => {}
+            }
+        }
+
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -802,6 +823,7 @@ impl RenderEngine {
                     scale,
                     tint,
                     uv_rect,
+                    origin,
                     ..
                 } = &command.kind
                 else {
@@ -823,7 +845,17 @@ impl RenderEngine {
                 }
 
                 // write vertices directly into persistent buffer
-                self.write_sprite_vertices(tex_id, *position, *rotation, *scale, *tint, *uv_rect);
+                self.write_sprite_vertices(
+                    tex_id,
+                    SpriteDrawParams {
+                        position: *position,
+                        rotation: *rotation,
+                        scale: *scale,
+                        tint: *tint,
+                        uv_rect: *uv_rect,
+                        origin: *origin,
+                    },
+                );
             }
 
             // flush final sprite batch
@@ -925,27 +957,27 @@ impl RenderEngine {
 
     /// write a sprite's 6 vertices into the persistent vertex buffer.
     /// vertex format: [pos.x, pos.y, u, v] (f32) + [packed rgba] (u32) = 20 bytes
-    fn write_sprite_vertices(
-        &mut self,
-        _tex_id: u32,
-        position: Vec2,
-        rotation: f32,
-        scale: Vec2,
-        tint: Color,
-        uv_rect: Option<(Vec2, Vec2)>,
-    ) {
-        let hw = scale.x * 0.5;
-        let hh = scale.y * 0.5;
+    /// origin is the pivot point for rotation/scaling, relative to the sprite's top-left.
+    fn write_sprite_vertices(&mut self, _tex_id: u32, params: SpriteDrawParams) {
+        let SpriteDrawParams {
+            position,
+            rotation,
+            scale,
+            tint,
+            uv_rect,
+            origin,
+        } = params;
         let cos = rotation.cos();
         let sin = rotation.sin();
 
+        // corners relative to origin (not center)
         let corners = [
-            [-hw, -hh],
-            [hw, -hh],
-            [-hw, hh],
-            [-hw, hh],
-            [hw, -hh],
-            [hw, hh],
+            [-origin.x, -origin.y],
+            [scale.x - origin.x, -origin.y],
+            [-origin.x, scale.y - origin.y],
+            [-origin.x, scale.y - origin.y],
+            [scale.x - origin.x, -origin.y],
+            [scale.x - origin.x, scale.y - origin.y],
         ];
 
         let (uv_min, uv_max) = uv_rect.unwrap_or((Vec2::ZERO, Vec2::new(1.0, 1.0)));
@@ -1128,6 +1160,7 @@ pub struct DrawCommand {
 pub enum DrawKind {
     /// draw a 2D sprite
     /// uv_rect overrides the default [0,0,1,1] UV range (used for texture atlases).
+    /// origin is the pivot point for rotation and scaling, relative to the sprite's top-left.
     Sprite {
         texture: Option<u64>,
         position: Vec2,
@@ -1136,6 +1169,7 @@ pub enum DrawKind {
         tint: Color,
         layer: i32,
         uv_rect: Option<(Vec2, Vec2)>,
+        origin: Vec2,
     },
     /// draw a 2D rectangle
     Rect {
@@ -1226,6 +1260,7 @@ impl RenderQueue {
                 tint: Color::WHITE,
                 layer,
                 uv_rect: None,
+                origin: Vec2::new(size.x * 0.5, size.y * 0.5),
             },
         });
     }
@@ -1251,6 +1286,7 @@ impl RenderQueue {
                 tint: params.tint,
                 layer,
                 uv_rect: None,
+                origin: params.origin,
             },
         });
     }
