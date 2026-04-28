@@ -782,10 +782,11 @@ Part 5 (Distribution)
 └── 49. Shooter Example → all core systems
 
 Part 6 (Engine Editor)
-├── 50. Editor Foundation → 49 (working example proves API)
-├── 51. Editor Panels → 50
-├── 52. Scene Editing → 50, 51
-└── 53. Editor Build & Distribution → 50
+├── 50. engine-ui (Taffy + custom wgpu) → 6 (render system), 19 (atlas), 20 (layers)
+├── 51. Editor Foundation → 50, 49 (working example proves API)
+├── 52. Editor Panels → 50, 51
+├── 53. Scene Editing → 51, 52
+└── 54. Editor Build & Distribution → 51
 ```
 
 ---
@@ -853,101 +854,149 @@ Part 6 (Engine Editor)
 
 ## Part 5: Engine Editor
 
-> A Unity-style editor tool — a separate application that runs alongside (or wraps) the engine,
-> providing a viewport, scene hierarchy, inspector, and asset browser.
+> A Unity-style editor tool — a separate binary that hosts the engine's ECS world, renders the game
+> scene to an offscreen texture, and displays its own UI alongside it.
 >
-> **Framework: egui** — immediate mode, egui-wgpu backend shares the existing wgpu device/queue,
-> battle-tested in Rust editor tooling. Slint/iced/taffy are not suitable (wrong paradigm or integration model).
+> **UI approach: Taffy (layout) + custom wgpu (rendering)** — Taffy computes panel/widget positions via
+> flexbox; wgpu draws them using the existing render pipeline extended with UI-specific draw calls.
+> This is the same stack that will eventually power in-game UI (items 26–27 in Part 2), so editor UI
+> work feeds directly into that. Where the existing pipeline falls short, custom wgpu render passes
+> are added — the two work in tandem rather than one replacing the other.
 >
-> **Architecture: in-process** — the editor is a separate binary that hosts the engine's ECS world
-> internally, renders the game scene to an offscreen texture, and displays that texture inside an egui viewport panel.
-> The game's systems run at editor tick rate (not real-time) while paused.
+> **Architecture: in-process** — editor is a separate binary. Game scene runs in an engine World inside
+> the editor process. Game systems run at editor tick rate while paused; full rate in play mode.
+>
+> **No SDL3 in the editor** — winit drives the editor window; SDL3 stays for game builds only.
 
-### 50. Editor Foundation
-- [ ] 50.1 `engine-editor` crate
-  - [ ] 50.1.1 Add `engine-editor` to the workspace under `crates/engine-editor/`
-  - [ ] 50.1.2 Binary target: `editor` (the editor application itself)
-  - [ ] 50.1.3 Dependencies: `engine-api`, `engine-render`, `egui`, `egui-wgpu`, `egui-winit`
-  - [ ] 50.1.4 Replace SDL3 window creation with winit for the editor window (egui-winit handles events)
-- [ ] 50.2 egui + wgpu integration
-  - [ ] 50.2.1 Initialize wgpu device/queue/surface for the editor window via winit
-  - [ ] 50.2.2 Initialize `egui_wgpu::Renderer` sharing the same device
-  - [ ] 50.2.3 Each frame: run egui, collect paint jobs, render game scene, composite egui on top
-  - [ ] 50.2.4 Implement `EditorApp` struct holding: `egui::Context`, `egui_wgpu::Renderer`, engine `World`, engine `RenderEngine`
-- [ ] 50.3 Offscreen game viewport
-  - [ ] 50.3.1 Create a wgpu texture for the game scene render target (not the swap chain)
-  - [ ] 50.3.2 Render the game world into that texture each frame
-  - [ ] 50.3.3 Register the texture with egui-wgpu so it can be displayed as an `egui::Image`
-  - [ ] 50.3.4 Resize the render texture when the viewport panel is resized
-- [ ] 50.4 Editor event loop
-  - [ ] 50.4.1 winit event loop drives the editor (not SDL3)
-  - [ ] 50.4.2 Forward keyboard/mouse events to egui first; unfocused viewport events go to the engine input system
-  - [ ] 50.4.3 Play mode: engine runs at full tick rate. Pause mode: engine systems frozen, only editor systems run
+### 50. Editor UI Framework (engine-ui-editor crate)
+> This is the foundation everything else is built on. Produces reusable widget primitives that are
+> later promoted into the general UI system (item 26). Build this before the editor panels.
+- [ ] 50.1 `engine-ui` crate
+  - [ ] 50.1.1 Add `engine-ui` to the workspace under `crates/engine-ui/`
+  - [ ] 50.1.2 Dependencies: `taffy`, `engine-render`, `engine-math`, `engine-input`
+  - [ ] 50.1.3 No dependency on `engine-editor` — this crate is usable in games too (links to item 26)
+- [ ] 50.2 Taffy layout integration
+  - [ ] 50.2.1 `UiTree` struct wrapping a `taffy::TaffyTree` — owns all node handles
+  - [ ] 50.2.2 `UiNode` component: maps an ECS entity to a Taffy node handle
+  - [ ] 50.2.3 `Style` component: wraps `taffy::Style` (flex direction, size, padding, margin, etc.)
+  - [ ] 50.2.4 `compute_layout(root, available_space)` — calls `taffy.compute_layout`, writes resolved `Rect` back to each node's `LayoutOutput` component
+  - [ ] 50.2.5 Layout is lazy — only recomputed when a `Style` or tree structure changes (dirty flag on `UiTree`)
+- [ ] 50.3 UI render pass (custom wgpu)
+  - [ ] 50.3.1 `UiRenderPass` struct — a dedicated wgpu render pass that runs after the game scene pass
+  - [ ] 50.3.2 Separate vertex buffer for UI geometry (screen-space, pixel coordinates, no camera transform)
+  - [ ] 50.3.3 UI shader: supports flat color fills, texture sampling, and rounded corner SDF (single shader, mode selected per draw call via push constant)
+  - [ ] 50.3.4 Nine-patch support for panel backgrounds — avoids stretching artifacts on resizable panels
+  - [ ] 50.3.5 Scissor rect per panel for clipping overflow (wgpu scissor_rect on render pass)
+  - [ ] 50.3.6 `UiDrawList` — sorted list of UI draw commands built each frame from layout output, flushed to `UiRenderPass`
+- [ ] 50.4 Widget primitives
+  - [ ] 50.4.1 `Panel { background: Color, border: Option<Border> }` — filled rect, optional border
+  - [ ] 50.4.2 `Label { text: String, font: Handle<Font>, size: f32, color: Color }` — single-line text
+  - [ ] 50.4.3 `Button { label: String, style: ButtonStyle }` — panel + label + interaction state
+  - [ ] 50.4.4 `TextInput { value: String, placeholder: String }` — editable single-line field
+  - [ ] 50.4.5 `ScrollArea { content_height: f32 }` — vertical scroll with scroll offset, scissor clipping
+  - [ ] 50.4.6 `Image { handle: Handle<Texture>, tint: Color }` — texture display with optional tint
+  - [ ] 50.4.7 `Separator` — horizontal or vertical dividing line
+- [ ] 50.5 Input routing
+  - [ ] 50.5.1 `UiInputSystem` — runs before game input, walks the node tree hit-testing pointer position
+  - [ ] 50.5.2 `Interaction` component: `None | Hovered | Pressed` — updated each frame
+  - [ ] 50.5.3 `Focus` component: tracks keyboard focus, Tab cycles through focusable nodes
+  - [ ] 50.5.4 Events: `ButtonPressed`, `TextChanged`, `ScrollMoved` — fire as ECS events for game/editor code to consume
+  - [ ] 50.5.5 Input consumed by UI is not forwarded to game systems (event propagation stop)
 
-### 51. Editor Panels
-- [ ] 51.1 Main layout
-  - [ ] 51.1.1 Top menu bar (File, Edit, View, Help)
-  - [ ] 51.1.2 Left panel: scene hierarchy
-  - [ ] 51.1.3 Center panel: game viewport
-  - [ ] 51.1.4 Right panel: inspector
-  - [ ] 51.1.5 Bottom panel: asset browser + log output
-  - [ ] 51.1.6 Panels are resizable (egui `SidePanel`, `CentralPanel`, `TopBottomPanel`)
-- [ ] 51.2 Toolbar
-  - [ ] 51.2.1 Play / Pause / Stop buttons — toggles engine tick mode
-  - [ ] 51.2.2 Transform gizmo mode selector: Translate / Rotate / Scale
-  - [ ] 51.2.3 FPS counter and frame time display
-- [ ] 51.3 Scene hierarchy panel
-  - [ ] 51.3.1 Query all entities in the world and list them by id
-  - [ ] 51.3.2 Show `Name` component value if present, otherwise show entity id
-  - [ ] 51.3.3 Click to select an entity — selection stored in `EditorState` resource
-  - [ ] 51.3.4 Right-click context menu: "Spawn empty entity", "Despawn"
-  - [ ] 51.3.5 Indentation for parent/child hierarchy (once item 21 entity hierarchies are done)
-- [ ] 51.4 Inspector panel
-  - [ ] 51.4.1 Display all components on the selected entity
-  - [ ] 51.4.2 `Transform`: editable x/y/z position, rotation (degrees), scale x/y fields
-  - [ ] 51.4.3 `Color` fields rendered as egui color picker
-  - [ ] 51.4.4 `Handle<Texture>` fields show texture preview thumbnail
-  - [ ] 51.4.5 Unknown components show component type name and "not inspectable" placeholder
-  - [ ] 51.4.6 Implement `Inspectable` trait — components opt-in to custom inspector UI by implementing it
-  - [ ] 51.4.7 Changes made in the inspector write back to the ECS world immediately
-- [ ] 51.5 Asset browser panel
-  - [ ] 51.5.1 Walk the `assets/` directory and list files grouped by type (textures, fonts, sounds)
-  - [ ] 51.5.2 Show texture thumbnails (small preview rendered via wgpu)
-  - [ ] 51.5.3 Click to select asset — shows metadata (dimensions, file size, load state)
-  - [ ] 51.5.4 Double-click to open in external app (image editor, etc.) via `open` crate
-  - [ ] 51.5.5 Refresh button to re-scan directory (hot reload already handles live changes)
-- [ ] 51.6 Log panel
-  - [ ] 51.6.1 Capture `log` crate output in-editor (custom `log::Log` impl that buffers to a `Vec<LogEntry>`)
-  - [ ] 51.6.2 Display log entries with level color coding (error=red, warn=yellow, info=white, debug=gray)
-  - [ ] 51.6.3 Filter by log level, search by text
-  - [ ] 51.6.4 Auto-scroll to bottom unless user has scrolled up
+### 51. Editor Foundation (engine-editor crate)
+- [ ] 51.1 `engine-editor` crate
+  - [ ] 51.1.1 Add `engine-editor` to the workspace under `crates/engine-editor/`
+  - [ ] 51.1.2 Binary target: `lunar-editor`
+  - [ ] 51.1.3 Dependencies: `engine-api`, `engine-render`, `engine-ui`, `winit`
+- [ ] 51.2 Window and render setup
+  - [ ] 51.2.1 winit event loop creates the editor window (not SDL3)
+  - [ ] 51.2.2 Initialize wgpu surface, device, queue from the winit window handle
+  - [ ] 51.2.3 `EditorApp` struct: holds `UiTree`, engine `World`, engine `RenderEngine`, `EditorState`
+  - [ ] 51.2.4 Each frame: compute UI layout → render game scene to offscreen texture → run UI render pass → present
+- [ ] 51.3 Offscreen game viewport texture
+  - [ ] 51.3.1 Allocate a wgpu texture sized to the viewport panel's layout rect
+  - [ ] 51.3.2 Game `RenderEngine` renders into this texture instead of the swap chain
+  - [ ] 51.3.3 Display the texture in the center panel via `Image` widget
+  - [ ] 51.3.4 Reallocate texture on viewport resize
+- [ ] 51.4 Editor state and tick modes
+  - [ ] 51.4.1 `EditorState` resource: `selected_entity`, `gizmo_mode`, `play_state`, `project_path`
+  - [ ] 51.4.2 `PlayState` enum: `Stopped | Playing | Paused`
+  - [ ] 51.4.3 Stopped/Paused: engine ECS world is frozen, only editor systems run
+  - [ ] 51.4.4 Playing: engine runs at full tick rate, editor panels update at reduced rate (every 4 frames)
+  - [ ] 51.4.5 On stop: restore world snapshot taken at play start (serialize before play, deserialize on stop)
 
-### 52. Scene Editing
-- [ ] 52.1 Entity manipulation
-  - [ ] 52.1.1 Click in the viewport to select an entity (ray-pick by AABB against Transform + sprite bounds)
-  - [ ] 52.1.2 Translate gizmo: drag X/Y axis handles to move the selected entity
-  - [ ] 52.1.3 Rotate gizmo: drag arc handle to rotate around Z axis
-  - [ ] 52.1.4 Scale gizmo: drag corner handles to scale X/Y
-  - [ ] 52.1.5 Gizmos are rendered as overlays on top of the game scene (drawn after scene, before egui)
-- [ ] 52.2 Spawn / despawn
-  - [ ] 52.2.1 Drag asset from asset browser into viewport → spawn entity with that texture at drop position
-  - [ ] 52.2.2 Delete key despawns selected entity
-  - [ ] 52.2.3 Ctrl+Z / Ctrl+Y undo/redo for spawn, despawn, and transform changes
-- [ ] 52.3 Scene save/load
-  - [ ] 52.3.1 Serialize current world state to JSON (entity list, components per entity) — simple custom format, not bevy_scene
-  - [ ] 52.3.2 Load JSON scene: clear world, spawn entities from file, restore components
-  - [ ] 52.3.3 File > Save Scene (Ctrl+S) and File > Open Scene
-  - [ ] 52.3.4 Mark scene as dirty (unsaved changes) and prompt on close
+### 52. Editor Panels
+- [ ] 52.1 Main layout (Taffy flex tree)
+  - [ ] 52.1.1 Root: column flex — menu bar (fixed height) + body row + status bar (fixed height)
+  - [ ] 52.1.2 Body row: hierarchy panel (fixed width, resizable) + center column + inspector panel (fixed width, resizable)
+  - [ ] 52.1.3 Center column: toolbar (fixed height) + viewport (flex grow) + bottom panel (fixed height, resizable)
+  - [ ] 52.1.4 Panel resize: drag handle between panels updates the Taffy `Style` size, marks layout dirty
+- [ ] 52.2 Menu bar
+  - [ ] 52.2.1 File: New Project, Open Project, Save Scene (Ctrl+S), Quit
+  - [ ] 52.2.2 Edit: Undo (Ctrl+Z), Redo (Ctrl+Y), Spawn Entity, Despawn Selected
+  - [ ] 52.2.3 View: toggle panel visibility
+- [ ] 52.3 Toolbar
+  - [ ] 52.3.1 Play / Pause / Stop buttons — updates `PlayState`
+  - [ ] 52.3.2 Gizmo mode buttons: Translate / Rotate / Scale
+  - [ ] 52.3.3 Frame time and FPS readout (right-aligned)
+- [ ] 52.4 Scene hierarchy panel
+  - [ ] 52.4.1 Query all entities each frame; display in a `ScrollArea`
+  - [ ] 52.4.2 Show `Name` component if present, else show `Entity` id as `"entity {id}"`
+  - [ ] 52.4.3 Click sets `EditorState::selected_entity`
+  - [ ] 52.4.4 Right-click context menu: Spawn Empty, Despawn
+  - [ ] 52.4.5 Indent children under parents once entity hierarchies (item 21) are implemented
+- [ ] 52.5 Inspector panel
+  - [ ] 52.5.1 Display components on `EditorState::selected_entity` in a `ScrollArea`
+  - [ ] 52.5.2 `Transform`: x/y/z `TextInput` fields for translation, rotation in degrees, scale x/y
+  - [ ] 52.5.3 `Color`: custom color picker widget (hue/sat/val sliders + hex input)
+  - [ ] 52.5.4 `Handle<Texture>`: show asset path and thumbnail `Image`
+  - [ ] 52.5.5 `Inspectable` trait: components implement `fn inspect(&mut self, ui: &mut UiBuilder)` for custom inspector widgets
+  - [ ] 52.5.6 Unknown components: show type name as a collapsed header with "not inspectable" body
+  - [ ] 52.5.7 Write field changes back to ECS world immediately on `TextChanged` / slider release
+- [ ] 52.6 Asset browser panel
+  - [ ] 52.6.1 Walk `project_path/assets/` on open and on `AssetWatcher` change events
+  - [ ] 52.6.2 Group by type in a `ScrollArea`: Textures, Fonts, Sounds, Other
+  - [ ] 52.6.3 Texture entries show a thumbnail `Image` (load via `AssetServer`, display when ready)
+  - [ ] 52.6.4 Click selects asset; shows path, file size, dimensions, load state in a sidebar
+  - [ ] 52.6.5 Double-click opens in OS default app (`open` crate)
+- [ ] 52.7 Log panel
+  - [ ] 52.7.1 Custom `log::Log` impl buffers up to 1000 `LogEntry { level, message, timestamp }` in a ring buffer
+  - [ ] 52.7.2 Display in `ScrollArea`, auto-scroll to bottom unless user has scrolled up manually
+  - [ ] 52.7.3 Color by level: error=red, warn=amber, info=white, debug=gray, trace=dark gray
+  - [ ] 52.7.4 Filter bar: level dropdown + text search field
 
-### 53. Editor Build & Distribution
-- [ ] 53.1 Standalone editor binary
-  - [ ] 53.1.1 `cargo build --bin editor --release` produces a standalone editor executable
-  - [ ] 53.1.2 Editor binary is self-contained — no runtime dependencies beyond system GPU drivers
-- [ ] 53.2 Project model
-  - [ ] 53.2.1 Editor opens a "project" directory (contains `assets/`, `src/`, `Cargo.toml`)
-  - [ ] 53.2.2 File > New Project creates the directory structure with a template game plugin
-  - [ ] 53.2.3 File > Open Project sets the working directory and scans assets
-- [ ] 53.3 Game plugin hot reload (stretch goal)
-  - [ ] 53.3.1 Compile game plugin as a dylib (`cdylib`) on save
-  - [ ] 53.3.2 Editor unloads old dylib, loads new one, re-runs startup systems
-  - [ ] 53.3.3 Enables edit-without-restart workflow (significant complexity — evaluate after basics work)
+### 53. Scene Editing
+- [ ] 53.1 Viewport entity picking
+  - [ ] 53.1.1 On left click in viewport (not consumed by gizmo): hit-test all entities with Transform + sprite bounds
+  - [ ] 53.1.2 Sort hits back-to-front by z; select topmost
+  - [ ] 53.1.3 Highlight selected entity with an outline overlay drawn in the UI render pass
+- [ ] 53.2 Transform gizmos
+  - [ ] 53.2.1 Gizmos rendered as overlays in the UI render pass (screen-space, on top of scene)
+  - [ ] 53.2.2 Translate: X (red) and Y (green) axis arrows; drag moves entity in that axis
+  - [ ] 53.2.3 Rotate: arc handle around entity center; drag rotates around Z
+  - [ ] 53.2.4 Scale: corner squares; drag scales X/Y (hold Shift for uniform)
+  - [ ] 53.2.5 Gizmo drag produces `TransformChanged` commands buffered into the undo stack
+- [ ] 53.3 Spawn / despawn
+  - [ ] 53.3.1 Drag texture from asset browser into viewport → spawn entity with that Handle<Texture> + Transform at drop position
+  - [ ] 53.3.2 Delete key: despawn `EditorState::selected_entity`, clear selection
+  - [ ] 53.3.3 Ctrl+Z / Ctrl+Y: undo/redo stack of `EditorCommand` enum (SpawnEntity, DespawnEntity, TransformChanged, ComponentChanged)
+- [ ] 53.4 Scene save/load
+  - [ ] 53.4.1 Scene format: JSON — array of `{ id, components: { "Transform": {...}, ... } }`
+  - [ ] 53.4.2 Components must implement `SceneSerialize` trait to be included (opt-in, keeps format stable)
+  - [ ] 53.4.3 Save: serialize world → write to `project_path/scenes/<name>.scene.json`
+  - [ ] 53.4.4 Load: clear world entities, deserialize JSON, spawn via Commands
+  - [ ] 53.4.5 Dirty flag: title bar shows `*` on unsaved changes; prompt to save on close / open / play
+
+### 54. Editor Build & Distribution
+- [ ] 54.1 Standalone binary
+  - [ ] 54.1.1 `cargo build --bin lunar-editor --release` produces the editor executable
+  - [ ] 54.1.2 No SDL3 runtime dependency in the editor binary (winit only)
+- [ ] 54.2 Project model
+  - [ ] 54.2.1 Editor opens a project directory containing `assets/`, `src/`, `Cargo.toml`, `lunar.project.json`
+  - [ ] 54.2.2 `lunar.project.json`: project name, default scene, editor camera settings
+  - [ ] 54.2.3 File > New Project: scaffold directory, write template `GamePlugin`, open in editor
+  - [ ] 54.2.4 File > Open Project: pick directory, validate structure, load default scene
+- [ ] 54.3 Game plugin hot reload (stretch goal)
+  - [ ] 54.3.1 Compile game plugin as `cdylib` via `cargo build` subprocess on source save
+  - [ ] 54.3.2 Unload old dylib, load new one with `libloading`, re-run startup systems against current world
+  - [ ] 54.3.3 High complexity — only pursue after the rest of the editor is stable
