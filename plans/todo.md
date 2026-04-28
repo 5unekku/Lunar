@@ -782,9 +782,9 @@ Part 5 (Distribution)
 └── 49. Shooter Example → all core systems
 
 Part 6 (Engine Editor)
-├── 50. engine-ui (Taffy + custom wgpu) → 6 (render system), 19 (atlas), 20 (layers)
-├── 51. Editor Foundation → 50, 49 (working example proves API)
-├── 52. Editor Panels → 50, 51
+├── 50. engine-ui crate (in-game UI, Taffy + custom wgpu) → 6 (render), 19 (atlas), 20 (layers)
+├── 51. Editor Foundation (egui + wgpu + winit) → 49 (shooter example proves API)
+├── 52. Editor Panels (egui) → 51
 ├── 53. Scene Editing → 51, 52
 └── 54. Editor Build & Distribution → 51
 ```
@@ -854,27 +854,29 @@ Part 6 (Engine Editor)
 
 ## Part 5: Engine Editor
 
-> A Unity-style editor tool — a separate binary that hosts the engine's ECS world, renders the game
-> scene to an offscreen texture, and displays its own UI alongside it.
+> Two distinct UI concerns that must not be conflated:
 >
-> **UI approach: Taffy (layout) + custom wgpu (rendering)** — Taffy computes panel/widget positions via
-> flexbox; wgpu draws them using the existing render pipeline extended with UI-specific draw calls.
-> This is the same stack that will eventually power in-game UI (items 26–27 in Part 2), so editor UI
-> work feeds directly into that. Where the existing pipeline falls short, custom wgpu render passes
-> are added — the two work in tandem rather than one replacing the other.
+> **Editor GUI** (panels, inspector, hierarchy, asset browser) — uses **egui**.
+> egui is immediate mode, MIT licensed, integrates with wgpu via egui-wgpu in a few lines,
+> and is designed exactly for game tooling. Performance is fine for a desktop editor.
+> Slint is the alternative if visual polish becomes a priority, but brings GPL licensing and
+> heavier integration. Taffy is not an answer here — it is layout math only, no widgets.
 >
-> **Architecture: in-process** — editor is a separate binary. Game scene runs in an engine World inside
-> the editor process. Game systems run at editor tick rate while paused; full rate in play mode.
+> **In-game UI** (UI inside games made with the engine) — uses **Taffy + custom wgpu**.
+> This lives in `engine-ui` (item 26 from Part 2, tracked as item 50 here).
+> Completely separate from the editor GUI — game developers use this, not the editor itself.
 >
-> **No SDL3 in the editor** — winit drives the editor window; SDL3 stays for game builds only.
+> **Architecture: in-process** — editor is a separate binary. Game scene runs in an engine World
+> inside the editor process. Game systems frozen while paused; full rate in play mode.
+> winit drives the editor window; SDL3 stays for game builds only.
 
-### 50. Editor UI Framework (engine-ui-editor crate)
-> This is the foundation everything else is built on. Produces reusable widget primitives that are
-> later promoted into the general UI system (item 26). Build this before the editor panels.
+### 50. engine-ui crate (in-game UI for games made with the engine)
+> Taffy + custom wgpu. Used by game developers, not by the editor GUI itself.
+> This is item 26 from Part 2 promoted here because editor work makes it the right time to build it.
 - [ ] 50.1 `engine-ui` crate
   - [ ] 50.1.1 Add `engine-ui` to the workspace under `crates/engine-ui/`
   - [ ] 50.1.2 Dependencies: `taffy`, `engine-render`, `engine-math`, `engine-input`
-  - [ ] 50.1.3 No dependency on `engine-editor` — this crate is usable in games too (links to item 26)
+  - [ ] 50.1.3 No dependency on `engine-editor` — purely a game-side API
 - [ ] 50.2 Taffy layout integration
   - [ ] 50.2.1 `UiTree` struct wrapping a `taffy::TaffyTree` — owns all node handles
   - [ ] 50.2.2 `UiNode` component: maps an ECS entity to a Taffy node handle
@@ -907,12 +909,13 @@ Part 6 (Engine Editor)
 - [ ] 51.1 `engine-editor` crate
   - [ ] 51.1.1 Add `engine-editor` to the workspace under `crates/engine-editor/`
   - [ ] 51.1.2 Binary target: `lunar-editor`
-  - [ ] 51.1.3 Dependencies: `engine-api`, `engine-render`, `engine-ui`, `winit`
+  - [ ] 51.1.3 Dependencies: `engine-api`, `engine-render`, `egui`, `egui-wgpu`, `egui-winit`, `winit`
 - [ ] 51.2 Window and render setup
   - [ ] 51.2.1 winit event loop creates the editor window (not SDL3)
   - [ ] 51.2.2 Initialize wgpu surface, device, queue from the winit window handle
-  - [ ] 51.2.3 `EditorApp` struct: holds `UiTree`, engine `World`, engine `RenderEngine`, `EditorState`
-  - [ ] 51.2.4 Each frame: compute UI layout → render game scene to offscreen texture → run UI render pass → present
+  - [ ] 51.2.3 Initialize `egui_wgpu::Renderer` sharing the same wgpu device — no second GPU context
+  - [ ] 51.2.4 `EditorApp` struct: holds `egui::Context`, `egui_wgpu::Renderer`, engine `World`, engine `RenderEngine`, `EditorState`
+  - [ ] 51.2.5 Each frame: run egui frame → render game scene to offscreen texture → render egui paint jobs → present
 - [ ] 51.3 Offscreen game viewport texture
   - [ ] 51.3.1 Allocate a wgpu texture sized to the viewport panel's layout rect
   - [ ] 51.3.2 Game `RenderEngine` renders into this texture instead of the swap chain
@@ -926,11 +929,12 @@ Part 6 (Engine Editor)
   - [ ] 51.4.5 On stop: restore world snapshot taken at play start (serialize before play, deserialize on stop)
 
 ### 52. Editor Panels
-- [ ] 52.1 Main layout (Taffy flex tree)
-  - [ ] 52.1.1 Root: column flex — menu bar (fixed height) + body row + status bar (fixed height)
-  - [ ] 52.1.2 Body row: hierarchy panel (fixed width, resizable) + center column + inspector panel (fixed width, resizable)
-  - [ ] 52.1.3 Center column: toolbar (fixed height) + viewport (flex grow) + bottom panel (fixed height, resizable)
-  - [ ] 52.1.4 Panel resize: drag handle between panels updates the Taffy `Style` size, marks layout dirty
+- [ ] 52.1 Main layout (egui panels)
+  - [ ] 52.1.1 `egui::TopBottomPanel` for menu bar and status bar
+  - [ ] 52.1.2 `egui::SidePanel` left for scene hierarchy, right for inspector
+  - [ ] 52.1.3 `egui::TopBottomPanel` inside central area for toolbar, `egui::CentralPanel` for viewport
+  - [ ] 52.1.4 `egui::TopBottomPanel` bottom for asset browser + log tabs
+  - [ ] 52.1.5 Panel resize: egui handles this natively via resizable side panels
 - [ ] 52.2 Menu bar
   - [ ] 52.2.1 File: New Project, Open Project, Save Scene (Ctrl+S), Quit
   - [ ] 52.2.2 Edit: Undo (Ctrl+Z), Redo (Ctrl+Y), Spawn Entity, Despawn Selected
@@ -946,13 +950,13 @@ Part 6 (Engine Editor)
   - [ ] 52.4.4 Right-click context menu: Spawn Empty, Despawn
   - [ ] 52.4.5 Indent children under parents once entity hierarchies (item 21) are implemented
 - [ ] 52.5 Inspector panel
-  - [ ] 52.5.1 Display components on `EditorState::selected_entity` in a `ScrollArea`
-  - [ ] 52.5.2 `Transform`: x/y/z `TextInput` fields for translation, rotation in degrees, scale x/y
-  - [ ] 52.5.3 `Color`: custom color picker widget (hue/sat/val sliders + hex input)
-  - [ ] 52.5.4 `Handle<Texture>`: show asset path and thumbnail `Image`
-  - [ ] 52.5.5 `Inspectable` trait: components implement `fn inspect(&mut self, ui: &mut UiBuilder)` for custom inspector widgets
-  - [ ] 52.5.6 Unknown components: show type name as a collapsed header with "not inspectable" body
-  - [ ] 52.5.7 Write field changes back to ECS world immediately on `TextChanged` / slider release
+  - [ ] 52.5.1 Display components on `EditorState::selected_entity` in an `egui::ScrollArea`
+  - [ ] 52.5.2 `Transform`: `egui::DragValue` fields for x/y/z translation, rotation in degrees, scale x/y
+  - [ ] 52.5.3 `Color`: egui's built-in `color_picker::color_edit_button_rgba`
+  - [ ] 52.5.4 `Handle<Texture>`: show asset path and register texture with `egui_wgpu` to display as thumbnail
+  - [ ] 52.5.5 `Inspectable` trait: components implement `fn inspect(&mut self, ui: &mut egui::Ui)` for custom inspector widgets
+  - [ ] 52.5.6 Unknown components: show type name as `egui::CollapsingHeader` with "not inspectable" body
+  - [ ] 52.5.7 Write field changes back to ECS world immediately on value change
 - [ ] 52.6 Asset browser panel
   - [ ] 52.6.1 Walk `project_path/assets/` on open and on `AssetWatcher` change events
   - [ ] 52.6.2 Group by type in a `ScrollArea`: Textures, Fonts, Sounds, Other
@@ -969,9 +973,9 @@ Part 6 (Engine Editor)
 - [ ] 53.1 Viewport entity picking
   - [ ] 53.1.1 On left click in viewport (not consumed by gizmo): hit-test all entities with Transform + sprite bounds
   - [ ] 53.1.2 Sort hits back-to-front by z; select topmost
-  - [ ] 53.1.3 Highlight selected entity with an outline overlay drawn in the UI render pass
+  - [ ] 53.1.3 Highlight selected entity with an outline overlay drawn via the engine's render queue (into the offscreen texture, not egui)
 - [ ] 53.2 Transform gizmos
-  - [ ] 53.2.1 Gizmos rendered as overlays in the UI render pass (screen-space, on top of scene)
+  - [ ] 53.2.1 Gizmos drawn via the engine's render queue into the offscreen texture — rendered in world space, appear naturally in the viewport
   - [ ] 53.2.2 Translate: X (red) and Y (green) axis arrows; drag moves entity in that axis
   - [ ] 53.2.3 Rotate: arc handle around entity center; drag rotates around Z
   - [ ] 53.2.4 Scale: corner squares; drag scales X/Y (hold Shift for uniform)
