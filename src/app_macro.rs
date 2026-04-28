@@ -1,7 +1,8 @@
 /// convenience macro to bootstrap a lunar game.
 ///
-/// expands to an async main function that initializes SDL3, creates a window,
-/// sets up the render surface, adds all built-in plugins, and runs the game loop.
+/// expands to a `main` function that initializes SDL3, creates a window,
+/// sets up the wgpu render surface, adds all built-in plugins, and runs
+/// the game loop. the window title defaults to `"Lunar"`.
 ///
 /// # usage
 ///
@@ -9,7 +10,9 @@
 /// use lunar::lunar_app;
 /// use engine_core::GamePlugin;
 ///
+/// #[derive(Default)]
 /// struct MyGame;
+///
 /// impl GamePlugin for MyGame {
 ///     fn name(&self) -> &str { "MyGame" }
 /// }
@@ -17,10 +20,10 @@
 /// lunar_app!(MyGame);
 /// ```
 ///
-/// # with config
+/// # with a custom render config
 ///
 /// ```ignore
-/// lunar_app!(MyGame, RenderConfig { width: 1920, height: 1080, ..Default::default() });
+/// lunar_app!(MyGame, engine_render::RenderConfig { width: 1920, height: 1080, ..Default::default() });
 /// ```
 #[macro_export]
 macro_rules! lunar_app {
@@ -28,8 +31,7 @@ macro_rules! lunar_app {
         $crate::lunar_app!($game_plugin, engine_render::RenderConfig::default());
     };
     ($game_plugin:ty, $render_config:expr) => {
-        #[tokio::main]
-        async fn main() {
+        fn main() {
             env_logger::init();
             log::info!("lunar engine starting...");
 
@@ -58,19 +60,17 @@ macro_rules! lunar_app {
                     .expect("failed to create wgpu surface")
             };
 
+            // from_surface is sync on native (pollster-backed)
             let render_engine =
                 engine_render::RenderEngine::from_surface(&instance, surface, config.clone());
 
             let mut app = engine_core::App::new();
             app.insert_resource(render_engine);
 
-            // add built-in plugins
             app.add_plugin(engine_input::InputPlugin);
             app.add_plugin(engine_render::RenderPlugin);
             app.add_plugin(engine_assets::AssetPlugin);
             app.add_plugin(engine_audio::AudioPlugin);
-
-            // add the game plugin
             app.add_plugin(<$game_plugin>::default());
 
             let mut event_pump = sdl.event_pump().expect("failed to get event pump");

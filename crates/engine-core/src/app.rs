@@ -166,18 +166,21 @@ impl App {
         self
     }
 
-    /// add a system to a specific update stage
+    /// add a system to a specific update stage.
+    ///
+    /// **note:** stage ordering is not yet implemented — the system is added to the
+    /// default update schedule regardless of which `stage` is passed.
+    /// full stage support requires bevy_ecs's schedule graph, which is a planned upgrade.
     pub fn add_system_to_stage<M>(
         &mut self,
         stage: UpdateStage,
         system: impl IntoSystem<(), (), M>,
     ) -> &mut Self {
+        log::warn!(
+            "add_system_to_stage({:?}): stage ordering not yet implemented, system added to default schedule",
+            stage
+        );
         self.engine.schedule_mut().add_systems(system);
-        // note: bevy_ecs schedules don't support custom stage labels directly
-        // on a single Schedule; stage ordering is handled via multiple schedules.
-        // for now, systems are added to the default Update schedule.
-        // full stage support requires switching to bevy_ecs's ScheduleGraph.
-        let _ = stage;
         self
     }
 
@@ -188,12 +191,12 @@ impl App {
         self
     }
 
-    /// add a custom stage with the given ordering relative to built-in stages
-    pub fn add_stage<S: ScheduleLabel>(&mut self, stage: S, order: StageOrder) -> &mut Self {
-        // custom stages require a separate schedule; the engine currently
-        // uses a single Update schedule. this method is a placeholder
-        // for future expansion when bevy_ecs's full schedule graph is used.
-        let _ = (stage, order);
+    /// add a custom stage with the given ordering relative to built-in stages.
+    ///
+    /// **note:** custom stages are not yet implemented — this is a no-op placeholder.
+    /// full stage support requires bevy_ecs's schedule graph, which is a planned upgrade.
+    pub fn add_stage<S: ScheduleLabel>(&mut self, _stage: S, _order: StageOrder) -> &mut Self {
+        log::warn!("add_stage: custom stages not yet implemented, call ignored");
         self
     }
 

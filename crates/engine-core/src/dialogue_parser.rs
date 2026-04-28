@@ -96,6 +96,11 @@ pub fn parse_dialogue(source: &str) -> Result<Dialogue, String> {
         serde_yaml::from_str(source).map_err(|e| format!("yaml parse error: {e}"))?;
 
     let start = raw.start.clone();
+
+    if !raw.nodes.contains_key(&start) {
+        return Err(format!("start node '{start}' does not exist in nodes"));
+    }
+
     let mut nodes = Vec::new();
 
     for (id, raw_node) in &raw.nodes {
@@ -242,6 +247,18 @@ nodes:
             .get_node("narration")
             .expect("should have narration node");
         assert!(narration.line.speaker.is_none());
+    }
+
+    #[test]
+    fn parse_invalid_start_fails() {
+        let yaml = r#"
+start: nonexistent
+nodes:
+  a:
+    text: "hello"
+"#;
+        let result = parse_dialogue(yaml);
+        assert!(result.is_err());
     }
 
     #[test]

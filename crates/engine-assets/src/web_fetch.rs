@@ -1,14 +1,17 @@
 //! web asset loading via the fetch API
 //!
-//! provides [`fetch_bytes`] for downloading assets over HTTP on WASM targets.
-//! on native targets this module is a stub that uses std::fs::read.
+//! provides [`fetch_bytes`] for downloading raw asset data over HTTP on WASM targets.
+//! the [`IoTaskPool`](super::IoTaskPool) calls this directly; use it for any ad-hoc
+//! network fetch from game code as well.
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{RequestInit, RequestMode, Response};
 
 /// fetch raw bytes from a URL using the browser's fetch API.
-/// returns the bytes on success or an error string on failure.
+///
+/// returns the full response body on success, or an error string on failure.
+/// uses CORS mode so cross-origin assets work when the server sends the right headers.
 pub async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let window = web_sys::window().ok_or("no window available")?;
 
@@ -38,21 +41,5 @@ pub async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     .await
     .map_err(|e| format!("failed to read body: {e:?}"))?;
 
-    let bytes = js_sys::Uint8Array::new(&array_buffer).to_vec();
-    Ok(bytes)
-}
-
-/// fetch a texture from a URL and return the raw bytes.
-pub async fn fetch_texture(url: &str) -> Result<Vec<u8>, String> {
-    fetch_bytes(url).await
-}
-
-/// fetch a sound from a URL and return the raw bytes.
-pub async fn fetch_sound(url: &str) -> Result<Vec<u8>, String> {
-    fetch_bytes(url).await
-}
-
-/// fetch a font from a URL and return the raw bytes.
-pub async fn fetch_font(url: &str) -> Result<Vec<u8>, String> {
-    fetch_bytes(url).await
+    Ok(js_sys::Uint8Array::new(&array_buffer).to_vec())
 }

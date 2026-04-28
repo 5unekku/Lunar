@@ -440,11 +440,11 @@ impl IoTaskPool {
 }
 
 /// web-compatible io task pool using async fetch instead of threads.
+///
+/// results are sent back through channels identical to the native pool,
+/// so [`AssetServer::update`] works the same on both targets.
 #[cfg(target_arch = "wasm32")]
 pub struct IoTaskPool {
-    pending_textures: std::collections::HashMap<u32, (String, wasm_bindgen_futures::JsFuture)>,
-    pending_sounds: std::collections::HashMap<u32, (String, wasm_bindgen_futures::JsFuture)>,
-    pending_fonts: std::collections::HashMap<u32, (String, wasm_bindgen_futures::JsFuture)>,
     texture_results: crossbeam_channel::Receiver<LoadResult<Texture>>,
     sound_results: crossbeam_channel::Receiver<LoadResult<Sound>>,
     font_results: crossbeam_channel::Receiver<LoadResult<Font>>,
@@ -455,142 +455,64 @@ pub struct IoTaskPool {
 
 #[cfg(target_arch = "wasm32")]
 impl IoTaskPool {
-    /// create a new io task pool for web (thread_count is ignored).
+    /// create a new io task pool for web (`thread_count` is unused on WASM).
     pub fn new(_thread_count: usize) -> Self {
-        let (texture_send, texture_receiver) = crossbeam_channel::unbounded();
-        let (sound_send, sound_receiver) = crossbeam_channel::unbounded();
-        let (font_send, font_receiver) = crossbeam_channel::unbounded();
-
+        let (texture_send, texture_results) = crossbeam_channel::unbounded();
+        let (sound_send, sound_results) = crossbeam_channel::unbounded();
+        let (font_send, font_results) = crossbeam_channel::unbounded();
         IoTaskPool {
-            pending_textures: std::collections::HashMap::new(),
-            pending_sounds: std::collections::HashMap::new(),
-            pending_fonts: std::collections::HashMap::new(),
-            texture_results: texture_receiver,
-            sound_results: sound_receiver,
-            font_results: font_receiver,
+            texture_results,
+            sound_results,
+            font_results,
             texture_send,
             sound_send,
             font_send,
         }
     }
 
-    /// submit a texture load task, checking bundled assets first then fetch API.
-    fn load_texture(&self, path: String, id: u32, _loader: Arc<dyn TextureLoaderTrait>) {
-        let path_clone = path.clone();
+    /// submit a texture load task — checks bundled assets first, then falls back to fetch.
+    fn load_texture(&self, path: String, id: u32, loader: Arc<dyn TextureLoaderTrait>) {
         let send = self.texture_send.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let result = if crate::bundled::contains(&path_clone) {
-                match crate::bundled::get(&path_clone) {
-                    Some(bytes) => LoadResult {
-                        id,
-                        path: path_clone.clone(),
-                        data: Ok(Texture {
-                            width: 0,
-                            height: 0,
-                            data: bytes,
-                        }),
-                    },
-                    None => LoadResult {
-                        id,
-                        path: path_clone,
-                        data: Err("bundled asset not found".to_string()),
-                    },
-                }
+            let bytes_result = if crate::bundled::contains(&path) {
+                crate::bundled::get(&path).ok_or_else(|| "bundled asset disappeared".to_string())
             } else {
-                match crate::web_fetch::fetch_texture(&path_clone).await {
-                    Ok(bytes) => LoadResult {
-                        id,
-                        path: path_clone.clone(),
-                        data: Ok(Texture {
-                            width: 0,
-                            height: 0,
-                            data: bytes,
-                        }),
-                    },
-                    Err(e) => LoadResult {
-                        id,
-                        path: path_clone,
-                        data: Err(e),
-                    },
-                }
+                crate::web_fetch::fetch_bytes(&path).await
             };
-            let _ = send.send(result);
+            let data = bytes_result.and_then(|bytes| loader.load(bytes));
+            let _ = send.send(LoadResult { id, path, data });
         });
     }
 
-    /// submit a sound load task, checking bundled assets first then fetch API.
-    fn load_sound(&self, path: String, id: u32, _loader: Arc<dyn SoundLoaderTrait>) {
-        let path_clone = path.clone();
+    /// submit a sound load task — checks bundled assets first, then falls back to fetch.
+    fn load_sound(&self, path: String, id: u32, loader: Arc<dyn SoundLoaderTrait>) {
         let send = self.sound_send.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let result = if crate::bundled::contains(&path_clone) {
-                match crate::bundled::get(&path_clone) {
-                    Some(bytes) => LoadResult {
-                        id,
-                        path: path_clone.clone(),
-                        data: Ok(Sound { data: bytes }),
-                    },
-                    None => LoadResult {
-                        id,
-                        path: path_clone,
-                        data: Err("bundled asset not found".to_string()),
-                    },
-                }
+            let bytes_result = if crate::bundled::contains(&path) {
+                crate::bundled::get(&path).ok_or_else(|| "bundled asset disappeared".to_string())
             } else {
-                match crate::web_fetch::fetch_sound(&path_clone).await {
-                    Ok(bytes) => LoadResult {
-                        id,
-                        path: path_clone.clone(),
-                        data: Ok(Sound { data: bytes }),
-                    },
-                    Err(e) => LoadResult {
-                        id,
-                        path: path_clone,
-                        data: Err(e),
-                    },
-                }
+                crate::web_fetch::fetch_bytes(&path).await
             };
-            let _ = send.send(result);
+            let data = bytes_result.and_then(|bytes| loader.load(bytes));
+            let _ = send.send(LoadResult { id, path, data });
         });
     }
 
-    /// submit a font load task, checking bundled assets first then fetch API.
-    fn load_font(&self, path: String, id: u32, _loader: Arc<dyn FontLoaderTrait>) {
-        let path_clone = path.clone();
+    /// submit a font load task — checks bundled assets first, then falls back to fetch.
+    fn load_font(&self, path: String, id: u32, loader: Arc<dyn FontLoaderTrait>) {
         let send = self.font_send.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let result = if crate::bundled::contains(&path_clone) {
-                match crate::bundled::get(&path_clone) {
-                    Some(bytes) => LoadResult {
-                        id,
-                        path: path_clone.clone(),
-                        data: Ok(Font { data: bytes }),
-                    },
-                    None => LoadResult {
-                        id,
-                        path: path_clone,
-                        data: Err("bundled asset not found".to_string()),
-                    },
-                }
+            let bytes_result = if crate::bundled::contains(&path) {
+                crate::bundled::get(&path).ok_or_else(|| "bundled asset disappeared".to_string())
             } else {
-                match crate::web_fetch::fetch_font(&path_clone).await {
-                    Ok(bytes) => LoadResult {
-                        id,
-                        path: path_clone.clone(),
-                        data: Ok(Font { data: bytes }),
-                    },
-                    Err(e) => LoadResult {
-                        id,
-                        path: path_clone,
-                        data: Err(e),
-                    },
-                }
+                crate::web_fetch::fetch_bytes(&path).await
             };
-            let _ = send.send(result);
+            let data = bytes_result.and_then(|bytes| loader.load(bytes));
+            let _ = send.send(LoadResult { id, path, data });
         });
     }
 
-    /// drain all completed texture results
+    /// drain all completed texture results.
     fn drain_texture_results(&self) -> Vec<LoadResult<Texture>> {
         let mut results = Vec::new();
         while let Ok(result) = self.texture_results.try_recv() {
@@ -599,7 +521,7 @@ impl IoTaskPool {
         results
     }
 
-    /// drain all completed sound results
+    /// drain all completed sound results.
     fn drain_sound_results(&self) -> Vec<LoadResult<Sound>> {
         let mut results = Vec::new();
         while let Ok(result) = self.sound_results.try_recv() {
@@ -608,7 +530,7 @@ impl IoTaskPool {
         results
     }
 
-    /// drain all completed font results
+    /// drain all completed font results.
     fn drain_font_results(&self) -> Vec<LoadResult<Font>> {
         let mut results = Vec::new();
         while let Ok(result) = self.font_results.try_recv() {
@@ -660,14 +582,13 @@ pub struct WavSoundLoader;
 
 impl SoundLoaderTrait for WavSoundLoader {
     fn load(&self, bytes: Vec<u8>) -> Result<Sound, String> {
+        use rodio::Source as _;
         let cursor = std::io::Cursor::new(bytes);
         let source =
             rodio::Decoder::new_wav(cursor).map_err(|e| format!("failed to decode wav: {e}"))?;
+        let sample_rate = source.sample_rate();
         let samples: Vec<f32> = source.map(|s| s as f32 / i16::MAX as f32).collect();
-        Ok(Sound {
-            samples,
-            sample_rate: 44100,
-        })
+        Ok(Sound { samples, sample_rate })
     }
 }
 
@@ -678,14 +599,13 @@ pub struct OggSoundLoader;
 
 impl SoundLoaderTrait for OggSoundLoader {
     fn load(&self, bytes: Vec<u8>) -> Result<Sound, String> {
+        use rodio::Source as _;
         let cursor = std::io::Cursor::new(bytes);
         let source =
             rodio::Decoder::new_vorbis(cursor).map_err(|e| format!("failed to decode ogg: {e}"))?;
+        let sample_rate = source.sample_rate();
         let samples: Vec<f32> = source.map(|s| s as f32 / i16::MAX as f32).collect();
-        Ok(Sound {
-            samples,
-            sample_rate: 44100,
-        })
+        Ok(Sound { samples, sample_rate })
     }
 }
 
@@ -762,6 +682,36 @@ fn font_loader_for(path: &str) -> Arc<dyn FontLoaderTrait> {
     }
 }
 
+/// per-type entry in the custom loader registry.
+struct CustomLoaderEntry<T: ?Sized> {
+    extensions: Vec<String>,
+    loader: Arc<T>,
+}
+
+/// bridges a public [`AssetLoader<Asset=Texture>`] into the internal [`TextureLoaderTrait`].
+struct TextureLoaderAdapter<L: AssetLoader<Asset = Texture>>(L);
+impl<L: AssetLoader<Asset = Texture> + Send + Sync> TextureLoaderTrait for TextureLoaderAdapter<L> {
+    fn load(&self, bytes: Vec<u8>) -> Result<Texture, String> {
+        self.0.load(bytes)
+    }
+}
+
+/// bridges a public [`AssetLoader<Asset=Sound>`] into the internal [`SoundLoaderTrait`].
+struct SoundLoaderAdapter<L: AssetLoader<Asset = Sound>>(L);
+impl<L: AssetLoader<Asset = Sound> + Send + Sync> SoundLoaderTrait for SoundLoaderAdapter<L> {
+    fn load(&self, bytes: Vec<u8>) -> Result<Sound, String> {
+        self.0.load(bytes)
+    }
+}
+
+/// bridges a public [`AssetLoader<Asset=Font>`] into the internal [`FontLoaderTrait`].
+struct FontLoaderAdapter<L: AssetLoader<Asset = Font>>(L);
+impl<L: AssetLoader<Asset = Font> + Send + Sync> FontLoaderTrait for FontLoaderAdapter<L> {
+    fn load(&self, bytes: Vec<u8>) -> Result<Font, String> {
+        self.0.load(bytes)
+    }
+}
+
 /// asset server resource, manages loading and handles.
 ///
 /// the asset server is the primary interface for loading game assets.
@@ -776,147 +726,151 @@ fn font_loader_for(path: &str) -> Arc<dyn FontLoaderTrait> {
 ///     // handle is valid immediately, but the texture data loads in the background
 /// }
 /// ```
-/// loader entry for the extension-based dispatch registry.
-struct LoaderEntry {
-    extensions: Vec<String>,
-    loader: Arc<dyn AssetLoaderDyn>,
-}
-
-/// object-safe trait for type-erased asset loaders.
-trait AssetLoaderDyn: Send + Sync {
-    #[allow(dead_code)]
-    fn load(&self, bytes: Vec<u8>) -> Result<Box<dyn std::any::Any>, String>;
-}
-
-/// wrapper that makes a typed AssetLoader implement AssetLoaderDyn.
-struct AssetLoaderWrapper<L: AssetLoader> {
-    #[allow(dead_code)]
-    loader: L,
-}
-
-impl<L: AssetLoader> AssetLoaderDyn for AssetLoaderWrapper<L> {
-    fn load(&self, bytes: Vec<u8>) -> Result<Box<dyn std::any::Any>, String> {
-        let asset = self.loader.load(bytes)?;
-        Ok(Box::new(asset))
-    }
-}
-
 #[derive(Resource)]
 pub struct AssetServer {
     texture_store: AssetStore<Texture>,
     sound_store: AssetStore<Sound>,
     font_store: AssetStore<Font>,
     io_pool: IoTaskPool,
-    /// registered loaders keyed by file extension.
-    custom_loaders: Vec<LoaderEntry>,
+    custom_texture_loaders: Vec<CustomLoaderEntry<dyn TextureLoaderTrait>>,
+    custom_sound_loaders: Vec<CustomLoaderEntry<dyn SoundLoaderTrait>>,
+    custom_font_loaders: Vec<CustomLoaderEntry<dyn FontLoaderTrait>>,
 }
 
 impl AssetServer {
-    /// create a new asset server with the given number of io threads
+    /// create a new asset server with the given number of io threads.
     pub fn new(io_thread_count: usize) -> Self {
         AssetServer {
             texture_store: AssetStore::new(),
             sound_store: AssetStore::new(),
             font_store: AssetStore::new(),
             io_pool: IoTaskPool::new(io_thread_count),
-            custom_loaders: Vec::new(),
+            custom_texture_loaders: Vec::new(),
+            custom_sound_loaders: Vec::new(),
+            custom_font_loaders: Vec::new(),
         }
     }
 
-    /// register a custom texture loader for the given extensions.
-    pub fn register_texture_loader<L: AssetLoader<Asset = Texture>>(
+    /// register a custom texture loader for the given file extensions.
+    ///
+    /// custom loaders take priority over the built-in ones. call this before
+    /// any [`load_texture`](Self::load_texture) calls for those extensions.
+    pub fn register_texture_loader<L: AssetLoader<Asset = Texture> + 'static>(
         &mut self,
         extensions: &[&str],
         loader: L,
     ) {
-        let entry = LoaderEntry {
+        self.custom_texture_loaders.push(CustomLoaderEntry {
             extensions: extensions.iter().map(|s| s.to_string()).collect(),
-            loader: Arc::new(AssetLoaderWrapper { loader }),
-        };
-        self.custom_loaders.push(entry);
+            loader: Arc::new(TextureLoaderAdapter(loader)),
+        });
     }
 
-    /// register a custom sound loader for the given extensions.
-    pub fn register_sound_loader<L: AssetLoader<Asset = Sound>>(
+    /// register a custom sound loader for the given file extensions.
+    ///
+    /// custom loaders take priority over the built-in ones.
+    pub fn register_sound_loader<L: AssetLoader<Asset = Sound> + 'static>(
         &mut self,
         extensions: &[&str],
         loader: L,
     ) {
-        let entry = LoaderEntry {
+        self.custom_sound_loaders.push(CustomLoaderEntry {
             extensions: extensions.iter().map(|s| s.to_string()).collect(),
-            loader: Arc::new(AssetLoaderWrapper { loader }),
-        };
-        self.custom_loaders.push(entry);
+            loader: Arc::new(SoundLoaderAdapter(loader)),
+        });
     }
 
-    /// register a custom font loader for the given extensions.
-    pub fn register_font_loader<L: AssetLoader<Asset = Font>>(
+    /// register a custom font loader for the given file extensions.
+    ///
+    /// custom loaders take priority over the built-in ones.
+    pub fn register_font_loader<L: AssetLoader<Asset = Font> + 'static>(
         &mut self,
         extensions: &[&str],
         loader: L,
     ) {
-        let entry = LoaderEntry {
+        self.custom_font_loaders.push(CustomLoaderEntry {
             extensions: extensions.iter().map(|s| s.to_string()).collect(),
-            loader: Arc::new(AssetLoaderWrapper { loader }),
-        };
-        self.custom_loaders.push(entry);
+            loader: Arc::new(FontLoaderAdapter(loader)),
+        });
     }
 
-    /// find a custom loader by file extension.
-    #[allow(dead_code)]
-    fn find_loader(&self, path: &str) -> Option<&Arc<dyn AssetLoaderDyn>> {
-        let ext = std::path::Path::new(path)
+    /// resolve the texture loader for a path — custom loaders take priority over built-ins.
+    fn resolve_texture_loader(&self, path: &str) -> Arc<dyn TextureLoaderTrait> {
+        let ext = Path::new(path)
             .extension()
-            .and_then(|e| e.to_str())?;
-        for entry in &self.custom_loaders {
-            if entry.extensions.iter().any(|e| e == ext) {
-                return Some(&entry.loader);
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        for entry in &self.custom_texture_loaders {
+            if entry.extensions.iter().any(|e| e.as_str() == ext) {
+                return Arc::clone(&entry.loader);
             }
         }
-        None
+        texture_loader_for(path)
     }
 
-    /// load an asset by path, returns immediately with a handle.
-    /// the asset loads asynchronously in the background.
-    /// this is the generic entry point — it dispatches to the correct
-    /// type-specific method based on the `T` parameter.
-    pub fn load<T: Asset>(&mut self, _path: &str) -> Handle<T> {
-        // note: generic load dispatch requires type-erased loader registry.
-        // use type-specific methods (load_texture, load_sound, load_font) directly.
-        unimplemented!("use type-specific load methods for now")
+    /// resolve the sound loader for a path — custom loaders take priority over built-ins.
+    fn resolve_sound_loader(&self, path: &str) -> Arc<dyn SoundLoaderTrait> {
+        let ext = Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        for entry in &self.custom_sound_loaders {
+            if entry.extensions.iter().any(|e| e.as_str() == ext) {
+                return Arc::clone(&entry.loader);
+            }
+        }
+        sound_loader_for(path)
     }
 
-    /// load a batch of assets by path, returns handles immediately.
-    pub fn load_batch<T: Asset>(&mut self, _paths: &[&str]) -> Vec<Handle<T>> {
-        Vec::new()
+    /// resolve the font loader for a path — custom loaders take priority over built-ins.
+    fn resolve_font_loader(&self, path: &str) -> Arc<dyn FontLoaderTrait> {
+        let ext = Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        for entry in &self.custom_font_loaders {
+            if entry.extensions.iter().any(|e| e.as_str() == ext) {
+                return Arc::clone(&entry.loader);
+            }
+        }
+        font_loader_for(path)
     }
 
     /// load a texture, returns immediately with a handle.
+    ///
     /// the texture loads asynchronously in the background.
+    /// use [`is_texture_ready`](Self::is_texture_ready) to check when it's usable.
     pub fn load_texture(&mut self, path: &str) -> Handle<Texture> {
         let resolved = resolve_asset_path(path);
         let handle = self.texture_store.allocate_slot(resolved.clone());
-        let loader = texture_loader_for(&resolved);
+        let loader = self.resolve_texture_loader(&resolved);
         self.io_pool.load_texture(resolved, handle.id(), loader);
         handle
     }
 
     /// load a sound, returns immediately with a handle.
+    ///
     /// the sound loads asynchronously in the background.
+    /// use [`is_sound_ready`](Self::is_sound_ready) to check when it's usable.
     pub fn load_sound(&mut self, path: &str) -> Handle<Sound> {
         let resolved = resolve_asset_path(path);
         let handle = self.sound_store.allocate_slot(resolved.clone());
-        let loader = sound_loader_for(&resolved);
+        let loader = self.resolve_sound_loader(&resolved);
         self.io_pool.load_sound(resolved, handle.id(), loader);
         handle
     }
 
     /// load a font, returns immediately with a handle.
+    ///
     /// the font loads asynchronously in the background.
+    /// use [`is_font_ready`](Self::is_font_ready) to check when it's usable.
     pub fn load_font(&mut self, path: &str) -> Handle<Font> {
         let resolved = resolve_asset_path(path);
         let handle = self.font_store.allocate_slot(resolved.clone());
-        let loader = font_loader_for(&resolved);
+        let loader = self.resolve_font_loader(&resolved);
         self.io_pool.load_font(resolved, handle.id(), loader);
         handle
     }
@@ -993,9 +947,11 @@ impl AssetServer {
             + self.font_store.loading_count()
     }
 
-    /// block until all assets are loaded.
-    /// this is a convenience for tests or initialization code.
-    /// in a real game, prefer polling `is_loaded` or `loading_count`.
+    /// block the calling thread until all pending asset loads complete.
+    ///
+    /// intended for tests and one-shot init code only — not available on WASM
+    /// (no threads to block). in a running game, prefer polling [`loading_count`](Self::loading_count).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn wait_for_all(&self) {
         while self.loading_count() > 0 {
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -1122,25 +1078,17 @@ fn process_asset_loads(mut asset_server: ResMut<AssetServer>) {
 }
 
 /// event emitted when a watched asset file changes.
+///
+/// only emitted on native targets — not available on WASM.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone)]
 pub struct AssetChangedEvent {
     /// the file path that changed.
     pub path: String,
 }
 
-/// asset watcher resource, watches asset directories for changes
-/// and triggers reloads of changed assets.
-///
-/// only active in dev builds — not intended for release.
-#[cfg_attr(not(target_arch = "wasm32"), derive(Resource))]
-pub struct AssetWatcher {
-    #[allow(dead_code)]
-    watcher: Option<notify::RecommendedWatcher>,
-    /// map of watched paths to asset type tags.
-    watched: std::collections::HashMap<String, AssetType>,
-}
-
-/// asset type tag for dispatching reloads.
+/// asset type tag for dispatching hot-reload events.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum AssetType {
     Texture,
@@ -1148,59 +1096,65 @@ pub enum AssetType {
     Font,
 }
 
+/// watches an asset directory for file changes and logs them.
+///
+/// only available on native targets — `notify` does not support WASM.
+/// event routing into the ECS is a planned feature; currently changes
+/// are logged via [`log::info`] for debugging.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Resource)]
+pub struct AssetWatcher {
+    #[allow(dead_code)]
+    watcher: Option<notify::RecommendedWatcher>,
+    watched: std::collections::HashMap<String, AssetType>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 impl AssetWatcher {
-    /// create a new asset watcher that watches the given directory.
+    /// create a new asset watcher that recursively watches the given directory.
     pub fn new(watch_dir: &str) -> Self {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            use notify::{RecursiveMode, Watcher as _};
-            let _tx: std::sync::mpsc::Sender<()> = std::sync::mpsc::channel().0;
-            // note: the watcher is created but events are not yet drained into the ECS.
-            // a full implementation would spawn a thread to drain _rx and push events.
-            let mut watcher: Option<notify::RecommendedWatcher> = None;
-            if let Ok(mut w) =
-                notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
-                    if let Ok(event) = res {
-                        for path in event.paths {
-                            if let Some(p) = path.to_str() {
-                                log::info!("asset changed: {}", p);
-                            }
+        use notify::{RecursiveMode, Watcher as _};
+        // TODO: route events into ECS via a channel instead of just logging.
+        let mut watcher: Option<notify::RecommendedWatcher> = None;
+        if let Ok(mut w) =
+            notify::recommended_watcher(|res: Result<notify::Event, notify::Error>| {
+                if let Ok(event) = res {
+                    for path in event.paths {
+                        if let Some(p) = path.to_str() {
+                            log::info!("asset changed: {p}");
                         }
                     }
-                })
-            {
-                let _ = w.watch(std::path::Path::new(watch_dir), RecursiveMode::Recursive);
-                watcher = Some(w);
-            }
-            Self {
-                watcher,
-                watched: std::collections::HashMap::new(),
-            }
-        }
-        #[cfg(target_arch = "wasm32")]
+                }
+            })
         {
-            let _ = watch_dir;
-            Self {
-                watcher: None,
-                watched: std::collections::HashMap::new(),
-            }
+            let _ = w.watch(std::path::Path::new(watch_dir), RecursiveMode::Recursive);
+            watcher = Some(w);
+        }
+        Self {
+            watcher,
+            watched: std::collections::HashMap::new(),
         }
     }
 
-    /// watch a specific asset path.
+    /// register a specific path to track for reload dispatch.
     pub fn watch(&mut self, path: &str, asset_type: AssetType) {
         self.watched.insert(path.to_string(), asset_type);
     }
 
-    /// get the list of watched paths.
+    /// list all registered watch paths.
     pub fn watched_paths(&self) -> Vec<&str> {
         self.watched.keys().map(|s| s.as_str()).collect()
     }
 }
 
-/// asset watcher plugin, registers the AssetWatcher resource.
+/// asset watcher plugin — registers [`AssetWatcher`] as a resource.
+///
+/// only available on native targets. add this plugin during development
+/// to get file-change logs for assets in the `assets/` directory.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct AssetWatcherPlugin;
 
+#[cfg(not(target_arch = "wasm32"))]
 impl GamePlugin for AssetWatcherPlugin {
     fn name(&self) -> &str {
         "AssetWatcherPlugin"
