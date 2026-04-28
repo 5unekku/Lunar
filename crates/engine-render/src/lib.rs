@@ -1382,6 +1382,13 @@ pub mod layers {
     pub const UI: i32 = 300;
 }
 
+/// ECS component that assigns an entity to a render layer.
+///
+/// entities with a higher layer value are drawn on top of lower layers.
+/// use the [`layers`] constants for common layer assignments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Component)]
+pub struct Layer(pub i32);
+
 impl RenderQueue {
     /// create a new empty render queue
     #[must_use]
