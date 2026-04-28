@@ -762,6 +762,7 @@ impl RenderEngine {
             let layer = match &cmd.kind {
                 DrawKind::Sprite { layer, .. } => *layer,
                 DrawKind::Rect { layer, .. } => *layer,
+                DrawKind::Line { layer, .. } => *layer,
                 DrawKind::Text { layer, .. } => *layer,
             };
             let tex = match &cmd.kind {
@@ -773,22 +774,11 @@ impl RenderEngine {
             (layer, tex)
         });
 
-        // collect rect and text commands (no texture)
+        // collect untextured commands (rects, lines, text)
         let mut rect_commands: Vec<&DrawCommand> = Vec::new();
         for command in &sorted_commands {
             match &command.kind {
-                DrawKind::Rect { .. } | DrawKind::Text { .. } => {
-                    rect_commands.push(command);
-                }
-                _ => {}
-            }
-        }
-
-        // collect rect and text commands (no texture)
-        let mut rect_commands: Vec<&DrawCommand> = Vec::new();
-        for command in &sorted_commands {
-            match &command.kind {
-                DrawKind::Rect { .. } | DrawKind::Text { .. } => {
+                DrawKind::Rect { .. } | DrawKind::Line { .. } | DrawKind::Text { .. } => {
                     rect_commands.push(command);
                 }
                 _ => {}
@@ -884,7 +874,7 @@ impl RenderEngine {
                 self.draw_vertex_batch(&mut pass, tex_id, batch_start, vertex_count);
             }
 
-            // draw untextured commands (rects, text) as solid color
+            // draw untextured commands (rects, lines, text) as solid color
             if !rect_commands.is_empty() {
                 let rect_start = self.vertex_offset;
                 for command in &rect_commands {
@@ -896,6 +886,15 @@ impl RenderEngine {
                             ..
                         } => {
                             self.write_rect_vertices(*position, *size, *color);
+                        }
+                        DrawKind::Line {
+                            start,
+                            end,
+                            color,
+                            thickness,
+                            ..
+                        } => {
+                            self.write_line_vertices(*start, *end, *color, *thickness);
                         }
                         DrawKind::Text {
                             font,
@@ -1060,6 +1059,45 @@ impl RenderEngine {
         self.vertex_offset += 6 * VERTEX_STRIDE;
     }
 
+    /// write a line's 6 vertices into the persistent vertex buffer.
+    /// renders a rotated rectangle along the line segment.
+    fn write_line_vertices(&mut self, start: Vec2, end: Vec2, color: Color, thickness: f32) {
+        let dx = end.x - start.x;
+        let dy = end.y - start.y;
+        let len = (dx * dx + dy * dy).sqrt();
+        if len < 0.001 {
+            return;
+        }
+        // unit direction and perpendicular
+        let nx = -dy / len;
+        let ny = dx / len;
+        let half_t = thickness * 0.5;
+        // 4 corners of the line rectangle
+        let corners = [
+            (start.x + nx * half_t, start.y + ny * half_t),
+            (start.x - nx * half_t, start.y - ny * half_t),
+            (end.x + nx * half_t, end.y + ny * half_t),
+            (end.x - nx * half_t, end.y - ny * half_t),
+        ];
+        let packed_color = pack_color(color);
+        // 6 vertices (2 triangles) * 5 components = 30 u32s
+        let mut verts: [u32; 30] = [0; 30];
+        let indices = [0, 1, 2, 2, 1, 3];
+        for (i, &idx) in indices.iter().enumerate() {
+            let base = i * 5;
+            let (px, py) = corners[idx];
+            verts[base] = f32_to_u32(px);
+            verts[base + 1] = f32_to_u32(py);
+            verts[base + 2] = 0; // u
+            verts[base + 3] = 0; // v
+            verts[base + 4] = packed_color;
+        }
+        let bytes = bytemuck::cast_slice(&verts);
+        self.queue
+            .write_buffer(&self.vertex_buf, self.vertex_offset as u64, bytes);
+        self.vertex_offset += 6 * VERTEX_STRIDE;
+    }
+
     /// write a text quad's 6 vertices into the persistent vertex buffer.
     /// vertex format: [pos.x, pos.y, u, v] (f32) + [packed rgba] (u32) = 20 bytes
     fn write_text_quad(&mut self, quad: &text::TextGlyphQuad, color: Color) {
@@ -1196,6 +1234,14 @@ pub enum DrawKind {
         color: Color,
         layer: i32,
     },
+    /// draw a line between two points
+    Line {
+        start: Vec2,
+        end: Vec2,
+        color: Color,
+        thickness: f32,
+        layer: i32,
+    },
     /// draw text
     Text {
         font: Option<u64>,
@@ -1326,44 +1372,28 @@ impl RenderQueue {
         });
     }
 
-    /// draw a line between two points
+    /// draw a line between two points with the given thickness.
+    /// uses a proper rotated rectangle, not an AABB approximation.
     pub fn draw_line(&mut self, start: Vec2, end: Vec2, color: Color, thickness: f32) {
-        let delta = end - start;
-        let length = delta.length();
-        if length < 0.001 {
-            return;
-        }
-        // draw a thin rect along the line
-        let angle = delta.y.atan2(delta.x);
-        let cos = angle.cos();
-        let sin = angle.sin();
-        let half_t = thickness * 0.5;
+        self.draw_line_on_layer(start, end, color, thickness, layers::GAME);
+    }
 
-        // compute the axis-aligned bounding box of the rotated line rect
-        let corners = [
-            [-sin * half_t, cos * half_t],
-            [cos * length - sin * half_t, sin * length + cos * half_t],
-            [cos * length + sin * half_t, sin * length - cos * half_t],
-            [sin * half_t, -cos * half_t],
-        ];
-
-        let min_x = corners.iter().map(|c| c[0]).fold(f32::INFINITY, f32::min);
-        let max_x = corners
-            .iter()
-            .map(|c| c[0])
-            .fold(f32::NEG_INFINITY, f32::max);
-        let min_y = corners.iter().map(|c| c[1]).fold(f32::INFINITY, f32::min);
-        let max_y = corners
-            .iter()
-            .map(|c| c[1])
-            .fold(f32::NEG_INFINITY, f32::max);
-
+    /// draw a line on a specific layer
+    pub fn draw_line_on_layer(
+        &mut self,
+        start: Vec2,
+        end: Vec2,
+        color: Color,
+        thickness: f32,
+        layer: i32,
+    ) {
         self.push(DrawCommand {
-            kind: DrawKind::Rect {
-                position: Vec2::new(start.x + min_x, start.y + min_y),
-                size: Vec2::new(max_x - min_x, max_y - min_y),
+            kind: DrawKind::Line {
+                start,
+                end,
                 color,
-                layer: layers::GAME,
+                thickness,
+                layer,
             },
         });
     }
