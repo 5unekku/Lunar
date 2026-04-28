@@ -136,7 +136,9 @@ impl GameLoop {
         ticks.min(5)
     }
 
-    /// apply frame rate limiting if frame cap is set
+    /// apply frame rate limiting if frame cap is set.
+    /// uses a hybrid approach: sleep for most of the wait time, then spin-wait
+    /// the last ~1ms for better precision and reduced frame pacing jitter.
     pub fn apply_frame_cap(&self) {
         if self.frame_cap == 0 {
             return;
@@ -146,7 +148,15 @@ impl GameLoop {
         let elapsed = self.last_frame.elapsed();
 
         if elapsed < frame_duration {
-            std::thread::sleep(frame_duration - elapsed);
+            let remaining = frame_duration - elapsed;
+            // sleep for all but the last 1ms, then spin-wait for precision
+            if remaining > Duration::from_millis(1) {
+                std::thread::sleep(remaining - Duration::from_millis(1));
+            }
+            // spin-wait the remaining time
+            while self.last_frame.elapsed() < frame_duration {
+                std::hint::spin_loop();
+            }
         }
     }
 }
