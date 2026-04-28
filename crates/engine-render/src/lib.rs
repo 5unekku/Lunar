@@ -39,7 +39,6 @@ use bevy_ecs::prelude::*;
 use engine_assets::{Font, Handle, Texture};
 use engine_core::{App, GamePlugin};
 use engine_math::{Color, Vec2};
-use wgpu::util::DeviceExt;
 
 /// parameters for drawing a transformed sprite.
 /// used with [`RenderQueue::draw_sprite_transformed_on_layer`] to avoid
@@ -167,6 +166,13 @@ impl Default for RenderConfig {
     }
 }
 
+/// max vertices per frame before buffer overflow (64k vertices = ~16k sprites with packed color)
+/// vertex format: [pos.x, pos.y, u, v] (16 bytes) + [color_u32] (4 bytes) = 20 bytes per vertex
+const MAX_VERTICES: usize = 65536;
+
+/// bytes per vertex: 2 floats for position + 2 floats for uv + 1 u32 for packed rgba color
+const VERTEX_STRIDE: usize = 20;
+
 /// render engine resource, owns all wgpu rendering state.
 ///
 /// manages the GPU device, queue, surface, and render pipelines.
@@ -187,6 +193,10 @@ pub struct RenderEngine {
     sampler: wgpu::Sampler,
     textures: HashMap<u32, GpuTexture>,
     bind_groups: HashMap<u32, wgpu::BindGroup>,
+    /// persistent vertex buffer — written each frame, no per-frame allocation
+    vertex_buf: wgpu::Buffer,
+    /// current write offset into vertex_buf
+    vertex_offset: usize,
     glyph_atlas: text::GlyphAtlas,
     #[allow(dead_code)]
     glyph_atlas_texture: Option<GpuTexture>,
@@ -414,7 +424,7 @@ impl RenderEngine {
             immediate_size: 0,
         });
 
-        // vertex layout: [pos.x, pos.y, u, v, r, g, b, a] per vertex (stride 32 bytes)
+        // vertex layout: [pos.x, pos.y, u, v] (16 bytes) + [packed rgba u32] (4 bytes) = 20 bytes
         let sprite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("sprite pipeline"),
             layout: Some(&pipeline_layout),
@@ -422,7 +432,7 @@ impl RenderEngine {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: 32,
+                    array_stride: VERTEX_STRIDE as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &[
                         wgpu::VertexAttribute {
@@ -436,7 +446,7 @@ impl RenderEngine {
                             shader_location: 1,
                         },
                         wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x4,
+                            format: wgpu::VertexFormat::Unorm8x4,
                             offset: 16,
                             shader_location: 2,
                         },
@@ -492,6 +502,16 @@ impl RenderEngine {
             frame_cap_str
         );
 
+        // persistent vertex buffer — no per-frame allocation
+        let vertex_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("persistent vertex buffer"),
+            size: (MAX_VERTICES * 32) as u64,
+            usage: wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::MAP_WRITE
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         RenderEngine {
             surface,
             device,
@@ -505,6 +525,8 @@ impl RenderEngine {
             sampler,
             textures: HashMap::new(),
             bind_groups: HashMap::new(),
+            vertex_buf,
+            vertex_offset: 0,
             glyph_atlas: text::GlyphAtlas::new(1024, 1024),
             glyph_atlas_texture: None,
             render_passes: Vec::new(),
@@ -765,9 +787,12 @@ impl RenderEngine {
 
             pass.set_pipeline(&self.sprite_pipeline);
 
+            // reset persistent vertex buffer offset for this frame
+            self.vertex_offset = 0;
+
             // draw sprites batched by texture (sorted order means same-tex commands are contiguous)
             let mut current_tex: Option<u32> = None;
-            let mut vertices: Vec<f32> = Vec::with_capacity(1024);
+            let mut batch_start = 0; // vertex index where current batch started
 
             for command in &sorted_commands {
                 let DrawKind::Sprite {
@@ -787,60 +812,31 @@ impl RenderEngine {
 
                 // flush and switch texture when it changes
                 if current_tex != Some(tex_id) {
-                    if !vertices.is_empty()
+                    if self.vertex_offset > batch_start
                         && let Some(prev_tex) = current_tex
                     {
-                        self.draw_vertex_batch(&mut pass, prev_tex, &vertices);
+                        let vertex_count = (self.vertex_offset - batch_start) / VERTEX_STRIDE;
+                        self.draw_vertex_batch(&mut pass, prev_tex, batch_start, vertex_count);
                     }
-                    vertices.clear();
+                    batch_start = self.vertex_offset;
                     current_tex = Some(tex_id);
                 }
 
-                // accumulate vertices
-                let hw = scale.x * 0.5;
-                let hh = scale.y * 0.5;
-                let cos = rotation.cos();
-                let sin = rotation.sin();
-
-                let corners = [
-                    [-hw, -hh],
-                    [hw, -hh],
-                    [-hw, hh],
-                    [-hw, hh],
-                    [hw, -hh],
-                    [hw, hh],
-                ];
-
-                let (uv_min, uv_max) = uv_rect.unwrap_or((Vec2::ZERO, Vec2::new(1.0, 1.0)));
-                let uvs = [
-                    [uv_min.x, uv_min.y],
-                    [uv_max.x, uv_min.y],
-                    [uv_min.x, uv_max.y],
-                    [uv_min.x, uv_max.y],
-                    [uv_max.x, uv_min.y],
-                    [uv_max.x, uv_max.y],
-                ];
-
-                for (i, [lx, ly]) in corners.iter().enumerate() {
-                    let rx = lx * cos - ly * sin;
-                    let ry = lx * sin + ly * cos;
-                    let px = position.x + rx;
-                    let py = position.y + ry;
-                    let [u, v] = uvs[i];
-                    vertices.extend_from_slice(&[px, py, u, v, tint.r, tint.g, tint.b, tint.a]);
-                }
+                // write vertices directly into persistent buffer
+                self.write_sprite_vertices(tex_id, *position, *rotation, *scale, *tint, *uv_rect);
             }
 
             // flush final sprite batch
-            if !vertices.is_empty()
+            if self.vertex_offset > batch_start
                 && let Some(tex_id) = current_tex
             {
-                self.draw_vertex_batch(&mut pass, tex_id, &vertices);
+                let vertex_count = (self.vertex_offset - batch_start) / VERTEX_STRIDE;
+                self.draw_vertex_batch(&mut pass, tex_id, batch_start, vertex_count);
             }
 
             // draw untextured commands (rects, text) as solid color
             if !rect_commands.is_empty() {
-                let mut vertices: Vec<f32> = Vec::with_capacity(rect_commands.len() * 36);
+                let rect_start = self.vertex_offset;
                 for command in &rect_commands {
                     match &command.kind {
                         DrawKind::Rect {
@@ -849,19 +845,7 @@ impl RenderEngine {
                             color,
                             ..
                         } => {
-                            let (x, y, w, h) = (position.x, position.y, size.x, size.y);
-                            for [px, py] in [
-                                [x, y],
-                                [x + w, y],
-                                [x, y + h],
-                                [x, y + h],
-                                [x + w, y],
-                                [x + w, y + h],
-                            ] {
-                                vertices.extend_from_slice(&[
-                                    px, py, 0.0, 0.0, color.r, color.g, color.b, color.a,
-                                ]);
-                            }
+                            self.write_rect_vertices(*position, *size, *color);
                         }
                         DrawKind::Text {
                             font,
@@ -871,11 +855,7 @@ impl RenderEngine {
                             color,
                             ..
                         } => {
-                            // layout text and generate quads
                             let font_id = font.unwrap_or(0) as u32;
-                            // ensure all glyphs are in the atlas (rasterize on demand)
-                            // note: we don't have access to the Font resource here, so we skip rasterization
-                            // in a real implementation, fonts would be pre-rasterized
                             let quads = text::layout_text(
                                 &self.glyph_atlas,
                                 font_id,
@@ -884,43 +864,16 @@ impl RenderEngine {
                                 *position,
                             );
                             for quad in &quads {
-                                let x = quad.position.x;
-                                let y = quad.position.y;
-                                let w = quad.size.x;
-                                let h = quad.size.y;
-                                let u0 = quad.uv_min.x;
-                                let v0 = quad.uv_min.y;
-                                let u1 = quad.uv_max.x;
-                                let v1 = quad.uv_max.y;
-                                for [px, py, u, v] in [
-                                    [x, y, u0, v0],
-                                    [x + w, y, u1, v0],
-                                    [x, y + h, u0, v1],
-                                    [x, y + h, u0, v1],
-                                    [x + w, y, u1, v0],
-                                    [x + w, y + h, u1, v1],
-                                ] {
-                                    vertices.extend_from_slice(&[
-                                        px, py, u, v, color.r, color.g, color.b, color.a,
-                                    ]);
-                                }
+                                self.write_text_quad(quad, *color);
                             }
                         }
                         _ => {}
                     }
                 }
 
-                if !vertices.is_empty() {
-                    let vertex_buf =
-                        self.device
-                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                label: Some("rect vertices"),
-                                contents: bytemuck::cast_slice(&vertices),
-                                usage: wgpu::BufferUsages::VERTEX,
-                            });
-
-                    pass.set_vertex_buffer(0, vertex_buf.slice(..));
-                    pass.draw(0..(vertices.len() / 8) as u32, 0..1);
+                if self.vertex_offset > rect_start {
+                    let vertex_count = (self.vertex_offset - rect_start) / VERTEX_STRIDE;
+                    self.draw_vertex_batch(&mut pass, 0, rect_start, vertex_count);
                 }
             }
         }
@@ -950,22 +903,162 @@ impl RenderEngine {
         frame.present();
     }
 
-    /// draw a batch of vertices using the cached bind group for the given texture.
-    fn draw_vertex_batch(&self, pass: &mut wgpu::RenderPass<'_>, tex_id: u32, vertices: &[f32]) {
+    /// draw a batch of vertices from the persistent vertex buffer.
+    fn draw_vertex_batch(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        tex_id: u32,
+        offset: usize,
+        vertex_count: usize,
+    ) {
         let Some(bind_group) = self.bind_groups.get(&tex_id) else {
             return;
         };
-        let vertex_buf = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("sprite vertices"),
-                contents: bytemuck::cast_slice(vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
         pass.set_bind_group(0, bind_group, &[]);
-        pass.set_vertex_buffer(0, vertex_buf.slice(..));
-        pass.draw(0..(vertices.len() / 8) as u32, 0..1);
+        pass.set_vertex_buffer(
+            0,
+            self.vertex_buf
+                .slice(offset as u64..(offset + vertex_count * VERTEX_STRIDE) as u64),
+        );
+        pass.draw(0..vertex_count as u32, 0..1);
     }
+
+    /// write a sprite's 6 vertices into the persistent vertex buffer.
+    /// vertex format: [pos.x, pos.y, u, v] (f32) + [packed rgba] (u32) = 20 bytes
+    fn write_sprite_vertices(
+        &mut self,
+        _tex_id: u32,
+        position: Vec2,
+        rotation: f32,
+        scale: Vec2,
+        tint: Color,
+        uv_rect: Option<(Vec2, Vec2)>,
+    ) {
+        let hw = scale.x * 0.5;
+        let hh = scale.y * 0.5;
+        let cos = rotation.cos();
+        let sin = rotation.sin();
+
+        let corners = [
+            [-hw, -hh],
+            [hw, -hh],
+            [-hw, hh],
+            [-hw, hh],
+            [hw, -hh],
+            [hw, hh],
+        ];
+
+        let (uv_min, uv_max) = uv_rect.unwrap_or((Vec2::ZERO, Vec2::new(1.0, 1.0)));
+        let uvs = [
+            [uv_min.x, uv_min.y],
+            [uv_max.x, uv_min.y],
+            [uv_min.x, uv_max.y],
+            [uv_min.x, uv_max.y],
+            [uv_max.x, uv_min.y],
+            [uv_max.x, uv_max.y],
+        ];
+
+        let packed_color = pack_color(tint);
+        // 6 vertices * 5 components (4 f32 + 1 u32) = 30 elements
+        let mut verts: [u32; 30] = [0; 30];
+        for (i, [lx, ly]) in corners.iter().enumerate() {
+            let rx = lx * cos - ly * sin;
+            let ry = lx * sin + ly * cos;
+            let px = position.x + rx;
+            let py = position.y + ry;
+            let [u, v] = uvs[i];
+            let base = i * 5;
+            verts[base] = f32_to_u32(px);
+            verts[base + 1] = f32_to_u32(py);
+            verts[base + 2] = f32_to_u32(u);
+            verts[base + 3] = f32_to_u32(v);
+            verts[base + 4] = packed_color;
+        }
+
+        let bytes = bytemuck::cast_slice(&verts);
+        self.queue
+            .write_buffer(&self.vertex_buf, self.vertex_offset as u64, bytes);
+        self.vertex_offset += 6 * VERTEX_STRIDE;
+    }
+
+    /// write a rect's 6 vertices into the persistent vertex buffer.
+    /// vertex format: [pos.x, pos.y, u, v] (f32) + [packed rgba] (u32) = 20 bytes
+    fn write_rect_vertices(&mut self, position: Vec2, size: Vec2, color: Color) {
+        let (x, y, w, h) = (position.x, position.y, size.x, size.y);
+        let packed_color = pack_color(color);
+        // 6 vertices * 5 components = 30 u32s
+        let mut verts: [u32; 30] = [0; 30];
+        let positions = [
+            (x, y),
+            (x + w, y),
+            (x, y + h),
+            (x, y + h),
+            (x + w, y),
+            (x + w, y + h),
+        ];
+        for (i, (px, py)) in positions.iter().enumerate() {
+            let base = i * 5;
+            verts[base] = f32_to_u32(*px);
+            verts[base + 1] = f32_to_u32(*py);
+            verts[base + 2] = 0; // u
+            verts[base + 3] = 0; // v
+            verts[base + 4] = packed_color;
+        }
+        let bytes = bytemuck::cast_slice(&verts);
+        self.queue
+            .write_buffer(&self.vertex_buf, self.vertex_offset as u64, bytes);
+        self.vertex_offset += 6 * VERTEX_STRIDE;
+    }
+
+    /// write a text quad's 6 vertices into the persistent vertex buffer.
+    /// vertex format: [pos.x, pos.y, u, v] (f32) + [packed rgba] (u32) = 20 bytes
+    fn write_text_quad(&mut self, quad: &text::TextGlyphQuad, color: Color) {
+        let x = quad.position.x;
+        let y = quad.position.y;
+        let w = quad.size.x;
+        let h = quad.size.y;
+        let u0 = quad.uv_min.x;
+        let v0 = quad.uv_min.y;
+        let u1 = quad.uv_max.x;
+        let v1 = quad.uv_max.y;
+        let packed_color = pack_color(color);
+        // 6 vertices * 5 components = 30 u32s
+        let mut verts: [u32; 30] = [0; 30];
+        let positions_uvs = [
+            (x, y, u0, v0),
+            (x + w, y, u1, v0),
+            (x, y + h, u0, v1),
+            (x, y + h, u0, v1),
+            (x + w, y, u1, v0),
+            (x + w, y + h, u1, v1),
+        ];
+        for (i, (px, py, u, v)) in positions_uvs.iter().enumerate() {
+            let base = i * 5;
+            verts[base] = f32_to_u32(*px);
+            verts[base + 1] = f32_to_u32(*py);
+            verts[base + 2] = f32_to_u32(*u);
+            verts[base + 3] = f32_to_u32(*v);
+            verts[base + 4] = packed_color;
+        }
+        let bytes = bytemuck::cast_slice(&verts);
+        self.queue
+            .write_buffer(&self.vertex_buf, self.vertex_offset as u64, bytes);
+        self.vertex_offset += 6 * VERTEX_STRIDE;
+    }
+}
+
+/// pack an rgba color into a single u32 (r in lowest byte, a in highest).
+fn pack_color(color: Color) -> u32 {
+    let r = (color.r * 255.0).clamp(0.0, 255.0) as u32;
+    let g = (color.g * 255.0).clamp(0.0, 255.0) as u32;
+    let b = (color.b * 255.0).clamp(0.0, 255.0) as u32;
+    let a = (color.a * 255.0).clamp(0.0, 255.0) as u32;
+    (a << 24) | (b << 16) | (g << 8) | r
+}
+
+/// reinterpret an f32 as a u32 without conversion (for vertex buffer packing).
+fn f32_to_u32(value: f32) -> u32 {
+    bytemuck::cast(value)
 }
 
 const SHADER_SOURCE: &str = r#"
