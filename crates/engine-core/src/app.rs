@@ -162,27 +162,20 @@ impl App {
         self
     }
 
-    /// add a system to the default schedule
+    /// add a system to the default Update stage
     pub fn add_system<M>(&mut self, system: impl IntoSystem<(), (), M>) -> &mut Self {
-        self.engine.schedule_mut().add_systems(system);
-        self
+        self.add_system_to_stage(UpdateStage::Update, system)
     }
 
     /// add a system to a specific update stage.
-    ///
-    /// **note:** stage ordering is not yet implemented — the system is added to the
-    /// default update schedule regardless of which `stage` is passed.
-    /// full stage support requires bevy_ecs's schedule graph, which is a planned upgrade.
+    /// systems are grouped by stage and run in order each frame:
+    /// Input → Physics → Update → Render.
     pub fn add_system_to_stage<M>(
         &mut self,
         stage: UpdateStage,
         system: impl IntoSystem<(), (), M>,
     ) -> &mut Self {
-        log::warn!(
-            "add_system_to_stage({:?}): stage ordering not yet implemented, system added to default schedule",
-            stage
-        );
-        self.engine.schedule_mut().add_systems(system);
+        self.engine.stage_schedule_mut(stage).add_systems(system);
         self
     }
 
@@ -193,7 +186,6 @@ impl App {
     }
 
     /// add a custom stage with the given ordering relative to built-in stages.
-    ///
     /// **note:** custom stages are not yet implemented — this is a no-op placeholder.
     /// full stage support requires bevy_ecs's schedule graph, which is a planned upgrade.
     pub fn add_stage<S: ScheduleLabel>(&mut self, _stage: S, _order: StageOrder) -> &mut Self {
@@ -281,9 +273,7 @@ impl App {
     /// start the game loop with per-frame event processing
     /// the callback runs each frame before the ECS tick, giving you a chance to
     /// poll native events and update resources like InputState.
-    ///
     /// # example
-    ///
     /// ```ignore
     /// use engine_input::{InputPlugin, process_events, init_sdl};
     /// let mut event_pump = init_sdl();
@@ -326,8 +316,8 @@ impl App {
                 if let Some(mut time) = self.engine.world_mut().get_resource_mut::<Time>() {
                     time.tick();
                 }
-                // run systems
-                self.engine.run();
+                // run all stage schedules in order
+                self.engine.run_stages();
             }
 
             // apply frame cap for sleep
@@ -343,7 +333,7 @@ impl App {
         if let Some(mut time) = self.engine.world_mut().get_resource_mut::<Time>() {
             time.tick();
         }
-        self.engine.run();
+        self.engine.run_stages();
     }
 }
 

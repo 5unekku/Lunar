@@ -2,21 +2,21 @@
 //!
 //! the engine owns the ECS world and manages system execution.
 //! game code interacts with the world through the [`App`] builder.
+//!
+//! # stage-based ordering
+//!
+//! systems can be added to named stages (Input, Physics, Update, Render).
+//! stages run in a fixed order each frame, with `apply_deferred` between them
+//! to flush commands from the previous stage.
 
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::ScheduleLabel;
-
-/// default schedule label for the main update loop.
-///
-/// all systems added via [`App::add_system`] are registered under this schedule.
-#[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Update;
 
 /// schedule for startup systems that run once before the main loop
 #[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Startup;
 
-/// the engine owns the ECS world and schedule.
+/// the engine owns the ECS world and schedules.
 ///
 /// this is the low-level wrapper around bevy_ecs.
 /// most game code should interact with the engine through [`App`] instead.
@@ -25,17 +25,23 @@ pub struct Engine {
     world: World,
     /// the startup schedule (run once before main loop)
     startup_schedule: Schedule,
-    /// the main update schedule
-    schedule: Schedule,
+    /// per-stage schedules for ordered system execution
+    stage_schedules: [Schedule; 4],
 }
 
 impl Engine {
     /// create a new empty engine
     pub fn new() -> Self {
+        use crate::schedule::UpdateStage;
         Self {
             world: World::new(),
             startup_schedule: Schedule::new(Startup),
-            schedule: Schedule::new(Update),
+            stage_schedules: [
+                Schedule::new(UpdateStage::Input),
+                Schedule::new(UpdateStage::Physics),
+                Schedule::new(UpdateStage::Update),
+                Schedule::new(UpdateStage::Render),
+            ],
         }
     }
 
@@ -54,14 +60,9 @@ impl Engine {
         &mut self.startup_schedule
     }
 
-    /// get mutable access to the schedule
-    pub fn schedule_mut(&mut self) -> &mut Schedule {
-        &mut self.schedule
-    }
-
-    /// get a reference to the schedule
-    pub fn schedule(&self) -> &Schedule {
-        &self.schedule
+    /// get mutable access to a stage schedule
+    pub fn stage_schedule_mut(&mut self, stage: crate::schedule::UpdateStage) -> &mut Schedule {
+        &mut self.stage_schedules[stage as usize]
     }
 
     /// run all startup systems once
@@ -69,9 +70,11 @@ impl Engine {
         self.startup_schedule.run(&mut self.world);
     }
 
-    /// run all systems in the schedule
-    pub fn run(&mut self) {
-        self.schedule.run(&mut self.world);
+    /// run all stage schedules in order: Input → Physics → Update → Render
+    pub fn run_stages(&mut self) {
+        for schedule in &mut self.stage_schedules {
+            schedule.run(&mut self.world);
+        }
     }
 }
 
