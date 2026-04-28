@@ -31,9 +31,10 @@ use bevy_ecs::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
 use engine_core::EngineState;
 use engine_core::{App, GamePlugin};
+use std::collections::HashMap;
 
-/// number of distinct KeyCode variants (used to size the input arrays)
-const KEY_COUNT: usize = 64;
+/// size of the fast-path key array (covers common keys 0-127)
+const KEY_ARRAY_SIZE: usize = 128;
 /// number of distinct MouseButton variants
 const MOUSE_BUTTON_COUNT: usize = 4;
 
@@ -425,9 +426,14 @@ pub enum GamepadAxis {
 /// uses fixed-size bool arrays indexed by discriminant value — O(1) lookup, no hashing.
 #[derive(Resource, Clone)]
 pub struct InputState {
-    keys_held: [bool; KEY_COUNT],
-    keys_just_pressed: [bool; KEY_COUNT],
-    keys_just_released: [bool; KEY_COUNT],
+    /// fast-path array for common keys (indices 0..KEY_ARRAY_SIZE)
+    keys_held: [bool; KEY_ARRAY_SIZE],
+    keys_just_pressed: [bool; KEY_ARRAY_SIZE],
+    keys_just_released: [bool; KEY_ARRAY_SIZE],
+    /// fallback for rare/international keys outside the fast-path range
+    keys_held_extra: HashMap<KeyCode, bool>,
+    keys_just_pressed_extra: HashMap<KeyCode, bool>,
+    keys_just_released_extra: HashMap<KeyCode, bool>,
     mouse_position: (f32, f32),
     mouse_delta: (f32, f32),
     mouse_buttons_held: [bool; MOUSE_BUTTON_COUNT],
@@ -440,9 +446,12 @@ impl InputState {
     /// create a new empty input state
     pub fn new() -> Self {
         Self {
-            keys_held: [false; KEY_COUNT],
-            keys_just_pressed: [false; KEY_COUNT],
-            keys_just_released: [false; KEY_COUNT],
+            keys_held: [false; KEY_ARRAY_SIZE],
+            keys_just_pressed: [false; KEY_ARRAY_SIZE],
+            keys_just_released: [false; KEY_ARRAY_SIZE],
+            keys_held_extra: HashMap::new(),
+            keys_just_pressed_extra: HashMap::new(),
+            keys_just_released_extra: HashMap::new(),
             mouse_position: (0.0, 0.0),
             mouse_delta: (0.0, 0.0),
             mouse_buttons_held: [false; MOUSE_BUTTON_COUNT],
@@ -454,17 +463,38 @@ impl InputState {
 
     /// check if a key is currently held down
     pub fn is_key_held(&self, key: KeyCode) -> bool {
-        self.keys_held[key as usize]
+        let idx = key as usize;
+        if idx < KEY_ARRAY_SIZE {
+            self.keys_held[idx]
+        } else {
+            self.keys_held_extra.get(&key).copied().unwrap_or(false)
+        }
     }
 
     /// check if a key was just pressed this frame
     pub fn is_key_just_pressed(&self, key: KeyCode) -> bool {
-        self.keys_just_pressed[key as usize]
+        let idx = key as usize;
+        if idx < KEY_ARRAY_SIZE {
+            self.keys_just_pressed[idx]
+        } else {
+            self.keys_just_pressed_extra
+                .get(&key)
+                .copied()
+                .unwrap_or(false)
+        }
     }
 
     /// check if a key was just released this frame
     pub fn is_key_just_released(&self, key: KeyCode) -> bool {
-        self.keys_just_released[key as usize]
+        let idx = key as usize;
+        if idx < KEY_ARRAY_SIZE {
+            self.keys_just_released[idx]
+        } else {
+            self.keys_just_released_extra
+                .get(&key)
+                .copied()
+                .unwrap_or(false)
+        }
     }
 
     /// get the current mouse position
@@ -494,8 +524,10 @@ impl InputState {
 
     /// begin frame: clear just_pressed/just_released sets
     pub fn begin_frame(&mut self) {
-        self.keys_just_pressed = [false; KEY_COUNT];
-        self.keys_just_released = [false; KEY_COUNT];
+        self.keys_just_pressed = [false; KEY_ARRAY_SIZE];
+        self.keys_just_released = [false; KEY_ARRAY_SIZE];
+        self.keys_just_pressed_extra.clear();
+        self.keys_just_released_extra.clear();
         self.mouse_buttons_just_pressed = [false; MOUSE_BUTTON_COUNT];
         self.mouse_buttons_just_released = [false; MOUSE_BUTTON_COUNT];
         self.mouse_delta = (0.0, 0.0);

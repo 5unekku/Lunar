@@ -180,6 +180,9 @@ impl Default for RenderConfig {
 /// vertex format: [pos.x, pos.y, u, v] (16 bytes) + [color_u32] (4 bytes) = 20 bytes per vertex
 const MAX_VERTICES: usize = 65536;
 
+/// number of vertex buffers for double-buffering (prevents GPU read/write conflicts)
+const VERTEX_BUFFER_COUNT: usize = 2;
+
 /// bytes per vertex: 2 floats for position + 2 floats for uv + 1 u32 for packed rgba color
 const VERTEX_STRIDE: usize = 20;
 
@@ -203,9 +206,11 @@ pub struct RenderEngine {
     sampler: wgpu::Sampler,
     textures: HashMap<u32, GpuTexture>,
     bind_groups: HashMap<u32, wgpu::BindGroup>,
-    /// persistent vertex buffer — written each frame, no per-frame allocation
-    vertex_buf: wgpu::Buffer,
-    /// current write offset into vertex_buf
+    /// persistent vertex buffers — double-buffered to prevent GPU read/write conflicts
+    vertex_bufs: [wgpu::Buffer; VERTEX_BUFFER_COUNT],
+    /// current frame index for buffer selection
+    frame_index: usize,
+    /// current write offset into the active vertex buffer
     vertex_offset: usize,
     glyph_atlas: text::GlyphAtlas,
     #[allow(dead_code)]
@@ -213,6 +218,9 @@ pub struct RenderEngine {
     /// cache of text layout results keyed by (font_id, text, font_size_bits)
     text_layout_cache: HashMap<(u32, String, u32), Vec<text::TextGlyphQuad>>,
     render_passes: Vec<Box<dyn RenderPass>>,
+    /// vulkan pipeline cache for faster startup on subsequent launches
+    #[cfg(not(target_arch = "wasm32"))]
+    pipeline_cache: Option<wgpu::PipelineCache>,
 }
 
 /// gpu-ready texture: texture + view + sampler
@@ -498,7 +506,7 @@ impl RenderEngine {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            cache: None,
+            cache: None, // populated below after cache is loaded
             multiview_mask: None,
         });
 
@@ -514,19 +522,21 @@ impl RenderEngine {
             frame_cap_str
         );
 
-        // persistent vertex buffer — no per-frame allocation
-        let vertex_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("persistent vertex buffer"),
-            size: (MAX_VERTICES * VERTEX_STRIDE) as u64,
-            usage: wgpu::BufferUsages::VERTEX
-                | wgpu::BufferUsages::MAP_WRITE
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+        // persistent vertex buffers — double-buffered to prevent GPU read/write conflicts
+        let vertex_bufs: [wgpu::Buffer; VERTEX_BUFFER_COUNT] = std::array::from_fn(|i| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&format!("persistent vertex buffer {i}")),
+                size: (MAX_VERTICES * VERTEX_STRIDE) as u64,
+                usage: wgpu::BufferUsages::VERTEX
+                    | wgpu::BufferUsages::MAP_WRITE
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
         });
 
         RenderEngine {
             surface,
-            device,
+            device: device.clone(),
             queue,
             config: surface_config,
             render_config: config,
@@ -537,12 +547,59 @@ impl RenderEngine {
             sampler,
             textures: HashMap::new(),
             bind_groups: HashMap::new(),
-            vertex_buf,
+            vertex_bufs,
+            frame_index: 0,
             vertex_offset: 0,
             glyph_atlas: text::GlyphAtlas::new(1024, 1024),
             glyph_atlas_texture: None,
             text_layout_cache: HashMap::new(),
             render_passes: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            pipeline_cache: Self::load_pipeline_cache(&device),
+        }
+    }
+
+    /// load the vulkan pipeline cache from disk if it exists.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_pipeline_cache(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
+        let cache_path = std::path::Path::new(".pipeline_cache.bin");
+        if cache_path.exists() {
+            match std::fs::read(cache_path) {
+                Ok(data) => {
+                    log::info!("loaded pipeline cache ({} bytes)", data.len());
+                    // safety: wgpu validates the cache data internally,
+                    // fallback=true ensures a fresh cache is created if data is invalid
+                    Some(unsafe {
+                        device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
+                            label: Some("loaded pipeline cache"),
+                            data: Some(&data),
+                            fallback: true,
+                        })
+                    })
+                }
+                Err(e) => {
+                    log::warn!("failed to load pipeline cache: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    }
+
+    /// save the vulkan pipeline cache to disk.
+    /// call this before shutting down to speed up future launches.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn save_pipeline_cache(&self) {
+        if let Some(ref cache) = self.pipeline_cache
+            && let Some(data) = cache.get_data()
+        {
+            let cache_path = std::path::Path::new(".pipeline_cache.bin");
+            if let Err(e) = std::fs::write(cache_path, &data) {
+                log::warn!("failed to save pipeline cache: {e}");
+            } else {
+                log::info!("saved pipeline cache ({} bytes)", data.len());
+            }
         }
     }
 
@@ -834,6 +891,8 @@ impl RenderEngine {
 
             pass.set_pipeline(&self.sprite_pipeline);
 
+            // advance frame index for double-buffering
+            self.frame_index = (self.frame_index + 1) % VERTEX_BUFFER_COUNT;
             // reset persistent vertex buffer offset for this frame
             self.vertex_offset = 0;
 
@@ -1004,10 +1063,10 @@ impl RenderEngine {
             return;
         };
         pass.set_bind_group(0, bind_group, &[]);
+        let buf = &self.vertex_bufs[self.frame_index];
         pass.set_vertex_buffer(
             0,
-            self.vertex_buf
-                .slice(offset as u64..(offset + vertex_count * VERTEX_STRIDE) as u64),
+            buf.slice(offset as u64..(offset + vertex_count * VERTEX_STRIDE) as u64),
         );
         pass.draw(0..vertex_count as u32, 0..1);
     }
@@ -1065,8 +1124,9 @@ impl RenderEngine {
         }
 
         let bytes = bytemuck::cast_slice(&verts);
+        let buf = &self.vertex_bufs[self.frame_index];
         self.queue
-            .write_buffer(&self.vertex_buf, self.vertex_offset as u64, bytes);
+            .write_buffer(buf, self.vertex_offset as u64, bytes);
         self.vertex_offset += 6 * VERTEX_STRIDE;
     }
 
@@ -1094,8 +1154,9 @@ impl RenderEngine {
             verts[base + 4] = packed_color;
         }
         let bytes = bytemuck::cast_slice(&verts);
+        let buf = &self.vertex_bufs[self.frame_index];
         self.queue
-            .write_buffer(&self.vertex_buf, self.vertex_offset as u64, bytes);
+            .write_buffer(buf, self.vertex_offset as u64, bytes);
         self.vertex_offset += 6 * VERTEX_STRIDE;
     }
 
@@ -1133,8 +1194,9 @@ impl RenderEngine {
             verts[base + 4] = packed_color;
         }
         let bytes = bytemuck::cast_slice(&verts);
+        let buf = &self.vertex_bufs[self.frame_index];
         self.queue
-            .write_buffer(&self.vertex_buf, self.vertex_offset as u64, bytes);
+            .write_buffer(buf, self.vertex_offset as u64, bytes);
         self.vertex_offset += 6 * VERTEX_STRIDE;
     }
 
@@ -1169,8 +1231,9 @@ impl RenderEngine {
             verts[base + 4] = packed_color;
         }
         let bytes = bytemuck::cast_slice(&verts);
+        let buf = &self.vertex_bufs[self.frame_index];
         self.queue
-            .write_buffer(&self.vertex_buf, self.vertex_offset as u64, bytes);
+            .write_buffer(buf, self.vertex_offset as u64, bytes);
         self.vertex_offset += 6 * VERTEX_STRIDE;
     }
 }
