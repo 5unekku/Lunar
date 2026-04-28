@@ -1,33 +1,35 @@
-//! scene definition format: JSON authoring and binary runtime.
+//! scene definition format: TOML authoring and binary runtime.
 //!
-//! # authoring format (JSON)
+//! # authoring format (TOML)
 //!
-//! scenes are authored as JSON files with entity definitions:
+//! scenes are authored as TOML files with entity definitions:
 //!
-//! ```json
-//! {
-//!   "name": "level_1",
-//!   "entities": [
-//!     {
-//!       "id": "player",
-//!       "transform": { "x": 100, "y": 200, "rotation": 0, "scale_x": 1, "scale_y": 1 },
-//!       "sprite": { "texture": "player.png", "width": 32, "height": 32 },
-//!       "layer": 1
-//!     },
-//!     {
-//!       "id": "enemy",
-//!       "parent": "player",
-//!       "transform": { "x": 50, "y": 0 },
-//!       "sprite": { "texture": "enemy.png", "width": 24, "height": 24 },
-//!       "layer": 1
-//!     }
-//!   ]
-//! }
+//! ```toml
+//! name = "level_1"
+//!
+//! [[entities]]
+//! id = "player"
+//! x = 100.0
+//! y = 200.0
+//! layer = 1
+//! sprite_texture = "player.png"
+//! sprite_width = 32.0
+//! sprite_height = 32.0
+//!
+//! [[entities]]
+//! id = "enemy"
+//! parent = "player"
+//! x = 50.0
+//! y = 0.0
+//! layer = 1
+//! sprite_texture = "enemy.png"
+//! sprite_width = 24.0
+//! sprite_height = 24.0
 //! ```
 //!
 //! # binary runtime
 //!
-//! at build time, JSON scenes are converted to a compact binary format
+//! at build time, TOML scenes are converted to a compact binary format
 //! using bincode for fast loading at runtime.
 
 use bevy_ecs::prelude::*;
@@ -38,9 +40,9 @@ use engine_math::{Color, LocalTransform, Vec2, Vec3};
 
 use crate::hierarchy::{Children, Parent};
 
-/// authoring-time scene definition (JSON format).
+/// authoring-time scene definition (TOML format).
 ///
-/// use [`SceneDefinition::from_json`] to parse from a JSON string.
+/// use [`SceneDefinition::from_toml`] to parse from a TOML string.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SceneDefinition {
     /// scene name
@@ -48,9 +50,6 @@ pub struct SceneDefinition {
     /// entity definitions
     #[serde(default)]
     pub entities: Vec<EntityDefinition>,
-    /// optional metadata
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<serde_json::Value>,
 }
 
 /// authoring-time entity definition.
@@ -62,29 +61,6 @@ pub struct EntityDefinition {
     /// optional parent entity id
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
-    /// local transform
-    #[serde(default)]
-    pub transform: TransformDef,
-    /// optional sprite component
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sprite: Option<SpriteDef>,
-    /// optional text component
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<TextDef>,
-    /// render layer (default 0)
-    #[serde(default)]
-    pub layer: i32,
-    /// optional custom tags
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
-    /// optional custom data (game-specific)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
-}
-
-/// transform definition in scene files.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransformDef {
     /// x position
     #[serde(default)]
     pub x: f32,
@@ -100,47 +76,25 @@ pub struct TransformDef {
     /// y scale
     #[serde(default = "default_one")]
     pub scale_y: f32,
-}
-
-fn default_one() -> f32 {
-    1.0
-}
-
-impl Default for TransformDef {
-    fn default() -> Self {
-        Self {
-            x: 0.0,
-            y: 0.0,
-            rotation: 0.0,
-            scale_x: 1.0,
-            scale_y: 1.0,
-        }
-    }
-}
-
-/// sprite definition in scene files.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpriteDef {
-    /// texture path or atlas region name
-    pub texture: String,
-    /// sprite width
-    pub width: f32,
-    /// sprite height
-    pub height: f32,
-    /// optional tint color (hex string like "#ff0000")
+    /// optional sprite texture path
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tint: Option<String>,
-    /// optional atlas region name (if using a texture atlas)
+    pub sprite_texture: Option<String>,
+    /// sprite width (required if sprite_texture is set)
+    #[serde(default)]
+    pub sprite_width: f32,
+    /// sprite height (required if sprite_texture is set)
+    #[serde(default)]
+    pub sprite_height: f32,
+    /// optional sprite tint color (hex string like "#ff0000")
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub region: Option<String>,
-}
-
-/// text definition in scene files.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TextDef {
-    /// text content
-    pub content: String,
-    /// font size
+    pub sprite_tint: Option<String>,
+    /// optional atlas region name
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sprite_region: Option<String>,
+    /// optional text content
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// text font size
     #[serde(default = "default_font_size")]
     pub font_size: f32,
     /// optional font path
@@ -148,26 +102,110 @@ pub struct TextDef {
     pub font: Option<String>,
     /// optional text color
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
+    pub text_color: Option<String>,
+    /// render layer (default 0)
+    #[serde(default)]
+    pub layer: i32,
+    /// optional custom tags
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
+fn default_one() -> f32 {
+    1.0
 }
 
 fn default_font_size() -> f32 {
     16.0
 }
 
-impl SceneDefinition {
-    /// parse a scene from a JSON string.
-    pub fn from_json(json: &str) -> Result<Self, String> {
-        serde_json::from_str(json).map_err(|e| format!("failed to parse scene json: {e}"))
+/// sprite definition for runtime use.
+#[derive(Debug, Clone)]
+pub struct SpriteDef {
+    pub texture: String,
+    pub width: f32,
+    pub height: f32,
+    pub tint: Color,
+    pub region: Option<String>,
+}
+
+/// text definition for runtime use.
+#[derive(Debug, Clone)]
+pub struct TextDef {
+    pub content: String,
+    pub font_size: f32,
+    pub font: Option<String>,
+    pub color: Color,
+}
+
+/// transform definition for runtime use.
+#[derive(Debug, Clone, Copy)]
+pub struct TransformDef {
+    pub x: f32,
+    pub y: f32,
+    pub rotation: f32,
+    pub scale_x: f32,
+    pub scale_y: f32,
+}
+
+impl EntityDefinition {
+    /// get the transform for this entity.
+    #[must_use]
+    pub const fn transform(&self) -> TransformDef {
+        TransformDef {
+            x: self.x,
+            y: self.y,
+            rotation: self.rotation,
+            scale_x: self.scale_x,
+            scale_y: self.scale_y,
+        }
     }
 
-    /// load a scene from a JSON file path.
+    /// get the sprite definition if present.
+    #[must_use]
+    pub fn sprite(&self) -> Option<SpriteDef> {
+        self.sprite_texture.as_ref().map(|texture| SpriteDef {
+            texture: texture.clone(),
+            width: self.sprite_width,
+            height: self.sprite_height,
+            tint: self
+                .sprite_tint
+                .as_ref()
+                .and_then(|s| parse_hex_color(s))
+                .unwrap_or(Color::WHITE),
+            region: self.sprite_region.clone(),
+        })
+    }
+
+    /// get the text definition if present.
+    #[must_use]
+    pub fn text_def(&self) -> Option<TextDef> {
+        self.text.as_ref().map(|content| TextDef {
+            content: content.clone(),
+            font_size: self.font_size,
+            font: self.font.clone(),
+            color: self
+                .text_color
+                .as_ref()
+                .and_then(|s| parse_hex_color(s))
+                .unwrap_or(Color::WHITE),
+        })
+    }
+}
+
+impl SceneDefinition {
+    /// parse a scene from a TOML string.
+    pub fn from_toml(source: &str) -> Result<Self, String> {
+        toml::from_str(source).map_err(|e| format!("failed to parse scene toml: {e}"))
+    }
+
+    /// load a scene from a TOML file path.
     pub fn from_file(path: &str) -> Result<Self, String> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let content = std::fs::read_to_string(path)
                 .map_err(|e| format!("failed to read scene file '{path}': {e}"))?;
-            Self::from_json(&content)
+            Self::from_toml(&content)
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -185,10 +223,6 @@ impl SceneDefinition {
                 .iter()
                 .map(EntityDefinition::to_binary)
                 .collect(),
-            metadata: self
-                .metadata
-                .as_ref()
-                .map(|v| serde_json::to_string(v).unwrap_or_default()),
         };
         bincode::serialize(&binary).map_err(|e| format!("failed to serialize scene: {e}"))
     }
@@ -204,7 +238,6 @@ impl SceneDefinition {
                 .into_iter()
                 .map(BinaryEntityDefinition::into_authoring)
                 .collect(),
-            metadata: binary.metadata.and_then(|s| serde_json::from_str(&s).ok()),
         })
     }
 }
@@ -214,7 +247,6 @@ impl SceneDefinition {
 struct BinaryScene {
     name: String,
     entities: Vec<BinaryEntityDefinition>,
-    metadata: Option<String>,
 }
 
 /// binary runtime entity definition.
@@ -232,13 +264,12 @@ struct BinaryEntityDefinition {
     sprite_height: f32,
     sprite_tint: Option<String>,
     sprite_region: Option<String>,
-    text_content: Option<String>,
-    text_font_size: f32,
-    text_font: Option<String>,
+    text: Option<String>,
+    font_size: f32,
+    font: Option<String>,
     text_color: Option<String>,
     layer: i32,
     tags: Vec<String>,
-    data: Option<String>,
 }
 
 impl EntityDefinition {
@@ -246,26 +277,22 @@ impl EntityDefinition {
         BinaryEntityDefinition {
             id: self.id.clone(),
             parent: self.parent.clone(),
-            x: self.transform.x,
-            y: self.transform.y,
-            rotation: self.transform.rotation,
-            scale_x: self.transform.scale_x,
-            scale_y: self.transform.scale_y,
-            sprite_texture: self.sprite.as_ref().map(|s| s.texture.clone()),
-            sprite_width: self.sprite.as_ref().map_or(0.0, |s| s.width),
-            sprite_height: self.sprite.as_ref().map_or(0.0, |s| s.height),
-            sprite_tint: self.sprite.as_ref().and_then(|s| s.tint.clone()),
-            sprite_region: self.sprite.as_ref().and_then(|s| s.region.clone()),
-            text_content: self.text.as_ref().map(|t| t.content.clone()),
-            text_font_size: self.text.as_ref().map_or(16.0, |t| t.font_size),
-            text_font: self.text.as_ref().and_then(|t| t.font.clone()),
-            text_color: self.text.as_ref().and_then(|t| t.color.clone()),
+            x: self.x,
+            y: self.y,
+            rotation: self.rotation,
+            scale_x: self.scale_x,
+            scale_y: self.scale_y,
+            sprite_texture: self.sprite_texture.clone(),
+            sprite_width: self.sprite_width,
+            sprite_height: self.sprite_height,
+            sprite_tint: self.sprite_tint.clone(),
+            sprite_region: self.sprite_region.clone(),
+            text: self.text.clone(),
+            font_size: self.font_size,
+            font: self.font.clone(),
+            text_color: self.text_color.clone(),
             layer: self.layer,
             tags: self.tags.clone(),
-            data: self
-                .data
-                .as_ref()
-                .map(|v| serde_json::to_string(v).unwrap_or_default()),
         }
     }
 }
@@ -273,34 +300,24 @@ impl EntityDefinition {
 impl BinaryEntityDefinition {
     fn into_authoring(self) -> EntityDefinition {
         EntityDefinition {
-            id: self.id.clone(),
-            parent: self.parent.clone(),
-            transform: TransformDef {
-                x: self.x,
-                y: self.y,
-                rotation: self.rotation,
-                scale_x: self.scale_x,
-                scale_y: self.scale_y,
-            },
-            sprite: self.sprite_texture.as_ref().map(|texture| SpriteDef {
-                texture: texture.clone(),
-                width: self.sprite_width,
-                height: self.sprite_height,
-                tint: self.sprite_tint.clone(),
-                region: self.sprite_region.clone(),
-            }),
-            text: self.text_content.as_ref().map(|content| TextDef {
-                content: content.clone(),
-                font_size: self.text_font_size,
-                font: self.text_font.clone(),
-                color: self.text_color.clone(),
-            }),
+            id: self.id,
+            parent: self.parent,
+            x: self.x,
+            y: self.y,
+            rotation: self.rotation,
+            scale_x: self.scale_x,
+            scale_y: self.scale_y,
+            sprite_texture: self.sprite_texture,
+            sprite_width: self.sprite_width,
+            sprite_height: self.sprite_height,
+            sprite_tint: self.sprite_tint,
+            sprite_region: self.sprite_region,
+            text: self.text,
+            font_size: self.font_size,
+            font: self.font,
+            text_color: self.text_color,
             layer: self.layer,
-            tags: self.tags.clone(),
-            data: self
-                .data
-                .as_ref()
-                .and_then(|s| serde_json::from_str(s).ok()),
+            tags: self.tags,
         }
     }
 }
@@ -337,9 +354,9 @@ impl SceneLoader {
         for entity_def in &scene.entities {
             let mut spawn = commands.spawn((
                 LocalTransform {
-                    translation: Vec3::new(entity_def.transform.x, entity_def.transform.y, 0.0),
-                    rotation: entity_def.transform.rotation,
-                    scale: Vec2::new(entity_def.transform.scale_x, entity_def.transform.scale_y),
+                    translation: Vec3::new(entity_def.x, entity_def.y, 0.0),
+                    rotation: entity_def.rotation,
+                    scale: Vec2::new(entity_def.scale_x, entity_def.scale_y),
                 },
                 engine_math::WorldTransform::default(),
                 SceneLayer(entity_def.layer),
@@ -350,33 +367,23 @@ impl SceneLoader {
             ));
 
             // add sprite if present
-            if let Some(ref sprite) = entity_def.sprite {
-                let tint = sprite
-                    .tint
-                    .as_ref()
-                    .and_then(|s| parse_hex_color(s))
-                    .unwrap_or(Color::WHITE);
+            if let Some(sprite) = entity_def.sprite() {
                 spawn.insert(SceneSprite {
-                    texture: sprite.texture.clone(),
+                    texture: sprite.texture,
                     width: sprite.width,
                     height: sprite.height,
-                    tint,
-                    region: sprite.region.clone(),
+                    tint: sprite.tint,
+                    region: sprite.region,
                 });
             }
 
             // add text if present
-            if let Some(ref text) = entity_def.text {
-                let color = text
-                    .color
-                    .as_ref()
-                    .and_then(|s| parse_hex_color(s))
-                    .unwrap_or(Color::WHITE);
+            if let Some(text) = entity_def.text_def() {
                 spawn.insert(SceneText {
-                    content: text.content.clone(),
+                    content: text.content,
                     font_size: text.font_size,
-                    font: text.font.clone(),
-                    color,
+                    font: text.font,
+                    color: text.color,
                 });
             }
 
@@ -384,9 +391,6 @@ impl SceneLoader {
             if !entity_def.tags.is_empty() {
                 spawn.insert(SceneTags(entity_def.tags.clone()));
             }
-
-            // add custom data
-            spawn.insert(SceneData(entity_def.data.clone()));
 
             let entity = spawn.id();
 
@@ -416,7 +420,7 @@ impl SceneLoader {
         id_map
     }
 
-    /// load and spawn a scene from a JSON file path.
+    /// load and spawn a scene from a TOML file path.
     pub fn load_and_spawn(
         commands: &mut Commands,
         path: &str,
@@ -492,49 +496,86 @@ mod tests {
 
     #[test]
     fn parse_empty_scene() {
-        let json = r#"{"name": "empty"}"#;
-        let scene = SceneDefinition::from_json(json).unwrap();
+        let toml = r#"name = "empty""#;
+        let scene = SceneDefinition::from_toml(toml).unwrap();
         assert_eq!(scene.name, "empty");
         assert!(scene.entities.is_empty());
     }
 
     #[test]
     fn parse_scene_with_entity() {
-        let json = r#"{
-            "name": "test",
-            "entities": [{
-                "id": "player",
-                "transform": { "x": 100, "y": 200 },
-                "sprite": { "texture": "player.png", "width": 32, "height": 32 },
-                "layer": 1
-            }]
-        }"#;
-        let scene = SceneDefinition::from_json(json).unwrap();
+        let toml = r#"
+name = "test"
+
+[[entities]]
+id = "player"
+x = 100.0
+y = 200.0
+sprite_texture = "player.png"
+sprite_width = 32.0
+sprite_height = 32.0
+layer = 1
+"#;
+        let scene = SceneDefinition::from_toml(toml).unwrap();
         assert_eq!(scene.name, "test");
         assert_eq!(scene.entities.len(), 1);
         let entity = &scene.entities[0];
         assert_eq!(entity.id.as_deref(), Some("player"));
-        assert_eq!(entity.transform.x, 100.0);
-        assert_eq!(entity.transform.y, 200.0);
-        assert_eq!(
-            entity.sprite.as_ref().map(|s| s.texture.as_str()),
-            Some("player.png")
-        );
+        assert_eq!(entity.x, 100.0);
+        assert_eq!(entity.y, 200.0);
+        assert_eq!(entity.sprite_texture.as_deref(), Some("player.png"));
         assert_eq!(entity.layer, 1);
     }
 
     #[test]
+    fn parse_scene_with_parent() {
+        let toml = r#"
+name = "hierarchy"
+
+[[entities]]
+id = "parent"
+x = 100.0
+y = 100.0
+
+[[entities]]
+id = "child"
+parent = "parent"
+x = 10.0
+y = 0.0
+"#;
+        let scene = SceneDefinition::from_toml(toml).unwrap();
+        assert_eq!(scene.entities.len(), 2);
+        assert_eq!(scene.entities[1].parent.as_deref(), Some("parent"));
+    }
+
+    #[test]
     fn binary_roundtrip() {
-        let json = r##"{"name":"roundtrip","entities":[{"id":"e1","transform":{"x":10,"y":20,"rotation":1.5,"scale_x":2,"scale_y":2},"sprite":{"texture":"tex.png","width":16,"height":16,"tint":"#ff0000"},"layer":2,"tags":["enemy"]}]}"##;
-        let original = SceneDefinition::from_json(json).unwrap();
+        let toml = r##"
+name = "roundtrip"
+
+[[entities]]
+id = "e1"
+x = 10.0
+y = 20.0
+rotation = 1.5
+scale_x = 2.0
+scale_y = 2.0
+sprite_texture = "tex.png"
+sprite_width = 16.0
+sprite_height = 16.0
+sprite_tint = "#ff0000"
+layer = 2
+tags = ["enemy"]
+"##;
+        let original = SceneDefinition::from_toml(toml).unwrap();
         let binary = original.to_binary().unwrap();
         let restored = SceneDefinition::from_binary(&binary).unwrap();
         assert_eq!(restored.name, original.name);
         assert_eq!(restored.entities.len(), original.entities.len());
         let e = &restored.entities[0];
-        assert_eq!(e.transform.x, 10.0);
-        assert_eq!(e.transform.rotation, 1.5);
-        assert_eq!(e.sprite.as_ref().unwrap().tint.as_deref(), Some("#ff0000"));
+        assert_eq!(e.x, 10.0);
+        assert_eq!(e.rotation, 1.5);
+        assert_eq!(e.sprite_tint.as_deref(), Some("#ff0000"));
         assert_eq!(e.tags, vec!["enemy"]);
     }
 
