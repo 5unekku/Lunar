@@ -685,21 +685,19 @@ Part 2 (Post-Engine)
 - **Effort:** Low
 
 #### 37. Pre-allocate RenderQueue Commands
-- [ ] 37.1 Pre-allocate `Vec::with_capacity(1024)` for commands
-  - [ ] 37.1.2 Use `clear()` which retains capacity
-  - [ ] 37.1.3 Monitor typical command counts and adjust capacity
+- [x] 37.1 Pre-allocate `Vec::with_capacity(1024)` for commands
+  - [x] 37.1.1 Use `clear()` which retains capacity
 - **Impact:** Eliminates mid-frame reallocation
 - **Effort:** Low
 
 #### 38. Rect Utility Extensions
-- [ ] 38.1 Add methods to Rect (see item 24)
-  - [ ] 38.1.1 `inflate(dx, dy)`
-  - [ ] 38.1.2 `clamp(within)`
-  - [ ] 38.1.3 `collide_point(x, y)`
-  - [ ] 38.1.4 `collide_rect(other)`
-  - [ ] 38.1.5 `center()`
-  - [ ] 38.1.6 `union(other)`
-- **Note:** Already tracked as item 24 in Part 2
+- [x] 38.1 Add methods to Rect (see item 24)
+  - [x] 38.1.1 `inflate(dx, dy)`
+  - [x] 38.1.2 `clamp(within)`
+  - [x] 38.1.3 `collide_point(x, y)`
+  - [x] 38.1.4 `collide_rect(other)`
+  - [x] 38.1.5 `center()` (already existed)
+  - [x] 38.1.6 `union(other)`
 - **Effort:** Low
 
 #### 39. Fix SpriteParams Origin Usage

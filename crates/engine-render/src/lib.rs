@@ -1079,7 +1079,7 @@ impl RenderQueue {
     /// create a new empty render queue
     pub fn new() -> Self {
         RenderQueue {
-            commands: Vec::new(),
+            commands: Vec::with_capacity(1024),
             target: None,
         }
     }

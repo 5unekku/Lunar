@@ -196,4 +196,44 @@ impl Rect {
     pub fn bottom_right(&self) -> Vec2 {
         Vec2::new(self.x + self.w, self.y + self.h)
     }
+
+    /// expand or shrink the rect by the given deltas on all sides.
+    pub fn inflate(&mut self, dx: f32, dy: f32) {
+        self.x -= dx;
+        self.y -= dy;
+        self.w += dx * 2.0;
+        self.h += dy * 2.0;
+    }
+
+    /// constrain this rect to lie fully within another rect.
+    pub fn clamp(&mut self, within: &Self) {
+        self.x = self.x.max(within.x);
+        self.y = self.y.max(within.y);
+        self.w = self.w.min(within.w);
+        self.h = self.h.min(within.h);
+    }
+
+    /// alias for [`Rect::contains`] — point collision check.
+    pub fn collide_point(&self, point: Vec2) -> bool {
+        self.contains(point)
+    }
+
+    /// alias for [`Rect::intersects`] — rect collision check.
+    pub fn collide_rect(&self, other: &Self) -> bool {
+        self.intersects(other)
+    }
+
+    /// return the smallest rect that contains both this rect and another.
+    pub fn union(&self, other: &Self) -> Self {
+        let x = self.x.min(other.x);
+        let y = self.y.min(other.y);
+        let right = (self.x + self.w).max(other.x + other.w);
+        let bottom = (self.y + self.h).max(other.y + other.h);
+        Self {
+            x,
+            y,
+            w: right - x,
+            h: bottom - y,
+        }
+    }
 }
