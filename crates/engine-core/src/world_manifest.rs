@@ -1,4 +1,9 @@
 //! world manifest: XML-based world definition with scenes and spatial chunks.
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
+)]
 //!
 //! # authoring format (XML)
 //!
@@ -55,7 +60,8 @@ impl StringInterner {
         if let Some(&id) = self.forward.get(s) {
             return id;
         }
-        let id = self.reverse.len() as u32;
+        let id = u32::try_from(self.reverse.len())
+            .unwrap_or_else(|_| panic!("string interner exceeded u32 capacity"));
         self.forward.insert(s.to_string(), id);
         self.reverse.push(s.to_string());
         id
@@ -344,7 +350,10 @@ impl WorldManifest {
 
         Ok(CompiledWorld {
             strings: (0..interner.len())
-                .filter_map(|i| interner.resolve(i as u32).map(String::from))
+                .filter_map(|i| {
+                    let id = u32::try_from(i).ok()?;
+                    interner.resolve(id).map(String::from)
+                })
                 .collect(),
             name_id,
             start_scene_id: start_id,
@@ -737,7 +746,7 @@ impl AdvancedSceneLoader {
         result
     }
 
-    /// despawn all entities that have the SceneEntity component.
+    /// despawn all entities that have the `SceneEntity` component.
     fn despawn_all_scene_entities(commands: &mut Commands, world: &mut World) {
         let scene_entities: Vec<Entity> = world
             .query_filtered::<Entity, With<crate::scene_format::SceneEntity>>()

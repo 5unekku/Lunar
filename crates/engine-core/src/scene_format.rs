@@ -1,4 +1,5 @@
 //! scene definition format: RON authoring and binary runtime.
+#![allow(clippy::cast_precision_loss)]
 //!
 //! # authoring format (RON)
 //!
@@ -79,10 +80,10 @@ pub struct EntityDefinition {
     pub scale_y: f32,
     /// optional sprite texture path
     pub sprite_texture: Option<String>,
-    /// sprite width (required if sprite_texture is set)
+    /// sprite width (required if `sprite_texture` is set)
     #[serde(default)]
     pub sprite_width: f32,
-    /// sprite height (required if sprite_texture is set)
+    /// sprite height (required if `sprite_texture` is set)
     #[serde(default)]
     pub sprite_height: f32,
     /// optional sprite tint color (hex string like "#ff0000")
@@ -192,11 +193,15 @@ impl EntityDefinition {
 
 impl SceneDefinition {
     /// parse a scene from a RON string.
+    /// # Errors
+    /// returns an error if the RON string fails to parse.
     pub fn from_ron(source: &str) -> Result<Self, String> {
         ron::from_str(source).map_err(|e| format!("failed to parse scene ron: {e}"))
     }
 
     /// load a scene from a RON file path.
+    /// # Errors
+    /// returns an error if the file cannot be read or parsed.
     pub fn from_file(path: &str) -> Result<Self, String> {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -212,6 +217,8 @@ impl SceneDefinition {
     }
 
     /// serialize the scene to binary format using bincode.
+    /// # Errors
+    /// returns an error if serialization fails.
     pub fn to_binary(&self) -> Result<Vec<u8>, String> {
         let binary = BinaryScene {
             name: self.name.clone(),
@@ -225,6 +232,8 @@ impl SceneDefinition {
     }
 
     /// deserialize a scene from binary format.
+    /// # Errors
+    /// returns an error if deserialization fails.
     pub fn from_binary(bytes: &[u8]) -> Result<Self, String> {
         let binary: BinaryScene =
             bincode::deserialize(bytes).map_err(|e| format!("failed to deserialize scene: {e}"))?;
@@ -351,7 +360,7 @@ pub struct SceneData(pub Option<serde_json::Value>);
 impl SceneLoader {
     /// spawn all entities from a scene definition into the world.
     /// returns a map of entity ids (from the scene file) to spawned [`Entity`] handles.
-    /// sub-scene references are resolved via the provided scene registry (name → SceneDefinition).
+    /// sub-scene references are resolved via the provided scene registry (name → `SceneDefinition`).
     pub fn spawn_scene(
         commands: &mut Commands,
         scene: &SceneDefinition,
@@ -478,6 +487,10 @@ impl SceneLoader {
     }
 
     /// load and spawn a scene from a RON file path.
+    ///
+    /// # Errors
+    ///
+    /// returns an error if the file cannot be read or parsed.
     pub fn load_and_spawn(
         commands: &mut Commands,
         path: &str,
@@ -516,6 +529,7 @@ pub struct SceneTags(pub Vec<String>);
 pub struct SceneLayer(pub i32);
 
 /// parse a hex color string like "#ff0000" or "#f00" into a Color.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 fn parse_hex_color(hex: &str) -> Option<Color> {
     let hex = hex.trim_start_matches('#');
     let (r, g, b, a) = match hex.len() {
@@ -541,10 +555,10 @@ fn parse_hex_color(hex: &str) -> Option<Color> {
         _ => return None,
     };
     Some(Color::rgba(
-        r as f32 / 255.0,
-        g as f32 / 255.0,
-        b as f32 / 255.0,
-        a as f32 / 255.0,
+        f32::from(r) / 255.0,
+        f32::from(g) / 255.0,
+        f32::from(b) / 255.0,
+        f32::from(a) / 255.0,
     ))
 }
 

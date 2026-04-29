@@ -10,6 +10,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use sdl3::event::{Event, WindowEvent};
 use sdl3::keyboard::Keycode;
 
+#[allow(clippy::too_many_lines, clippy::cast_sign_loss)]
 #[tokio::main]
 async fn main() {
     env_logger::init();
@@ -87,6 +88,7 @@ async fn main() {
     let mut running = true;
 
     let mut game_loop = GameLoop::new(60);
+    #[allow(clippy::no_effect_underscore_binding)]
     let mut _state = EngineState::Running;
     let _command_registry = CommandRegistry::new();
     let _render_config = RenderConfig {

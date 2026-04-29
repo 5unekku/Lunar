@@ -1,4 +1,9 @@
 //! rendering subsystem via wgpu
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 //!
 //! decoupled from game logic. handles 2D rendering with wgpu.
 //! architecture allows future 3D expansion without breaking changes.
@@ -1758,6 +1763,7 @@ impl DrawContext<'_> {
     /// draw a stroked circle (outline only, approximated with line segments).
     pub fn circle(&mut self, center: Vec2, radius: f32, color: Color, thickness: f32) {
         let segments = 32;
+        #[allow(clippy::cast_precision_loss)]
         for i in 0..segments {
             let a1 = (i as f32 / segments as f32) * 2.0 * std::f32::consts::PI;
             let a2 = ((i + 1) as f32 / segments as f32) * 2.0 * std::f32::consts::PI;
@@ -1772,6 +1778,7 @@ impl DrawContext<'_> {
     /// draw a filled circle (approximated with triangles from center).
     pub fn circle_filled(&mut self, center: Vec2, radius: f32, color: Color) {
         let segments = 32;
+        #[allow(clippy::cast_precision_loss)]
         for i in 0..segments {
             let a1 = (i as f32 / segments as f32) * 2.0 * std::f32::consts::PI;
             let a2 = ((i + 1) as f32 / segments as f32) * 2.0 * std::f32::consts::PI;
@@ -1998,12 +2005,14 @@ fn render_system(mut queue: ResMut<RenderQueue>) {
 }
 
 /// debug overlay system — draws FPS, frame time, sprite count, and entity count.
+#[allow(clippy::needless_pass_by_value)]
 fn debug_overlay_system(
     overlay: Res<DebugOverlay>,
     info: Res<RenderInfo>,
     mut queue: ResMut<RenderQueue>,
     entities: Query<Entity>,
 ) {
+    #[allow(clippy::cast_possible_truncation)]
     let entity_count = entities.iter().count() as u32;
     overlay.draw(
         &mut queue,

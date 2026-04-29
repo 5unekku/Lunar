@@ -123,6 +123,7 @@ pub fn propagate_transforms(
             let world_translation = compute_world_transform(parent_world, local);
 
             if let Ok(mut world) = world_query.get_mut(entity) {
+                #[allow(clippy::float_cmp)]
                 if world.translation != world_translation.0
                     || world.rotation != world_translation.1
                     || world.scale != world_translation.2
@@ -202,7 +203,7 @@ pub struct PostUpdate;
 pub struct HierarchyPlugin;
 
 impl crate::GamePlugin for HierarchyPlugin {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "hierarchy"
     }
 

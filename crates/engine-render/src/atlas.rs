@@ -1,4 +1,5 @@
 //! texture atlas integration for the render system.
+#![allow(clippy::missing_errors_doc, clippy::must_use_candidate)]
 //!
 //! provides [`TextureAtlas`] resource that wraps a packed atlas texture
 //! with named region lookup. sprites can reference atlas regions via
@@ -47,6 +48,8 @@ impl TextureAtlas {
     /// look up a region by name.
     ///
     /// returns the [`AtlasRegion`] with UV coordinates for this sprite.
+    /// # Panics
+    ///
     /// panics if the region does not exist.
     #[must_use]
     pub fn region(&self, name: &str) -> &AtlasRegion {
