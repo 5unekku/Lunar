@@ -1884,6 +1884,83 @@ impl Default for RenderInfo {
     }
 }
 
+/// debug overlay for displaying runtime stats.
+///
+/// when enabled, draws FPS, frame time, sprite count, and entity count
+/// in the top-left corner using immediate mode rendering.
+#[derive(Resource)]
+pub struct DebugOverlay {
+    /// whether the overlay is currently visible
+    pub enabled: bool,
+    /// position in screen space (top-left corner)
+    pub position: Vec2,
+    /// font size for text
+    pub font_size: f32,
+    /// text color
+    pub color: Color,
+}
+
+impl DebugOverlay {
+    /// create a new debug overlay with default settings.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            enabled: false,
+            position: Vec2::new(10.0, 10.0),
+            font_size: 14.0,
+            color: Color::WHITE,
+        }
+    }
+
+    /// draw debug info to the render queue.
+    /// call this each frame with current stats.
+    pub fn draw(
+        &self,
+        queue: &mut RenderQueue,
+        fps: f32,
+        frame_time_ms: f32,
+        sprite_count: u32,
+        entity_count: u32,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        let y = self.position.y;
+        queue.draw_immediate(|draw| {
+            draw.text(
+                &format!("FPS: {fps:.1}"),
+                Vec2::new(self.position.x, y),
+                self.font_size,
+                self.color,
+            );
+            draw.text(
+                &format!("Frame: {frame_time_ms:.1}ms"),
+                Vec2::new(self.position.x, y + self.font_size + 2.0),
+                self.font_size,
+                self.color,
+            );
+            draw.text(
+                &format!("Sprites: {sprite_count}"),
+                Vec2::new(self.position.x, y + (self.font_size + 2.0) * 2.0),
+                self.font_size,
+                self.color,
+            );
+            draw.text(
+                &format!("Entities: {entity_count}"),
+                Vec2::new(self.position.x, y + (self.font_size + 2.0) * 3.0),
+                self.font_size,
+                self.color,
+            );
+        });
+    }
+}
+
+impl Default for DebugOverlay {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// render plugin, registers render systems and resources.
 ///
 /// add this plugin to your [`App`] to enable rendering.
@@ -1904,7 +1981,9 @@ impl GamePlugin for RenderPlugin {
     fn build(&mut self, app: &mut App) {
         app.insert_resource(RenderQueue::new());
         app.insert_resource(RenderInfo::new());
+        app.insert_resource(DebugOverlay::new());
         app.add_system_to_stage(engine_core::UpdateStage::Render, render_system);
+        app.add_system_to_stage(engine_core::UpdateStage::Render, debug_overlay_system);
     }
 }
 
@@ -1916,4 +1995,21 @@ fn render_system(mut queue: ResMut<RenderQueue>) {
     // note: actual rendering is handled by the RenderEngine in the game loop.
     // this system exists so game code can push draw commands during the render stage.
     // the RenderEngine will consume the queue when it is available as a resource.
+}
+
+/// debug overlay system — draws FPS, frame time, sprite count, and entity count.
+fn debug_overlay_system(
+    overlay: Res<DebugOverlay>,
+    info: Res<RenderInfo>,
+    mut queue: ResMut<RenderQueue>,
+    entities: Query<Entity>,
+) {
+    let entity_count = entities.iter().count() as u32;
+    overlay.draw(
+        &mut queue,
+        info.fps,
+        info.frame_time_ms,
+        info.sprite_count,
+        entity_count,
+    );
 }

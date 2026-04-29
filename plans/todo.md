@@ -491,8 +491,8 @@ Everything else (zones, scenes, dialogue, web, 3D) can come after.
 - [x] 25.1 Immediate mode API
   - [x] 25.1.1 `draw_immediate(|draw| { ... })` closure
   - [x] 25.1.2 Debug drawing helpers (lines, circles, text)
-- [ ] 25.2 Debug overlay
-  - [ ] 25.2.1 FPS counter, entity count, collision visualization
+- [x] 25.2 Debug overlay
+  - [x] 25.2.1 FPS counter, entity count, collision visualization
 
 ---
 
