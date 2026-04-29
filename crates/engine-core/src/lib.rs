@@ -92,3 +92,6 @@ pub use world_manifest::{
 };
 /// world zone management
 pub use zone::{FadeConfig, WorldManager, Zone, ZoneTransition};
+
+/// full prelude for game development
+pub mod prelude;

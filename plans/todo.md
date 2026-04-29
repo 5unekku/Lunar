@@ -479,13 +479,13 @@ Everything else (zones, scenes, dialogue, web, 3D) can come after.
   - [ ] 23.4.1 Per-game and per-player data tracking
 
 ### 24. Rect Utility Extensions
-- [ ] 24.1 Add methods to Rect
-  - [ ] 24.1.1 `inflate(dx, dy)` — expand/shrink rect
-  - [ ] 24.1.2 `clamp(within)` — constrain rect inside another
-  - [ ] 24.1.3 `collide_point(x, y)` — point collision check
-  - [ ] 24.1.4 `collide_rect(other)` — rect collision check
-  - [ ] 24.1.5 `center()` — get center point
-  - [ ] 24.1.6 `union(other)` — bounding box of two rects
+- [x] 24.1 Add methods to Rect
+  - [x] 24.1.1 `inflate(dx, dy)` — expand/shrink rect
+  - [x] 24.1.2 `clamp(within)` — constrain rect inside another
+  - [x] 24.1.3 `collide_point(x, y)` — point collision check
+  - [x] 24.1.4 `collide_rect(other)` — rect collision check
+  - [x] 24.1.5 `center()` — get center point
+  - [x] 24.1.6 `union(other)` — bounding box of two rects
 
 ### 25. Immediate Mode Render API (Optional)
 - [x] 25.1 Immediate mode API
@@ -805,13 +805,13 @@ Part 6 (Engine Editor)
   - [ ] 46.2.2 Pin the vendored wgpu to a specific commit so the patch stays stable
 
 ### 47. Public API Surface
-- [ ] 47.1 Audit engine-api re-exports
-  - [ ] 47.1.1 Every type a user needs (Transform, Color, Rect, RenderQueue, InputState, AssetServer, Time, App, Schedule, etc.) must be accessible via `use engine_api::*` — no reaching into sub-crates
-  - [ ] 47.1.2 Identify any types currently leaking from engine-core/engine-render that aren't in engine-api and add re-exports
-  - [ ] 47.1.3 Identify any engine-api re-exports that expose internal implementation details and remove/hide them
-- [ ] 47.2 Prelude module
-  - [ ] 47.2.1 Add `engine_api::prelude` that re-exports the most common items (App, Transform, Color, Rect, Vec2, Vec3, KeyCode, Time, RenderQueue, AssetServer, Commands, Query, Res, ResMut, Entity)
-  - [ ] 47.2.2 Users should be able to `use engine_api::prelude::*` and write a full game without any further imports
+- [x] 47.1 Audit engine-api re-exports
+  - [x] 47.1.1 Every type a user needs (Transform, Color, Rect, RenderQueue, InputState, AssetServer, Time, App, Schedule, etc.) must be accessible via `use engine_api::*` — no reaching into sub-crates
+  - [x] 47.1.2 Identify any types currently leaking from engine-core/engine-render that aren't in engine-api and add re-exports
+  - [x] 47.1.3 Identify any engine-api re-exports that expose internal implementation details and remove/hide them
+- [x] 47.2 Prelude module
+  - [x] 47.2.1 Add `engine_api::prelude` that re-exports the most common items (App, Transform, Color, Rect, Vec2, Vec3, KeyCode, Time, RenderQueue, AssetServer, Commands, Query, Res, ResMut, Entity)
+  - [x] 47.2.2 Users should be able to `use engine_api::prelude::*` and write a full game without any further imports
 - [ ] 47.3 Rename engine-api to lunar (or create lunar facade crate)
   - [ ] 47.3.1 Evaluate: rename the crate vs add a thin `lunar` crate that re-exports engine-api — pick one
   - [ ] 47.3.2 External users should write `lunar = { git = "..." }` not `engine-api = { git = "..." }`
