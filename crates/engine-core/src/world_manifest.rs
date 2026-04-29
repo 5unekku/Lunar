@@ -671,7 +671,7 @@ impl AdvancedSceneLoader {
         Self::despawn_all_scene_entities(commands, world);
 
         // load the new scene
-        let result = crate::scene_format::SceneLoader::spawn_scene(commands, scene);
+        let result = crate::scene_format::SceneLoader::spawn_scene(commands, scene, None);
 
         // track loaded scene
         if let Some(mut loaded) = world.get_resource_mut::<LoadedScenes>() {
@@ -692,7 +692,7 @@ impl AdvancedSceneLoader {
         world: &mut World,
         scene: &SceneDefinition,
     ) -> HashMap<String, Entity> {
-        let result = crate::scene_format::SceneLoader::spawn_scene(commands, scene);
+        let result = crate::scene_format::SceneLoader::spawn_scene(commands, scene, None);
 
         // track loaded scene
         if let Some(mut loaded) = world.get_resource_mut::<LoadedScenes>() {
@@ -718,7 +718,7 @@ impl AdvancedSceneLoader {
     ) -> HashMap<String, Entity> {
         // streaming is driven by the world manifest chunk system.
         // this mode loads the scene additively and sets up streaming state.
-        let result = crate::scene_format::SceneLoader::spawn_scene(commands, scene);
+        let result = crate::scene_format::SceneLoader::spawn_scene(commands, scene, None);
 
         if let Some(mut loaded) = world.get_resource_mut::<LoadedScenes>() {
             if !loaded.active_scenes.contains(&scene.name) {

@@ -466,7 +466,7 @@ Everything else (zones, scenes, dialogue, web, 3D) can come after.
 - [x] 22.3 Scene loader
   - [x] 22.3.1 Load scene → spawn entities via Commands — SceneLoader::spawn_scene
   - [x] 22.3.2 Scene entity tracking — SceneEntity marker component, id_map return
-  - [ ] 22.3.3 Scene instancing (nest scenes within scenes)
+  - [x] 22.3.3 Scene instancing (nest scenes within scenes)
 
 ### 23. Gameplay Framework (Optional)
 - [ ] 23.1 GameMode resource

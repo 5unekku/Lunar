@@ -104,6 +104,8 @@ pub struct EntityDefinition {
     /// optional custom tags
     #[serde(default)]
     pub tags: Vec<String>,
+    /// optional sub-scene to instance (nest another scene under this entity)
+    pub sub_scene: Option<String>,
 }
 
 fn default_one() -> f32 {
@@ -265,6 +267,7 @@ struct BinaryEntityDefinition {
     text_color: Option<String>,
     layer: i32,
     tags: Vec<String>,
+    sub_scene: Option<String>,
 }
 
 impl EntityDefinition {
@@ -288,6 +291,7 @@ impl EntityDefinition {
             text_color: self.text_color.clone(),
             layer: self.layer,
             tags: self.tags.clone(),
+            sub_scene: self.sub_scene.clone(),
         }
     }
 }
@@ -313,6 +317,7 @@ impl BinaryEntityDefinition {
             text_color: self.text_color,
             layer: self.layer,
             tags: self.tags,
+            sub_scene: self.sub_scene,
         }
     }
 }
@@ -331,6 +336,14 @@ pub struct SceneEntity {
     pub entity_id: Option<String>,
 }
 
+/// marker component for entities that instance a sub-scene.
+/// the sub-scene's root entities are spawned as children of this entity.
+#[derive(Debug, Clone, Component)]
+pub struct SceneInstance {
+    /// path or name of the instanced sub-scene
+    pub scene_path: String,
+}
+
 /// component storing the raw custom data from the scene definition.
 #[derive(Debug, Clone, Component)]
 pub struct SceneData(pub Option<serde_json::Value>);
@@ -338,12 +351,24 @@ pub struct SceneData(pub Option<serde_json::Value>);
 impl SceneLoader {
     /// spawn all entities from a scene definition into the world.
     /// returns a map of entity ids (from the scene file) to spawned [`Entity`] handles.
+    /// sub-scene references are resolved via the provided scene registry (name → SceneDefinition).
     pub fn spawn_scene(
         commands: &mut Commands,
         scene: &SceneDefinition,
+        scene_registry: Option<&HashMap<String, SceneDefinition>>,
+    ) -> HashMap<String, Entity> {
+        Self::spawn_scene_internal(commands, scene, scene_registry, None)
+    }
+
+    fn spawn_scene_internal(
+        commands: &mut Commands,
+        scene: &SceneDefinition,
+        scene_registry: Option<&HashMap<String, SceneDefinition>>,
+        parent_entity: Option<Entity>,
     ) -> HashMap<String, Entity> {
         let mut id_map: HashMap<String, Entity> = HashMap::new();
         let mut parent_refs: Vec<(Entity, String)> = Vec::new();
+        let mut sub_scene_roots: Vec<(Entity, String)> = Vec::new();
 
         // first pass: spawn entities and store components
         for entity_def in &scene.entities {
@@ -360,6 +385,11 @@ impl SceneLoader {
                     entity_id: entity_def.id.clone(),
                 },
             ));
+
+            // add sub-scene instance if present
+            if let Some(ref sub_scene) = entity_def.sub_scene {
+                sub_scene_roots.push((spawn.id(), sub_scene.clone()));
+            }
 
             // add sprite if present
             if let Some(sprite) = entity_def.sprite() {
@@ -412,6 +442,38 @@ impl SceneLoader {
             }
         }
 
+        // third pass: resolve sub-scene instances
+        for (entity, sub_scene_name) in sub_scene_roots {
+            if let Some(registry) = scene_registry
+                && let Some(sub_scene) = registry.get(&sub_scene_name)
+            {
+                commands.entity(entity).insert(SceneInstance {
+                    scene_path: sub_scene_name.clone(),
+                });
+                let sub_id_map =
+                    Self::spawn_scene_internal(commands, sub_scene, Some(registry), Some(entity));
+                // parent sub-scene roots under this entity
+                for sub_entity in sub_id_map.values() {
+                    commands.entity(*sub_entity).insert(Parent(entity));
+                    commands
+                        .entity(entity)
+                        .insert(Children(smallvec::smallvec![*sub_entity]));
+                }
+            } else {
+                log::warn!("SceneLoader: sub-scene '{sub_scene_name}' not found in registry");
+            }
+        }
+
+        // if this scene was spawned under a parent, parent the root entities
+        if let Some(parent) = parent_entity {
+            for entity in id_map.values() {
+                commands.entity(*entity).insert(Parent(parent));
+                commands
+                    .entity(parent)
+                    .insert(Children(smallvec::smallvec![*entity]));
+            }
+        }
+
         id_map
     }
 
@@ -419,9 +481,10 @@ impl SceneLoader {
     pub fn load_and_spawn(
         commands: &mut Commands,
         path: &str,
+        scene_registry: Option<&HashMap<String, SceneDefinition>>,
     ) -> Result<HashMap<String, Entity>, String> {
         let scene = SceneDefinition::from_file(path)?;
-        Ok(Self::spawn_scene(commands, &scene))
+        Ok(Self::spawn_scene(commands, &scene, scene_registry))
     }
 }
 
