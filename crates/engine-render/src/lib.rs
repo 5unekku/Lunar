@@ -1690,6 +1690,131 @@ impl RenderQueue {
             },
         });
     }
+
+    /// immediate mode drawing API for debug visualization and quick prototyping.
+    ///
+    /// the closure receives a [`DrawContext`] with convenience methods for
+    /// drawing lines, circles, rects, and text without managing draw commands manually.
+    ///
+    /// # example
+    ///
+    /// ```ignore
+    /// queue.draw_immediate(|draw| {
+    ///     draw.line(Vec2::new(0.0, 0.0), Vec2::new(100.0, 100.0), Color::RED, 2.0);
+    ///     draw.circle(Vec2::new(50.0, 50.0), 20.0, Color::GREEN, 2.0);
+    ///     draw.rect(Vec2::new(10.0, 10.0), Vec2::new(40.0, 40.0), Color::BLUE);
+    ///     draw.text("debug info", Vec2::new(0.0, 0.0), 16.0, Color::WHITE);
+    /// });
+    /// ```
+    pub fn draw_immediate(&mut self, f: impl FnOnce(&mut DrawContext<'_>)) {
+        let mut ctx = DrawContext { queue: self };
+        f(&mut ctx);
+    }
+}
+
+/// drawing context for immediate mode rendering.
+///
+/// provides convenience methods for debug drawing without managing
+/// draw commands manually. obtained via [`RenderQueue::draw_immediate`].
+pub struct DrawContext<'a> {
+    queue: &'a mut RenderQueue,
+}
+
+impl DrawContext<'_> {
+    /// draw a line between two points.
+    pub fn line(&mut self, start: Vec2, end: Vec2, color: Color, thickness: f32) {
+        self.queue.draw_line(start, end, color, thickness);
+    }
+
+    /// draw a filled rectangle.
+    pub fn rect(&mut self, position: Vec2, size: Vec2, color: Color) {
+        self.queue.draw_rect(position, size, color);
+    }
+
+    /// draw a stroked rectangle (outline only).
+    pub fn rect_stroke(&mut self, position: Vec2, size: Vec2, color: Color, thickness: f32) {
+        let Vec2 { x, y } = position;
+        let Vec2 { x: w, y: h } = size;
+        // top
+        self.line(Vec2::new(x, y), Vec2::new(x + w, y), color, thickness);
+        // bottom
+        self.line(
+            Vec2::new(x, y + h),
+            Vec2::new(x + w, y + h),
+            color,
+            thickness,
+        );
+        // left
+        self.line(Vec2::new(x, y), Vec2::new(x, y + h), color, thickness);
+        // right
+        self.line(
+            Vec2::new(x + w, y),
+            Vec2::new(x + w, y + h),
+            color,
+            thickness,
+        );
+    }
+
+    /// draw a stroked circle (outline only, approximated with line segments).
+    pub fn circle(&mut self, center: Vec2, radius: f32, color: Color, thickness: f32) {
+        let segments = 32;
+        for i in 0..segments {
+            let a1 = (i as f32 / segments as f32) * 2.0 * std::f32::consts::PI;
+            let a2 = ((i + 1) as f32 / segments as f32) * 2.0 * std::f32::consts::PI;
+            let x1 = center.x + a1.cos() * radius;
+            let y1 = center.y + a1.sin() * radius;
+            let x2 = center.x + a2.cos() * radius;
+            let y2 = center.y + a2.sin() * radius;
+            self.line(Vec2::new(x1, y1), Vec2::new(x2, y2), color, thickness);
+        }
+    }
+
+    /// draw a filled circle (approximated with triangles from center).
+    pub fn circle_filled(&mut self, center: Vec2, radius: f32, color: Color) {
+        let segments = 32;
+        for i in 0..segments {
+            let a1 = (i as f32 / segments as f32) * 2.0 * std::f32::consts::PI;
+            let a2 = ((i + 1) as f32 / segments as f32) * 2.0 * std::f32::consts::PI;
+            let x1 = center.x + a1.cos() * radius;
+            let y1 = center.y + a1.sin() * radius;
+            let x2 = center.x + a2.cos() * radius;
+            let y2 = center.y + a2.sin() * radius;
+            // draw triangle as thin rect from center to edge
+            self.queue.push(DrawCommand {
+                kind: DrawKind::Rect {
+                    position: center,
+                    size: Vec2::new((x2 - x1).abs() + 1.0, (y2 - y1).abs() + 1.0),
+                    color,
+                    layer: layers::FOREGROUND,
+                },
+            });
+        }
+    }
+
+    /// draw text.
+    pub fn text(&mut self, content: &str, position: Vec2, font_size: f32, color: Color) {
+        // use a placeholder font id of 0 for immediate mode text
+        self.queue.push(DrawCommand {
+            kind: DrawKind::Text {
+                font: Some(0),
+                content: content.to_string(),
+                position,
+                font_size,
+                color,
+                layer: layers::FOREGROUND,
+            },
+        });
+    }
+
+    /// draw a point as a small filled circle.
+    pub fn point(&mut self, position: Vec2, color: Color) {
+        self.circle(position, 3.0, color, 1.0);
+    }
+
+    /// draw an AABB collision box.
+    pub fn aabb(&mut self, min: Vec2, max: Vec2, color: Color, thickness: f32) {
+        self.rect_stroke(min, max - min, color, thickness);
+    }
 }
 
 /// trait for custom render passes that can be executed by the render engine.

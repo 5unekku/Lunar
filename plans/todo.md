@@ -488,9 +488,9 @@ Everything else (zones, scenes, dialogue, web, 3D) can come after.
   - [ ] 24.1.6 `union(other)` — bounding box of two rects
 
 ### 25. Immediate Mode Render API (Optional)
-- [ ] 25.1 Immediate mode API
-  - [ ] 25.1.1 `draw_immediate(|draw| { ... })` closure
-  - [ ] 25.1.2 Debug drawing helpers (lines, circles, text)
+- [x] 25.1 Immediate mode API
+  - [x] 25.1.1 `draw_immediate(|draw| { ... })` closure
+  - [x] 25.1.2 Debug drawing helpers (lines, circles, text)
 - [ ] 25.2 Debug overlay
   - [ ] 25.2.1 FPS counter, entity count, collision visualization
 
