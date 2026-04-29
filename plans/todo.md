@@ -423,49 +423,49 @@ Everything else (zones, scenes, dialogue, web, 3D) can come after.
 > They are tracked here for planning purposes only — do NOT start work on these until Part 1 is complete.
 
 ### 19. Texture Atlas System
-- [ ] 19.1 TextureAtlas resource
-  - [ ] 19.1.1 Bin-packing algorithm (shelf packing or maxrects)
-  - [ ] 19.1.2 Atlas builder (packs multiple textures into single GPU texture)
-  - [ ] 19.1.3 Region lookup by name
-- [ ] 19.2 Sprite atlas integration
-  - [ ] 19.2.1 Sprite component gains optional `atlas_region: Option<Rect>`
-  - [ ] 19.2.2 RenderQueue batches by atlas texture, not individual textures
-  - [ ] 19.2.3 UV coordinate remapping for atlas regions
-- [ ] 19.3 Asset pipeline support
-  - [ ] 19.3.1 Atlas definition format (JSON5 authoring → binary runtime)
-  - [ ] 19.3.2 Atlas compilation during asset bundling
+- [x] 19.1 TextureAtlas resource
+  - [x] 19.1.1 Bin-packing algorithm (shelf packing or maxrects) — engine-atlas crate, maxrects packer
+  - [x] 19.1.2 Atlas builder (packs multiple textures into single GPU texture) — AtlasPacker
+  - [x] 19.1.3 Region lookup by name — TextureAtlas::region(), try_region()
+- [x] 19.2 Sprite atlas integration
+  - [x] 19.2.1 Sprite component gains optional atlas region via uv_rect on DrawKind::Sprite
+  - [x] 19.2.2 RenderQueue batches by atlas texture, not individual textures — sort by (layer, texture_id)
+  - [x] 19.2.3 UV coordinate remapping for atlas regions — draw_sprite_atlas, draw_sprite_atlas_on_layer
+- [x] 19.3 Asset pipeline support
+  - [x] 19.3.1 Atlas definition format (RON authoring → binary runtime) — AtlasManifest
+  - [x] 19.3.2 Atlas compilation during asset bundling — AtlasManifest::to_binary/from_binary
 
 ### 20. Layer-Based Rendering
-- [ ] 20.1 Layer component
-  - [ ] 20.1.1 `Layer { order: i32 }` component
-  - [ ] 20.1.2 Built-in layer constants (BACKGROUND, GAME, FOREGROUND, UI)
-- [ ] 20.2 RenderQueue layer sorting
-  - [ ] 20.2.1 Sort draw commands by layer before batching
-  - [ ] 20.2.2 Stable sort (preserve registration order within same layer)
+- [x] 20.1 Layer component
+  - [x] 20.1.1 `Layer(pub i32)` component in engine-render
+  - [x] 20.1.2 Built-in layer constants (BACKGROUND, GAME, FOREGROUND, UI) — layers module
+- [x] 20.2 RenderQueue layer sorting
+  - [x] 20.2.1 Sort draw commands by layer before batching — sort_by_key (layer, texture_id)
+  - [x] 20.2.2 Stable sort (preserve registration order within same layer)
 - [ ] 20.3 Camera per-layer offset
   - [ ] 20.3.1 Optional parallax support (per-layer camera offset)
 
 ### 21. Entity Hierarchies (Composition, NOT Inheritance)
-- [ ] 21.1 Parent/Child components
-  - [ ] 21.1.1 `Parent(pub Entity)` component
-  - [ ] 21.1.2 `Children(pub SmallVec<[Entity; 4]>)` component
-- [ ] 21.2 Transform propagation system
-  - [ ] 21.2.1 Compute world transforms from local + parent
-  - [ ] 21.2.2 Run in Update stage, before render
-- [ ] 21.3 LocalTransform vs WorldTransform
-  - [ ] 21.3.1 LocalTransform: position relative to parent
-  - [ ] 21.3.2 WorldTransform: absolute position (computed)
+- [x] 21.1 Parent/Child components
+  - [x] 21.1.1 `Parent(pub Entity)` component — hierarchy.rs
+  - [x] 21.1.2 `Children(pub SmallVec<[Entity; 4]>)` component — hierarchy.rs
+- [x] 21.2 Transform propagation system
+  - [x] 21.2.1 Compute world transforms from local + parent — propagate_transforms (DFS)
+  - [x] 21.2.2 sync_children + propagate_transforms registered via HierarchyPlugin
+- [x] 21.3 LocalTransform vs WorldTransform
+  - [x] 21.3.1 LocalTransform: position relative to parent — engine-math
+  - [x] 21.3.2 WorldTransform: absolute position (computed) — engine-math
 
 ### 22. Scene Definition Format
-- [ ] 22.1 Authoring format (JSON5)
-  - [ ] 22.1.1 JSON5 scene schema definition
-  - [ ] 22.1.2 Scene parser and validator
-- [ ] 22.2 Runtime format (binary)
-  - [ ] 22.2.1 Binary scene serialization (bincode/rkyv/custom)
-  - [ ] 22.2.2 Compile-time conversion: JSON5 → binary
-- [ ] 22.3 Scene loader
-  - [ ] 22.3.1 Load binary scene → spawn entities via Commands
-  - [ ] 22.3.2 SceneHandle for runtime reference
+- [x] 22.1 Authoring format (RON)
+  - [x] 22.1.1 RON scene schema — SceneDefinition, EntityDefinition in scene_format.rs
+  - [x] 22.1.2 Scene parser and validator — SceneDefinition::from_ron, entity/parent validation
+- [x] 22.2 Runtime format (binary)
+  - [x] 22.2.1 Binary scene serialization — bincode via SceneDefinition::to_binary/from_binary
+  - [x] 22.2.2 World manifest: XML authoring → compiled binary with string interning
+- [x] 22.3 Scene loader
+  - [x] 22.3.1 Load scene → spawn entities via Commands — SceneLoader::spawn_scene
+  - [x] 22.3.2 Scene entity tracking — SceneEntity marker component, id_map return
   - [ ] 22.3.3 Scene instancing (nest scenes within scenes)
 
 ### 23. Gameplay Framework (Optional)
