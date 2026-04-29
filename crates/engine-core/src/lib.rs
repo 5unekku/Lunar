@@ -47,6 +47,7 @@ mod scene;
 mod scene_format;
 mod schedule;
 mod state;
+mod world_manifest;
 mod zone;
 
 /// app builder and time resource
@@ -83,5 +84,11 @@ pub use scene_format::{
 pub use schedule::{StageLabelExt, StageOrder, UpdateStage};
 /// engine running state
 pub use state::EngineState;
+/// world manifest: XML-based world definition with scenes and spatial chunks
+pub use world_manifest::{
+    AdvancedSceneLoader, ChunkEntry, CompiledChunkEntry, CompiledSceneEntry, CompiledWorld,
+    ComponentScene, EntityData, LoadMode, LoadedScenes, SceneEntry, StreamingConfig,
+    StreamingState, StringInterner, WorldManifest, builtin_components,
+};
 /// world zone management
 pub use zone::{FadeConfig, WorldManager, Zone, ZoneTransition};
