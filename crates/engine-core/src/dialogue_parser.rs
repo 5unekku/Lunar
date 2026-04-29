@@ -1,33 +1,39 @@
 //! dialogue authoring format parser
 //!
-//! provides a yaml-based format for writing dialogue files that compile
+//! provides a RON-based format for writing dialogue files that compile
 //! into the engine's [`Dialogue`](crate::dialogue::Dialogue) data structures.
 //!
 //! # format
 //!
-//! dialogue files are written in yaml with the following structure:
+//! dialogue files are written in RON with the following structure:
 //!
-//! ```yaml
-//! start: greeting
-//! nodes:
-//!   greeting:
-//!     speaker: "NPC"
-//!     text: "hello there, traveler!"
-//!     sprite_change: "npc_happy"
-//!     next: farewell
-//!   farewell:
-//!     speaker: "NPC"
-//!     text: "what would you like to do?"
-//!     choices:
-//!       - label: "leave"
-//!         target: "end"
-//!       - label: "ask more"
-//!         target: "more_info"
-//!   more_info:
-//!     text: "the world is full of wonders..."
-//!     next: farewell
-//!   end:
-//!     text: "safe travels!"
+//! ```ron
+//! Dialogue(
+//!     start: "greeting",
+//!     nodes: {
+//!         "greeting": (
+//!             speaker: Some("NPC"),
+//!             text: "hello there, traveler!",
+//!             sprite_change: Some("npc_happy"),
+//!             next: Some("farewell"),
+//!         ),
+//!         "farewell": (
+//!             speaker: Some("NPC"),
+//!             text: "what would you like to do?",
+//!             choices: [
+//!                 (label: "leave", target: "end"),
+//!                 (label: "ask more", target: "more_info"),
+//!             ],
+//!         ),
+//!         "more_info": (
+//!             text: "the world is full of wonders...",
+//!             next: Some("farewell"),
+//!         ),
+//!         "end": (
+//!             text: "safe travels!",
+//!         ),
+//!     },
+//! )
 //! ```
 //!
 //! # example
@@ -35,27 +41,27 @@
 //! ```ignore
 //! use engine_core::dialogue_parser::parse_dialogue;
 //!
-//! let yaml = r#"
-//! start: greeting
-//! nodes:
-//!   greeting:
-//!     speaker: "NPC"
-//!     text: "hello!"
-//!     next: end
-//!   end:
-//!     text: "bye!"
+//! let ron = r#"
+//! Dialogue(
+//!     start: "greeting",
+//!     nodes: {
+//!         "greeting": (speaker: Some("NPC"), text: "hello!", next: Some("end")),
+//!         "end": (text: "bye!"),
+//!     },
+//! )
 //! "#;
 //!
-//! let dialogue = parse_dialogue(yaml).expect("failed to parse dialogue");
+//! let dialogue = parse_dialogue(ron).expect("failed to parse dialogue");
 //! ```
 
 use crate::dialogue::{Dialogue, DialogueChoice, DialogueLine, DialogueNode};
 use serde::Deserialize;
 
-/// raw yaml representation of a dialogue file.
+/// raw RON representation of a dialogue file.
 ///
-/// deserialized directly from the yaml source before validation.
+/// deserialized directly from the RON source before validation.
 #[derive(Debug, Deserialize)]
+#[serde(rename = "Dialogue")]
 struct RawDialogue {
     /// the entry point node id.
     start: String,
@@ -63,7 +69,7 @@ struct RawDialogue {
     nodes: std::collections::HashMap<String, RawNode>,
 }
 
-/// raw yaml representation of a single dialogue node.
+/// raw RON representation of a single dialogue node.
 #[derive(Debug, Deserialize)]
 struct RawNode {
     /// optional speaker identifier (none for narrator text).
@@ -81,7 +87,7 @@ struct RawNode {
     choices: Vec<RawChoice>,
 }
 
-/// raw yaml representation of a dialogue choice.
+/// raw RON representation of a dialogue choice.
 #[derive(Debug, Deserialize)]
 struct RawChoice {
     /// the text label shown to the player.
@@ -90,7 +96,7 @@ struct RawChoice {
     target: String,
 }
 
-/// parse a yaml dialogue string into a [`Dialogue`](crate::dialogue::Dialogue).
+/// parse a RON dialogue string into a [`Dialogue`](crate::dialogue::Dialogue).
 ///
 /// validates that the start node exists, all `next` references are valid,
 /// and all choice targets point to existing nodes.
@@ -99,8 +105,7 @@ struct RawChoice {
 /// # Errors
 /// returns an error if the yaml is invalid or contains references to non-existent nodes.
 pub fn parse_dialogue(source: &str) -> Result<Dialogue, String> {
-    let raw: RawDialogue =
-        serde_yaml::from_str(source).map_err(|e| format!("yaml parse error: {e}"))?;
+    let raw: RawDialogue = ron::from_str(source).map_err(|e| format!("ron parse error: {e}"))?;
 
     let start = raw.start.clone();
 
@@ -172,40 +177,40 @@ mod tests {
 
     #[test]
     fn parse_simple_dialogue() {
-        let yaml = r#"
-start: greeting
-nodes:
-  greeting:
-    speaker: "NPC"
-    text: "hello!"
-    next: end
-  end:
-    text: "bye!"
-"#;
-        let dialogue = parse_dialogue(yaml).expect("should parse");
+        let ron = r##"
+Dialogue(
+    start: "greeting",
+    nodes: {
+        "greeting": (speaker: Some("NPC"), text: "hello!", next: Some("end")),
+        "end": (text: "bye!"),
+    },
+)
+"##;
+        let dialogue = parse_dialogue(ron).expect("should parse");
         assert_eq!(dialogue.start, "greeting");
         assert_eq!(dialogue.nodes.len(), 2);
     }
 
     #[test]
     fn parse_dialogue_with_choices() {
-        let yaml = r#"
-start: question
-nodes:
-  question:
-    speaker: "NPC"
-    text: "what do you want?"
-    choices:
-      - label: "yes"
-        target: "yes_path"
-      - label: "no"
-        target: "no_path"
-  yes_path:
-    text: "you said yes!"
-  no_path:
-    text: "you said no!"
-"#;
-        let dialogue = parse_dialogue(yaml).expect("should parse");
+        let ron = r##"
+Dialogue(
+    start: "question",
+    nodes: {
+        "question": (
+            speaker: Some("NPC"),
+            text: "what do you want?",
+            choices: [
+                (label: "yes", target: "yes_path"),
+                (label: "no", target: "no_path"),
+            ],
+        ),
+        "yes_path": (text: "you said yes!"),
+        "no_path": (text: "you said no!"),
+    },
+)
+"##;
+        let dialogue = parse_dialogue(ron).expect("should parse");
         let question = dialogue
             .get_node("question")
             .expect("should have question node");
@@ -216,44 +221,47 @@ nodes:
 
     #[test]
     fn parse_invalid_next_fails() {
-        let yaml = r#"
-start: a
-nodes:
-  a:
-    text: "hello"
-    next: nonexistent
-"#;
-        let result = parse_dialogue(yaml);
+        let ron = r##"
+Dialogue(
+    start: "a",
+    nodes: {
+        "a": (text: "hello", next: Some("nonexistent")),
+    },
+)
+"##;
+        let result = parse_dialogue(ron);
         assert!(result.is_err());
     }
 
     #[test]
     fn parse_invalid_choice_target_fails() {
-        let yaml = r#"
-start: a
-nodes:
-  a:
-    text: "hello"
-    choices:
-      - label: "go"
-        target: nowhere
-"#;
-        let result = parse_dialogue(yaml);
+        let ron = r##"
+Dialogue(
+    start: "a",
+    nodes: {
+        "a": (
+            text: "hello",
+            choices: [(label: "go", target: "nowhere")],
+        ),
+    },
+)
+"##;
+        let result = parse_dialogue(ron);
         assert!(result.is_err());
     }
 
     #[test]
     fn parse_narrator_text() {
-        let yaml = r#"
-start: narration
-nodes:
-  narration:
-    text: "the wind howls through the trees..."
-    next: end
-  end:
-    text: "the end."
-"#;
-        let dialogue = parse_dialogue(yaml).expect("should parse");
+        let ron = r##"
+Dialogue(
+    start: "narration",
+    nodes: {
+        "narration": (text: "the wind howls through the trees...", next: Some("end")),
+        "end": (text: "the end."),
+    },
+)
+"##;
+        let dialogue = parse_dialogue(ron).expect("should parse");
         let narration = dialogue
             .get_node("narration")
             .expect("should have narration node");
@@ -262,30 +270,30 @@ nodes:
 
     #[test]
     fn parse_invalid_start_fails() {
-        let yaml = r#"
-start: nonexistent
-nodes:
-  a:
-    text: "hello"
-"#;
-        let result = parse_dialogue(yaml);
+        let ron = r##"
+Dialogue(
+    start: "nonexistent",
+    nodes: {
+        "a": (text: "hello"),
+    },
+)
+"##;
+        let result = parse_dialogue(ron);
         assert!(result.is_err());
     }
 
     #[test]
     fn parse_sprite_change() {
-        let yaml = r#"
-start: greet
-nodes:
-  greet:
-    speaker: "NPC"
-    text: "hi!"
-    sprite_change: "npc_angry"
-    next: end
-  end:
-    text: "bye"
-"#;
-        let dialogue = parse_dialogue(yaml).expect("should parse");
+        let ron = r##"
+Dialogue(
+    start: "greet",
+    nodes: {
+        "greet": (speaker: Some("NPC"), text: "hi!", sprite_change: Some("npc_angry"), next: Some("end")),
+        "end": (text: "bye"),
+    },
+)
+"##;
+        let dialogue = parse_dialogue(ron).expect("should parse");
         let greet = dialogue.get_node("greet").expect("should have greet node");
         assert_eq!(greet.line.sprite_change, Some("npc_angry".to_string()));
     }

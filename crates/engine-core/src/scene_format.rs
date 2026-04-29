@@ -1,35 +1,37 @@
-//! scene definition format: TOML authoring and binary runtime.
+//! scene definition format: RON authoring and binary runtime.
 //!
-//! # authoring format (TOML)
+//! # authoring format (RON)
 //!
-//! scenes are authored as TOML files with entity definitions:
+//! scenes are authored as RON files with entity definitions:
 //!
-//! ```toml
-//! name = "level_1"
-//!
-//! [[entities]]
-//! id = "player"
-//! x = 100.0
-//! y = 200.0
-//! layer = 1
-//! sprite_texture = "player.png"
-//! sprite_width = 32.0
-//! sprite_height = 32.0
-//!
-//! [[entities]]
-//! id = "enemy"
-//! parent = "player"
-//! x = 50.0
-//! y = 0.0
-//! layer = 1
-//! sprite_texture = "enemy.png"
-//! sprite_width = 24.0
-//! sprite_height = 24.0
+//! ```ron
+//! Scene(
+//!     name: "level_1",
+//!     entities: [
+//!         (
+//!             id: Some("player"),
+//!             x: 100.0,
+//!             y: 200.0,
+//!             sprite_texture: Some("player.png"),
+//!             sprite_width: 32.0,
+//!             sprite_height: 32.0,
+//!             layer: 1,
+//!         ),
+//!         (
+//!             id: Some("enemy"),
+//!             parent: Some("player"),
+//!             x: 50.0,
+//!             sprite_texture: Some("enemy.png"),
+//!             sprite_width: 24.0,
+//!             sprite_height: 24.0,
+//!         ),
+//!     ],
+//! )
 //! ```
 //!
 //! # binary runtime
 //!
-//! at build time, TOML scenes are converted to a compact binary format
+//! at build time, RON scenes are converted to a compact binary format
 //! using bincode for fast loading at runtime.
 
 use bevy_ecs::prelude::*;
@@ -40,10 +42,11 @@ use engine_math::{Color, LocalTransform, Vec2, Vec3};
 
 use crate::hierarchy::{Children, Parent};
 
-/// authoring-time scene definition (TOML format).
+/// authoring-time scene definition (RON format).
 ///
-/// use [`SceneDefinition::from_toml`] to parse from a TOML string.
+/// use [`SceneDefinition::from_ron`] to parse from a RON string.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename = "Scene")]
 pub struct SceneDefinition {
     /// scene name
     pub name: String,
@@ -56,10 +59,8 @@ pub struct SceneDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityDefinition {
     /// optional entity identifier for referencing
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     /// optional parent entity id
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     /// x position
     #[serde(default)]
@@ -77,7 +78,6 @@ pub struct EntityDefinition {
     #[serde(default = "default_one")]
     pub scale_y: f32,
     /// optional sprite texture path
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sprite_texture: Option<String>,
     /// sprite width (required if sprite_texture is set)
     #[serde(default)]
@@ -86,28 +86,23 @@ pub struct EntityDefinition {
     #[serde(default)]
     pub sprite_height: f32,
     /// optional sprite tint color (hex string like "#ff0000")
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sprite_tint: Option<String>,
     /// optional atlas region name
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sprite_region: Option<String>,
     /// optional text content
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     /// text font size
     #[serde(default = "default_font_size")]
     pub font_size: f32,
     /// optional font path
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
     /// optional text color
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_color: Option<String>,
     /// render layer (default 0)
     #[serde(default)]
     pub layer: i32,
     /// optional custom tags
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub tags: Vec<String>,
 }
 
@@ -194,18 +189,18 @@ impl EntityDefinition {
 }
 
 impl SceneDefinition {
-    /// parse a scene from a TOML string.
-    pub fn from_toml(source: &str) -> Result<Self, String> {
-        toml::from_str(source).map_err(|e| format!("failed to parse scene toml: {e}"))
+    /// parse a scene from a RON string.
+    pub fn from_ron(source: &str) -> Result<Self, String> {
+        ron::from_str(source).map_err(|e| format!("failed to parse scene ron: {e}"))
     }
 
-    /// load a scene from a TOML file path.
+    /// load a scene from a RON file path.
     pub fn from_file(path: &str) -> Result<Self, String> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let content = std::fs::read_to_string(path)
                 .map_err(|e| format!("failed to read scene file '{path}': {e}"))?;
-            Self::from_toml(&content)
+            Self::from_ron(&content)
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -420,7 +415,7 @@ impl SceneLoader {
         id_map
     }
 
-    /// load and spawn a scene from a TOML file path.
+    /// load and spawn a scene from a RON file path.
     pub fn load_and_spawn(
         commands: &mut Commands,
         path: &str,
@@ -496,27 +491,31 @@ mod tests {
 
     #[test]
     fn parse_empty_scene() {
-        let toml = r#"name = "empty""#;
-        let scene = SceneDefinition::from_toml(toml).unwrap();
+        let ron = r#"Scene(name: "empty")"#;
+        let scene = SceneDefinition::from_ron(ron).unwrap();
         assert_eq!(scene.name, "empty");
         assert!(scene.entities.is_empty());
     }
 
     #[test]
     fn parse_scene_with_entity() {
-        let toml = r#"
-name = "test"
-
-[[entities]]
-id = "player"
-x = 100.0
-y = 200.0
-sprite_texture = "player.png"
-sprite_width = 32.0
-sprite_height = 32.0
-layer = 1
-"#;
-        let scene = SceneDefinition::from_toml(toml).unwrap();
+        let ron = r##"
+Scene(
+    name: "test",
+    entities: [
+        (
+            id: Some("player"),
+            x: 100.0,
+            y: 200.0,
+            sprite_texture: Some("player.png"),
+            sprite_width: 32.0,
+            sprite_height: 32.0,
+            layer: 1,
+        ),
+    ],
+)
+"##;
+        let scene = SceneDefinition::from_ron(ron).unwrap();
         assert_eq!(scene.name, "test");
         assert_eq!(scene.entities.len(), 1);
         let entity = &scene.entities[0];
@@ -529,45 +528,44 @@ layer = 1
 
     #[test]
     fn parse_scene_with_parent() {
-        let toml = r#"
-name = "hierarchy"
-
-[[entities]]
-id = "parent"
-x = 100.0
-y = 100.0
-
-[[entities]]
-id = "child"
-parent = "parent"
-x = 10.0
-y = 0.0
-"#;
-        let scene = SceneDefinition::from_toml(toml).unwrap();
+        let ron = r##"
+Scene(
+    name: "hierarchy",
+    entities: [
+        (id: Some("parent"), x: 100.0, y: 100.0),
+        (id: Some("child"), parent: Some("parent"), x: 10.0, y: 0.0),
+    ],
+)
+"##;
+        let scene = SceneDefinition::from_ron(ron).unwrap();
         assert_eq!(scene.entities.len(), 2);
         assert_eq!(scene.entities[1].parent.as_deref(), Some("parent"));
     }
 
     #[test]
     fn binary_roundtrip() {
-        let toml = r##"
-name = "roundtrip"
-
-[[entities]]
-id = "e1"
-x = 10.0
-y = 20.0
-rotation = 1.5
-scale_x = 2.0
-scale_y = 2.0
-sprite_texture = "tex.png"
-sprite_width = 16.0
-sprite_height = 16.0
-sprite_tint = "#ff0000"
-layer = 2
-tags = ["enemy"]
+        let ron = r##"
+Scene(
+    name: "roundtrip",
+    entities: [
+        (
+            id: Some("e1"),
+            x: 10.0,
+            y: 20.0,
+            rotation: 1.5,
+            scale_x: 2.0,
+            scale_y: 2.0,
+            sprite_texture: Some("tex.png"),
+            sprite_width: 16.0,
+            sprite_height: 16.0,
+            sprite_tint: Some("#ff0000"),
+            layer: 2,
+            tags: ["enemy"],
+        ),
+    ],
+)
 "##;
-        let original = SceneDefinition::from_toml(toml).unwrap();
+        let original = SceneDefinition::from_ron(ron).unwrap();
         let binary = original.to_binary().unwrap();
         let restored = SceneDefinition::from_binary(&binary).unwrap();
         assert_eq!(restored.name, original.name);

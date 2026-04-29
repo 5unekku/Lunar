@@ -74,7 +74,7 @@ pub use hierarchy::{
 pub use localization::{Localization, LocalizationPlugin};
 /// scene system for game state management
 pub use scene::{Scene, SceneManager};
-/// scene definition format: TOML authoring and binary runtime
+/// scene definition format: RON authoring and binary runtime
 pub use scene_format::{
     EntityDefinition, SceneData, SceneDefinition, SceneEntity, SceneLayer, SceneLoader,
     SceneSprite, SceneTags, SceneText, SpriteDef, TextDef, TransformDef,

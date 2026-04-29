@@ -99,12 +99,12 @@ impl Localization {
         self.load_strings(lang, &source)
     }
 
-    /// load a string table for a language from a yaml string.
+    /// load a string table for a language from a RON string.
     /// # Errors
-    /// returns an error if the yaml source is invalid.
+    /// returns an error if the RON source is invalid.
     pub fn load_strings(&mut self, lang: &str, source: &str) -> Result<(), String> {
         let strings: HashMap<String, String> =
-            serde_yaml::from_str(source).map_err(|e| format!("yaml parse error: {e}"))?;
+            ron::from_str(source).map_err(|e| format!("ron parse error: {e}"))?;
         self.string_tables.insert(lang.to_string(), strings);
         self.available_languages
             .entry(lang.to_string())
@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn localization_string_lookup() {
         let mut loc = Localization::new("en");
-        loc.load_strings("en", "greeting: hello\nfarewell: goodbye")
+        loc.load_strings("en", r#"{ "greeting": "hello", "farewell": "goodbye" }"#)
             .unwrap();
         assert_eq!(loc.get("greeting"), "hello".to_string());
         assert_eq!(loc.get("unknown"), "unknown".to_string());
