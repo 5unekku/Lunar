@@ -442,8 +442,8 @@ Everything else (zones, scenes, dialogue, web, 3D) can come after.
 - [x] 20.2 RenderQueue layer sorting
   - [x] 20.2.1 Sort draw commands by layer before batching — sort_by_key (layer, texture_id)
   - [x] 20.2.2 Stable sort (preserve registration order within same layer)
-- [ ] 20.3 Camera per-layer offset
-  - [ ] 20.3.1 Optional parallax support (per-layer camera offset)
+- [x] 20.3 Camera per-layer offset
+  - [x] 20.3.1 Optional parallax support (per-layer camera offset)
 
 ### 21. Entity Hierarchies (Composition, NOT Inheritance)
 - [x] 21.1 Parent/Child components

@@ -84,35 +84,65 @@ pub struct Camera {
     pub rotation: f32,
     /// viewport size in pixels (None = full window)
     pub viewport: Option<(u32, u32)>,
+    /// per-layer offset for parallax scrolling (layer id → world offset)
+    pub layer_parallax: HashMap<i32, Vec2>,
 }
 
 impl Camera {
     /// create a new camera at the origin with default settings
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             position: Vec2::ZERO,
             zoom: 1.0,
             rotation: 0.0,
             viewport: None,
+            layer_parallax: HashMap::default(),
         }
     }
 
     /// create a camera at the given position
     #[must_use]
-    pub const fn at_position(x: f32, y: f32) -> Self {
+    pub fn at_position(x: f32, y: f32) -> Self {
         Self {
             position: Vec2::new(x, y),
             zoom: 1.0,
             rotation: 0.0,
             viewport: None,
+            layer_parallax: HashMap::default(),
         }
     }
 
     /// compute the orthographic projection matrix incorporating camera transforms.
     /// returns a 4x4 column-major matrix as a flat array of 16 f32s.
+    /// for per-layer parallax, use [`Camera::projection_matrix_for_layer`] instead.
     #[must_use]
     pub fn projection_matrix(&self, window_width: u32, window_height: u32) -> [f32; 16] {
+        self.projection_matrix_for_layer(0, window_width, window_height)
+    }
+
+    /// compute the orthographic projection matrix with a per-layer parallax offset.
+    /// the layer's parallax offset is subtracted from the camera position before
+    /// computing the transform, so layers can scroll at different speeds.
+    /// set per-layer offsets via [`Camera::set_layer_parallax`].
+    #[must_use]
+    pub fn projection_matrix_for_layer(
+        &self,
+        layer: i32,
+        window_width: u32,
+        window_height: u32,
+    ) -> [f32; 16] {
+        let parallax_offset = self
+            .layer_parallax
+            .get(&layer)
+            .copied()
+            .unwrap_or(Vec2::ZERO);
+        let effective_pos = self.position - parallax_offset;
+        self.projection_matrix_at(effective_pos, window_width, window_height)
+    }
+
+    /// internal: compute projection at a specific camera position.
+    fn projection_matrix_at(&self, pos: Vec2, window_width: u32, window_height: u32) -> [f32; 16] {
         #[allow(clippy::cast_precision_loss)]
         let w = window_width as f32;
         #[allow(clippy::cast_precision_loss)]
@@ -126,8 +156,8 @@ impl Camera {
         let sy = -2.0 / h * zoom;
 
         // camera translation (accounting for rotation)
-        let tx = -self.position.y.mul_add(-sin, self.position.x * cos);
-        let ty = -self.position.y.mul_add(cos, self.position.x * sin);
+        let tx = -pos.y.mul_add(-sin, pos.x * cos);
+        let ty = -pos.y.mul_add(cos, pos.x * sin);
 
         // combined matrix: scale then translate, y-down
         [
@@ -148,6 +178,21 @@ impl Camera {
             0.0,
             1.0,
         ]
+    }
+
+    /// set a parallax offset for a specific layer.
+    /// the offset is in world space and is subtracted from the camera position
+    /// when rendering that layer, creating a parallax effect.
+    /// a factor of 0.0 means no offset (layer moves with camera),
+    /// 1.0 means the layer stays fixed in world space,
+    /// values between 0 and 1 create slower-scrolling backgrounds.
+    pub fn set_layer_parallax(&mut self, layer: i32, offset: Vec2) {
+        self.layer_parallax.insert(layer, offset);
+    }
+
+    /// remove the parallax offset for a layer, reverting to normal camera tracking.
+    pub fn clear_layer_parallax(&mut self, layer: i32) {
+        self.layer_parallax.remove(&layer);
     }
 }
 
@@ -572,6 +617,37 @@ impl RenderEngine {
         }
     }
 
+    /// update the uniform buffer with the projection matrix for a specific layer.
+    /// applies per-layer parallax offset from the camera if present.
+    fn update_projection_for_layer(&mut self, layer: i32, camera: Option<&Camera>) {
+        let projection = if let Some(cam) = camera {
+            cam.projection_matrix_for_layer(layer, self.config.width, self.config.height)
+        } else {
+            let w = self.config.width as f32;
+            let h = self.config.height as f32;
+            [
+                2.0 / w,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                -2.0 / h,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                -1.0,
+                1.0,
+                0.0,
+                1.0,
+            ]
+        };
+        self.queue
+            .write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&projection));
+    }
+
     /// load the vulkan pipeline cache from disk if it exists.
     #[cfg(not(target_arch = "wasm32"))]
     fn load_pipeline_cache(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
@@ -815,36 +891,8 @@ impl RenderEngine {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // compute projection matrix: use camera if provided, otherwise default orthographic
-        let projection = if let Some(cam) = camera {
-            cam.projection_matrix(self.config.width, self.config.height)
-        } else {
-            // orthographic projection: y-down, maps [0, width] x [0, height] to NDC
-            #[allow(clippy::cast_precision_loss)]
-            let surface_width = self.config.width as f32;
-            #[allow(clippy::cast_precision_loss)]
-            let surface_height = self.config.height as f32;
-            [
-                2.0 / surface_width,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                -2.0 / surface_height,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-                0.0,
-                -1.0,
-                1.0,
-                0.0,
-                1.0,
-            ]
-        };
-        self.queue
-            .write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&projection));
+        // track current layer for parallax — updated as we iterate sorted commands
+        let mut current_layer: Option<i32> = None;
 
         // sort by (layer, texture_id) — same-texture commands are contiguous, no HashMap needed
         let mut sorted_commands: Vec<&DrawCommand> = commands.iter().collect();
@@ -924,11 +972,25 @@ impl RenderEngine {
                     tint,
                     uv_rect,
                     origin,
-                    ..
+                    layer,
                 } = &command.kind
                 else {
                     continue;
                 };
+
+                // update projection if layer changed (parallax)
+                if current_layer != Some(*layer) {
+                    // flush current batch before projection change
+                    if self.vertex_offset > batch_start
+                        && let Some(prev_tex) = current_tex
+                    {
+                        let vertex_count = (self.vertex_offset - batch_start) / VERTEX_STRIDE;
+                        self.draw_vertex_batch(&mut pass, prev_tex, batch_start, vertex_count);
+                    }
+                    batch_start = self.vertex_offset;
+                    self.update_projection_for_layer(*layer, camera);
+                    current_layer = Some(*layer);
+                }
 
                 let tex_id = u32::try_from(*tex_id).unwrap_or(u32::MAX);
 
@@ -970,9 +1032,30 @@ impl RenderEngine {
             }
 
             // draw untextured commands (rects, lines, text) as solid color
+            // these are already sorted by layer from sorted_commands
             if !rect_commands.is_empty() {
-                let rect_start = self.vertex_offset;
+                let mut rect_batch_start = self.vertex_offset;
                 for command in &rect_commands {
+                    let layer = match &command.kind {
+                        DrawKind::Rect { layer, .. }
+                        | DrawKind::Line { layer, .. }
+                        | DrawKind::Text { layer, .. } => *layer,
+                        DrawKind::Sprite { .. } => continue,
+                    };
+
+                    // update projection if layer changed (parallax)
+                    if current_layer != Some(layer) {
+                        // flush current batch before projection change
+                        if self.vertex_offset > rect_batch_start {
+                            let vertex_count =
+                                (self.vertex_offset - rect_batch_start) / VERTEX_STRIDE;
+                            self.draw_vertex_batch(&mut pass, 0, rect_batch_start, vertex_count);
+                        }
+                        rect_batch_start = self.vertex_offset;
+                        self.update_projection_for_layer(layer, camera);
+                        current_layer = Some(layer);
+                    }
+
                     // drop this command if the buffer is full
                     if self.vertex_offset + 6 * VERTEX_STRIDE > MAX_VERTICES * VERTEX_STRIDE {
                         log::warn!("vertex buffer full: dropping draw command");
@@ -1021,9 +1104,9 @@ impl RenderEngine {
                     }
                 }
 
-                if self.vertex_offset > rect_start {
-                    let vertex_count = (self.vertex_offset - rect_start) / VERTEX_STRIDE;
-                    self.draw_vertex_batch(&mut pass, 0, rect_start, vertex_count);
+                if self.vertex_offset > rect_batch_start {
+                    let vertex_count = (self.vertex_offset - rect_batch_start) / VERTEX_STRIDE;
+                    self.draw_vertex_batch(&mut pass, 0, rect_batch_start, vertex_count);
                 }
             }
         }
