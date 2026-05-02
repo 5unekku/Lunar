@@ -1095,7 +1095,7 @@ pub fn process_events(_event_pump: &mut (), world: &mut bevy_ecs::prelude::World
 
 /// poll the gamepad API for connected gamepads (WASM target)
 #[cfg(target_arch = "wasm32")]
-fn poll_gamepads(input: &mut InputState) {
+fn poll_gamepads(_input: &mut InputState) {
     use web_input::{push_gamepad_axis, push_gamepad_button, release_gamepad_button};
     use web_sys::Gamepad;
 
@@ -1110,6 +1110,7 @@ fn poll_gamepads(input: &mut InputState) {
     };
 
     for (index, gamepad_opt) in gamepads.iter().enumerate() {
+        use wasm_bindgen::JsCast;
         let gamepad: Gamepad = match gamepad_opt.dyn_into() {
             Ok(g) => g,
             Err(_) => continue,
@@ -1118,7 +1119,11 @@ fn poll_gamepads(input: &mut InputState) {
         // poll buttons
         let buttons = gamepad.buttons();
         for (btn_index, btn) in buttons.iter().enumerate() {
-            let pressed = btn.pressed();
+            let web_btn: web_sys::GamepadButton = match btn.dyn_into() {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            let pressed = web_btn.pressed();
             let mapped = match btn_index {
                 0 => Some(GamepadButton::South),
                 1 => Some(GamepadButton::East),
@@ -1130,10 +1135,10 @@ fn poll_gamepads(input: &mut InputState) {
                 9 => Some(GamepadButton::Start),
                 10 => Some(GamepadButton::LeftStick),
                 11 => Some(GamepadButton::RightStick),
-                12 => Some(GamepadButton::DPadUp),
-                13 => Some(GamepadButton::DPadDown),
-                14 => Some(GamepadButton::DPadLeft),
-                15 => Some(GamepadButton::DPadRight),
+                12 => Some(GamepadButton::DpadUp),
+                13 => Some(GamepadButton::DpadDown),
+                14 => Some(GamepadButton::DpadLeft),
+                15 => Some(GamepadButton::DpadRight),
                 _ => None,
             };
             if let Some(button) = mapped {
@@ -1148,16 +1153,32 @@ fn poll_gamepads(input: &mut InputState) {
         // poll axes
         let axes = gamepad.axes();
         if axes.length() > 0 {
-            push_gamepad_axis(index, GamepadAxis::LeftStickX, axes.get(0) as f32);
+            push_gamepad_axis(
+                index,
+                GamepadAxis::LeftStickX,
+                axes.get(0).as_f64().unwrap_or(0.0) as f32,
+            );
         }
         if axes.length() > 1 {
-            push_gamepad_axis(index, GamepadAxis::LeftStickY, axes.get(1) as f32);
+            push_gamepad_axis(
+                index,
+                GamepadAxis::LeftStickY,
+                axes.get(1).as_f64().unwrap_or(0.0) as f32,
+            );
         }
         if axes.length() > 2 {
-            push_gamepad_axis(index, GamepadAxis::RightStickX, axes.get(2) as f32);
+            push_gamepad_axis(
+                index,
+                GamepadAxis::RightStickX,
+                axes.get(2).as_f64().unwrap_or(0.0) as f32,
+            );
         }
         if axes.length() > 3 {
-            push_gamepad_axis(index, GamepadAxis::RightStickY, axes.get(3) as f32);
+            push_gamepad_axis(
+                index,
+                GamepadAxis::RightStickY,
+                axes.get(3).as_f64().unwrap_or(0.0) as f32,
+            );
         }
     }
 }

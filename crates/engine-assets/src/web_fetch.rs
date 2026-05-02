@@ -4,7 +4,7 @@
 //! the [`IoTaskPool`](super::IoTaskPool) calls this directly; use it for any ad-hoc
 //! network fetch from game code as well.
 
-use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{RequestInit, RequestMode, Response};
 
@@ -15,9 +15,9 @@ use web_sys::{RequestInit, RequestMode, Response};
 pub async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let window = web_sys::window().ok_or("no window available")?;
 
-    let mut opts = RequestInit::new();
-    opts.method("GET");
-    opts.mode(RequestMode::Cors);
+    let opts = RequestInit::new();
+    opts.set_method("GET");
+    opts.set_mode(RequestMode::Cors);
 
     let request = web_sys::Request::new_with_str_and_init(url, &opts)
         .map_err(|e| format!("failed to create request: {e:?}"))?;

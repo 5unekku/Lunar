@@ -46,7 +46,7 @@ fn roundtrip_with_metadata() {
         metadata: Some(r#"{"source":"test.png"}"#.to_string()),
         ..Default::default()
     };
-    let bytes = encode_with_opts(width, height, &pixels, opts).unwrap();
+    let bytes = encode_with_opts(width, height, &pixels, &opts).unwrap();
     let image = decode(&bytes).unwrap();
 
     assert_eq!(image.pixels, pixels);

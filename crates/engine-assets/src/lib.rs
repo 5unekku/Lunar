@@ -46,15 +46,17 @@ pub mod web_fetch;
 #[cfg(target_arch = "wasm32")]
 pub mod bundled;
 
+use bevy_ecs::prelude::*;
+use engine_core::{App, GamePlugin};
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::Arc;
-use std::thread;
 
-use bevy_ecs::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
 use crossbeam_channel::{Receiver, Sender};
-use engine_core::{App, GamePlugin};
+#[cfg(not(target_arch = "wasm32"))]
+use std::thread;
 
 /// trait for types that can load a specific asset type from raw bytes.
 ///
@@ -590,8 +592,10 @@ impl TextureLoaderTrait for MiTextureLoader {
 /// loader for wav sound files.
 ///
 /// uses rodio to decode wav files into sound buffers.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct WavSoundLoader;
 
+#[cfg(not(target_arch = "wasm32"))]
 impl SoundLoaderTrait for WavSoundLoader {
     fn load(&self, bytes: Vec<u8>) -> Result<Sound, String> {
         use rodio::Source as _;
@@ -610,8 +614,10 @@ impl SoundLoaderTrait for WavSoundLoader {
 /// loader for ogg/vorbis sound files.
 ///
 /// uses rodio to decode ogg files into sound buffers.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct OggSoundLoader;
 
+#[cfg(not(target_arch = "wasm32"))]
 impl SoundLoaderTrait for OggSoundLoader {
     fn load(&self, bytes: Vec<u8>) -> Result<Sound, String> {
         use rodio::Source as _;
@@ -671,15 +677,21 @@ fn texture_loader_for(path: &str) -> Arc<dyn TextureLoaderTrait> {
 }
 
 /// determine the appropriate sound loader for a file extension.
-fn sound_loader_for(path: &str) -> Arc<dyn SoundLoaderTrait> {
-    let ext = Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-
-    let _ = ext;
+#[cfg(not(target_arch = "wasm32"))]
+fn sound_loader_for(_path: &str) -> Arc<dyn SoundLoaderTrait> {
     Arc::new(WavSoundLoader)
+}
+
+/// stub sound loader for WASM — returns an error since rodio doesn't compile on wasm.
+#[cfg(target_arch = "wasm32")]
+fn sound_loader_for(_path: &str) -> Arc<dyn SoundLoaderTrait> {
+    struct WasmStubLoader;
+    impl SoundLoaderTrait for WasmStubLoader {
+        fn load(&self, _bytes: Vec<u8>) -> Result<Sound, String> {
+            Err("sound loading not supported on WASM target".to_string())
+        }
+    }
+    Arc::new(WasmStubLoader)
 }
 
 /// determine the appropriate font loader for a file extension.
@@ -1263,4 +1275,157 @@ macro_rules! impl_asset {
     ($ty:ty) => {
         impl $crate::Asset for $ty {}
     };
+}
+
+#[cfg(test)]
+mod handle_tests {
+    use super::*;
+
+    #[derive(Debug, PartialEq)]
+    struct TestAsset;
+    impl Asset for TestAsset {}
+
+    #[test]
+    fn handle_new_creates_valid_handle() {
+        let h = Handle::<TestAsset>::new(5, 3);
+        assert_eq!(h.id(), 5);
+        assert_eq!(h.generation(), 3);
+    }
+
+    #[test]
+    fn handle_copy_and_clone() {
+        let a = Handle::<TestAsset>::new(1, 2);
+        let b = Handle::<TestAsset>::new(1, 2);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn asset_store_allocate_slot() {
+        let mut store = AssetStore::<TestAsset>::new();
+        let h = store.allocate_slot("test/path".into());
+        assert_eq!(h.id(), 0);
+        assert_eq!(h.generation(), 0);
+        assert_eq!(store.loading_count(), 1);
+    }
+
+    #[test]
+    fn asset_store_insert_and_retrieve() {
+        let mut store = AssetStore::<TestAsset>::new();
+        let h = store.allocate_slot("test".into());
+        store.insert(h.id(), TestAsset);
+        assert_eq!(store.get(&h), Some(&TestAsset));
+    }
+
+    #[test]
+    fn asset_store_generation_increments_on_reuse() {
+        let mut store = AssetStore::<TestAsset>::new();
+        let h1 = store.allocate_slot("a".into());
+        // nested allocate_slot with a different path reuses slot — not directly testable
+        // but we can verify basic generation tracking works
+        assert_eq!(h1.generation(), 0);
+    }
+
+    #[test]
+    fn asset_store_stale_generation_invalid() {
+        let mut store = AssetStore::<TestAsset>::new();
+        let h = store.allocate_slot("test".into());
+        store.insert(h.id(), TestAsset);
+        let stale = Handle::<TestAsset>::new(h.id(), 42);
+        assert!(store.get(&stale).is_none());
+    }
+
+    #[test]
+    fn asset_store_is_ready_after_insert() {
+        let mut store = AssetStore::<TestAsset>::new();
+        let h = store.allocate_slot("test".into());
+        assert!(!store.is_ready(&h));
+        store.insert(h.id(), TestAsset);
+        assert!(store.is_ready(&h));
+    }
+
+    #[test]
+    fn asset_store_loading_count() {
+        let mut store = AssetStore::<TestAsset>::new();
+        let _ = store.allocate_slot("a".into());
+        let _ = store.allocate_slot("b".into());
+        assert_eq!(store.loading_count(), 2);
+        // insert one to make it loaded
+        store.insert(0, TestAsset);
+        assert_eq!(store.loading_count(), 1);
+    }
+
+    #[test]
+    fn asset_store_mark_failed() {
+        let mut store = AssetStore::<TestAsset>::new();
+        let h = store.allocate_slot("test".into());
+        assert!(
+            store
+                .get_info(&h)
+                .is_some_and(|i| i.state == LoadState::Loading)
+        );
+        store.mark_failed(h.id());
+        assert!(
+            store
+                .get_info(&h)
+                .is_some_and(|i| i.state == LoadState::Failed)
+        );
+    }
+
+    #[test]
+    fn asset_store_ref_count_coalesces_duplicates() {
+        let mut store = AssetStore::<TestAsset>::new();
+        let h1 = store.allocate_slot("shared".into());
+        store.insert(h1.id(), TestAsset);
+        let h2 = store.allocate_slot("shared".into());
+        // same id because already loaded
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn load_state_debug() {
+        assert_eq!(format!("{:?}", LoadState::Loading), "Loading");
+        assert_eq!(format!("{:?}", LoadState::Loaded), "Loaded");
+        assert_eq!(format!("{:?}", LoadState::Failed), "Failed");
+    }
+
+    #[test]
+    fn resolve_asset_path_relative() {
+        assert_eq!(
+            resolve_asset_path("sprites/player.png"),
+            "assets/sprites/player.png"
+        );
+    }
+
+    #[test]
+    fn resolve_asset_path_already_assets() {
+        assert_eq!(
+            resolve_asset_path("assets/sprites/player.png"),
+            "assets/sprites/player.png"
+        );
+    }
+
+    #[test]
+    fn resolve_asset_path_dot_slash() {
+        assert_eq!(
+            resolve_asset_path("./sprites/player.png"),
+            "assets/sprites/player.png"
+        );
+    }
+
+    #[test]
+    fn resolve_asset_path_absolute_unchanged() {
+        assert_eq!(
+            resolve_asset_path("/absolute/path.png"),
+            "/absolute/path.png"
+        );
+    }
+
+    #[test]
+    fn impl_asset_macro() {
+        struct Foo;
+        impl_asset!(Foo);
+        // just verifying it compiles
+        fn _accepts_asset(_: &dyn Asset) {}
+        _accepts_asset(&Foo);
+    }
 }

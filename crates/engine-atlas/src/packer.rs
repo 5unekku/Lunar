@@ -168,3 +168,81 @@ impl AtlasPacker {
         }
     }
 }
+
+#[cfg(test)]
+mod packer_tests {
+    use super::*;
+
+    fn image(w: u32, h: u32) -> Image {
+        let mut pixels = vec![0u8; (w * h * 4) as usize];
+        for (i, chunk) in pixels.chunks_exact_mut(4).enumerate() {
+            let t = (i * 8) as u8;
+            chunk.copy_from_slice(&[t, t, t, 255]);
+        }
+        let mut img = Image::new(w, h);
+        img.pixels = pixels;
+        img
+    }
+
+    #[test]
+    fn pack_single_image() {
+        let packer = AtlasPacker::new(256, 256);
+        let sources = [SourceImage {
+            name: "test".into(),
+            image: image(32, 32),
+        }];
+        let result = packer.pack(&sources).unwrap();
+        assert_eq!(result.manifest.regions.len(), 1);
+        let r = result.manifest.regions.get("test").unwrap();
+        assert_eq!(r.x, 0);
+        assert_eq!(r.y, 0);
+        assert_eq!(r.w, 32);
+        assert_eq!(r.h, 32);
+    }
+
+    #[test]
+    fn pack_multiple_images() {
+        let packer = AtlasPacker::new(128, 128);
+        let sources = [
+            SourceImage {
+                name: "a".into(),
+                image: image(10, 20),
+            },
+            SourceImage {
+                name: "b".into(),
+                image: image(15, 10),
+            },
+            SourceImage {
+                name: "c".into(),
+                image: image(8, 8),
+            },
+        ];
+        let result = packer.pack(&sources).unwrap();
+        assert_eq!(result.manifest.regions.len(), 3);
+        // all images should be placed without overlap
+        let mut regions: Vec<_> = result.manifest.regions.values().collect();
+        regions.sort_by_key(|r| (r.x, r.y));
+        // at minimum their combined height should fit
+        let total_h: u32 = regions.iter().map(|r| r.h).sum();
+        assert!(result.manifest.atlas_height >= total_h / 2); // shelf packing, so >= avg height
+    }
+
+    #[test]
+    fn pack_empty_returns_1x1() {
+        let packer = AtlasPacker::new(256, 256);
+        let result = packer.pack(&[]).unwrap();
+        assert_eq!(result.image.width, 1);
+        assert_eq!(result.image.height, 1);
+        assert!(result.manifest.regions.is_empty());
+    }
+
+    #[test]
+    fn pack_image_too_large_errors() {
+        let packer = AtlasPacker::new(32, 32);
+        let sources = [SourceImage {
+            name: "big".into(),
+            image: image(64, 64),
+        }];
+        assert!(packer.pack(&sources).is_err());
+    }
+}

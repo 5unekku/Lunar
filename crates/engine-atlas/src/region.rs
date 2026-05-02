@@ -38,3 +38,42 @@ impl AtlasRegion {
         Self { uv_min, uv_max }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_pixels_origin() {
+        let r = AtlasRegion::from_pixels(0, 0, 100, 50, 200, 100);
+        assert_eq!(r.uv_min.x, 0.0);
+        assert_eq!(r.uv_min.y, 0.0);
+        assert_eq!(r.uv_max.x, 0.5);
+        assert_eq!(r.uv_max.y, 0.5);
+    }
+
+    #[test]
+    fn from_pixels_middle() {
+        let r = AtlasRegion::from_pixels(100, 50, 100, 50, 200, 100);
+        assert!((r.uv_min.x - 0.5).abs() < 1e-6);
+        assert!((r.uv_min.y - 0.5).abs() < 1e-6);
+        assert!((r.uv_max.x - 1.0).abs() < 1e-6);
+        assert!((r.uv_max.y - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn from_pixels_single_pixel() {
+        let r = AtlasRegion::from_pixels(5, 5, 1, 1, 10, 10);
+        assert!((r.uv_min.x - 0.5).abs() < 1e-6);
+        assert!((r.uv_max.x - 0.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn from_uv_identity() {
+        let r = AtlasRegion::from_uv(Vec2::new(0.25, 0.25), Vec2::new(0.75, 0.75));
+        assert_eq!(r.uv_min.x, 0.25);
+        assert_eq!(r.uv_min.y, 0.25);
+        assert_eq!(r.uv_max.x, 0.75);
+        assert_eq!(r.uv_max.y, 0.75);
+    }
+}

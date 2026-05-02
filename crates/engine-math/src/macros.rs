@@ -13,21 +13,21 @@
 macro_rules! transform {
     (pos: $pos:expr, rot: $rot:expr, scale: $scale:expr) => {
         $crate::Transform {
-            translation: $pos,
+            translation: $crate::Vec3::new($pos.x, $pos.y, 0.0),
             rotation: $rot,
             scale: $scale,
         }
     };
     (x: $x:expr, y: $y:expr) => {
         $crate::Transform {
-            translation: $crate::Vec2::new($x, $y),
+            translation: $crate::Vec3::new($x, $y, 0.0),
             rotation: 0.0,
             scale: $crate::Vec2::ONE,
         }
     };
     (pos: $pos:expr) => {
         $crate::Transform {
-            translation: $pos,
+            translation: $crate::Vec3::new($pos.x, $pos.y, 0.0),
             rotation: 0.0,
             scale: $crate::Vec2::ONE,
         }
@@ -157,4 +157,74 @@ macro_rules! query {
     ($($component:ty),+, with: $with:ty, without: $without:ty, changed: $changed:ty $(,)?) => {
         bevy_ecs::prelude::Query<($(& $component),+), (bevy_ecs::prelude::With<$with>, bevy_ecs::prelude::Without<$without>, bevy_ecs::prelude::Changed<$changed>)>
     };
+}
+
+#[cfg(test)]
+mod macro_tests {
+    #[test]
+    fn transform_macro_full() {
+        let t = transform!(pos: crate::Vec2::new(1.0, 2.0), rot: 3.0, scale: crate::Vec2::new(4.0, 5.0));
+        assert_eq!(t.translation.x, 1.0);
+        assert_eq!(t.translation.y, 2.0);
+        assert_eq!(t.rotation, 3.0);
+        assert_eq!(t.scale.x, 4.0);
+        assert_eq!(t.scale.y, 5.0);
+    }
+
+    #[test]
+    fn transform_macro_xy() {
+        let t = transform!(x: 10.0, y: 20.0);
+        assert_eq!(t.translation.x, 10.0);
+        assert_eq!(t.translation.y, 20.0);
+        assert_eq!(t.rotation, 0.0);
+        assert_eq!(t.scale, crate::Vec2::ONE);
+    }
+
+    #[test]
+    fn transform_macro_pos_only() {
+        let t = transform!(pos: crate::Vec2::new(5.0, 6.0));
+        assert_eq!(t.translation.x, 5.0);
+        assert_eq!(t.rotation, 0.0);
+    }
+
+    #[test]
+    fn color_macro_rgb() {
+        let c = color!(r: 1.0, g: 0.5, b: 0.0);
+        assert_eq!(c.r, 1.0);
+        assert_eq!(c.g, 0.5);
+        assert_eq!(c.b, 0.0);
+        assert_eq!(c.a, 1.0);
+    }
+
+    #[test]
+    fn color_macro_rgba() {
+        let c = color!(r: 0.5, g: 0.5, b: 0.5, a: 0.25);
+        assert_eq!(c.a, 0.25);
+    }
+
+    #[test]
+    fn color_macro_hex() {
+        let c = color!(hex: 0xFF8800);
+        assert!((c.r - 1.0).abs() < 0.001);
+        assert!((c.g - 0.533).abs() < 0.001);
+        assert!((c.b - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn rect_macro_xywh() {
+        let r = rect!(x: 0.0, y: 10.0, w: 100.0, h: 50.0);
+        assert_eq!(r.x, 0.0);
+        assert_eq!(r.y, 10.0);
+        assert_eq!(r.w, 100.0);
+        assert_eq!(r.h, 50.0);
+    }
+
+    #[test]
+    fn rect_macro_pos_size() {
+        let r = rect!(pos: crate::Vec2::new(5.0, 5.0), size: crate::Vec2::new(10.0, 20.0));
+        assert_eq!(r.x, 5.0);
+        assert_eq!(r.y, 5.0);
+        assert_eq!(r.w, 10.0);
+        assert_eq!(r.h, 20.0);
+    }
 }

@@ -357,7 +357,6 @@ impl RenderEngine {
         instance: &wgpu::Instance,
         canvas: &web_sys::HtmlCanvasElement,
     ) -> Result<wgpu::Surface<'static>, String> {
-        use wasm_bindgen::JsCast;
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
             .map_err(|e| format!("failed to create surface: {e:?}"))?;
@@ -367,6 +366,7 @@ impl RenderEngine {
     /// find a canvas element by id and return it.
     #[cfg(target_arch = "wasm32")]
     pub fn find_canvas(id: &str) -> Result<web_sys::HtmlCanvasElement, String> {
+        use wasm_bindgen::JsCast;
         let window = web_sys::window().ok_or("no window")?;
         let document = window.document().ok_or("no document")?;
         let element = document

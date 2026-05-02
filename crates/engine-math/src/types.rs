@@ -354,3 +354,246 @@ impl Rect {
         }
     }
 }
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+
+    #[test]
+    fn rgb_constructs_with_full_opacity() {
+        let c = Color::rgb(0.5, 0.3, 0.8);
+        assert_eq!(c.r, 0.5);
+        assert_eq!(c.g, 0.3);
+        assert_eq!(c.b, 0.8);
+        assert_eq!(c.a, 1.0);
+    }
+
+    #[test]
+    fn rgba_constructs_with_explicit_alpha() {
+        let c = Color::rgba(1.0, 0.0, 0.0, 0.5);
+        assert_eq!(c.a, 0.5);
+    }
+
+    #[test]
+    fn constants_have_expected_values() {
+        assert_eq!(Color::BLACK, Color::rgb(0.0, 0.0, 0.0));
+        assert_eq!(Color::WHITE, Color::rgb(1.0, 1.0, 1.0));
+        assert_eq!(Color::RED, Color::rgb(1.0, 0.0, 0.0));
+        assert_eq!(Color::GREEN, Color::rgb(0.0, 1.0, 0.0));
+        assert_eq!(Color::BLUE, Color::rgb(0.0, 0.0, 1.0));
+        assert_eq!(Color::TRANSPARENT, Color::rgba(0.0, 0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn default_is_white() {
+        assert_eq!(Color::default(), Color::WHITE);
+    }
+}
+
+#[cfg(test)]
+mod rect_tests {
+    use super::*;
+
+    #[test]
+    fn new_creates_rect() {
+        let r = Rect::new(10.0, 20.0, 100.0, 50.0);
+        assert_eq!(r.x, 10.0);
+        assert_eq!(r.y, 20.0);
+        assert_eq!(r.w, 100.0);
+        assert_eq!(r.h, 50.0);
+    }
+
+    #[test]
+    fn from_center_derives_correct_corners() {
+        let r = Rect::from_center(Vec2::new(50.0, 30.0), Vec2::new(40.0, 20.0));
+        assert_eq!(r.x, 10.0);
+        assert_eq!(r.y, 10.0);
+        assert_eq!(r.w, 80.0);
+        assert_eq!(r.h, 40.0);
+    }
+
+    #[test]
+    fn contains_point_inside() {
+        let r = Rect::new(0.0, 0.0, 100.0, 100.0);
+        assert!(r.contains(Vec2::new(50.0, 50.0)));
+        assert!(r.contains(Vec2::new(0.0, 0.0)));
+        assert!(r.contains(Vec2::new(100.0, 100.0)));
+    }
+
+    #[test]
+    fn contains_point_outside() {
+        let r = Rect::new(0.0, 0.0, 100.0, 100.0);
+        assert!(!r.contains(Vec2::new(-1.0, 50.0)));
+        assert!(!r.contains(Vec2::new(50.0, 101.0)));
+    }
+
+    #[test]
+    fn intersects_overlapping() {
+        let a = Rect::new(0.0, 0.0, 50.0, 50.0);
+        let b = Rect::new(25.0, 25.0, 50.0, 50.0);
+        assert!(a.intersects(&b));
+        assert!(b.intersects(&a));
+    }
+
+    #[test]
+    fn intersects_non_overlapping() {
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let b = Rect::new(20.0, 20.0, 10.0, 10.0);
+        assert!(!a.intersects(&b));
+    }
+
+    #[test]
+    fn center_is_midpoint() {
+        let r = Rect::new(10.0, 20.0, 100.0, 50.0);
+        let c = r.center();
+        assert_eq!(c.x, 60.0);
+        assert_eq!(c.y, 45.0);
+    }
+
+    #[test]
+    fn inflate_expands_on_all_sides() {
+        let mut r = Rect::new(10.0, 10.0, 20.0, 20.0);
+        r.inflate(5.0, 10.0);
+        assert_eq!(r.x, 5.0);
+        assert_eq!(r.y, 0.0);
+        assert_eq!(r.w, 30.0);
+        assert_eq!(r.h, 40.0);
+    }
+
+    #[test]
+    fn clamp_constrains_within_boundary() {
+        let mut r = Rect::new(-10.0, -10.0, 100.0, 100.0);
+        let boundary = Rect::new(0.0, 0.0, 50.0, 50.0);
+        r.clamp(&boundary);
+        assert_eq!(r.x, 0.0);
+        assert_eq!(r.y, 0.0);
+        assert_eq!(r.w, 50.0);
+        assert_eq!(r.h, 50.0);
+    }
+
+    #[test]
+    fn clamp_does_not_expand() {
+        let mut r = Rect::new(10.0, 10.0, 20.0, 20.0);
+        let boundary = Rect::new(0.0, 0.0, 100.0, 100.0);
+        r.clamp(&boundary);
+        assert_eq!(r, Rect::new(10.0, 10.0, 20.0, 20.0));
+    }
+
+    #[test]
+    fn collide_point_delegates_to_contains() {
+        let r = Rect::new(0.0, 0.0, 10.0, 10.0);
+        assert!(r.collide_point(Vec2::new(5.0, 5.0)));
+        assert!(!r.collide_point(Vec2::new(15.0, 5.0)));
+    }
+
+    #[test]
+    fn collide_rect_delegates_to_intersects() {
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+        assert!(a.collide_rect(&Rect::new(5.0, 5.0, 10.0, 10.0)));
+        assert!(!a.collide_rect(&Rect::new(20.0, 20.0, 10.0, 10.0)));
+    }
+
+    #[test]
+    fn union_encloses_both_rects() {
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let b = Rect::new(20.0, 20.0, 10.0, 10.0);
+        let u = a.union(&b);
+        assert_eq!(u, Rect::new(0.0, 0.0, 30.0, 30.0));
+    }
+
+    #[test]
+    fn union_with_contained_rect() {
+        let a = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let b = Rect::new(10.0, 10.0, 20.0, 20.0);
+        assert_eq!(a.union(&b), a);
+    }
+
+    #[test]
+    fn top_left_returns_corner() {
+        let r = Rect::new(5.0, 10.0, 50.0, 30.0);
+        assert_eq!(r.top_left(), Vec2::new(5.0, 10.0));
+    }
+
+    #[test]
+    fn bottom_right_returns_corner() {
+        let r = Rect::new(5.0, 10.0, 50.0, 30.0);
+        assert_eq!(r.bottom_right(), Vec2::new(55.0, 40.0));
+    }
+}
+
+#[cfg(test)]
+mod transform_tests {
+    use super::*;
+
+    #[test]
+    fn default_transform_is_at_origin() {
+        let t = Transform::default();
+        assert_eq!(t.translation, Vec3::ZERO);
+        assert_eq!(t.rotation, 0.0);
+        assert_eq!(t.scale, Vec2::ONE);
+    }
+
+    #[test]
+    fn from_translation_sets_position() {
+        let t = Transform::from_translation(Vec2::new(100.0, 200.0));
+        assert_eq!(t.translation.x, 100.0);
+        assert_eq!(t.translation.y, 200.0);
+        assert_eq!(t.translation.z, 0.0);
+        assert_eq!(t.rotation, 0.0);
+        assert_eq!(t.scale, Vec2::ONE);
+    }
+
+    #[test]
+    fn from_xy_shorthand() {
+        let t = Transform::from_xy(50.0, 75.0);
+        assert_eq!(t.translation.x, 50.0);
+        assert_eq!(t.translation.y, 75.0);
+    }
+
+    #[test]
+    fn with_rotation_chain() {
+        let t = Transform::from_xy(0.0, 0.0).with_rotation(1.5);
+        assert_eq!(t.rotation, 1.5);
+    }
+
+    #[test]
+    fn with_scale_chain() {
+        let t = Transform::from_xy(0.0, 0.0).with_scale(Vec2::new(2.0, 3.0));
+        assert_eq!(t.scale, Vec2::new(2.0, 3.0));
+    }
+
+    #[test]
+    fn builder_chaining() {
+        let t = Transform::from_xy(10.0, 20.0)
+            .with_rotation(0.5)
+            .with_scale(Vec2::splat(2.0));
+        assert_eq!(t.translation.x, 10.0);
+        assert_eq!(t.translation.y, 20.0);
+        assert_eq!(t.rotation, 0.5);
+        assert_eq!(t.scale, Vec2::splat(2.0));
+    }
+
+    #[test]
+    fn local_transform_default() {
+        let t = LocalTransform::default();
+        assert_eq!(t.translation, Vec3::ZERO);
+        assert_eq!(t.rotation, 0.0);
+        assert_eq!(t.scale, Vec2::ONE);
+    }
+
+    #[test]
+    fn world_transform_new_is_at_origin() {
+        let t = WorldTransform::new();
+        assert_eq!(t.translation, Vec3::ZERO);
+        assert_eq!(t.rotation, 0.0);
+        assert_eq!(t.scale, Vec2::ONE);
+    }
+
+    #[test]
+    fn world_transform_from_xy() {
+        let t = WorldTransform::from_xy(30.0, 40.0);
+        assert_eq!(t.translation.x, 30.0);
+        assert_eq!(t.translation.y, 40.0);
+        assert_eq!(t.translation.z, 0.0);
+    }
+}

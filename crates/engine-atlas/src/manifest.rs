@@ -224,3 +224,94 @@ impl AtlasManifest {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod manifest_tests {
+    use super::*;
+
+    fn make_manifest() -> AtlasManifest {
+        let mut regions = HashMap::new();
+        regions.insert(
+            "player".into(),
+            ManifestRegion {
+                x: 0,
+                y: 0,
+                w: 32,
+                h: 32,
+            },
+        );
+        regions.insert(
+            "enemy".into(),
+            ManifestRegion {
+                x: 32,
+                y: 0,
+                w: 16,
+                h: 16,
+            },
+        );
+        AtlasManifest {
+            atlas_width: 64,
+            atlas_height: 64,
+            regions,
+        }
+    }
+
+    #[test]
+    fn roundtrip_binary() {
+        let original = make_manifest();
+        let bytes = original.to_bytes();
+        let decoded = AtlasManifest::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.atlas_width, original.atlas_width);
+        assert_eq!(decoded.atlas_height, original.atlas_height);
+        assert_eq!(decoded.regions.len(), original.regions.len());
+        for (name, region) in &original.regions {
+            let got = decoded.regions.get(name).unwrap();
+            assert_eq!(got.x, region.x);
+            assert_eq!(got.y, region.y);
+            assert_eq!(got.w, region.w);
+            assert_eq!(got.h, region.h);
+        }
+    }
+
+    #[test]
+    fn empty_manifest_roundtrip() {
+        let m = AtlasManifest {
+            atlas_width: 1,
+            atlas_height: 1,
+            regions: HashMap::new(),
+        };
+        let bytes = m.to_bytes();
+        let decoded = AtlasManifest::from_bytes(&bytes).unwrap();
+        assert!(decoded.regions.is_empty());
+    }
+
+    #[test]
+    fn reject_bad_magic() {
+        let err = AtlasManifest::from_bytes(b"BADS\x01\x00").unwrap_err();
+        assert!(matches!(err, ManifestError::InvalidMagic(_)));
+    }
+
+    #[test]
+    fn reject_unsupported_version() {
+        let data = [b'A', b'T', b'L', b'S', 0xFF, 0xFF];
+        let err = AtlasManifest::from_bytes(&data).unwrap_err();
+        assert!(matches!(err, ManifestError::UnsupportedVersion(0xFFFF)));
+    }
+
+    #[test]
+    fn reject_truncated() {
+        let err = AtlasManifest::from_bytes(b"ATLS").unwrap_err();
+        assert!(matches!(err, ManifestError::Truncated));
+    }
+
+    #[test]
+    fn resolve_regions_computes_uv() {
+        let m = make_manifest();
+        let resolved = m.resolve_regions();
+        let player = resolved.get("player").unwrap();
+        assert_eq!(player.uv_min.x, 0.0);
+        assert_eq!(player.uv_max.x, 0.5);
+        let enemy = resolved.get("enemy").unwrap();
+        assert_eq!(enemy.uv_min.x, 0.5);
+    }
+}
