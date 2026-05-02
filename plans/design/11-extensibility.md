@@ -103,7 +103,7 @@ app.add_render_pass(Box::new(MyCustomPass));
 
 Because the engine is a set of crates, games can:
 
-1. Depend on `engine-api` for the stable public API
+1. Depend on `lunar` for the stable public API
 2. Depend on individual engine crates (`engine-render`, `engine-input`) if they need lower-level access
 3. Fork and replace any engine crate without affecting others (loose coupling)
 
@@ -122,7 +122,7 @@ Each crate in the workspace is an independent fork point. the table below shows 
 | `engine-input` | sdl3 / web input handling | sdl3 (native), web-sys (web), engine-math | engine-core | different input backend (glfw, raw x11, custom) |
 | `engine-audio` | audio playback (stub) | none | engine-core | miniaudio, cpal, rodio, or any audio library |
 | `engine-core` | game loop, app builder, ecs wiring | bevy_ecs, all engine-* crates | lunar binary | different ecs, different game loop strategy |
-| `engine-api` | re-exports and stable public api | engine-math, bevy_ecs | game projects | custom api surface for your game |
+| `lunar` | re-exports and stable public api | engine-math, bevy_ecs | game projects | custom api surface for your game |
 
 ### Recommended fork strategies
 

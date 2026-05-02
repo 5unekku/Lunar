@@ -4,7 +4,7 @@
 lunar (binary)
 ├── engine-core
 │   ├── bevy_ecs
-│   ├── engine-api
+│   ├── lunar
 │   ├── engine-math
 │   └── log
 ├── engine-render
@@ -21,7 +21,7 @@ lunar (binary)
 │   └── log
 ├── engine-math
 │   └── glam
-├── engine-api
+├── lunar
 │   ├── bevy_ecs (re-export)
 │   ├── engine-math (re-export)
 │   └── log
@@ -36,7 +36,7 @@ lunar (binary)
 Game project:
 ```
 my-game
-├── engine-api        # primary dependency
+├── lunar          # primary dependency
 └── lunar          # for lunar_app! macro
 ```
 

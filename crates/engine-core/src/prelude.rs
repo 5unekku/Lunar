@@ -1,4 +1,4 @@
-//! full prelude for game development — re-exports everything from engine-api
+//! full prelude for game development — re-exports everything from lunar
 //! plus all engine-core types (scenes, zones, dialogue, localization, etc.).
 //!
 //! for subsystem types (render, input, assets), import those crates directly.
@@ -13,8 +13,8 @@
 //! }
 //! ```
 
-// everything from engine-api prelude
-pub use engine_api::prelude::*;
+// everything from lunar prelude
+pub use lunar::prelude::*;
 
 // engine-core types
 pub use crate::app::{App, GamePlugin, Time};

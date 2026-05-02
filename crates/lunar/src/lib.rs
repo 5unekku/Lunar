@@ -13,7 +13,7 @@
 //! # quick start
 //!
 //! ```ignore
-//! use engine_api::prelude::*;
+//! use lunar::prelude::*;
 //!
 //! fn main() {
 //!     let mut app = App::new();
@@ -44,7 +44,7 @@ pub use engine_math::{Color, Mat2, Mat3, Mat4, Rect, Transform, Vec2, Vec3, Vec4
 /// # example
 ///
 /// ```ignore
-/// use engine_api::GameComponent;
+/// use lunar::GameComponent;
 ///
 /// struct Player {
 ///     health: u32,
@@ -62,7 +62,7 @@ pub trait GameComponent: Send + Sync + 'static {}
 /// # example
 ///
 /// ```ignore
-/// use engine_api::GameResource;
+/// use lunar::GameResource;
 ///
 /// struct ScoreTracker {
 ///     current_score: u32,

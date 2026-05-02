@@ -28,7 +28,7 @@ a 2D game engine built in Rust.
 | `engine-input` | SDL3 input handling with KeyCode, MouseButton, InputState |
 | `engine-audio` | audio subsystem stub with AudioPlugin |
 | `engine-math` | glam re-exports, Transform, Color, Rect types |
-| `engine-api` | public API for game logic |
+| `lunar` | public API for game logic |
 | `engine-assets` | asset system with Handle<T>, AssetServer, AssetPlugin |
 
 ## getting started
@@ -180,7 +180,7 @@ lunar/
 │   ├── engine-input/     # SDL3 input
 │   ├── engine-audio/     # audio stub
 │   ├── engine-math/      # math types
-│   ├── engine-api/       # public API
+│   ├── lunar/           # public API
 │   └── engine-assets/    # asset system
 ├── examples/
 │   └── shooter/          # top-down shooter example

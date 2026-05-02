@@ -1,12 +1,12 @@
 //! prelude module — re-exports the most common types for game development.
 //!
-//! users should be able to write `use engine_api::prelude::*;` and have
+//! users should be able to write `use lunar::prelude::*;` and have
 //! everything they need without any further imports.
 //!
 //! # example
 //!
 //! ```ignore
-//! use engine_api::prelude::*;
+//! use lunar::prelude::*;
 //!
 //! fn setup(mut commands: Commands) {
 //!     commands.spawn(Transform::default());
@@ -29,5 +29,5 @@ pub use bevy_ecs::system::Commands;
 // engine-math types
 pub use engine_math::{Color, Mat2, Mat3, Mat4, Rect, Transform, Vec2, Vec3, Vec4};
 
-// engine-api marker traits
+// lunar marker traits
 pub use crate::{GameComponent, GameResource};

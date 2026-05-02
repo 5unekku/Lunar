@@ -2,7 +2,7 @@
 
 ## What It Looks Like to Write a Game
 
-A game project is a separate Rust crate that depends on `engine-api` (and optionally `engine-core` for advanced use). The engine provides a macro that bootstraps the application and a plugin trait for game-specific initialization.
+A game project is a separate Rust crate that depends on `lunar` (and optionally `engine-core` for advanced use). The engine provides a macro that bootstraps the application and a plugin trait for game-specific initialization.
 
 ## Minimal Example — A Simple Platformer
 
@@ -192,7 +192,7 @@ my-game/
 ## Key DX Decisions
 
 - **`lunar_app!` macro** handles all the boilerplate: window creation, subsystem init, game loop startup. Game code just provides a plugin.
-- **Components derive from `bevy_ecs`** but are re-exported through `engine-api` so game code doesn't directly depend on bevy_ecs version.
+- **Components derive from `bevy_ecs`** but are re-exported through `lunar` so game code doesn't directly depend on bevy_ecs version.
 - **Systems are plain functions** with ECS query parameters. No custom DSL.
 - **Startup systems** run once before the main loop. Regular systems run every tick.
 - **`Commands`** is the only way to spawn/despawn entities or queue one-shot operations from systems.

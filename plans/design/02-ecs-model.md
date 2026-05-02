@@ -2,10 +2,10 @@
 
 ## Architecture
 
-Lunar uses `bevy_ecs` as its ECS backend, but game code never imports `bevy_ecs` directly. All ECS types are re-exported through `engine-api` with a stable interface.
+Lunar uses `bevy_ecs` as its ECS backend, but game code never imports `bevy_ecs` directly. All ECS types are re-exported through `lunar` with a stable interface.
 
 ```
-engine-api          <-- game code imports from here
+lunar            <-- game code imports from here
     └── re-exports bevy_ecs types:
         - Entity
         - Component (derive macro)

@@ -29,10 +29,10 @@
 
 /// re-export `bevy_ecs` for direct ECS access
 pub use bevy_ecs;
-/// re-export engine-api for game logic interfaces
-pub use engine_api;
 /// re-export engine-math for math types
 pub use engine_math;
+/// re-export lunar for game logic interfaces
+pub use lunar;
 
 mod app;
 mod command;

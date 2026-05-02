@@ -16,7 +16,7 @@
 - [x] 1.1 Integrate bevy_ecs World into engine-core
   - [x] 1.1.1 Add bevy_ecs dependency to engine-core
   - [x] 1.1.2 Create World wrapper in engine-core (Engine wraps bevy_ecs::World)
-  - [x] 1.1.3 Re-export World through engine-api (bevy_ecs re-exported, World accessible)
+  - [x] 1.1.3 Re-export World through lunar (bevy_ecs re-exported, World accessible)
   - [x] 1.1.4 Re-export Event, EventReader, EventWriter
   - [x] 1.1.5 Re-export With/Without query filters
 - [x] 1.2 Implement Schedule system
@@ -29,7 +29,7 @@
 - [x] 1.3 Commands system
   - [x] 1.3.1 Commands struct with spawn/despawn/entity access (bevy_ecs::Commands used in shooter)
   - [x] 1.3.2 Command queue deferred execution (bevy_ecs handles this)
-  - [x] 1.3.3 Re-export through engine-api
+  - [x] 1.3.3 Re-export through lunar
   - [x] 1.3.4 commands.entity() → EntityCommands builder (used in shooter example)
 
 ### 2. Plugin System
@@ -497,7 +497,26 @@ Everything else (zones, scenes, dialogue, web, 3D) can come after.
 ---
 
 ### 26. UI System (engine-ui crate) — DEFERRED
-> Full UI system implementation. Requires texture atlas, layer system, and entity hierarchies to be complete first.
+
+> A retained-mode UI system for in-game menus, HUDs, and dialogs.
+> **Not** for editor panels — those use egui instead (see Part 5).
+> These are two completely separate UI concerns.
+
+**Why Taffy:** Taffy is a pure-Rust flexbox/grid layout engine, MIT-licensed,
+WASM-compatible, and used by Bevy's UI system. It handles sizing, spacing,
+alignment, and reflow automatically. Game code provides style constraints
+(width, height, margin, padding, flex direction) and Taffy computes pixel
+positions — the engine then draws quads at those positions.
+
+**Why not egui for in-game UI:** egui is immediate-mode — it rebuilds the
+entire UI every frame. Great for debug overlays and editor panels where
+simplicity matters more than performance. Bad for in-game UIs where you
+want retained elements with hover states, focus management, and efficient
+re-rendering only on change.
+
+**Why not a custom layout system:** Flexbox is well-specified, well-understood,
+and avoids NIH. Writing a custom box model from scratch would replicate
+years of browser-engine effort with no benefit.
 
 - [ ] 26.1 engine-ui crate structure
   - [ ] 26.1.1 `node/` — Node + Style components (ECS)
@@ -506,7 +525,7 @@ Everything else (zones, scenes, dialogue, web, 3D) can come after.
   - [ ] 26.1.4 `interaction/` — Hover/press/focus tracking
   - [ ] 26.1.5 `events/` — UI event types (pressed, changed, focused)
 - [ ] 26.2 Layout system
-  - [ ] 26.2.1 Taffy integration (pure Rust flexbox, WASM compatible)
+  - [ ] 26.2.1 Taffy integration — wrap `taffy::TaffyTree`, store node handles in ECS
   - [ ] 26.2.2 Lazy recomputation — only on style/content change, NOT every frame
   - [ ] 26.2.3 Dirty region tracking — mark only changed nodes for re-layout
 - [ ] 26.3 Widget bundles
@@ -777,7 +796,7 @@ Part 4 (Infrastructure)
 
 Part 5 (Distribution)
 ├── 46. wgpu Patch → vendor/wgpu
-├── 47. Public API Surface → engine-api
+├── 47. Public API Surface → lunar
 ├── 48. Crate Metadata → all crates
 └── 49. Shooter Example → all core systems
 
@@ -805,16 +824,16 @@ Part 6 (Engine Editor)
   - [ ] 46.2.2 Pin the vendored wgpu to a specific commit so the patch stays stable
 
 ### 47. Public API Surface
-- [x] 47.1 Audit engine-api re-exports
-  - [x] 47.1.1 Every type a user needs (Transform, Color, Rect, RenderQueue, InputState, AssetServer, Time, App, Schedule, etc.) must be accessible via `use engine_api::*` — no reaching into sub-crates
-  - [x] 47.1.2 Identify any types currently leaking from engine-core/engine-render that aren't in engine-api and add re-exports
-  - [x] 47.1.3 Identify any engine-api re-exports that expose internal implementation details and remove/hide them
+- [x] 47.1 Audit lunar re-exports
+      - [x] 47.1.1 Every type a user needs (Transform, Color, Rect, RenderQueue, InputState, AssetServer, Time, App, Schedule, etc.) must be accessible via `use lunar::*` — no reaching into sub-crates
+  - [x] 47.1.2 Identify any types currently leaking from engine-core/engine-render that aren't in lunar and add re-exports
+  - [x] 47.1.3 Identify any lunar re-exports that expose internal implementation details and remove/hide them
 - [x] 47.2 Prelude module
-  - [x] 47.2.1 Add `engine_api::prelude` that re-exports the most common items (App, Transform, Color, Rect, Vec2, Vec3, KeyCode, Time, RenderQueue, AssetServer, Commands, Query, Res, ResMut, Entity)
-  - [x] 47.2.2 Users should be able to `use engine_api::prelude::*` and write a full game without any further imports
-- [ ] 47.3 Rename engine-api to lunar (or create lunar facade crate)
-  - [ ] 47.3.1 Evaluate: rename the crate vs add a thin `lunar` crate that re-exports engine-api — pick one
-  - [ ] 47.3.2 External users should write `lunar = { git = "..." }` not `engine-api = { git = "..." }`
+  - [x] 47.2.1 Add `lunar::prelude` that re-exports the most common items (App, Transform, Color, Rect, Vec2, Vec3, KeyCode, Time, RenderQueue, AssetServer, Commands, Query, Res, ResMut, Entity)
+  - [x] 47.2.2 Users should be able to `use lunar::prelude::*` and write a full game without any further imports
+- [x] 47.3 Rename crate to lunar (or create lunar facade crate)
+  - [x] 47.3.1 Evaluate: rename the crate vs add a thin `lunar` facade crate that re-exports it — pick one
+  - [x] 47.3.2 External users should write `lunar = { git = "..." }` not `engine-api = { git = "..." }`
 
 ### 48. Crate Metadata
 - [ ] 48.1 Workspace-level Cargo.toml
@@ -832,7 +851,7 @@ Part 6 (Engine Editor)
 ### 49. Shooter Example
 > Proves the full API end-to-end and serves as the canonical "hello world" for new users.
 - [ ] 49.1 Project setup
-  - [ ] 49.1.1 Add `examples/shooter/` directory with its own Cargo.toml depending only on `engine-api` (or `lunar`)
+  - [ ] 49.1.1 Add `examples/shooter/` directory with its own Cargo.toml depending only on `lunar`
   - [ ] 49.1.2 Provides a realistic test of the external-user experience — no reaching into internals
 - [ ] 49.2 Assets
   - [ ] 49.2.1 Add placeholder pixel-art sprites for player, bullet, enemy (shipped in `examples/shooter/assets/`)
@@ -909,7 +928,7 @@ Part 6 (Engine Editor)
 - [ ] 51.1 `engine-editor` crate
   - [ ] 51.1.1 Add `engine-editor` to the workspace under `crates/engine-editor/`
   - [ ] 51.1.2 Binary target: `lunar-editor`
-  - [ ] 51.1.3 Dependencies: `engine-api`, `engine-render`, `egui`, `egui-wgpu`, `egui-winit`, `winit`
+  - [ ] 51.1.3 Dependencies: `lunar`, `engine-render`, `egui`, `egui-wgpu`, `egui-winit`, `winit`
 - [ ] 51.2 Window and render setup
   - [ ] 51.2.1 winit event loop creates the editor window (not SDL3)
   - [ ] 51.2.2 Initialize wgpu surface, device, queue from the winit window handle

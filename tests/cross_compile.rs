@@ -42,7 +42,7 @@ fn check_target(target: &str, label: &str) {
             target,
             "--workspace",
             "--exclude",
-            "lunar",
+            "lunar-game",
         ])
         .output()
         .expect("failed to run cargo check");

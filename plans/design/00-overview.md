@@ -29,7 +29,7 @@ lunar/
 │   ├── engine-input/       # SDL3 input handling
 │   ├── engine-audio/       # miniaudio stub
 │   ├── engine-math/        # glam re-exports
-│   └── engine-api/         # public-facing API for game logic
+│   └── lunar/           # public-facing API for game logic (use lunar::prelude::*)
 ```
 
 ## Table of Contents

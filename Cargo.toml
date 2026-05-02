@@ -10,7 +10,7 @@ members = [
     "crates/engine-input",
     "crates/engine-audio",
     "crates/engine-math",
-    "crates/engine-api",
+    "crates/lunar",
     "crates/engine-assets",
     "crates/engine-image",
     "crates/engine-atlas",
@@ -39,7 +39,7 @@ env_logger = "0.11"
 pollster = "0.4"
 
 [package]
-name = "lunar"
+name = "lunar-game"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -58,7 +58,7 @@ engine-render = { path = "crates/engine-render" }
 engine-input = { path = "crates/engine-input" }
 engine-audio = { path = "crates/engine-audio" }
 engine-math = { path = "crates/engine-math" }
-engine-api = { path = "crates/engine-api" }
+lunar = { path = "crates/lunar" }
 engine-assets = { path = "crates/engine-assets" }
 engine-image = { path = "crates/engine-image" }
 env_logger = { workspace = true }
