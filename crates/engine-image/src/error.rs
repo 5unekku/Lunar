@@ -1,5 +1,8 @@
 use thiserror::Error;
 
+/// errors that can occur when decoding a .mi image.
+///
+/// covers header validation, chunk parsing, and decompression failures.
 #[derive(Debug, Error)]
 pub enum DecodeError {
     #[error("file too short for header")]
@@ -30,6 +33,9 @@ pub enum DecodeError {
     TruncatedChunk,
 }
 
+/// errors that can occur when encoding a .mi image.
+///
+/// covers dimension validation, pixel buffer validation, and compression failures.
 #[derive(Debug, Error)]
 pub enum EncodeError {
     #[error("image dimensions too large: {width}x{height}")]

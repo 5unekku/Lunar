@@ -79,6 +79,22 @@ pub struct SpriteParams {
 ///
 /// when no camera resource exists, rendering uses world-space anchored at origin.
 /// when present, the orthographic projection is offset and scaled accordingly.
+///
+/// # example
+///
+/// ```ignore
+/// use engine_render::Camera;
+///
+/// // camera centered at (400, 300), 800x600 viewport
+/// let cam = Camera {
+///     position: Vec2::new(400.0, 300.0),
+///     zoom: 1.0,
+///     rotation: 0.0,
+///     viewport: Some(Vec4::new(0.0, 0.0, 800.0, 600.0)),
+/// };
+///
+/// // use cam.projection_matrix() for the render projection
+/// ```
 #[derive(Resource, Clone)]
 pub struct Camera {
     /// camera position in world space
@@ -121,6 +137,16 @@ impl Camera {
     /// compute the orthographic projection matrix incorporating camera transforms.
     /// returns a 4x4 column-major matrix as a flat array of 16 f32s.
     /// for per-layer parallax, use [`Camera::projection_matrix_for_layer`] instead.
+    ///
+    /// # example
+    ///
+    /// ```ignore
+    /// use engine_render::Camera;
+    ///
+    /// let cam = Camera::default();
+    /// let proj = cam.projection_matrix(800, 600);
+    /// // proj is a [f32; 16] suitable for wgpu uniform upload
+    /// ```
     #[must_use]
     pub fn projection_matrix(&self, window_width: u32, window_height: u32) -> [f32; 16] {
         self.projection_matrix_for_layer(0, window_width, window_height)
@@ -352,6 +378,11 @@ impl RenderEngine {
     }
 
     /// create a WebGPU surface from a canvas element (WASM only).
+    ///
+    /// # Errors
+    ///
+    /// returns an error if the canvas element is not compatible with the GPU
+    /// or if the browser denies GPU access.
     #[cfg(target_arch = "wasm32")]
     pub fn create_canvas_surface(
         instance: &wgpu::Instance,
@@ -364,6 +395,11 @@ impl RenderEngine {
     }
 
     /// find a canvas element by id and return it.
+    ///
+    /// # Errors
+    ///
+    /// returns an error if no window, no document, no element with the given id,
+    /// or if the element is not an html canvas element.
     #[cfg(target_arch = "wasm32")]
     pub fn find_canvas(id: &str) -> Result<web_sys::HtmlCanvasElement, String> {
         use wasm_bindgen::JsCast;

@@ -20,6 +20,18 @@ pub struct Startup;
 ///
 /// this is the low-level wrapper around `bevy_ecs`.
 /// most game code should interact with the engine through [`crate::app::App`] instead.
+///
+/// # example
+///
+/// ```ignore
+/// use engine_core::Engine;
+/// use engine_core::app::App;
+///
+/// let mut app = App::new();
+/// app.add_plugin(MyGamePlugin);
+/// // Engine wraps the bevy_ecs World and Schedule
+/// // most code interacts through App instead
+/// ```
 pub struct Engine {
     /// the ECS world containing all entities, components, and resources
     world: World,
