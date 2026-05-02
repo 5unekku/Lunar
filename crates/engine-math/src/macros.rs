@@ -1,6 +1,6 @@
 //! convenience macros for common math types.
 
-/// create a [`Transform`] from components.
+/// create a `Transform` from components.
 ///
 /// # example
 ///
@@ -34,7 +34,7 @@ macro_rules! transform {
     };
 }
 
-/// create a [`Color`] from components.
+/// create a `Color` from components.
 ///
 /// # example
 ///
@@ -71,7 +71,7 @@ macro_rules! color {
     }};
 }
 
-/// create a [`Rect`] from components.
+/// create a `Rect` from components.
 ///
 /// # example
 ///

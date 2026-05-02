@@ -662,12 +662,12 @@ impl Default for InputState {
 ///
 /// # native setup
 ///
-/// on native targets, call [`InputPlugin::init_sdl`] before creating the app,
+/// on native targets, call `InputPlugin::init_sdl` before creating the app,
 /// then pass the returned event pump to [`App::run_with_events`].
 ///
 /// # web setup
 ///
-/// on web, call [`setup_web_input`] with the canvas element before running.
+/// on web, call the platform input setup function before running.
 pub struct InputPlugin;
 
 impl GamePlugin for InputPlugin {

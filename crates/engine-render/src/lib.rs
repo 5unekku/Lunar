@@ -586,13 +586,12 @@ impl RenderEngine {
         );
 
         // persistent vertex buffers — double-buffered to prevent GPU read/write conflicts
+        // uses COPY_DST for queue.write_buffer (no MAP_WRITE needed)
         let vertex_bufs: [wgpu::Buffer; VERTEX_BUFFER_COUNT] = std::array::from_fn(|i| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(&format!("persistent vertex buffer {i}")),
                 size: (MAX_VERTICES * VERTEX_STRIDE) as u64,
-                usage: wgpu::BufferUsages::VERTEX
-                    | wgpu::BufferUsages::MAP_WRITE
-                    | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             })
         });
@@ -1011,9 +1010,12 @@ impl RenderEngine {
                     current_tex = Some(tex_id);
                 }
 
-                // drop this sprite if the buffer is full — 64K vertices handles ~16K sprites per frame
+                // drop sprite if buffer is full — 64K vertices = ~10K sprites, adequate for 2D
                 if self.vertex_offset + 6 * VERTEX_STRIDE > MAX_VERTICES * VERTEX_STRIDE {
-                    log::warn!("vertex buffer full: dropping sprite");
+                    log::warn!(
+                        "vertex buffer full (limit {} sprites): dropping sprite",
+                        MAX_VERTICES / 6
+                    );
                     continue;
                 }
 
@@ -1420,7 +1422,7 @@ pub struct DrawCommand {
 #[derive(Debug, Clone)]
 pub enum DrawKind {
     /// draw a 2D sprite
-    /// `uv_rect` overrides the default [0,0,1,1] UV range (used for texture atlases).
+    /// `uv_rect` overrides the default UV range \[0..1, 0..1\] (used for texture atlases).
     /// origin is the pivot point for rotation and scaling, relative to the sprite's top-left.
     Sprite {
         texture: Option<u64>,

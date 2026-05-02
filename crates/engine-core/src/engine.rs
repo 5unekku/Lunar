@@ -19,7 +19,7 @@ pub struct Startup;
 /// the engine owns the ECS world and schedules.
 ///
 /// this is the low-level wrapper around `bevy_ecs`.
-/// most game code should interact with the engine through [`App`] instead.
+/// most game code should interact with the engine through [`crate::app::App`] instead.
 pub struct Engine {
     /// the ECS world containing all entities, components, and resources
     world: World,

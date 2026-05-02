@@ -3,6 +3,11 @@ name = "engine-input"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "input subsystem: keyboard, mouse, gamepad via SDL3 (native) or web-sys (WASM)"
+repository.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
 
 [dependencies]
 bevy_ecs = { workspace = true }

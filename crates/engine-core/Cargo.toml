@@ -3,6 +3,11 @@ name = "engine-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "core engine: game loop, ECS wiring, plugin system, zones, scenes, dialogue, error handling"
+repository.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
 
 [dependencies]
 bevy_ecs = { workspace = true }

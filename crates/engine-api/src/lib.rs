@@ -6,8 +6,8 @@
 //! # architecture
 //!
 //! the engine follows a handle-based design:
-//! - assets (textures, sounds, fonts) are accessed through typed [`Handle`]s
-//! - game logic registers systems via the [`App`] builder
+//! - assets (textures, sounds, fonts) are accessed through typed `Handle`s from `engine_assets`
+//! - game logic registers systems via the `App` builder from `engine_core`
 //! - all game state lives in the ECS [`World`], never in global singletons
 //!
 //! # quick start

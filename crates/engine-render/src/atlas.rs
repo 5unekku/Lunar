@@ -3,7 +3,7 @@
 //!
 //! provides [`TextureAtlas`] resource that wraps a packed atlas texture
 //! with named region lookup. sprites can reference atlas regions via
-//! [`DrawKind::Sprite`] with an optional `atlas_region` field.
+//! `DrawKind::Sprite` with an optional `atlas_region` field.
 //!
 //! # example
 //!

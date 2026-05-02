@@ -6,20 +6,19 @@
 //! # architecture
 //!
 //! - [`AtlasManifest`] — binary manifest describing region layout
-//! - [`TextureAtlas`] — loaded atlas with GPU texture + region lookup
+//! - [`AtlasRegion`] — UV coordinate sub-rect within an atlas texture
 //! - [`AtlasPacker`] — bin-packing algorithm for building atlases
 //!
 //! # example
 //!
 //! ```ignore
-//! use engine_atlas::{TextureAtlas, AtlasManifest};
+//! use engine_atlas::{AtlasManifest, AtlasRegion};
 //!
-//! // load manifest and atlas texture via asset server
+//! // load manifest via asset server
 //! let manifest = AtlasManifest::load("sprites_atlas.manifest")?;
-//! let atlas = TextureAtlas::new(atlas_texture_handle, manifest);
 //!
 //! // look up a region by name
-//! let region = atlas.region("player_idle");
+//! let region = manifest.region("player_idle").unwrap();
 //! // use region.uv_min and region.uv_max for rendering
 //! ```
 

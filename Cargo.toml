@@ -21,6 +21,12 @@ resolver = "2"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+description = "a 2D game engine for Rust with ECS, wgpu rendering, and WASM support"
+repository = "https://github.com/jimmy/Lunar"
+homepage = "https://github.com/jimmy/Lunar"
+readme = "README.md"
+keywords = ["game-engine", "gamedev", "ecs", "wgpu", "2d"]
+categories = ["game-engines", "graphics", "wasm"]
 
 [workspace.dependencies]
 bevy_ecs = "0.18"
