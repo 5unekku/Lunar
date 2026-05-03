@@ -16,6 +16,8 @@ Lunar is a 2D game engine written in Rust. It targets Windows 7+, Windows 10/11,
 - **No god objects.** State is always inspectable from outside subsystems.
 - **Web target kept in mind.** No wasm-breaking assumptions.
 - **2D architecture should not paint 3D into a corner.** Spatial types and render pipeline are structured to allow future 3D expansion.
+- **Game code never touches native APIs.** SDL3, wgpu, OS handles — they are beneath the engine boundary. The `lunar` facade crate is the game's only dependency.
+- **`unsafe` is never required for basic engine features.** The engine shouldn't force `unsafe` onto game code. Game code can opt into `unsafe` for its own optimizations, but the engine should never mandate it for routine tasks.
 
 ## Current Workspace Structure
 

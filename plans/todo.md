@@ -365,6 +365,73 @@
 
 ---
 
+## Phase 10: High-Level API Rework (RPG Example Fallout)
+
+> Rework items surfaced by building the RPG example (`rpg-example`).
+> The engine had the right parts but made game code touch engine internals
+> for basic tasks. These items seal the engine boundary.
+
+### 55. Seal Native API Leaks
+- [ ] 55.1 Remove SDL3 dependency from game code
+  - [ ] 55.1.1 `lunar_app!` stores the window handle internally; expose `WindowInfo { width, height, is_fullscreen }` as a read-only Resource
+  - [ ] 55.1.2 Add `set_fullscreen(bool)` to `engine_input::InputPlugin` or a new `WindowPlugin` — handles SDL3 call + wgpu surface resize + camera viewport update atomically
+  - [ ] 55.1.3 `ActionMap` gets a default binding `fullscreen_toggle = F11/F` so games never call SDL3 directly
+  - [ ] 55.1.4 `unsafe` window handle wrappers live only in engine-internal code, never in game project code
+- [ ] 55.2 Remove wgpu surface resize from game sight
+  - [ ] 55.2.1 `RenderEngine::resize_surface` stays pub but is called automatically by the window system — game code never invokes it
+  - [ ] 55.2.2 On fullscreen toggle or window resize, the event loop handles surface reconfiguration before ECS ticks
+- [ ] 55.3 Remove `bevy_ecs` from game `Cargo.toml`
+  - [ ] 55.3.1 `lunar` crate re-exports derive macros at the crate root so `use lunar::Component` resolves
+  - [ ] 55.3.2 `lunar_app!` injects `extern crate bevy_ecs` into the expanded binary so proc macro side-channel works
+  - [ ] 55.3.3 Test: create a game project that depends only on `lunar` and compiles
+
+### 56. Coordinate System Helpers
+- [ ] 56.1 Camera coordinate conversion
+  - [ ] 56.1.1 `Camera::screen_to_world(&self, screen: Vec2) -> Vec2`
+  - [ ] 56.1.2 `Camera::world_to_screen(&self, world: Vec2) -> Vec2`
+  - [ ] 56.1.3 Both account for viewport letterboxing if `Camera::viewport` is set
+- [ ] 56.2 Screen-space UI drawing
+  - [ ] 56.2.1 `RenderQueue::draw_ui_text(font, text, screen_pos, size, color)` — internally converts through camera
+  - [ ] 56.2.2 `RenderQueue::draw_ui_rect(screen_pos, size, color)` — same, for dialogue boxes, HUD bars, etc.
+  - [ ] 56.2.3 These use the UI layer automatically; no manual layer management
+- [ ] 56.3 Viewport letterboxing toggle
+  - [ ] 56.3.1 `Camera::set_letterbox(enabled: bool) -> &mut Self` — when enabled, projection auto-computes black-bar offsets for non-4:3 windows
+  - [ ] 56.3.2 `Camera::set_target_aspect(width: u32, height: u32)` — replaces viewport field, computes projection and letterbox together
+
+### 57. Asset Loading UX
+- [ ] 57.1 Blocking wait API
+  - [ ] 57.1.1 `AssetServer::block_until_ready(&self, handle) -> &Asset` — blocks caller until asset is loaded (uses thread-pool join)
+  - [ ] 57.1.2 `AssetServer::block_until_all_ready(&self) -> bool` — blocks until all pending loads complete
+  - [ ] 57.1.3 Startup systems can call these to guarantee assets exist before first render
+- [ ] 57.2 Loading state resource
+  - [ ] 57.2.1 `LoadingState { total: usize, loaded: usize, failed: Vec<String> }` — auto-updated each frame by AssetPlugin
+  - [ ] 57.2.2 Game code uses this to show a loading screen / progress bar without manual tracking
+  - [ ] 57.2.3 Optional auto-transition: `LoadingPlugin { next_scene: SceneLabel }` → switches scene when all assets ready
+
+### 58. Render Pipeline Integration (Bugfixes)
+- [ ] 58.1 Wire `RenderEngine::render()` into the ECS pipeline
+  - [x] 58.1.1 `render_system` now calls `RenderEngine::render()` instead of only `queue.clear()`
+  - [ ] 58.1.2 Verify ordering: game render systems run in Update stage, pipeline render runs in Render stage
+  - [ ] 58.1.3 Update `RenderInfo` (window size, fps, draw calls) after each render call
+- [ ] 58.2 Split render concerns
+  - [ ] 58.2.1 Built-in render pass splits into `draw_world` (game objects) and `draw_ui` (overlays) sub-systems
+  - [ ] 58.2.2 Game code provides a `draw_world` system and/or `draw_ui` system instead of one monolithic render system with 9+ parameters
+  - [ ] 58.2.3 Camera + asset + queue setup is handled by the framework, not copied into each game
+
+### 59. Viewport & Fullscreen (the F-key problem)
+- [ ] 59.1 WindowPlugin
+  - [ ] 59.1.1 New plugin inserted by `lunar_app!` — owns the SDL3 window, manages wgpu surface lifecycle
+  - [ ] 59.1.2 Exposes `WindowSettings` resource: { width, height, is_fullscreen, vsync, frame_cap }
+  - [ ] 59.1.3 Fullscreen toggle: `settings.is_fullscreen ^= true` in a game system, WindowPlugin handles the rest
+- [ ] 59.2 Automatic viewport letterboxing
+  - [ ] 59.2.1 When `Camera::viewport` is set and surface size changes (fullscreen), the projection auto-computes letterbox offsets
+  - [ ] 59.2.2 No game code needed — set viewport once at startup, engine handles the rest
+- [ ] 59.3 Window resize handling
+  - [ ] 59.3.1 WindowPlugin catches SDL3 `WindowEvent::Resized`, reconfigures wgpu surface, updates `WindowSettings`
+  - [ ] 59.3.2 Game systems don't need to poll window size; they read `WindowSettings`
+
+---
+
 ## Dependency Graph
 
 ```
@@ -403,202 +470,13 @@ Phase 9 (Polish)
 ├── 16. Extensibility → 10
 ├── 17. Macros → 10
 └── 18. 3D Future → 6 (render system)
-```
 
-## Shooter Example Requirements
-
-To run the shooter example from the design doc, we need:
-- [x] Phase 1: Core ECS Integration (1, 2, 3)
-- [x] Phase 2: Subsystems (4, 5, 6 — at minimum: Time, Input, Render with draw_sprite)
-- [x] Phase 3: Asset Server (8 — at minimum: load, Handle<Texture>)
-- [x] Phase 4: Game Loop Integration (9, 10)
-
-Everything else (zones, scenes, dialogue, web, 3D) can come after.
-
----
-
-## Part 2: Post-Engine (UI & Polish Phase)
-
-> These items are deferred until the core engine is stable.
-> They are tracked here for planning purposes only — do NOT start work on these until Part 1 is complete.
-
-### 19. Texture Atlas System
-- [x] 19.1 TextureAtlas resource
-  - [x] 19.1.1 Bin-packing algorithm (shelf packing or maxrects) — engine-atlas crate, maxrects packer
-  - [x] 19.1.2 Atlas builder (packs multiple textures into single GPU texture) — AtlasPacker
-  - [x] 19.1.3 Region lookup by name — TextureAtlas::region(), try_region()
-- [x] 19.2 Sprite atlas integration
-  - [x] 19.2.1 Sprite component gains optional atlas region via uv_rect on DrawKind::Sprite
-  - [x] 19.2.2 RenderQueue batches by atlas texture, not individual textures — sort by (layer, texture_id)
-  - [x] 19.2.3 UV coordinate remapping for atlas regions — draw_sprite_atlas, draw_sprite_atlas_on_layer
-- [x] 19.3 Asset pipeline support
-  - [x] 19.3.1 Atlas definition format (RON authoring → binary runtime) — AtlasManifest
-  - [x] 19.3.2 Atlas compilation during asset bundling — AtlasManifest::to_binary/from_binary
-
-### 20. Layer-Based Rendering
-- [x] 20.1 Layer component
-  - [x] 20.1.1 `Layer(pub i32)` component in engine-render
-  - [x] 20.1.2 Built-in layer constants (BACKGROUND, GAME, FOREGROUND, UI) — layers module
-- [x] 20.2 RenderQueue layer sorting
-  - [x] 20.2.1 Sort draw commands by layer before batching — sort_by_key (layer, texture_id)
-  - [x] 20.2.2 Stable sort (preserve registration order within same layer)
-- [x] 20.3 Camera per-layer offset
-  - [x] 20.3.1 Optional parallax support (per-layer camera offset)
-
-### 21. Entity Hierarchies (Composition, NOT Inheritance)
-- [x] 21.1 Parent/Child components
-  - [x] 21.1.1 `Parent(pub Entity)` component — hierarchy.rs
-  - [x] 21.1.2 `Children(pub SmallVec<[Entity; 4]>)` component — hierarchy.rs
-- [x] 21.2 Transform propagation system
-  - [x] 21.2.1 Compute world transforms from local + parent — propagate_transforms (DFS)
-  - [x] 21.2.2 sync_children + propagate_transforms registered via HierarchyPlugin
-- [x] 21.3 LocalTransform vs WorldTransform
-  - [x] 21.3.1 LocalTransform: position relative to parent — engine-math
-  - [x] 21.3.2 WorldTransform: absolute position (computed) — engine-math
-
-### 22. Scene Definition Format
-- [x] 22.1 Authoring format (RON)
-  - [x] 22.1.1 RON scene schema — SceneDefinition, EntityDefinition in scene_format.rs
-  - [x] 22.1.2 Scene parser and validator — SceneDefinition::from_ron, entity/parent validation
-- [x] 22.2 Runtime format (binary)
-  - [x] 22.2.1 Binary scene serialization — bincode via SceneDefinition::to_binary/from_binary
-  - [x] 22.2.2 World manifest: XML authoring → compiled binary with string interning
-- [x] 22.3 Scene loader
-  - [x] 22.3.1 Load scene → spawn entities via Commands — SceneLoader::spawn_scene
-  - [x] 22.3.2 Scene entity tracking — SceneEntity marker component, id_map return
-  - [x] 22.3.3 Scene instancing (nest scenes within scenes)
-
-### 23. Gameplay Framework (Optional)
-- [ ] 23.1 GameMode resource
-  - [ ] 23.1.1 Game rules, zone transitions, scene management
-- [ ] 23.2 PlayerController resource
-  - [ ] 23.2.1 Input routing, camera control, UI interaction
-- [ ] 23.3 Pawn component
-  - [ ] 23.3.1 Physical representation of player/AI
-- [ ] 23.4 GameState/PlayerState resources
-  - [ ] 23.4.1 Per-game and per-player data tracking
-
-### 24. Rect Utility Extensions
-- [x] 24.1 Add methods to Rect
-  - [x] 24.1.1 `inflate(dx, dy)` — expand/shrink rect
-  - [x] 24.1.2 `clamp(within)` — constrain rect inside another
-  - [x] 24.1.3 `collide_point(x, y)` — point collision check
-  - [x] 24.1.4 `collide_rect(other)` — rect collision check
-  - [x] 24.1.5 `center()` — get center point
-  - [x] 24.1.6 `union(other)` — bounding box of two rects
-
-### 25. Immediate Mode Render API (Optional)
-- [x] 25.1 Immediate mode API
-  - [x] 25.1.1 `draw_immediate(|draw| { ... })` closure
-  - [x] 25.1.2 Debug drawing helpers (lines, circles, text)
-- [x] 25.2 Debug overlay
-  - [x] 25.2.1 FPS counter, entity count, collision visualization
-
----
-
-### 26. UI System (engine-ui crate) — DEFERRED
-
-> A retained-mode UI system for in-game menus, HUDs, and dialogs.
-> **Not** for editor panels — those use egui instead (see Part 5).
-> These are two completely separate UI concerns.
-
-**Why Taffy:** Taffy is a pure-Rust flexbox/grid layout engine, MIT-licensed,
-WASM-compatible, and used by Bevy's UI system. It handles sizing, spacing,
-alignment, and reflow automatically. Game code provides style constraints
-(width, height, margin, padding, flex direction) and Taffy computes pixel
-positions — the engine then draws quads at those positions.
-
-**Why not egui for in-game UI:** egui is immediate-mode — it rebuilds the
-entire UI every frame. Great for debug overlays and editor panels where
-simplicity matters more than performance. Bad for in-game UIs where you
-want retained elements with hover states, focus management, and efficient
-re-rendering only on change.
-
-**Why not a custom layout system:** Flexbox is well-specified, well-understood,
-and avoids NIH. Writing a custom box model from scratch would replicate
-years of browser-engine effort with no benefit.
-
-- [ ] 26.1 engine-ui crate structure
-  - [ ] 26.1.1 `node/` — Node + Style components (ECS)
-  - [ ] 26.1.2 `layout/` — Taffy integration (flexbox layout)
-  - [ ] 26.1.3 `widget/` — Button, Label, Panel bundles
-  - [ ] 26.1.4 `interaction/` — Hover/press/focus tracking
-  - [ ] 26.1.5 `events/` — UI event types (pressed, changed, focused)
-- [ ] 26.2 Layout system
-  - [ ] 26.2.1 Taffy integration — wrap `taffy::TaffyTree`, store node handles in ECS
-  - [ ] 26.2.2 Lazy recomputation — only on style/content change, NOT every frame
-  - [ ] 26.2.3 Dirty region tracking — mark only changed nodes for re-layout
-- [ ] 26.3 Widget bundles
-  - [ ] 26.3.1 Button (with Interaction component)
-  - [ ] 26.3.2 Label (text display)
-  - [ ] 26.3.3 Panel (container with background)
-  - [ ] 26.3.4 Image (texture display)
-  - [ ] 26.3.5 Containers: VBox, HBox, Grid, Margin, Center
-- [ ] 26.4 Focus management
-  - [ ] 26.4.1 Focus stack for keyboard/gamepad navigation
-  - [ ] 26.4.2 Tab order, directional navigation
-- [ ] 26.5 UI → DrawCommand conversion
-  - [ ] 26.5.1 UI entities produce DrawCommands (decoupled from render crate)
-  - [ ] 26.5.2 UI render pass (runs after game objects, on UI layer)
-
-### 27. Theme System — DEFERRED
-- [ ] 27.1 Theme resource
-  - [ ] 27.1.1 `Theme { colors, fonts, font_sizes, style_boxes }`
-  - [ ] 27.1.2 Theme loading from JSON5
-  - [ ] 27.1.3 Runtime theme swapping (for skinning/accessibility)
-- [ ] 27.2 StyleBox
-  - [ ] 27.2.1 Flat, textured, bordered backgrounds
-  - [ ] 27.2.2 Nine-patch scaling
-
-### 28. Named Event System (Optional) — DEFERRED
-- [ ] 28.1 EventBus resource
-  - [ ] 28.1.1 Named event dispatch (`events.dispatch("player_died", event)`)
-  - [ ] 28.1.2 Event subscription by name
-  - [ ] 28.1.3 Event priority ordering
-- [ ] 28.2 Integration with ECS events
-  - [ ] 28.2.1 Named events wrap bevy_ecs events under the hood
-  - [ ] 28.2.2 Raw ECS events still available for performance-critical paths
-
----
-
-## Dependency Graph (Updated)
-
-```
-Phase 1 (Core ECS)
-├── 1. ECS World & Schedule
-├── 2. Plugin System → 1
-└── 3. System Scheduling → 1, 2
-
-Phase 2 (Subsystems)
-├── 4. Time System → 1, 2, 3
-├── 5. Input System → 1, 2, 3
-├── 6. Render System → 1, 2, 3, 8 (Asset Server for textures)
-└── 7. Audio System → 1, 2, 3, 8 (Asset Server for sounds)
-
-Phase 3 (Assets)
-└── 8. Asset Server → 1
-
-Phase 4 (Game Loop)
-├── 9. App.run() Integration → 1, 2, 3, 4, 5, 6, 7, 8
-└── 10. lunar_app! Macro → 9
-
-Phase 5 (World/Scenes)
-├── 11. Zone System → 10
-└── 12. Scene System → 10
-
-Phase 6 (Errors)
-└── 13. Error System → 10
-
-Phase 7 (Dialogue)
-└── 14. Dialogue System → 10, 6 (text rendering)
-
-Phase 8 (Web)
-└── 15. WASM Target → 9, 10 (all core systems working natively first)
-
-Phase 9 (Polish)
-├── 16. Extensibility → 10
-├── 17. Macros → 10
-└── 18. 3D Future → 6 (render system)
+Phase 10 (High-Level API Rework)
+├── 55. Seal Native API Leaks → 10 (lunar_app!), 6 (render), 5 (input)
+├── 56. Coordinate System Helpers → 6 (render), 9.1 (Camera)
+├── 57. Asset Loading UX → 8 (asset server)
+├── 58. Render Pipeline Integration → 6 (render system)
+└── 59. Viewport & Fullscreen → 5 (input), 6 (render), 10 (lunar_app!)
 
 Part 2 (Post-Engine)
 ├── 19. Texture Atlas → 6 (render system), 8 (asset server)

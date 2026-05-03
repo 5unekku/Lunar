@@ -31,8 +31,6 @@
 pub use bevy_ecs;
 /// re-export engine-math for math types
 pub use engine_math;
-/// re-export lunar for game logic interfaces
-pub use lunar;
 
 mod app;
 mod command;
@@ -47,6 +45,7 @@ mod scene;
 mod scene_format;
 mod schedule;
 mod state;
+mod window;
 mod world_manifest;
 mod zone;
 
@@ -92,6 +91,9 @@ pub use world_manifest::{
 };
 /// world zone management
 pub use zone::{FadeConfig, WorldManager, Zone, ZoneTransition};
+
+/// window state resource
+pub use window::WindowSettings;
 
 /// full prelude for game development
 pub mod prelude;

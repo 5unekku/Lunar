@@ -197,6 +197,48 @@ my-game/
 - **Startup systems** run once before the main loop. Regular systems run every tick.
 - **`Commands`** is the only way to spawn/despawn entities or queue one-shot operations from systems.
 
+## Hard Rule — Unsafe Is Never Required for Basic Engine Features
+
+The engine must not force `unsafe` onto game code for routine tasks. Seasonal, heavily-optimized game code may have legitimate reasons to dip into `unsafe` — that's fine. The engine shouldn't be in the way of that choice.
+
+What's not acceptable: the engine's own API gaps forcing game code to write `unsafe` just to store a window handle or access a renderer. That means:
+
+- **Window handles, GPU resources, raw pointers** — all wrapped in engine-owned types. Games register systems, not SDL callbacks.
+- **Thread-safety** (`Send`/`Sync`) is handled by engine types internally. Game types derive `Component`/`Resource` and get this for free.
+- **FFI boundaries** (SDL3, wgpu, OS APIs) are sealed behind engine abstractions. A game crate imports `lunar` and nothing else with native bindings.
+- **Derive macros** re-export through `lunar` so game code never writes `use bevy_ecs::...`; the facade crate is the only dependency.
+
+If a game needs `unsafe` to get something basic working (storing a window handle, accessing a renderer), the engine API is incomplete — that's a bug to fix, not a workaround to accept. The game developer can opt into `unsafe` when they want to; the engine should never mandate it.
+
+## Post-1.0 Revision — What the RPG Example Revealed
+
+After building a minimal RPG demo (one room, 3 NPCs, typewriter dialogue, camera scrolling, fullscreen toggle), several gaps in the engine's high-level API were identified:
+
+### Engine-specific Leaks (the game had to touch native APIs)
+
+| Leak | Where | Fix |
+|---|---|---|
+| **SDL3 Window in ECS** | Game stored `sdl3::video::Window` as a Resource, requiring `unsafe impl Send+Sync` | Engine owns the window; expose `FullscreenToggle`, `WindowInfo` resources from the macro |
+| **Fullscreen via raw SDL3 call** | `wh.0.set_fullscreen(true)` called directly | `InputPlugin` handles F11/F keybinding + `ActionMap`, engine manages surface resize + viewport update |
+| **Resizing wgpu surface** | `re.resize_surface(...)` called from game system | Automatic when fullscreen toggles |
+| **`bevy_ecs` in Cargo.toml** | Derive macros need the crate name to resolve | `lunar` re-exports derives at the crate root so `use lunar::Component` works from game code |
+
+### Missing Convenience Abstractions
+
+| Gap | Impact | Fix |
+|---|---|---|
+| **No `screen_to_world` / `world_to_screen`** | Every camera-scrolling game with UI has to write `screen_pos + camera.pos - half_viewport` | Add to `Camera` as public methods |
+| **No viewport letterboxing** | Had to hack a custom projection matrix path | Camera's `viewport` field + projection already does this; make it a first-class feature toggled via `set_viewport(aspect_ratio)` |
+| **No blocking asset load** | Startup spawns before textures/fonts are ready | `AssetServer::wait_for_all()` or a `LoadingState` that auto-transitions |
+| **No `draw_ui_text` / `draw_ui_rect`** | UI drawing requires manual coordinate conversion | `RenderQueue` gets `draw_ui_*` variants that take screen-space coords and internally convert through the camera |
+| **Render system too wide** | The game's render system takes 9 parameters | Split into `draw_world` + `draw_ui` passes with automatic queue setup |
+
+### Pipeline Bugs Found
+
+| Bug | Detail |
+|---|---|
+| **`render_system` was a no-op** | `RenderPlugin` registered a system that only called `queue.clear()` — never called `RenderEngine::render()`. The full pipeline existed but was disconnected. |
+
 ---
 
 [← Back to Overview](00-overview.md) | [Next: Entity/Component Model →](02-ecs-model.md)

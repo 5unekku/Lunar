@@ -46,15 +46,24 @@ macro_rules! lunar_app {
 
 ## Component/Resource Derive
 
-These re-export bevy_ecs derives:
+These re-export bevy_ecs derives through the facade:
 
 ```rust
-/// Derive macro for ECS components
+// in lunar crate:
 pub use bevy_ecs::component::Component;
-
-/// Derive macro for ECS resources
 pub use bevy_ecs::system::Resource;
 ```
+
+**Important:** Derive macros resolve by crate name at the use site. Simply re-exporting is not enough — the game's `Cargo.toml` must make `bevy_ecs` available for the derive macro to find. The macro cannot `pub use` its way around this.
+
+The `lunar_app!` macro solves this by injecting `extern crate bevy_ecs` into the expanded binary, or the game plugin crate conditionally re-exports `lunar::Component` and `lunar::Resource` so game code writes:
+
+```rust
+use lunar::{Component, Resource};
+// not: use bevy_ecs::prelude::{Component, Resource};
+```
+
+Whichever approach, the rule is: **a game crate never lists `bevy_ecs` in its own `Cargo.toml`.**
 
 ## Asset Handle Derive
 

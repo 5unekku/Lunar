@@ -29,5 +29,17 @@ pub use bevy_ecs::system::Commands;
 // engine-math types
 pub use engine_math::{Color, Mat2, Mat3, Mat4, Rect, Transform, Vec2, Vec3, Vec4};
 
+// engine-core types
+pub use engine_core::{App, GamePlugin, Time, WindowSettings};
+
+// engine-render types
+pub use engine_render::{Camera, RenderConfig, RenderEngine, RenderInfo, RenderQueue};
+
+// engine-input types
+pub use engine_input::{ActionMap, InputState, KeyCode, MouseButton};
+
+// engine-assets types
+pub use engine_assets::{AssetServer, Handle};
+
 // lunar marker traits
 pub use crate::{GameComponent, GameResource};

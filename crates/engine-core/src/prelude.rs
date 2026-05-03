@@ -1,4 +1,4 @@
-//! full prelude for game development — re-exports everything from lunar
+//! full prelude for game development — re-exports everything from bevy_ecs
 //! plus all engine-core types (scenes, zones, dialogue, localization, etc.).
 //!
 //! for subsystem types (render, input, assets), import those crates directly.
@@ -13,8 +13,15 @@
 //! }
 //! ```
 
-// everything from lunar prelude
-pub use lunar::prelude::*;
+// bevy_ecs core types
+pub use bevy_ecs::event::Event;
+pub use bevy_ecs::message::{MessageReader, MessageWriter, Messages};
+pub use bevy_ecs::prelude::*;
+pub use bevy_ecs::query::{With, Without};
+pub use bevy_ecs::system::Commands;
+
+// engine-math types
+pub use engine_math::{Color, Mat2, Mat3, Mat4, Rect, Transform, Vec2, Vec3, Vec4};
 
 // engine-core types
 pub use crate::app::{App, GamePlugin, Time};

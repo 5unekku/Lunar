@@ -223,6 +223,99 @@ impl Camera {
     pub fn clear_layer_parallax(&mut self, layer: i32) {
         self.layer_parallax.remove(&layer);
     }
+
+    /// convert a screen-space pixel position to world-space coordinates.
+    ///
+    /// accounts for camera position, zoom, rotation, and viewport letterboxing.
+    /// screen origin is top-left, y-down. world is top-left, y-down.
+    ///
+    /// # example
+    ///
+    /// ```ignore
+    /// fn my_system(camera: Res<Camera>, input: Res<InputState>) {
+    ///     let (mx, my) = input.mouse_position();
+    ///     let world = camera.screen_to_world(Vec2::new(mx, my), 800, 600);
+    ///     // spawn something at the mouse position in world space
+    /// }
+    /// ```
+    #[must_use]
+    pub fn screen_to_world(&self, screen: Vec2, window_width: u32, window_height: u32) -> Vec2 {
+        let (vw, vh) = self.viewport.unwrap_or((window_width, window_height));
+        #[allow(clippy::cast_precision_loss)]
+        let (vw_f, vh_f) = (vw as f32, vh as f32);
+        #[allow(clippy::cast_precision_loss)]
+        let (ww_f, wh_f) = (window_width as f32, window_height as f32);
+
+        // account for viewport letterboxing offset
+        let letterbox_x = (ww_f - vw_f) * 0.5;
+        let letterbox_y = (wh_f - vh_f) * 0.5;
+        let view_x = screen.x - letterbox_x;
+        let view_y = screen.y - letterbox_y;
+
+        let zoom = self.zoom.max(0.001);
+        let cos = self.rotation.cos();
+        let sin = self.rotation.sin();
+
+        // unapply projection transform
+        let nx = view_x / vw_f - 0.5;
+        let ny = 0.5 - view_y / vh_f; // flip y
+        let world_dx = nx * vw_f / zoom;
+        let world_dy = ny * vh_f / zoom;
+
+        // unrotate
+        let unrot_x = world_dx * cos + world_dy * sin;
+        let unrot_y = -world_dx * sin + world_dy * cos;
+
+        Vec2::new(self.position.x + unrot_x, self.position.y + unrot_y)
+    }
+
+    /// convert a world-space position to screen-space pixel coordinates.
+    ///
+    /// inverse of [`screen_to_world`](Self::screen_to_world).
+    /// the result is in screen pixel coordinates (top-left origin, y-down).
+    #[must_use]
+    pub fn world_to_screen(&self, world: Vec2, window_width: u32, window_height: u32) -> Vec2 {
+        let (vw, vh) = self.viewport.unwrap_or((window_width, window_height));
+        #[allow(clippy::cast_precision_loss)]
+        let (vw_f, vh_f) = (vw as f32, vh as f32);
+        #[allow(clippy::cast_precision_loss)]
+        let (ww_f, wh_f) = (window_width as f32, window_height as f32);
+
+        let zoom = self.zoom.max(0.001);
+        let cos = self.rotation.cos();
+        let sin = self.rotation.sin();
+
+        // rotate world delta and apply zoom/scale
+        let dx = world.x - self.position.x;
+        let dy = world.y - self.position.y;
+        let rx = dx * cos - dy * sin;
+        let ry = dx * sin + dy * cos;
+
+        // apply ortho projection
+        let sx = rx * zoom / vw_f;
+        let sy = -ry * zoom / vh_f;
+
+        // letterbox offset
+        let letterbox_x = (ww_f - vw_f) * 0.5;
+        let letterbox_y = (wh_f - vh_f) * 0.5;
+
+        Vec2::new(
+            (sx + 0.5) * vw_f + letterbox_x,
+            (0.5 - sy) * vh_f + letterbox_y,
+        )
+    }
+
+    /// enable or disable viewport letterboxing.
+    ///
+    /// when enabled, the projection auto-computes black-bar offsets when the
+    /// window aspect ratio doesn't match the viewport aspect ratio.
+    /// this is called internally by [`set_target_aspect`](Self::set_target_aspect).
+    ///
+    /// returns `&mut Self` for chaining.
+    pub fn set_target_aspect(&mut self, width: u32, height: u32) -> &mut Self {
+        self.viewport = Some((width, height));
+        self
+    }
 }
 
 impl Default for Camera {
@@ -234,7 +327,7 @@ impl Default for Camera {
 /// rendering configuration.
 ///
 /// controls window size, vsync, and frame rate limiting.
-/// used when initializing the [`RenderEngine`].
+/// used when initializing the [`RenderEngine`] and [`WindowPlugin`].
 #[derive(Debug, Clone)]
 pub struct RenderConfig {
     /// window width
@@ -658,18 +751,80 @@ impl RenderEngine {
     /// update the uniform buffer with the projection matrix for a specific layer.
     /// applies per-layer parallax offset from the camera if present.
     fn update_projection_for_layer(&mut self, layer: i32, camera: Option<&Camera>) {
-        let projection = if let Some(cam) = camera {
+        let (surface_w, surface_h) = (self.config.width as f32, self.config.height as f32);
+
+        // if camera has a viewport, compute a letterboxed projection that fits
+        // the viewport into the surface while preserving aspect ratio
+        let projection = if let Some(cam) = camera
+            && let Some((vp_w, vp_h)) = cam.viewport
+        {
+            let (vp_w, vp_h) = (vp_w as f32, vp_h as f32);
+            // scale viewport to fit surface, maintaining aspect ratio
+            let scale = (surface_w / vp_w).min(surface_h / vp_h);
+            let vp_w_scaled = vp_w * scale;
+            let vp_h_scaled = vp_h * scale;
+
+            // clip-space offset to center the viewport
+            let offset_x = (surface_w - vp_w_scaled) / surface_w;
+            let offset_y = (surface_h - vp_h_scaled) / surface_h;
+
+            // build a custom orthographic projection:
+            // maps world (cam_x - vp_w/2, cam_y - vp_h/2) .. (cam_x + vp_w/2, cam_y + vp_h/2)
+            // to a centered letterboxed region of clip space
+            let _sx = (vp_w_scaled / surface_w) * 2.0 / vp_w;
+            let _sy = -(vp_h_scaled / surface_h) * 2.0 / vp_h;
+            let pos = cam.position;
+            let tx = pos.x;
+            let ty = pos.y;
+
+            // clip_x = sx * (world_x - tx) + (sx * tx - 1 + offset_x)
+            //        = sx * world_x + (sx * tx - 1 + offset_x - sx * tx)
+            //        = sx * world_x - 1 + offset_x
+
+            // Actually simpler: compute clip directly
+            let left = -1.0 + offset_x;
+            let right = 1.0 - offset_x;
+            let bottom = -1.0 + offset_y;
+            let top = 1.0 - offset_y;
+
+            // scale from world to clip:
+            // world_x = tx → clip_x = 0 → (left+right)/2
+            // world_x = tx - vp_w/2 → clip_x = left
+            // world_x = tx + vp_w/2 → clip_x = right
+
+            let sx2 = (right - left) / vp_w;
+            let sy2 = (top - bottom) / vp_h;
+            let tx2 = (right + left) / 2.0;
+            let ty2 = (top + bottom) / 2.0;
+
+            [
+                sx2,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                sy2,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                sx2 * (-tx) + tx2,
+                sy2 * (-ty) + ty2,
+                0.0,
+                1.0,
+            ]
+        } else if let Some(cam) = camera {
             cam.projection_matrix_for_layer(layer, self.config.width, self.config.height)
         } else {
-            let w = self.config.width as f32;
-            let h = self.config.height as f32;
             [
-                2.0 / w,
+                2.0 / surface_w,
                 0.0,
                 0.0,
                 0.0,
                 0.0,
-                -2.0 / h,
+                -2.0 / surface_h,
                 0.0,
                 0.0,
                 0.0,
@@ -914,11 +1069,28 @@ impl RenderEngine {
         });
     }
 
+    /// reconfigure the surface to a new size (e.g. for fullscreen).
+    pub fn resize_surface(&mut self, width: u32, height: u32) {
+        self.config.width = width;
+        self.config.height = height;
+        self.surface.configure(&self.device, &self.config);
+    }
+
+    /// current surface size
+    pub fn surface_size(&self) -> (u32, u32) {
+        (self.config.width, self.config.height)
+    }
+
     /// render all draw commands for this frame.
     /// sprites are batched by texture — one draw call per unique texture.
     /// rects (no texture) are drawn in a single additional draw call.
     #[allow(clippy::too_many_lines)]
-    pub fn render(&mut self, commands: &[DrawCommand], camera: Option<&Camera>) {
+    pub fn render(
+        &mut self,
+        commands: &[DrawCommand],
+        camera: Option<&Camera>,
+        render_info: &mut RenderInfo,
+    ) {
         let (wgpu::CurrentSurfaceTexture::Success(frame)
         | wgpu::CurrentSurfaceTexture::Suboptimal(frame)) = self.surface.get_current_texture()
         else {
@@ -1175,6 +1347,9 @@ impl RenderEngine {
 
         self.queue.submit(Some(encoder.finish()));
         frame.present();
+
+        render_info.window_width = self.config.width;
+        render_info.window_height = self.config.height;
     }
 
     /// draw a batch of vertices from the persistent vertex buffer.
@@ -1732,6 +1907,40 @@ impl RenderQueue {
         });
     }
 
+    /// draw text in screen-space coordinates (for UI).
+    /// internally converts through the camera to world-space.
+    /// the position is relative to the viewport top-left, y-down.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_ui_text(
+        &mut self,
+        font: &Handle<Font>,
+        text: &str,
+        screen_pos: Vec2,
+        font_size: f32,
+        color: Color,
+        camera: &Camera,
+        window_width: u32,
+        window_height: u32,
+    ) {
+        let world = camera.screen_to_world(screen_pos, window_width, window_height);
+        self.draw_text_on_layer(font, text, world, font_size, color, layers::UI);
+    }
+
+    /// draw a colored rectangle in screen-space coordinates (for UI).
+    /// internally converts through the camera to world-space.
+    pub fn draw_ui_rect(
+        &mut self,
+        screen_pos: Vec2,
+        size: Vec2,
+        color: Color,
+        camera: &Camera,
+        window_width: u32,
+        window_height: u32,
+    ) {
+        let world = camera.screen_to_world(screen_pos, window_width, window_height);
+        self.draw_rect_on_layer(world, size, color, layers::UI);
+    }
+
     /// immediate mode drawing API for debug visualization and quick prototyping.
     ///
     /// the closure receives a [`DrawContext`] with convenience methods for
@@ -2030,12 +2239,14 @@ impl GamePlugin for RenderPlugin {
 
 /// render system that processes the render queue.
 /// clears the queue at the start of each frame, then renders all commands.
-fn render_system(mut queue: ResMut<RenderQueue>) {
-    // clear last frame's commands
+fn render_system(
+    mut render_engine: ResMut<RenderEngine>,
+    mut queue: ResMut<RenderQueue>,
+    mut render_info: ResMut<RenderInfo>,
+    camera: Option<Res<Camera>>,
+) {
+    render_engine.render(queue.commands(), camera.as_deref(), &mut render_info);
     queue.clear();
-    // note: actual rendering is handled by the RenderEngine in the game loop.
-    // this system exists so game code can push draw commands during the render stage.
-    // the RenderEngine will consume the queue when it is available as a resource.
 }
 
 /// debug overlay system — draws FPS, frame time, sprite count, and entity count.

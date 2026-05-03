@@ -1,5 +1,5 @@
 # rust
-/target/
+**/target/
 **/*.rs.bk
 
 # ide

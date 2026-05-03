@@ -52,6 +52,10 @@ path = "src/main.rs"
 name = "lunar-web"
 path = "src/web.rs"
 
+[[bin]]
+name = "rpg-example"
+path = "src/bin/rpg_example_main.rs"
+
 [dependencies]
 engine-core = { path = "crates/engine-core" }
 engine-render = { path = "crates/engine-render" }
@@ -70,3 +74,4 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 wasm-bindgen = "0.2"
 console_error_panic_hook = "0.1"
 web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElement", "CanvasRenderingContext2d"] }
+bevy_ecs = { workspace = true }

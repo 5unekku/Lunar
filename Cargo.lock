@@ -897,7 +897,6 @@ dependencies = [
  "bincode",
  "engine-math",
  "log",
- "lunar",
  "ron",
  "roxmltree",
  "serde",
@@ -1820,13 +1819,25 @@ name = "lunar"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+ "engine-assets",
+ "engine-audio",
+ "engine-core",
+ "engine-input",
  "engine-math",
+ "engine-render",
+ "env_logger",
+ "log",
+ "pollster",
+ "raw-window-handle",
+ "sdl3",
+ "wgpu",
 ]
 
 [[package]]
 name = "lunar-game"
 version = "0.1.0"
 dependencies = [
+ "bevy_ecs",
  "console_error_panic_hook",
  "engine-assets",
  "engine-audio",

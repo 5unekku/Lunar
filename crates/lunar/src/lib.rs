@@ -1,7 +1,7 @@
 //! public API for game logic
 //!
-//! this crate provides the interfaces that game code uses to interact with the engine.
-//! game logic operates on handles, never direct references to engine internals.
+//! this crate re-exports everything a game project needs from the engine.
+//! game code should depend only on `lunar` and use its re-exports.
 //!
 //! # architecture
 //!
@@ -27,13 +27,27 @@
 //! ```
 
 pub use bevy_ecs;
+pub use engine_assets;
+pub use engine_audio;
+pub use engine_core;
+pub use engine_input;
 pub use engine_math;
+pub use engine_render;
 
 pub mod prelude;
 pub use prelude::*;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod bootstrap;
+#[cfg(not(target_arch = "wasm32"))]
+pub use bootstrap::bootstrap;
+
 // types re-exported at crate root for direct access (prelude covers glob imports)
+pub use engine_assets::{AssetServer, Handle};
+pub use engine_core::{App, GamePlugin, Time, WindowSettings};
+pub use engine_input::{ActionMap, InputBinding, InputState, KeyCode, MouseButton};
 pub use engine_math::{Color, Mat2, Mat3, Mat4, Rect, Transform, Vec2, Vec3, Vec4};
+pub use engine_render::{Camera, RenderConfig, RenderEngine, RenderInfo, RenderQueue};
 
 /// marker trait for components that can be used in game logic.
 ///
