@@ -212,11 +212,9 @@ impl Camera {
     }
 
     /// set a parallax offset for a specific layer.
-    /// the offset is in world space and is subtracted from the camera position
-    /// when rendering that layer, creating a parallax effect.
-    /// a factor of 0.0 means no offset (layer moves with camera),
-    /// 1.0 means the layer stays fixed in world space,
-    /// values between 0 and 1 create slower-scrolling backgrounds.
+    /// the offset is a world-space Vec2 subtracted from the camera position
+    /// when rendering that layer. to scroll a background at half speed,
+    /// pass `camera.position * 0.5` as the offset each frame.
     pub fn set_layer_parallax(&mut self, layer: i32, offset: Vec2) {
         self.layer_parallax.insert(layer, offset);
     }
@@ -1813,22 +1811,20 @@ impl DrawContext<'_> {
         }
     }
 
-    /// draw a filled circle (approximated with triangles from center).
+    /// draw a filled circle (scanline rects, one pixel tall per row).
     pub fn circle_filled(&mut self, center: Vec2, radius: f32, color: Color) {
-        let segments = 32;
+        let r = radius.ceil() as i32;
         #[allow(clippy::cast_precision_loss)]
-        for i in 0..segments {
-            let a1 = (i as f32 / segments as f32) * 2.0 * std::f32::consts::PI;
-            let a2 = ((i + 1) as f32 / segments as f32) * 2.0 * std::f32::consts::PI;
-            let x1 = center.x + a1.cos() * radius;
-            let y1 = center.y + a1.sin() * radius;
-            let x2 = center.x + a2.cos() * radius;
-            let y2 = center.y + a2.sin() * radius;
-            // draw triangle as thin rect from center to edge
+        for dy in -r..=r {
+            let dy_f = dy as f32 + 0.5; // sample at center of the scanline row
+            let half_w = (radius * radius - dy_f * dy_f).sqrt();
+            if half_w <= 0.0 {
+                continue;
+            }
             self.queue.push(DrawCommand {
                 kind: DrawKind::Rect {
-                    position: center,
-                    size: Vec2::new((x2 - x1).abs() + 1.0, (y2 - y1).abs() + 1.0),
+                    position: Vec2::new(center.x - half_w, center.y + dy as f32),
+                    size: Vec2::new(half_w * 2.0, 1.0),
                     color,
                     layer: layers::FOREGROUND,
                 },

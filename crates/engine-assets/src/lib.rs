@@ -678,8 +678,16 @@ fn texture_loader_for(path: &str) -> Arc<dyn TextureLoaderTrait> {
 
 /// determine the appropriate sound loader for a file extension.
 #[cfg(not(target_arch = "wasm32"))]
-fn sound_loader_for(_path: &str) -> Arc<dyn SoundLoaderTrait> {
-    Arc::new(WavSoundLoader)
+fn sound_loader_for(path: &str) -> Arc<dyn SoundLoaderTrait> {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    match ext.as_str() {
+        "ogg" => Arc::new(OggSoundLoader),
+        _ => Arc::new(WavSoundLoader),
+    }
 }
 
 /// stub sound loader for WASM — returns an error since rodio doesn't compile on wasm.

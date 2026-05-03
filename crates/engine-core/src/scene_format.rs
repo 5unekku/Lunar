@@ -439,16 +439,22 @@ impl SceneLoader {
             }
         }
 
-        // second pass: resolve parent references and add Parent/Children components
+        // second pass: resolve parent references — group children per parent, insert once
+        let mut parent_to_children: HashMap<Entity, smallvec::SmallVec<[Entity; 4]>> =
+            HashMap::new();
         for (entity, parent_id) in parent_refs {
             if let Some(&parent_entity) = id_map.get(&parent_id) {
                 commands.entity(entity).insert(Parent(parent_entity));
-                commands
-                    .entity(parent_entity)
-                    .insert(Children(smallvec::smallvec![entity]));
+                parent_to_children
+                    .entry(parent_entity)
+                    .or_default()
+                    .push(entity);
             } else {
                 log::warn!("SceneLoader: parent '{parent_id}' not found for entity");
             }
+        }
+        for (parent_entity, children) in parent_to_children {
+            commands.entity(parent_entity).insert(Children(children));
         }
 
         // third pass: resolve sub-scene instances
@@ -461,25 +467,29 @@ impl SceneLoader {
                 });
                 let sub_id_map =
                     Self::spawn_scene_internal(commands, sub_scene, Some(registry), Some(entity));
-                // parent sub-scene roots under this entity
+                // parent all sub-scene root entities under this entity in one Children insert
+                let mut sub_children: smallvec::SmallVec<[Entity; 4]> = smallvec::SmallVec::new();
                 for sub_entity in sub_id_map.values() {
                     commands.entity(*sub_entity).insert(Parent(entity));
-                    commands
-                        .entity(entity)
-                        .insert(Children(smallvec::smallvec![*sub_entity]));
+                    sub_children.push(*sub_entity);
+                }
+                if !sub_children.is_empty() {
+                    commands.entity(entity).insert(Children(sub_children));
                 }
             } else {
                 log::warn!("SceneLoader: sub-scene '{sub_scene_name}' not found in registry");
             }
         }
 
-        // if this scene was spawned under a parent, parent the root entities
+        // if this scene was spawned under a parent, parent all root entities in one Children insert
         if let Some(parent) = parent_entity {
+            let mut root_children: smallvec::SmallVec<[Entity; 4]> = smallvec::SmallVec::new();
             for entity in id_map.values() {
                 commands.entity(*entity).insert(Parent(parent));
-                commands
-                    .entity(parent)
-                    .insert(Children(smallvec::smallvec![*entity]));
+                root_children.push(*entity);
+            }
+            if !root_children.is_empty() {
+                commands.entity(parent).insert(Children(root_children));
             }
         }
 
