@@ -9,7 +9,7 @@ publish = false
 # wgpu, etc.) appear here as a direct dependency, that's a regression in the
 # abstraction boundary — fix the engine, not this Cargo.toml.
 [dependencies]
-lunar = { path = "../../crates/lunar" }
+lunar = { path = "../../crates/lunar", package = "lunar-lib" }
 
 [lib]
 path = "src/lib.rs"

@@ -10,6 +10,7 @@ use wasm_bindgen::prelude::*;
 /// minimal web demo — clears to the engine default color each frame.
 /// replace with your own GamePlugin to ship a real WASM game.
 #[derive(Default)]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 struct WebDemo;
 
 impl GamePlugin for WebDemo {

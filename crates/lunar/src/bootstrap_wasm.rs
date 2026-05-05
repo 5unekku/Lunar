@@ -48,7 +48,11 @@ pub async fn bootstrap_wasm<Plugin: engine_core::GamePlugin + Default + 'static>
     wasm_set_render_engine(engine);
 
     let mut app = App::new();
-    app.insert_resource(WindowSettings::new(config.width, config.height, config.vsync));
+    app.insert_resource(WindowSettings::new(
+        config.width,
+        config.height,
+        config.vsync,
+    ));
     app.add_plugin(RenderPlugin);
     app.add_plugin(InputPlugin);
     app.add_plugin(AssetPlugin);
@@ -65,9 +69,7 @@ pub async fn bootstrap_wasm<Plugin: engine_core::GamePlugin + Default + 'static>
             app.borrow_mut().tick();
             web_sys::window()
                 .unwrap()
-                .request_animation_frame(
-                    f.borrow().as_ref().unwrap().as_ref().unchecked_ref(),
-                )
+                .request_animation_frame(f.borrow().as_ref().unwrap().as_ref().unchecked_ref())
                 .unwrap();
         }
     }));

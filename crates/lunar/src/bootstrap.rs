@@ -5,7 +5,7 @@
 /// and runs the game loop. the window title defaults to `"Lunar"`.
 ///
 /// game code never touches SDL3, wgpu, or unsafe — read window state
-/// through [`WindowSettings`].
+/// through [`crate::WindowSettings`].
 ///
 /// # example
 ///
@@ -131,4 +131,3 @@ pub fn bootstrap<Plugin: engine_core::GamePlugin + Default + 'static>(
 
     log::info!("lunar engine shutting down...");
 }
-

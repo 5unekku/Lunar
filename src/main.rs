@@ -11,7 +11,9 @@ use lunar::prelude::*;
 struct EmptyPlugin;
 
 impl GamePlugin for EmptyPlugin {
-    fn name(&self) -> &str { "EmptyPlugin" }
+    fn name(&self) -> &str {
+        "EmptyPlugin"
+    }
 }
 
 fn main() {

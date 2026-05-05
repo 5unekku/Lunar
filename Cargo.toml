@@ -64,7 +64,7 @@ path = "src/bin/rpg_example_main.rs"
 # `lunar` is the only dependency a real game needs. The rpg-example
 # (item 73.5) was migrated off direct sub-crate imports — every `use` now
 # goes through `lunar::prelude::*` or `lunar::engine_core::…`.
-lunar = { path = "crates/lunar" }
+lunar = { path = "crates/lunar", package = "lunar-lib" }
 
 # opt-in domain crate — rpg-example uses dialogue; games without dialogue
 # don't add this. Localization and zones aren't used here.

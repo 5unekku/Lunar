@@ -13,7 +13,7 @@
 //! game code does not touch the GPU directly. two paths feed the renderer:
 //!
 //! 1. **components** (preferred) — spawn entities with [`Sprite`] or [`Text`]
-//!    alongside a [`Transform`](engine_math::Transform). built-in systems
+//!    alongside a [`Transform`]. built-in systems
 //!    enqueue them automatically every frame.
 //! 2. **immediate mode** (HUD / debug / one-shots) — call `draw_sprite`,
 //!    `draw_rect`, `draw_line`, `draw_text` on [`RenderQueue`] from inside a
@@ -338,7 +338,7 @@ impl Default for Camera {
 /// rendering configuration.
 ///
 /// controls window size, vsync, and frame rate limiting.
-/// used when initializing the [`RenderEngine`] and [`WindowPlugin`].
+/// used when initializing the [`RenderEngine`] and [`engine_core::WindowSettings`].
 #[derive(Debug, Clone)]
 pub struct RenderConfig {
     /// window width
@@ -1284,9 +1284,7 @@ impl RenderEngine {
 
                 // drop sprite if buffer is full this frame; flag overflow so the
                 // buffers double in size before next frame and the cap raises itself.
-                if self.vertex_offset + 6 * VERTEX_STRIDE
-                    > self.vertex_capacity * VERTEX_STRIDE
-                {
+                if self.vertex_offset + 6 * VERTEX_STRIDE > self.vertex_capacity * VERTEX_STRIDE {
                     self.overflow_flag = true;
                     continue;
                 }
@@ -1340,8 +1338,7 @@ impl RenderEngine {
 
                     // drop this command if the buffer is full this frame; flag
                     // overflow so capacity doubles before next frame.
-                    if self.vertex_offset + 6 * VERTEX_STRIDE
-                        > self.vertex_capacity * VERTEX_STRIDE
+                    if self.vertex_offset + 6 * VERTEX_STRIDE > self.vertex_capacity * VERTEX_STRIDE
                     {
                         self.overflow_flag = true;
                         continue;
@@ -1769,7 +1766,7 @@ pub struct Layer(pub i32);
 
 /// renderable 2D sprite component.
 ///
-/// any entity carrying a [`Transform`](engine_math::Transform) and a `Sprite`
+/// any entity carrying a [`Transform`] and a `Sprite`
 /// is drawn automatically each frame. game code spawns the entity and the
 /// engine's render system enqueues the draw — no manual `RenderQueue` calls.
 ///
@@ -1860,7 +1857,7 @@ impl Sprite {
 
 /// renderable text component.
 ///
-/// any entity carrying a [`Transform`](engine_math::Transform) and a `Text`
+/// any entity carrying a [`Transform`] and a `Text`
 /// is drawn automatically each frame. position comes from `Transform.translation`.
 ///
 /// # example
@@ -2546,7 +2543,11 @@ fn wasm_render_system(
 fn frame_stats_system(time: Res<Time>, mut info: ResMut<RenderInfo>) {
     let raw_delta = time.raw_delta_seconds();
     info.frame_time_ms = raw_delta * 1000.0;
-    info.fps = if raw_delta > 0.0 { 1.0 / raw_delta } else { 0.0 };
+    info.fps = if raw_delta > 0.0 {
+        1.0 / raw_delta
+    } else {
+        0.0
+    };
 }
 
 /// auto-render system: enqueues a sprite draw for every entity with both

@@ -20,7 +20,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput};
+use syn::{DeriveInput, parse_macro_input};
 
 /// Derive `Component` for a type. Generates an `impl` of bevy_ecs's
 /// `Component` trait with `StorageType::Table` and `Mutability::Mutable`
