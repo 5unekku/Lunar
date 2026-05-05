@@ -625,66 +625,73 @@ impl TextureLoaderTrait for MiTextureLoader {
     }
 }
 
-/// loader for wav sound files.
+/// unified audio loader for FLAC, OGG Vorbis, OGG Opus, and WAV.
 ///
-/// uses hound to decode wav files into sound buffers.
-#[cfg(not(target_arch = "wasm32"))]
-pub struct WavSoundLoader;
-
-#[cfg(not(target_arch = "wasm32"))]
-impl SoundLoaderTrait for WavSoundLoader {
-    fn load(&self, bytes: Vec<u8>) -> Result<Sound, String> {
-        let cursor = std::io::Cursor::new(bytes);
-        let reader =
-            hound::WavReader::new(cursor).map_err(|e| format!("failed to open wav: {e}"))?;
-        let spec = reader.spec();
-        let sample_rate = spec.sample_rate;
-        let max = (1i64 << (spec.bits_per_sample - 1)) as f64;
-        let samples: Vec<f32> = match spec.sample_format {
-            hound::SampleFormat::Float => reader
-                .into_samples::<f32>()
-                .map(|s| s.map_err(|e| e.to_string()))
-                .collect::<Result<_, _>>()
-                .map_err(|e| format!("wav sample error: {e}"))?,
-            hound::SampleFormat::Int => reader
-                .into_samples::<i32>()
-                .map(|s| {
-                    s.map(|x| (x as f64 / max) as f32)
-                        .map_err(|e| e.to_string())
-                })
-                .collect::<Result<_, _>>()
-                .map_err(|e| format!("wav sample error: {e}"))?,
-        };
-        Ok(Sound {
-            samples,
-            sample_rate,
-        })
-    }
+/// uses symphonia's probe+decode pipeline. works identically on native and WASM —
+/// no target split needed. pass an extension hint to speed up format probing;
+/// symphonia falls back to byte-sniffing if none is given.
+pub struct SymphoniaSoundLoader {
+    extension_hint: Option<&'static str>,
 }
 
-/// loader for ogg/vorbis sound files.
-///
-/// uses lewton to decode ogg files into sound buffers.
-#[cfg(not(target_arch = "wasm32"))]
-pub struct OggSoundLoader;
-
-#[cfg(not(target_arch = "wasm32"))]
-impl SoundLoaderTrait for OggSoundLoader {
+impl SoundLoaderTrait for SymphoniaSoundLoader {
     fn load(&self, bytes: Vec<u8>) -> Result<Sound, String> {
-        use lewton::inside_ogg::OggStreamReader;
-        let cursor = std::io::Cursor::new(bytes);
-        let mut reader =
-            OggStreamReader::new(cursor).map_err(|e| format!("failed to open ogg: {e}"))?;
-        let sample_rate = reader.ident_hdr.audio_sample_rate;
-        let mut samples = Vec::new();
-        while let Some(packet) = reader
-            .read_dec_packet_itl()
-            .map_err(|e| format!("ogg decode error: {e}"))?
-        {
-            for s in packet {
-                samples.push(s as f32 / f32::from(i16::MAX));
-            }
+        use symphonia::core::{
+            audio::SampleBuffer, codecs::DecoderOptions, errors::Error as SErr,
+            formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions, probe::Hint,
+        };
+
+        let mss = MediaSourceStream::new(Box::new(std::io::Cursor::new(bytes)), Default::default());
+        let mut hint = Hint::new();
+        if let Some(ext) = self.extension_hint {
+            hint.with_extension(ext);
         }
+
+        let probed = symphonia::default::get_probe()
+            .format(
+                &hint,
+                mss,
+                &FormatOptions::default(),
+                &MetadataOptions::default(),
+            )
+            .map_err(|e| format!("failed to probe audio: {e}"))?;
+
+        let mut format = probed.format;
+        let track = format
+            .default_track()
+            .ok_or_else(|| "no audio track found".to_string())?;
+        let track_id = track.id;
+        let sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
+
+        let mut decoder = symphonia::default::get_codecs()
+            .make(&track.codec_params, &DecoderOptions::default())
+            .map_err(|e| format!("failed to create decoder: {e}"))?;
+
+        let mut samples: Vec<f32> = Vec::new();
+        loop {
+            let packet = match format.next_packet() {
+                Ok(p) => p,
+                Err(SErr::IoError(_)) => break,
+                Err(SErr::ResetRequired) => continue,
+                Err(e) => return Err(format!("read error: {e}")),
+            };
+            if packet.track_id() != track_id {
+                continue;
+            }
+            let decoded = match decoder.decode(&packet) {
+                Ok(d) => d,
+                Err(SErr::IoError(_)) => break,
+                Err(SErr::DecodeError(e)) => {
+                    log::warn!("audio decode warning (skipping packet): {e}");
+                    continue;
+                }
+                Err(e) => return Err(format!("decode error: {e}")),
+            };
+            let mut buf = SampleBuffer::<f32>::new(decoded.capacity() as u64, *decoded.spec());
+            buf.copy_interleaved_ref(decoded);
+            samples.extend_from_slice(buf.samples());
+        }
+
         Ok(Sound {
             samples,
             sample_rate,
@@ -734,29 +741,21 @@ fn texture_loader_for(path: &str) -> Arc<dyn TextureLoaderTrait> {
 }
 
 /// determine the appropriate sound loader for a file extension.
-#[cfg(not(target_arch = "wasm32"))]
 fn sound_loader_for(path: &str) -> Arc<dyn SoundLoaderTrait> {
     let ext = Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
-    match ext.as_str() {
-        "ogg" => Arc::new(OggSoundLoader),
-        _ => Arc::new(WavSoundLoader),
-    }
-}
-
-/// stub sound loader for WASM — returns an error since rodio doesn't compile on wasm.
-#[cfg(target_arch = "wasm32")]
-fn sound_loader_for(_path: &str) -> Arc<dyn SoundLoaderTrait> {
-    struct WasmStubLoader;
-    impl SoundLoaderTrait for WasmStubLoader {
-        fn load(&self, _bytes: Vec<u8>) -> Result<Sound, String> {
-            Err("sound loading not supported on WASM target".to_string())
-        }
-    }
-    Arc::new(WasmStubLoader)
+    let hint = match ext.as_str() {
+        "flac" => Some("flac"),
+        "ogg" | "oga" | "opus" => Some("ogg"),
+        "wav" | "wave" => Some("wav"),
+        _ => None,
+    };
+    Arc::new(SymphoniaSoundLoader {
+        extension_hint: hint,
+    })
 }
 
 /// determine the appropriate font loader for a file extension.

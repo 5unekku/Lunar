@@ -25,6 +25,9 @@
 pub async fn bootstrap_wasm<Plugin: engine_core::GamePlugin + Default + 'static>(
     config: engine_render::RenderConfig,
 ) {
+    console_log::init_with_level(log::Level::Debug)
+        .unwrap_or_else(|_| log::warn!("logger already initialized"));
+
     use engine_assets::AssetPlugin;
     use engine_core::{App, WindowSettings};
     use engine_input::InputPlugin;
