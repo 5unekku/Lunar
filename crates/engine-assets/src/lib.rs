@@ -625,146 +625,20 @@ impl TextureLoaderTrait for MiTextureLoader {
     }
 }
 
-/// unified audio loader for FLAC, OGG Vorbis, OGG Opus, and WAV.
+/// audio loader for FLAC, OGG Vorbis, and WAV.
 ///
-/// uses symphonia's probe+decode pipeline. works identically on native and WASM —
-/// no target split needed. pass an extension hint to speed up format probing;
-/// symphonia falls back to byte-sniffing if none is given.
-pub struct SymphoniaSoundLoader {
-    extension_hint: Option<&'static str>,
+/// stores compressed bytes as-is; decoding happens in the audio plugin at playback
+/// time. the format tag is determined from the file extension at load time so the
+/// plugin doesn't need to re-sniff the bytes.
+pub struct CompressedSoundLoader {
+    format: AudioFormat,
 }
 
-impl SoundLoaderTrait for SymphoniaSoundLoader {
+impl SoundLoaderTrait for CompressedSoundLoader {
     fn load(&self, bytes: Vec<u8>) -> Result<Sound, String> {
-        use symphonia::core::{
-            audio::SampleBuffer, codecs::DecoderOptions, errors::Error as SErr,
-            formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions, probe::Hint,
-        };
-
-        let mss = MediaSourceStream::new(Box::new(std::io::Cursor::new(bytes)), Default::default());
-        let mut hint = Hint::new();
-        if let Some(ext) = self.extension_hint {
-            hint.with_extension(ext);
-        }
-
-        let probed = symphonia::default::get_probe()
-            .format(
-                &hint,
-                mss,
-                &FormatOptions::default(),
-                &MetadataOptions::default(),
-            )
-            .map_err(|e| format!("failed to probe audio: {e}"))?;
-
-        let mut format = probed.format;
-        let track = format
-            .default_track()
-            .ok_or_else(|| "no audio track found".to_string())?;
-        let track_id = track.id;
-        let sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
-
-        let mut decoder = symphonia::default::get_codecs()
-            .make(&track.codec_params, &DecoderOptions::default())
-            .map_err(|e| format!("failed to create decoder: {e}"))?;
-
-        let mut samples: Vec<f32> = Vec::new();
-        loop {
-            let packet = match format.next_packet() {
-                Ok(p) => p,
-                Err(SErr::IoError(_)) => break,
-                Err(SErr::ResetRequired) => continue,
-                Err(e) => return Err(format!("read error: {e}")),
-            };
-            if packet.track_id() != track_id {
-                continue;
-            }
-            let decoded = match decoder.decode(&packet) {
-                Ok(d) => d,
-                Err(SErr::IoError(_)) => break,
-                Err(SErr::DecodeError(e)) => {
-                    log::warn!("audio decode warning (skipping packet): {e}");
-                    continue;
-                }
-                Err(e) => return Err(format!("decode error: {e}")),
-            };
-            let mut buf = SampleBuffer::<f32>::new(decoded.capacity() as u64, *decoded.spec());
-            buf.copy_interleaved_ref(decoded);
-            samples.extend_from_slice(buf.samples());
-        }
-
         Ok(Sound {
-            samples,
-            sample_rate,
-        })
-    }
-}
-
-/// OGG Opus loader using libopus (the Xiph reference C implementation).
-///
-/// handles `.opus` files only. symphonia has no stable opus codec yet, so this
-/// uses `ogg` for demuxing and the `opus` crate (libopus bindings) for decoding.
-/// opus always outputs at 48 kHz; pre-skip samples from the OpusHead are stripped.
-#[cfg(not(target_arch = "wasm32"))]
-pub struct OpusSoundLoader;
-
-#[cfg(not(target_arch = "wasm32"))]
-impl SoundLoaderTrait for OpusSoundLoader {
-    fn load(&self, bytes: Vec<u8>) -> Result<Sound, String> {
-        use ogg::reading::PacketReader;
-
-        const SAMPLE_RATE: u32 = 48000;
-        // max Opus frame at 48 kHz is 120 ms = 5760 samples per channel
-        const MAX_FRAME: usize = 5760;
-
-        let cursor = std::io::Cursor::new(bytes);
-        let mut reader = PacketReader::new(cursor);
-
-        // OpusHead — magic + channel count + pre-skip
-        let head = reader
-            .read_packet_expected()
-            .map_err(|e| format!("ogg read error: {e}"))?;
-        if head.data.len() < 19 || &head.data[..8] != b"OpusHead" {
-            return Err("not a valid OGG Opus file".to_string());
-        }
-        let channels = head.data[9] as usize;
-        let pre_skip = u16::from_le_bytes([head.data[10], head.data[11]]) as usize;
-        let opus_channels = match channels {
-            1 => opus::Channels::Mono,
-            2 => opus::Channels::Stereo,
-            n => return Err(format!("unsupported opus channel count: {n}")),
-        };
-
-        // OpusTags — skip
-        reader
-            .read_packet_expected()
-            .map_err(|e| format!("ogg read error: {e}"))?;
-
-        let mut decoder = opus::Decoder::new(SAMPLE_RATE, opus_channels)
-            .map_err(|e| format!("failed to create opus decoder: {e}"))?;
-
-        let mut pcm = vec![0i16; MAX_FRAME * channels];
-        let mut samples: Vec<f32> = Vec::new();
-        let mut total_samples = 0usize;
-
-        while let Ok(Some(packet)) = reader.read_packet() {
-            if packet.data.is_empty() {
-                continue;
-            }
-            let n = decoder
-                .decode(&packet.data, &mut pcm, false)
-                .map_err(|e| format!("opus decode error: {e}"))?;
-            let decoded_samples = &pcm[..n * channels];
-            // strip pre-skip from the very beginning of the stream
-            let skip = pre_skip.saturating_sub(total_samples).min(n);
-            for &s in &decoded_samples[skip * channels..] {
-                samples.push(s as f32 / f32::from(i16::MAX));
-            }
-            total_samples += n;
-        }
-
-        Ok(Sound {
-            samples,
-            sample_rate: SAMPLE_RATE,
+            data: bytes,
+            format: self.format,
         })
     }
 }
@@ -817,22 +691,14 @@ fn sound_loader_for(path: &str) -> Arc<dyn SoundLoaderTrait> {
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
-
-    // .opus → libopus on native (symphonia has no stable opus codec yet)
-    #[cfg(not(target_arch = "wasm32"))]
-    if ext == "opus" {
-        return Arc::new(OpusSoundLoader);
-    }
-
-    let hint = match ext.as_str() {
-        "flac" => Some("flac"),
-        "ogg" | "oga" => Some("ogg"),
-        "wav" | "wave" => Some("wav"),
-        _ => None,
+    let format = match ext.as_str() {
+        "flac" => AudioFormat::Flac,
+        "ogg" | "oga" => AudioFormat::OggVorbis,
+        "opus" => AudioFormat::OggOpus,
+        "wav" | "wave" => AudioFormat::Wav,
+        _ => AudioFormat::Unknown,
     };
-    Arc::new(SymphoniaSoundLoader {
-        extension_hint: hint,
-    })
+    Arc::new(CompressedSoundLoader { format })
 }
 
 /// determine the appropriate font loader for a file extension.
@@ -1208,13 +1074,31 @@ pub struct Texture {
 
 impl Asset for Texture {}
 
-/// decoded sound data with sample buffer.
+/// compressed audio format tag.
 ///
-/// contains f32 samples and the sample rate.
-/// the audio system plays from this buffer.
+/// the audio plugin uses this to select the right decoder at playback time
+/// without re-sniffing the file bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioFormat {
+    Flac,
+    OggVorbis,
+    OggOpus,
+    Wav,
+    /// format couldn't be determined from the file extension
+    Unknown,
+}
+
+/// compressed audio bytes as loaded from disk.
+///
+/// stores raw file bytes rather than decoded PCM. decoding happens in the audio
+/// plugin at playback time — either fully (short SFX, cached) or frame-by-frame
+/// (music, streamed). this keeps memory proportional to the compressed size:
+/// a 3-min FLAC at 48 kHz stereo is ~70 MB decoded but ~20 MB on disk.
 pub struct Sound {
-    pub samples: Vec<f32>,
-    pub sample_rate: u32,
+    /// raw bytes from the audio file.
+    pub data: Vec<u8>,
+    /// format detected from file extension at load time.
+    pub format: AudioFormat,
 }
 
 impl Asset for Sound {}
