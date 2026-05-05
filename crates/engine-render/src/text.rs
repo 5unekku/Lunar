@@ -47,6 +47,9 @@ pub struct GlyphKey {
 /// stores rasterized glyphs in a single 2D pixel buffer.
 /// glyphs are placed sequentially, wrapping to new rows as needed.
 /// the atlas is uploaded to the GPU as a texture for rendering.
+///
+/// fonts are registered via [`register_font`] with raw bytes; the atlas
+/// parses and caches them internally so callers never touch fontdue/freetype directly.
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct GlyphAtlas {
@@ -58,6 +61,8 @@ pub struct GlyphAtlas {
     pub pixels: Vec<u8>,
     /// cached glyphs keyed by (`font_id`, character, quantized font size).
     pub glyphs: HashMap<GlyphKey, GlyphInfo>,
+    /// parsed fonts keyed by font_id.
+    font_cache: HashMap<u32, fontdue::Font>,
     /// current x position for the next glyph insertion.
     cursor_x: u32,
     /// current y position for the next glyph insertion.
@@ -75,24 +80,40 @@ impl GlyphAtlas {
             height,
             pixels: vec![0u8; (width * height * 4) as usize],
             glyphs: HashMap::new(),
+            font_cache: HashMap::new(),
             cursor_x: 0,
             cursor_y: 0,
             row_height: 0,
         }
     }
 
+    /// register a font from raw bytes.
+    ///
+    /// the atlas parses and caches the font internally. subsequent calls to
+    /// [`rasterize_glyph`] with this `font_id` will use the cached font.
+    /// no-op if the font_id is already registered.
+    #[allow(dead_code)]
+    pub fn register_font(&mut self, font_id: u32, data: &[u8]) {
+        if self.font_cache.contains_key(&font_id) {
+            return;
+        }
+        match fontdue::Font::from_bytes(data, fontdue::FontSettings::default()) {
+            Ok(font) => {
+                self.font_cache.insert(font_id, font);
+            }
+            Err(e) => log::warn!("failed to parse font {font_id}: {e}"),
+        }
+    }
+
     /// rasterize a glyph and insert it into the atlas.
     ///
-    /// returns `false` if the atlas doesn't have enough space for the glyph.
-    /// if the glyph is already cached, this is a no-op and returns `true`.
+    /// returns `false` if the atlas doesn't have enough space, the font_id is
+    /// not registered, or the glyph can't be rasterized. if the glyph is already
+    /// cached, this is a no-op and returns `true`.
+    ///
+    /// call [`register_font`] before rasterizing glyphs for a new font.
     #[allow(dead_code)]
-    pub fn rasterize_glyph(
-        &mut self,
-        font: &fontdue::Font,
-        font_id: u32,
-        char_code: char,
-        font_size: f32,
-    ) -> bool {
+    pub fn rasterize_glyph(&mut self, font_id: u32, char_code: char, font_size: f32) -> bool {
         let key = GlyphKey {
             font_id,
             char_code,
@@ -103,7 +124,11 @@ impl GlyphAtlas {
             return true;
         }
 
-        let (metrics, bitmap) = font.rasterize(char_code, font_size);
+        // borrow font immutably to rasterize, then drop the borrow before touching pixels
+        let (metrics, bitmap) = match self.font_cache.get(&font_id) {
+            Some(font) => font.rasterize(char_code, font_size),
+            None => return false,
+        };
 
         let gw = u32::try_from(metrics.width).unwrap_or(0);
         let gh = u32::try_from(metrics.height).unwrap_or(0);

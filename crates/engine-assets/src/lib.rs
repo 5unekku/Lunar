@@ -627,19 +627,34 @@ impl TextureLoaderTrait for MiTextureLoader {
 
 /// loader for wav sound files.
 ///
-/// uses rodio to decode wav files into sound buffers.
+/// uses hound to decode wav files into sound buffers.
 #[cfg(not(target_arch = "wasm32"))]
 pub struct WavSoundLoader;
 
 #[cfg(not(target_arch = "wasm32"))]
 impl SoundLoaderTrait for WavSoundLoader {
     fn load(&self, bytes: Vec<u8>) -> Result<Sound, String> {
-        use rodio::Source as _;
         let cursor = std::io::Cursor::new(bytes);
-        let source =
-            rodio::Decoder::new_wav(cursor).map_err(|e| format!("failed to decode wav: {e}"))?;
-        let sample_rate = source.sample_rate();
-        let samples: Vec<f32> = source.map(|s| f32::from(s) / f32::from(i16::MAX)).collect();
+        let reader =
+            hound::WavReader::new(cursor).map_err(|e| format!("failed to open wav: {e}"))?;
+        let spec = reader.spec();
+        let sample_rate = spec.sample_rate;
+        let max = (1i64 << (spec.bits_per_sample - 1)) as f64;
+        let samples: Vec<f32> = match spec.sample_format {
+            hound::SampleFormat::Float => reader
+                .into_samples::<f32>()
+                .map(|s| s.map_err(|e| e.to_string()))
+                .collect::<Result<_, _>>()
+                .map_err(|e| format!("wav sample error: {e}"))?,
+            hound::SampleFormat::Int => reader
+                .into_samples::<i32>()
+                .map(|s| {
+                    s.map(|x| (x as f64 / max) as f32)
+                        .map_err(|e| e.to_string())
+                })
+                .collect::<Result<_, _>>()
+                .map_err(|e| format!("wav sample error: {e}"))?,
+        };
         Ok(Sound {
             samples,
             sample_rate,
@@ -649,19 +664,27 @@ impl SoundLoaderTrait for WavSoundLoader {
 
 /// loader for ogg/vorbis sound files.
 ///
-/// uses rodio to decode ogg files into sound buffers.
+/// uses lewton to decode ogg files into sound buffers.
 #[cfg(not(target_arch = "wasm32"))]
 pub struct OggSoundLoader;
 
 #[cfg(not(target_arch = "wasm32"))]
 impl SoundLoaderTrait for OggSoundLoader {
     fn load(&self, bytes: Vec<u8>) -> Result<Sound, String> {
-        use rodio::Source as _;
+        use lewton::inside_ogg::OggStreamReader;
         let cursor = std::io::Cursor::new(bytes);
-        let source =
-            rodio::Decoder::new_vorbis(cursor).map_err(|e| format!("failed to decode ogg: {e}"))?;
-        let sample_rate = source.sample_rate();
-        let samples: Vec<f32> = source.map(|s| f32::from(s) / f32::from(i16::MAX)).collect();
+        let mut reader =
+            OggStreamReader::new(cursor).map_err(|e| format!("failed to open ogg: {e}"))?;
+        let sample_rate = reader.ident_hdr.audio_sample_rate;
+        let mut samples = Vec::new();
+        while let Some(packet) = reader
+            .read_dec_packet_itl()
+            .map_err(|e| format!("ogg decode error: {e}"))?
+        {
+            for s in packet {
+                samples.push(s as f32 / f32::from(i16::MAX));
+            }
+        }
         Ok(Sound {
             samples,
             sample_rate,
@@ -671,14 +694,12 @@ impl SoundLoaderTrait for OggSoundLoader {
 
 /// loader for ttf/otf font files.
 ///
-/// uses fontdue to rasterize font glyphs.
+/// stores raw bytes; the render system parses the font when needed.
 pub struct TtfFontLoader;
 
 impl FontLoaderTrait for TtfFontLoader {
     fn load(&self, bytes: Vec<u8>) -> Result<Font, String> {
-        let font = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default())
-            .map_err(|e| format!("failed to load font: {e}"))?;
-        Ok(Font { inner: font })
+        Ok(Font { data: bytes })
     }
 }
 
@@ -1122,11 +1143,12 @@ pub struct Sound {
 
 impl Asset for Sound {}
 
-/// loaded font data using fontdue.
+/// raw font file bytes.
 ///
-/// contains the parsed font ready for glyph rasterization.
+/// the render system parses and caches these into a glyph atlas per target
+/// (fontdue on WASM, freetype on native).
 pub struct Font {
-    pub inner: fontdue::Font,
+    pub data: Vec<u8>,
 }
 
 impl Asset for Font {}
