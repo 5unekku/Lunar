@@ -74,7 +74,8 @@ pub mod engine_plugins {
     /// Render plugin — sets up rendering
     pub struct RenderPlugin;
 
-    /// Audio plugin — sets up audio
+    /// Audio plugin — reserved for the Moonwalker integration (currently absent
+    /// from the workspace). Documented here so the slot stays visible.
     pub struct AudioPlugin;
 
     /// Time plugin — sets up time/delta time
@@ -93,7 +94,7 @@ App::run()
 ├── TimePlugin.build()
 ├── InputPlugin.build()
 ├── RenderPlugin.build()
-├── AudioPlugin.build()
+├── AudioPlugin.build()                  // reserved slot, currently no-op
 ├── [Game plugins .build() in registration order]
 ├── [All plugins .finish() in registration order]
 ├── Startup systems (in order)

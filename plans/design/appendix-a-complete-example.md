@@ -130,11 +130,8 @@ fn enemy_spawn_system(
                 health: 50,
             },
             Velocity(Vec2::ZERO),
-            Transform::from_translation(Vec3::new(x, -50.0, 0.0)),
-            Sprite {
-                texture: enemy_tex,
-                size: Vec2::new(32.0, 32.0),
-            },
+            Transform::from_xy(x, -50.0),
+            Sprite::new(enemy_tex).with_size(Vec2::new(32.0, 32.0)),
             Collider { radius: 16.0 },
         ));
     }
@@ -253,11 +250,9 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
             health: 100,
         },
         Velocity(Vec2::ZERO),
-        Transform::from_translation(Vec3::new(640.0, 360.0, 0.0)),
-        Sprite {
-            texture: assets.load("textures/player.png"),
-            size: Vec2::new(32.0, 48.0),
-        },
+        Transform::from_xy(640.0, 360.0),
+        Sprite::new(assets.load_texture("textures/player.png"))
+            .with_size(Vec2::new(32.0, 48.0)),
         Collider { radius: 16.0 },
     ));
 }

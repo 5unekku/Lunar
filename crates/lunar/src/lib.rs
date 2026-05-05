@@ -26,9 +26,18 @@
 //! }
 //! ```
 
-pub use bevy_ecs;
+// `__bevy_ecs` is the internal path the lunar-macros derives target. It
+// MUST keep this exact name — the derive macros emit `::lunar::__bevy_ecs::…`
+// paths. Hidden from rustdoc; not part of the public API contract.
+#[doc(hidden)]
+pub use bevy_ecs as __bevy_ecs;
+
+// wrapped ECS derives — game code writes `#[derive(Component)]` etc. without
+// ever naming bevy_ecs in its Cargo.toml. The derives expand to impls routed
+// through `::lunar::__bevy_ecs::…`.
+pub use lunar_macros::{Component, Event, Message, Resource};
+
 pub use engine_assets;
-pub use engine_audio;
 pub use engine_core;
 pub use engine_input;
 pub use engine_math;
@@ -42,12 +51,19 @@ mod bootstrap;
 #[cfg(not(target_arch = "wasm32"))]
 pub use bootstrap::bootstrap;
 
+#[cfg(target_arch = "wasm32")]
+mod bootstrap_wasm;
+#[cfg(target_arch = "wasm32")]
+pub use bootstrap_wasm::bootstrap_wasm;
+
 // types re-exported at crate root for direct access (prelude covers glob imports)
-pub use engine_assets::{AssetServer, Handle};
+pub use engine_assets::{AssetServer, Font, Handle, Sound, Texture};
 pub use engine_core::{App, GamePlugin, Time, WindowSettings};
 pub use engine_input::{ActionMap, InputBinding, InputState, KeyCode, MouseButton};
 pub use engine_math::{Color, Mat2, Mat3, Mat4, Rect, Transform, Vec2, Vec3, Vec4};
-pub use engine_render::{Camera, RenderConfig, RenderEngine, RenderInfo, RenderQueue};
+pub use engine_render::{
+    Camera, Layer, RenderConfig, RenderEngine, RenderInfo, RenderQueue, Sprite, Text, layers,
+};
 
 /// marker trait for components that can be used in game logic.
 ///

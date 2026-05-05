@@ -129,6 +129,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "api-seal-test"
+version = "0.0.0"
+dependencies = [
+ "lunar",
+]
+
+[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -881,15 +888,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "engine-audio"
-version = "0.1.0"
-dependencies = [
- "bevy_ecs",
- "engine-core",
- "log",
-]
-
-[[package]]
 name = "engine-core"
 version = "0.1.0"
 dependencies = [
@@ -904,6 +902,17 @@ dependencies = [
  "smallvec",
  "wasm-bindgen",
  "web-sys",
+]
+
+[[package]]
+name = "engine-dialogue"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "engine-core",
+ "log",
+ "ron",
+ "serde",
 ]
 
 [[package]]
@@ -928,6 +937,16 @@ dependencies = [
  "sdl3",
  "wasm-bindgen",
  "web-sys",
+]
+
+[[package]]
+name = "engine-localization"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "engine-core",
+ "log",
+ "ron",
 ]
 
 [[package]]
@@ -958,6 +977,15 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "wgpu",
+]
+
+[[package]]
+name = "engine-zones"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "engine-math",
+ "log",
 ]
 
 [[package]]
@@ -1820,16 +1848,20 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "engine-assets",
- "engine-audio",
  "engine-core",
  "engine-input",
  "engine-math",
  "engine-render",
  "env_logger",
+ "js-sys",
  "log",
+ "lunar-macros",
  "pollster",
  "raw-window-handle",
  "sdl3",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
  "wgpu",
 ]
 
@@ -1837,24 +1869,22 @@ dependencies = [
 name = "lunar-game"
 version = "0.1.0"
 dependencies = [
- "bevy_ecs",
  "console_error_panic_hook",
- "engine-assets",
- "engine-audio",
- "engine-core",
- "engine-image",
- "engine-input",
- "engine-math",
- "engine-render",
- "env_logger",
+ "engine-dialogue",
  "log",
  "lunar",
- "raw-window-handle",
- "sdl3",
- "tokio",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
- "wgpu",
+]
+
+[[package]]
+name = "lunar-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -2901,27 +2931,6 @@ name = "tinyvec_macros"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
-
-[[package]]
-name = "tokio"
-version = "1.52.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b67dee974fe86fd92cc45b7a95fdd2f99a36a6d7b0d431a231178d3d670bbcc6"
-dependencies = [
- "pin-project-lite",
- "tokio-macros",
-]
-
-[[package]]
-name = "tokio-macros"
-version = "2.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "385a6cb71ab9ab790c5fe8d67f1645e6c450a7ce006a33de03daa956cf70a496"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
 
 [[package]]
 name = "toml_datetime"

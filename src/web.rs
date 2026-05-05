@@ -1,22 +1,31 @@
 //! web entry point for WASM target
 //!
-//! this module provides the WASM-compatible entry point using wasm-bindgen
-//! and web-sys for canvas-based rendering.
+//! drives the game via WebGPU canvas and requestAnimationFrame.
+//! the HTML page must contain `<canvas id="lunar-canvas">`.
 
+use lunar::prelude::*;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-/// initialize the engine for web target
-#[wasm_bindgen(start)]
-pub fn start() {
-    console_error_panic_hook::set_once();
-    log::info!("lunar engine starting (web target)...");
+/// minimal web demo — clears to the engine default color each frame.
+/// replace with your own GamePlugin to ship a real WASM game.
+#[derive(Default)]
+struct WebDemo;
 
-    // web-specific initialization
-    // canvas setup, web audio, web input handling
-    // the rest of the engine code is identical to native
+impl GamePlugin for WebDemo {
+    fn name(&self) -> &str {
+        "WebDemo"
+    }
 }
 
-// stub main for non-wasm compilation
 fn main() {
-    start();
+    #[cfg(not(target_arch = "wasm32"))]
+    panic!("lunar-web must be compiled for wasm32-unknown-unknown");
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(start)]
+pub async fn start() {
+    console_error_panic_hook::set_once();
+    lunar::bootstrap_wasm::<WebDemo>(RenderConfig::default()).await;
 }

@@ -96,18 +96,20 @@ const MY_STAGE: StageLabel = StageLabel("my_stage");
 ## Convenience Macros
 
 ```rust
-/// Create a Transform from position
+/// Create a Transform from position. 2D only — for layering use the
+/// separate `Layer(i32)` component from `engine_render`.
 #[macro_export]
 macro_rules! transform {
-    ($x:expr, $y:expr) => {
-        $crate::prelude::Transform::from_translation(
-            $crate::prelude::Vec3::new($x, $y, 0.0)
-        )
+    (x: $x:expr, y: $y:expr) => {
+        $crate::prelude::Transform::from_xy($x, $y)
     };
-    ($x:expr, $y:expr, $z:expr) => {
-        $crate::prelude::Transform::from_translation(
-            $crate::prelude::Vec3::new($x, $y, $z)
-        )
+    (pos: $pos:expr) => {
+        $crate::prelude::Transform::from_translation($pos)
+    };
+    (pos: $pos:expr, rot: $rot:expr, scale: $scale:expr) => {
+        $crate::prelude::Transform::from_translation($pos)
+            .with_rotation($rot)
+            .with_scale($scale)
     };
 }
 

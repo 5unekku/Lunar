@@ -1,4 +1,4 @@
-use bevy_ecs::prelude::*;
+use lunar::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
 #[allow(dead_code)]

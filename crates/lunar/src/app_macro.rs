@@ -57,6 +57,11 @@ macro_rules! lunar_app {
             let surface = unsafe {
                 let display_handle = window.display_handle().unwrap();
                 let window_handle = window.window_handle().unwrap();
+                // SAFETY: the SDL3 `window` is owned by this `main` scope and
+                // outlives the wgpu surface (process exit drops both, with the
+                // surface dropped first). The handles point into `window`'s
+                // internal state and remain valid for that lifetime, satisfying
+                // wgpu's `create_surface_unsafe` contract.
                 instance
                     .create_surface_unsafe(
                         $crate::wgpu::SurfaceTargetUnsafe::from_display_and_window(
@@ -82,7 +87,7 @@ macro_rules! lunar_app {
             app.add_plugin($crate::engine_render::RenderPlugin);
             app.add_plugin($crate::engine_input::InputPlugin);
             app.add_plugin($crate::engine_assets::AssetPlugin);
-            app.add_plugin($crate::engine_audio::AudioPlugin);
+            // audio plugin slot — wire up here when the audio crate is ready
 
             // register default fullscreen toggle (F11 or F)
             app.add_startup_system(

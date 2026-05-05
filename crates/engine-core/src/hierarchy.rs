@@ -25,7 +25,7 @@ use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::ScheduleLabel;
-use engine_math::{LocalTransform, Vec2, Vec3, WorldTransform};
+use engine_math::{LocalTransform, Vec2, WorldTransform};
 
 use crate::App;
 
@@ -164,10 +164,9 @@ fn compute_world_transform(parent: &WorldTransform, local: &LocalTransform) -> W
     let rotated_y = scaled_x.mul_add(sin, scaled_y * cos);
 
     WorldTransform {
-        translation: Vec3::new(
+        translation: Vec2::new(
             parent.translation.x + rotated_x,
             parent.translation.y + rotated_y,
-            parent.translation.z + local.translation.z,
         ),
         rotation: parent.rotation + local.rotation,
         scale: Vec2::new(
@@ -258,7 +257,7 @@ mod tests {
     #[test]
     fn compute_world_transform_with_parent_rotation() {
         let parent = WorldTransform {
-            translation: Vec3::new(100.0, 100.0, 0.0),
+            translation: Vec2::new(100.0, 100.0),
             rotation: std::f32::consts::PI / 2.0,
             scale: Vec2::ONE,
         };
@@ -272,12 +271,12 @@ mod tests {
     #[test]
     fn compute_world_transform_with_parent_scale() {
         let parent = WorldTransform {
-            translation: Vec3::new(0.0, 0.0, 0.0),
+            translation: Vec2::ZERO,
             rotation: 0.0,
             scale: Vec2::new(2.0, 3.0),
         };
         let local = LocalTransform {
-            translation: Vec3::new(5.0, 4.0, 0.0),
+            translation: Vec2::new(5.0, 4.0),
             rotation: 0.0,
             scale: Vec2::new(1.0, 1.0),
         };

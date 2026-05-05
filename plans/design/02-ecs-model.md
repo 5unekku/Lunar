@@ -187,17 +187,21 @@ pub enum StageOrder {
 ### Transform Component
 
 ```rust
-/// 2D transform component — attached to entities that need position/rotation/scale
+/// 2D transform component — attached to entities that need position/rotation/scale.
+/// strict 2D: translation is `Vec2`. for depth/render ordering, attach a
+/// separate `Layer(i32)` component (from `engine_render`).
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Transform {
-    pub translation: Vec3,  // x, y position + z layer (for render ordering)
+    pub translation: Vec2,
     pub rotation: f32,       // radians
     pub scale: Vec2,         // x, y scale
 }
 
 impl Transform {
-    pub fn from_translation(pos: Vec3) -> Self;
-    pub fn from_xy(x: f32, y: f32) -> Self;
+    pub const fn from_translation(pos: Vec2) -> Self;
+    pub const fn from_xy(x: f32, y: f32) -> Self;
+    pub const fn with_rotation(self, rotation: f32) -> Self;
+    pub const fn with_scale(self, scale: Vec2) -> Self;
 }
 ```
 

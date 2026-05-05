@@ -39,7 +39,7 @@
 //! # example
 //!
 //! ```ignore
-//! use engine_core::dialogue_parser::parse_dialogue;
+//! use engine_dialogue::parse_dialogue;
 //!
 //! let ron = r#"
 //! Dialogue(

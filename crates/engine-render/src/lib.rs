@@ -6,45 +6,54 @@
 )]
 //!
 //! decoupled from game logic. handles 2D rendering with wgpu.
-//! architecture allows future 3D expansion without breaking changes.
+//! 2D-only by design; 3D, if it ever exists, will be a sister engine.
 //!
 //! # rendering model
 //!
-//! the render system uses a command-based approach:
-//! 1. game logic pushes [`DrawCommand`]s into the [`RenderQueue`]
-//! 2. the [`RenderEngine`] consumes all commands in a single batched draw call
-//! 3. all geometry is packed into one vertex buffer for efficiency
+//! game code does not touch the GPU directly. two paths feed the renderer:
 //!
-//! # example
+//! 1. **components** (preferred) — spawn entities with [`Sprite`] or [`Text`]
+//!    alongside a [`Transform`](engine_math::Transform). built-in systems
+//!    enqueue them automatically every frame.
+//! 2. **immediate mode** (HUD / debug / one-shots) — call `draw_sprite`,
+//!    `draw_rect`, `draw_line`, `draw_text` on [`RenderQueue`] from inside a
+//!    system. useful when the thing you're drawing isn't a persistent entity.
+//!
+//! [`DrawCommand`] / [`DrawKind`] / [`RenderQueue::push`] are internal plumbing
+//! and not part of the public contract — they're hidden from rustdoc.
+//!
+//! # example: component-driven
 //!
 //! ```ignore
-//! use engine_render::{RenderQueue, DrawCommand, DrawKind, Color};
-//! use engine_math::Vec2;
+//! use lunar::prelude::*;
 //!
-//! fn render_system(mut queue: ResMut<RenderQueue>) {
-//!     queue.clear(); // clear last frame's commands
-//!     queue.push(DrawCommand {
-//!         kind: DrawKind::Rect {
-//!             position: Vec2::new(100.0, 100.0),
-//!             size: Vec2::new(50.0, 50.0),
-//!             color: Color::RED,
-//!         },
-//!     });
+//! fn spawn_player(mut commands: Commands, assets: Res<AssetServer>) {
+//!     commands.spawn((
+//!         Transform::from_xy(100.0, 100.0),
+//!         Sprite::new(assets.get_texture_handle("player.png")),
+//!     ));
+//! }
+//! ```
+//!
+//! # example: immediate mode
+//!
+//! ```ignore
+//! fn draw_hud(mut queue: ResMut<RenderQueue>) {
+//!     queue.draw_rect(Vec2::ZERO, Vec2::new(200.0, 40.0), Color::rgba(0.0, 0.0, 0.0, 0.6));
 //! }
 //! ```
 
 pub mod atlas;
-pub mod mesh;
-pub mod render_pass_3d;
 mod text;
 pub mod textbox;
 
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
-use engine_assets::{Font, Handle, Texture};
-use engine_core::{App, GamePlugin};
-use engine_math::{Color, Vec2};
+use bevy_ecs::schedule::IntoScheduleConfigs;
+use engine_assets::{AssetServer, Font, Handle, Texture};
+use engine_core::{App, GamePlugin, Time};
+use engine_math::{Color, Transform, Vec2};
 
 /// internal parameters for writing sprite vertices.
 #[allow(dead_code)]
@@ -84,16 +93,18 @@ pub struct SpriteParams {
 ///
 /// ```ignore
 /// use engine_render::Camera;
+/// use engine_math::Vec2;
 ///
-/// // camera centered at (400, 300), 800x600 viewport
+/// // camera centered at (400, 300), letterboxed to an 800x600 viewport
 /// let cam = Camera {
 ///     position: Vec2::new(400.0, 300.0),
 ///     zoom: 1.0,
 ///     rotation: 0.0,
-///     viewport: Some(Vec4::new(0.0, 0.0, 800.0, 600.0)),
+///     viewport: Some((800, 600)),
+///     layer_parallax: Default::default(),
 /// };
 ///
-/// // use cam.projection_matrix() for the render projection
+/// // use cam.projection_matrix(window_w, window_h) for the render projection
 /// ```
 #[derive(Resource, Clone)]
 pub struct Camera {
@@ -351,9 +362,11 @@ impl Default for RenderConfig {
     }
 }
 
-/// max vertices per frame before buffer overflow (64k vertices = ~16k sprites with packed color)
+/// initial vertex capacity per frame (64k vertices = ~10k sprites with packed color).
+/// the buffer doubles automatically the frame after an overflow is detected,
+/// so this is a tunable starting point — never a ceiling.
 /// vertex format: [pos.x, pos.y, u, v] (16 bytes) + [`color_u32`] (4 bytes) = 20 bytes per vertex
-const MAX_VERTICES: usize = 65536;
+const INITIAL_VERTEX_CAPACITY: usize = 65536;
 
 /// number of vertex buffers for double-buffering (prevents GPU read/write conflicts)
 const VERTEX_BUFFER_COUNT: usize = 2;
@@ -383,6 +396,12 @@ pub struct RenderEngine {
     bind_groups: HashMap<u32, wgpu::BindGroup>,
     /// persistent vertex buffers — double-buffered to prevent GPU read/write conflicts
     vertex_bufs: [wgpu::Buffer; VERTEX_BUFFER_COUNT],
+    /// current vertex capacity (number of vertices, not bytes). doubles when
+    /// a frame overflows. starts at [`INITIAL_VERTEX_CAPACITY`].
+    vertex_capacity: usize,
+    /// set during render when a draw was dropped due to capacity. on the next
+    /// frame, [`Self::grow_vertex_buffers`] doubles capacity before drawing.
+    overflow_flag: bool,
     /// current frame index for buffer selection
     frame_index: usize,
     /// current write offset into the active vertex buffer
@@ -717,7 +736,7 @@ impl RenderEngine {
         let vertex_bufs: [wgpu::Buffer; VERTEX_BUFFER_COUNT] = std::array::from_fn(|i| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(&format!("persistent vertex buffer {i}")),
-                size: (MAX_VERTICES * VERTEX_STRIDE) as u64,
+                size: (INITIAL_VERTEX_CAPACITY * VERTEX_STRIDE) as u64,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             })
@@ -737,6 +756,8 @@ impl RenderEngine {
             textures: HashMap::new(),
             bind_groups: HashMap::new(),
             vertex_bufs,
+            vertex_capacity: INITIAL_VERTEX_CAPACITY,
+            overflow_flag: false,
             frame_index: 0,
             vertex_offset: 0,
             glyph_atlas: text::GlyphAtlas::new(1024, 1024),
@@ -849,8 +870,12 @@ impl RenderEngine {
             match std::fs::read(cache_path) {
                 Ok(data) => {
                     log::info!("loaded pipeline cache ({} bytes)", data.len());
-                    // safety: wgpu validates the cache data internally,
-                    // fallback=true ensures a fresh cache is created if data is invalid
+                    // SAFETY: `create_pipeline_cache` is unsafe because malformed
+                    // cache data could cause undefined behavior in some drivers.
+                    // We pass `fallback: true` so wgpu silently rebuilds a fresh
+                    // cache if validation fails; the data on disk was written by
+                    // a prior run of this same binary, so format mismatch is the
+                    // only realistic risk and is handled by the fallback.
                     Some(unsafe {
                         device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
                             label: Some("loaded pipeline cache"),
@@ -935,6 +960,13 @@ impl RenderEngine {
 
     /// get cached text layout for (`font_id`, text, `font_size`).
     /// computes and caches the result on first use.
+    ///
+    /// the key includes the full text content, so changing text naturally
+    /// misses the cache — no stale-content invalidation needed. however, the
+    /// cache grows unboundedly if the game renders many distinct strings
+    /// (e.g. an FPS counter changing every frame). if that becomes a memory
+    /// issue, swap this `HashMap` for an LRU. for now, games can call
+    /// [`Self::invalidate_text_cache`] periodically as a workaround.
     fn get_cached_text_layout(
         &mut self,
         font_id: u32,
@@ -1081,6 +1113,26 @@ impl RenderEngine {
         (self.config.width, self.config.height)
     }
 
+    /// recreate the persistent vertex buffers at the current `vertex_capacity`.
+    /// called when the previous frame overflowed; doubles the capacity first.
+    fn grow_vertex_buffers(&mut self) {
+        let new_capacity = self.vertex_capacity.saturating_mul(2);
+        log::warn!(
+            "render: vertex buffer overflow detected; growing capacity {} → {} vertices",
+            self.vertex_capacity,
+            new_capacity
+        );
+        self.vertex_capacity = new_capacity;
+        self.vertex_bufs = std::array::from_fn(|i| {
+            self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&format!("persistent vertex buffer {i}")),
+                size: (self.vertex_capacity * VERTEX_STRIDE) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
+    }
+
     /// render all draw commands for this frame.
     /// sprites are batched by texture — one draw call per unique texture.
     /// rects (no texture) are drawn in a single additional draw call.
@@ -1091,6 +1143,18 @@ impl RenderEngine {
         camera: Option<&Camera>,
         render_info: &mut RenderInfo,
     ) {
+        // if last frame overflowed, double the buffers before rendering this one.
+        if self.overflow_flag {
+            self.grow_vertex_buffers();
+            self.overflow_flag = false;
+        }
+
+        // per-frame stats — written to RenderInfo before returning so the
+        // debug overlay (and any game HUD that reads RenderInfo) shows real
+        // values instead of the zero-defaults.
+        let mut sprite_count: u32 = 0;
+        let mut draw_calls: u32 = 0;
+
         let (wgpu::CurrentSurfaceTexture::Success(frame)
         | wgpu::CurrentSurfaceTexture::Suboptimal(frame)) = self.surface.get_current_texture()
         else {
@@ -1196,6 +1260,7 @@ impl RenderEngine {
                     {
                         let vertex_count = (self.vertex_offset - batch_start) / VERTEX_STRIDE;
                         self.draw_vertex_batch(&mut pass, prev_tex, batch_start, vertex_count);
+                        draw_calls += 1;
                     }
                     batch_start = self.vertex_offset;
                     self.update_projection_for_layer(*layer, camera);
@@ -1211,17 +1276,18 @@ impl RenderEngine {
                     {
                         let vertex_count = (self.vertex_offset - batch_start) / VERTEX_STRIDE;
                         self.draw_vertex_batch(&mut pass, prev_tex, batch_start, vertex_count);
+                        draw_calls += 1;
                     }
                     batch_start = self.vertex_offset;
                     current_tex = Some(tex_id);
                 }
 
-                // drop sprite if buffer is full — 64K vertices = ~10K sprites, adequate for 2D
-                if self.vertex_offset + 6 * VERTEX_STRIDE > MAX_VERTICES * VERTEX_STRIDE {
-                    log::warn!(
-                        "vertex buffer full (limit {} sprites): dropping sprite",
-                        MAX_VERTICES / 6
-                    );
+                // drop sprite if buffer is full this frame; flag overflow so the
+                // buffers double in size before next frame and the cap raises itself.
+                if self.vertex_offset + 6 * VERTEX_STRIDE
+                    > self.vertex_capacity * VERTEX_STRIDE
+                {
+                    self.overflow_flag = true;
                     continue;
                 }
 
@@ -1234,6 +1300,7 @@ impl RenderEngine {
                     uv_rect: *uv_rect,
                     origin: *origin,
                 });
+                sprite_count += 1;
             }
 
             // flush final sprite batch
@@ -1242,6 +1309,7 @@ impl RenderEngine {
             {
                 let vertex_count = (self.vertex_offset - batch_start) / VERTEX_STRIDE;
                 self.draw_vertex_batch(&mut pass, tex_id, batch_start, vertex_count);
+                draw_calls += 1;
             }
 
             // draw untextured commands (rects, lines, text) as solid color
@@ -1263,15 +1331,19 @@ impl RenderEngine {
                             let vertex_count =
                                 (self.vertex_offset - rect_batch_start) / VERTEX_STRIDE;
                             self.draw_vertex_batch(&mut pass, 0, rect_batch_start, vertex_count);
+                            draw_calls += 1;
                         }
                         rect_batch_start = self.vertex_offset;
                         self.update_projection_for_layer(layer, camera);
                         current_layer = Some(layer);
                     }
 
-                    // drop this command if the buffer is full
-                    if self.vertex_offset + 6 * VERTEX_STRIDE > MAX_VERTICES * VERTEX_STRIDE {
-                        log::warn!("vertex buffer full: dropping draw command");
+                    // drop this command if the buffer is full this frame; flag
+                    // overflow so capacity doubles before next frame.
+                    if self.vertex_offset + 6 * VERTEX_STRIDE
+                        > self.vertex_capacity * VERTEX_STRIDE
+                    {
+                        self.overflow_flag = true;
                         continue;
                     }
 
@@ -1320,6 +1392,7 @@ impl RenderEngine {
                 if self.vertex_offset > rect_batch_start {
                     let vertex_count = (self.vertex_offset - rect_batch_start) / VERTEX_STRIDE;
                     self.draw_vertex_batch(&mut pass, 0, rect_batch_start, vertex_count);
+                    draw_calls += 1;
                 }
             }
         }
@@ -1350,6 +1423,8 @@ impl RenderEngine {
 
         render_info.window_width = self.config.width;
         render_info.window_height = self.config.height;
+        render_info.sprite_count = sprite_count;
+        render_info.draw_calls = draw_calls;
     }
 
     /// draw a batch of vertices from the persistent vertex buffer.
@@ -1614,20 +1689,23 @@ pub struct RenderQueue {
     target: Option<u32>,
 }
 
-/// a single draw command.
+/// internal — a single draw command produced by the engine's enqueue helpers.
 ///
-/// wraps a [`DrawKind`] which specifies what to draw.
+/// hidden from the public API: game code uses the [`Sprite`] / [`Text`]
+/// components or the immediate-mode helpers on [`RenderQueue`]
+/// (`draw_sprite`, `draw_text`, `draw_rect`, `draw_line`). this type and its
+/// `kind` field exist only so the engine can pass commands to the renderer.
+#[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct DrawCommand {
     /// draw type
     pub kind: DrawKind,
 }
 
-/// type of draw command.
+/// internal — primitive variant for a [`DrawCommand`].
 ///
-/// each variant represents a different primitive that can be rendered.
-/// sprite rendering is currently stubbed and will be implemented
-/// when the asset pipeline is complete.
+/// hidden from the public API; see [`DrawCommand`].
+#[doc(hidden)]
 #[derive(Debug, Clone)]
 pub enum DrawKind {
     /// draw a 2D sprite
@@ -1689,6 +1767,164 @@ pub mod layers {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Component)]
 pub struct Layer(pub i32);
 
+/// renderable 2D sprite component.
+///
+/// any entity carrying a [`Transform`](engine_math::Transform) and a `Sprite`
+/// is drawn automatically each frame. game code spawns the entity and the
+/// engine's render system enqueues the draw — no manual `RenderQueue` calls.
+///
+/// # example
+///
+/// ```ignore
+/// use lunar::prelude::*;
+///
+/// fn spawn_player(mut commands: Commands, assets: Res<AssetServer>) {
+///     let texture = assets.get_texture_handle("player.png");
+///     commands.spawn((
+///         Transform::from_xy(100.0, 100.0),
+///         Sprite::new(texture).with_size(Vec2::new(32.0, 32.0)),
+///     ));
+/// }
+/// ```
+///
+/// fields can be set directly or via the builder methods. when `size` is
+/// `None`, the sprite renders at the texture's native pixel size if the
+/// texture is loaded; otherwise a 32×32 placeholder is used.
+#[derive(Debug, Clone, Component)]
+pub struct Sprite {
+    /// texture to draw
+    pub texture: Handle<Texture>,
+    /// rendered size in pixels. `None` = use the texture's native size.
+    /// the entity's `Transform::scale` is applied on top of this.
+    pub size: Option<Vec2>,
+    /// color tint multiplied with the texture (RGBA). default white = no tint.
+    pub color: Color,
+    /// optional UV sub-rect for atlas sampling: `(uv_min, uv_max)` in 0..1 space.
+    pub source_rect: Option<(Vec2, Vec2)>,
+    /// pivot for rotation/scale, in pixels relative to the sprite's top-left.
+    /// `None` = sprite center (size / 2).
+    pub origin: Option<Vec2>,
+    /// render layer (lower = behind, higher = in front). see [`layers`].
+    pub layer: i32,
+}
+
+impl Sprite {
+    /// create a sprite with default settings (white tint, native size, centered, GAME layer)
+    #[must_use]
+    pub const fn new(texture: Handle<Texture>) -> Self {
+        Self {
+            texture,
+            size: None,
+            color: Color::WHITE,
+            source_rect: None,
+            origin: None,
+            layer: layers::GAME,
+        }
+    }
+
+    /// set explicit pixel size (overrides texture's native size)
+    #[must_use]
+    pub const fn with_size(mut self, size: Vec2) -> Self {
+        self.size = Some(size);
+        self
+    }
+
+    /// set color tint
+    #[must_use]
+    pub const fn with_color(mut self, color: Color) -> Self {
+        self.color = color;
+        self
+    }
+
+    /// set the render layer
+    #[must_use]
+    pub const fn with_layer(mut self, layer: i32) -> Self {
+        self.layer = layer;
+        self
+    }
+
+    /// set the UV sub-rect for atlas sampling
+    #[must_use]
+    pub const fn with_source_rect(mut self, uv_min: Vec2, uv_max: Vec2) -> Self {
+        self.source_rect = Some((uv_min, uv_max));
+        self
+    }
+
+    /// set the origin (pivot point) in pixels relative to top-left
+    #[must_use]
+    pub const fn with_origin(mut self, origin: Vec2) -> Self {
+        self.origin = Some(origin);
+        self
+    }
+}
+
+/// renderable text component.
+///
+/// any entity carrying a [`Transform`](engine_math::Transform) and a `Text`
+/// is drawn automatically each frame. position comes from `Transform.translation`.
+///
+/// # example
+///
+/// ```ignore
+/// use lunar::prelude::*;
+///
+/// fn spawn_label(mut commands: Commands, assets: Res<AssetServer>) {
+///     let font = assets.get_font_handle("ui.ttf");
+///     commands.spawn((
+///         Transform::from_xy(10.0, 10.0),
+///         Text::new("Score: 0", font).with_size(20.0),
+///     ));
+/// }
+/// ```
+#[derive(Debug, Clone, Component)]
+pub struct Text {
+    /// text content
+    pub content: String,
+    /// font to render with
+    pub font: Handle<Font>,
+    /// font size in pixels
+    pub font_size: f32,
+    /// text color (RGBA)
+    pub color: Color,
+    /// render layer
+    pub layer: i32,
+}
+
+impl Text {
+    /// create a text component with default settings (16px white, UI layer)
+    #[must_use]
+    pub fn new(content: impl Into<String>, font: Handle<Font>) -> Self {
+        Self {
+            content: content.into(),
+            font,
+            font_size: 16.0,
+            color: Color::WHITE,
+            layer: layers::UI,
+        }
+    }
+
+    /// set font size in pixels
+    #[must_use]
+    pub const fn with_size(mut self, font_size: f32) -> Self {
+        self.font_size = font_size;
+        self
+    }
+
+    /// set text color
+    #[must_use]
+    pub const fn with_color(mut self, color: Color) -> Self {
+        self.color = color;
+        self
+    }
+
+    /// set the render layer
+    #[must_use]
+    pub const fn with_layer(mut self, layer: i32) -> Self {
+        self.layer = layer;
+        self
+    }
+}
+
 impl RenderQueue {
     /// create a new empty render queue
     #[must_use]
@@ -1717,12 +1953,15 @@ impl RenderQueue {
         self.target
     }
 
-    /// add a draw command
+    /// internal — enqueue a raw draw command. game code should prefer the
+    /// [`Sprite`] / [`Text`] components or the `draw_*` helpers below.
+    #[doc(hidden)]
     pub fn push(&mut self, command: DrawCommand) {
         self.commands.push(command);
     }
 
-    /// get all pending draw commands
+    /// internal — drain target for the renderer.
+    #[doc(hidden)]
     #[must_use]
     pub fn commands(&self) -> &[DrawCommand] {
         &self.commands
@@ -2232,13 +2471,144 @@ impl GamePlugin for RenderPlugin {
         app.insert_resource(RenderQueue::new());
         app.insert_resource(RenderInfo::new());
         app.insert_resource(DebugOverlay::new());
-        app.add_system_to_stage(engine_core::UpdateStage::Render, render_system);
-        app.add_system_to_stage(engine_core::UpdateStage::Render, debug_overlay_system);
+        // ordering matters: component-driven enqueue → debug overlay enqueue →
+        // render_system drains the queue → clears it. all four mut-borrow
+        // RenderQueue so they serialize anyway; .chain() pins the order.
+        // on wasm the renderer is not yet wired, so the chain ends with a
+        // stub clear instead of render_system (RenderEngine isn't a Resource
+        // on wasm because WebGPU types are !Send).
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_system_to_stage(
+            engine_core::UpdateStage::Render,
+            (
+                frame_stats_system,
+                auto_sprite_system,
+                auto_text_system,
+                debug_overlay_system,
+                render_system,
+            )
+                .chain(),
+        );
+        #[cfg(target_arch = "wasm32")]
+        app.add_system_to_stage(
+            engine_core::UpdateStage::Render,
+            (
+                frame_stats_system,
+                auto_sprite_system,
+                auto_text_system,
+                debug_overlay_system,
+                wasm_render_system,
+            )
+                .chain(),
+        );
+    }
+}
+
+// thread-local storage for the WASM render engine.
+// wgpu WebGPU types are !Send, so we cannot store RenderEngine as an ECS Resource
+// on WASM. instead, bootstrap stores it here and the render system borrows it.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static WASM_RENDER_ENGINE: std::cell::RefCell<Option<RenderEngine>> =
+        std::cell::RefCell::new(None);
+}
+
+/// store the render engine for WASM rendering.
+/// call this once from bootstrap after async GPU init, before starting the game loop.
+#[cfg(target_arch = "wasm32")]
+pub fn wasm_set_render_engine(engine: RenderEngine) {
+    WASM_RENDER_ENGINE.with(|cell| {
+        *cell.borrow_mut() = Some(engine);
+    });
+}
+
+/// wasm render system: borrows the engine from thread-local storage,
+/// renders all queued commands, then clears the queue.
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::needless_pass_by_value)]
+fn wasm_render_system(
+    mut queue: ResMut<RenderQueue>,
+    mut render_info: ResMut<RenderInfo>,
+    camera: Option<Res<Camera>>,
+) {
+    WASM_RENDER_ENGINE.with(|cell| {
+        if let Some(engine) = cell.borrow_mut().as_mut() {
+            engine.render(queue.commands(), camera.as_deref(), &mut render_info);
+        }
+    });
+    queue.clear();
+}
+
+/// populate the [`RenderInfo`] resource each frame from [`Time`] so the debug
+/// overlay (and any game-side HUD that reads it) shows real values. without
+/// this, `info.fps` and `info.frame_time_ms` stayed at their `0.0` default.
+#[allow(clippy::needless_pass_by_value)]
+fn frame_stats_system(time: Res<Time>, mut info: ResMut<RenderInfo>) {
+    let raw_delta = time.raw_delta_seconds();
+    info.frame_time_ms = raw_delta * 1000.0;
+    info.fps = if raw_delta > 0.0 { 1.0 / raw_delta } else { 0.0 };
+}
+
+/// auto-render system: enqueues a sprite draw for every entity with both
+/// `Transform` and `Sprite`. resolves native texture size from `AssetServer`
+/// when `Sprite::size` is `None`.
+#[allow(clippy::needless_pass_by_value)]
+fn auto_sprite_system(
+    assets: Option<Res<AssetServer>>,
+    mut queue: ResMut<RenderQueue>,
+    query: Query<(&Transform, &Sprite)>,
+) {
+    for (transform, sprite) in &query {
+        let resolved_size = sprite.size.unwrap_or_else(|| {
+            assets
+                .as_deref()
+                .and_then(|server| server.get_texture(&sprite.texture))
+                .map_or(Vec2::splat(32.0), |texture| {
+                    Vec2::new(texture.width as f32, texture.height as f32)
+                })
+        });
+        let final_size = resolved_size * transform.scale;
+        let origin = sprite
+            .origin
+            .map_or_else(|| final_size * 0.5, |o| o * transform.scale);
+        queue.push(DrawCommand {
+            kind: DrawKind::Sprite {
+                texture: Some(u64::from(sprite.texture.id())),
+                position: transform.translation,
+                rotation: transform.rotation,
+                scale: final_size,
+                tint: sprite.color,
+                layer: sprite.layer,
+                uv_rect: sprite.source_rect,
+                origin,
+            },
+        });
+    }
+}
+
+/// auto-render system: enqueues a text draw for every entity with both
+/// `Transform` and `Text`.
+#[allow(clippy::needless_pass_by_value)]
+fn auto_text_system(mut queue: ResMut<RenderQueue>, query: Query<(&Transform, &Text)>) {
+    for (transform, text) in &query {
+        queue.push(DrawCommand {
+            kind: DrawKind::Text {
+                font: Some(u64::from(text.font.id())),
+                content: text.content.clone(),
+                position: transform.translation,
+                font_size: text.font_size,
+                color: text.color,
+                layer: text.layer,
+            },
+        });
     }
 }
 
 /// render system that processes the render queue.
 /// clears the queue at the start of each frame, then renders all commands.
+/// native-only: takes `ResMut<RenderEngine>` and `RenderEngine` only implements
+/// `Resource` on native (WebGPU types are `!Send` on wasm).
+#[cfg(not(target_arch = "wasm32"))]
 fn render_system(
     mut render_engine: ResMut<RenderEngine>,
     mut queue: ResMut<RenderQueue>,

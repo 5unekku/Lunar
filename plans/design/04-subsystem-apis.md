@@ -75,56 +75,81 @@ fn player_movement(actions: Res<ActionMap>, mut query: Query<&mut Velocity>) {
 
 ## Render API
 
-Game code does not call wgpu directly. Instead, it queues render commands:
+Two paths feed the renderer. Game code never calls wgpu and never constructs
+`DrawCommand` (which is `#[doc(hidden)]`).
+
+### 1. Component-driven (preferred)
+
+Spawn entities with `Transform` + `Sprite` (or `Text`); the engine's
+`auto_sprite_system` / `auto_text_system` query them each frame and enqueue
+draws automatically.
 
 ```rust
-/// Render queue resource — game code adds draw commands here
-#[derive(Resource)]
-pub struct RenderQueue {
-    // internal command buffer
+/// Renderable 2D sprite component.
+#[derive(Component, Clone, Debug)]
+pub struct Sprite {
+    pub texture: Handle<Texture>,
+    /// None = use the texture's native pixel size at render time.
+    pub size: Option<Vec2>,
+    pub color: Color,
+    /// UV sub-rect for atlas sampling: (uv_min, uv_max) in 0..1 space.
+    pub source_rect: Option<(Vec2, Vec2)>,
+    /// Pivot in pixels (relative to top-left); None = sprite center.
+    pub origin: Option<Vec2>,
+    pub layer: i32,
 }
 
+impl Sprite {
+    pub const fn new(texture: Handle<Texture>) -> Self;
+    pub const fn with_size(self, size: Vec2) -> Self;
+    pub const fn with_color(self, color: Color) -> Self;
+    pub const fn with_layer(self, layer: i32) -> Self;
+    pub const fn with_source_rect(self, uv_min: Vec2, uv_max: Vec2) -> Self;
+    pub const fn with_origin(self, origin: Vec2) -> Self;
+}
+
+/// Renderable text component.
+#[derive(Component, Clone, Debug)]
+pub struct Text {
+    pub content: String,
+    pub font: Handle<Font>,
+    pub font_size: f32,
+    pub color: Color,
+    pub layer: i32,
+}
+
+impl Text {
+    pub fn new(content: impl Into<String>, font: Handle<Font>) -> Self;
+    pub const fn with_size(self, font_size: f32) -> Self;
+    pub const fn with_color(self, color: Color) -> Self;
+    pub const fn with_layer(self, layer: i32) -> Self;
+}
+```
+
+### 2. Immediate mode (HUD / debug / one-shots)
+
+`RenderQueue` is the imperative escape hatch — useful when the thing you're
+drawing isn't a persistent entity:
+
+```rust
+/// Render queue resource — internal command buffer with public draw helpers.
+#[derive(Resource)]
+pub struct RenderQueue { /* fields hidden */ }
+
 impl RenderQueue {
-    /// Queue a sprite for rendering
-    pub fn draw_sprite(
-        &mut self,
-        texture: &TextureHandle,
-        position: Vec2,
-        size: Vec2,
-    );
-
-    /// Queue a sprite with rotation and origin
-    pub fn draw_sprite_transformed(
-        &mut self,
-        texture: &TextureHandle,
-        position: Vec2,
-        size: Vec2,
-        rotation: f32,
-        origin: Vec2,
-        color: Color,
-    );
-
-    /// Queue a filled rectangle
-    pub fn draw_rect(&mut self, rect: Rect, color: Color);
-
-    /// Queue a line
+    pub fn draw_sprite(&mut self, texture: &Handle<Texture>, position: Vec2, size: Vec2);
+    pub fn draw_sprite_on_layer(&mut self, texture: &Handle<Texture>, position: Vec2, size: Vec2, layer: i32);
+    pub fn draw_sprite_atlas(&mut self, texture: &Handle<Texture>, position: Vec2, size: Vec2, region: (Vec2, Vec2));
+    pub fn draw_sprite_transformed(&mut self, texture: &Handle<Texture>, params: SpriteParams);
+    pub fn draw_rect(&mut self, position: Vec2, size: Vec2, color: Color);
     pub fn draw_line(&mut self, start: Vec2, end: Vec2, color: Color, thickness: f32);
+    pub fn draw_text(&mut self, font: &Handle<Font>, content: &str, position: Vec2, font_size: f32, color: Color);
+    pub fn clear_color(&mut self, color: Color);
+    pub fn set_target(&mut self, target: Option<u32>);
 
-    /// Queue text rendering
-    pub fn draw_text(
-        &mut self,
-        font: &FontHandle,
-        text: &str,
-        position: Vec2,
-        size: f32,
-        color: Color,
-    );
-
-    /// Set a render target (for off-screen rendering)
-    pub fn set_target(&mut self, target: Option<&RenderTargetHandle>);
-
-    /// Clear the current target
-    pub fn clear(&mut self, color: Color);
+    // internal — hidden from rustdoc; reserved for the engine's render system.
+    #[doc(hidden)] pub fn push(&mut self, command: DrawCommand);
+    #[doc(hidden)] pub fn commands(&self) -> &[DrawCommand];
 }
 
 /// Camera resource — controls what the render queue renders.
@@ -150,6 +175,11 @@ pub struct RenderInfo {
 ```
 
 ## Audio API
+
+> **Status:** deferred. The audio engine (Moonwalker) is a separate project and
+> not currently part of this workspace. The spec below is the target API contract
+> for when it is wired in via a reintroduced `engine-audio` crate. Until then,
+> nothing in `lunar` exposes audio.
 
 ```rust
 /// Audio engine resource

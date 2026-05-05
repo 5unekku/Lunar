@@ -1,0 +1,15 @@
+[package]
+name = "lunar-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "internal proc-macro crate for lunar — wraps ECS derives so game crates depend only on lunar"
+repository.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"

@@ -1,5 +1,12 @@
-use bevy_ecs::prelude::*;
-use engine_core::GamePlugin;
+use lunar::prelude::*;
+// domain crate — not in lunar prelude because dialogue is opt-in.
+use engine_dialogue::{DialogueBuilder, DialogueManager, DialoguePlugin};
+// `UpdateStage` lives in engine_core; not re-exported through lunar because
+// custom-stage scheduling is an advanced API users typically don't need.
+use lunar::engine_core::UpdateStage;
+
+use crate::rpg_example::components::*;
+use crate::rpg_example::resources::*;
 
 #[derive(Default)]
 pub struct RpgGame;
@@ -9,24 +16,15 @@ impl GamePlugin for RpgGame {
         "RpgGame"
     }
 
-    fn build(&mut self, app: &mut engine_core::App) {
-        app.add_plugin(engine_core::DialoguePlugin);
+    fn build(&mut self, app: &mut App) {
+        app.add_plugin(DialoguePlugin);
         app.add_startup_system(setup);
         app.add_system(overworld_input);
         app.add_system(dialogue_input);
         app.add_system(camera_follow);
-        app.add_system_to_stage(engine_core::UpdateStage::Render, render);
+        app.add_system_to_stage(UpdateStage::Render, render);
     }
 }
-
-use engine_assets::AssetServer;
-use engine_core::{DialogueBuilder, DialogueManager, Time, WindowSettings};
-use engine_input::{InputState, KeyCode};
-use engine_math::{Color, Transform, Vec2, glam::Vec3Swizzles};
-use engine_render::{Camera, RenderInfo, RenderQueue, layers};
-
-use crate::rpg_example::components::*;
-use crate::rpg_example::resources::*;
 
 pub fn setup(
     mut commands: Commands,
@@ -316,7 +314,7 @@ pub fn render(
     if let Ok(player) = player_query.single() {
         queue.draw_sprite_on_layer(
             &assets.player_tex,
-            player.translation.xy(),
+            player.translation,
             Vec2::new(SPRITE_W, SPRITE_H),
             layers::GAME,
         );
@@ -324,7 +322,7 @@ pub fn render(
     for (npc_t, npc) in &npc_query {
         queue.draw_sprite_on_layer(
             &assets.npc_textures[npc.0],
-            npc_t.translation.xy(),
+            npc_t.translation,
             Vec2::new(SPRITE_W, SPRITE_H),
             layers::GAME,
         );

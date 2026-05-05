@@ -39,7 +39,7 @@ use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use engine_math::{Color, LocalTransform, Vec2, Vec3};
+use engine_math::{Color, LocalTransform, Vec2};
 
 use crate::hierarchy::{Children, Parent};
 
@@ -383,7 +383,7 @@ impl SceneLoader {
         for entity_def in &scene.entities {
             let mut spawn = commands.spawn((
                 LocalTransform {
-                    translation: Vec3::new(entity_def.x, entity_def.y, 0.0),
+                    translation: Vec2::new(entity_def.x, entity_def.y),
                     rotation: entity_def.rotation,
                     scale: Vec2::new(entity_def.scale_x, entity_def.scale_y),
                 },

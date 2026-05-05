@@ -13,21 +13,21 @@
 macro_rules! transform {
     (pos: $pos:expr, rot: $rot:expr, scale: $scale:expr) => {
         $crate::Transform {
-            translation: $crate::Vec3::new($pos.x, $pos.y, 0.0),
+            translation: $crate::Vec2::new($pos.x, $pos.y),
             rotation: $rot,
             scale: $scale,
         }
     };
     (x: $x:expr, y: $y:expr) => {
         $crate::Transform {
-            translation: $crate::Vec3::new($x, $y, 0.0),
+            translation: $crate::Vec2::new($x, $y),
             rotation: 0.0,
             scale: $crate::Vec2::ONE,
         }
     };
     (pos: $pos:expr) => {
         $crate::Transform {
-            translation: $crate::Vec3::new($pos.x, $pos.y, 0.0),
+            translation: $crate::Vec2::new($pos.x, $pos.y),
             rotation: 0.0,
             scale: $crate::Vec2::ONE,
         }

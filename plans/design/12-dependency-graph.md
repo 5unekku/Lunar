@@ -1,44 +1,67 @@
 # Crate Dependency Graph
 
 ```
-lunar (binary)
-├── engine-core
-│   ├── bevy_ecs
-│   ├── lunar
+lunar-game (binary, this workspace)
+├── lunar                         # public API facade
+│   ├── lunar-macros               # wrapped Component/Resource/Event/Message derives
+│   ├── engine-core
+│   │   ├── bevy_ecs                  (sealed via __bevy_ecs in lunar; not re-exported)
+│   │   ├── engine-math
+│   │   └── log
+│   ├── engine-render
+│   │   ├── wgpu
+│   │   ├── raw-window-handle
+│   │   ├── engine-assets
+│   │   ├── engine-math
+│   │   └── log
+│   ├── engine-input
+│   │   ├── sdl3                      (cfg: not wasm)
+│   │   ├── engine-math
+│   │   └── log
+│   ├── engine-assets
+│   │   ├── engine-image
+│   │   ├── crossbeam-channel
+│   │   └── notify                    (cfg: not wasm — hot reload)
+│   ├── engine-image
+│   │   ├── zstd
+│   │   └── image
+│   ├── engine-atlas
+│   │   └── engine-math
 │   ├── engine-math
-│   └── log
-├── engine-render
-│   ├── wgpu
-│   ├── raw-window-handle
-│   ├── engine-math
-│   └── log
-├── engine-input
-│   ├── sdl3
-│   ├── engine-math
-│   └── log
-├── engine-audio
-│   ├── miniaudio (future)
-│   └── log
-├── engine-math
-│   └── glam
-├── lunar
-│   ├── bevy_ecs (re-export)
-│   ├── engine-math (re-export)
-│   └── log
-├── sdl3
-├── wgpu
-├── raw-window-handle
-├── tokio
-├── env_logger
-└── log
+│   │   └── glam                      (Vec3/Vec4/Mat3/Mat4 re-exported but not consumed
+│   │                                   by the engine surface; engine API is strictly 2D)
+│   ├── pollster                      (cfg: not wasm — block on async wgpu init)
+│   └── env_logger                    (cfg: not wasm)
+├── opt-in domain crates              # game depends on these only when needed
+│   ├── engine-dialogue
+│   │   └── engine-core
+│   ├── engine-localization
+│   │   └── engine-core
+│   └── engine-zones
+│       └── engine-math
+│
+└── (no tokio, no rayon — async runtime not needed; pollster + std::thread +
+   wasm_bindgen_futures cover I/O; bevy_ecs is the parallel scheduler.)
 ```
 
-Game project:
+> **Reserved slot:** `engine-audio` will reappear here when the Moonwalker
+> audio engine is wired in. Until then, no audio crate is in the workspace.
+
+> **Deleted:** `engine-render::mesh` and `engine-render::render_pass_3d` were
+> empty 3D scaffolding (~570 LOC, never instantiated). Removed in the 2D-only
+> commitment. 3D, if it ever exists, is a sister engine — see
+> [appendix-c-3d-future.md](appendix-c-3d-future.md).
+
+Game project (downstream consumer):
 ```
 my-game
-├── lunar          # primary dependency
-└── lunar          # for lunar_app! macro
+├── lunar                          # always — the only required dep
+├── engine-dialogue                   # add only if the game has dialogue
+├── engine-localization               # add only if the game ships multiple languages
+└── engine-zones                      # add only if the game uses zoned area loading
 ```
+
+Games that don't need a domain crate pay zero compile cost for it.
 
 ---
 

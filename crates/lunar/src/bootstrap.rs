@@ -26,7 +26,6 @@ pub fn bootstrap<Plugin: engine_core::GamePlugin + Default + 'static>(
     config: engine_render::RenderConfig,
 ) {
     use engine_assets::AssetPlugin;
-    use engine_audio::AudioPlugin;
     use engine_core::{App, WindowSettings};
     use engine_input::{ActionMap, InputBinding, InputPlugin, InputState, KeyCode, process_events};
     use engine_render::{RenderEngine, RenderPlugin};
@@ -48,6 +47,11 @@ pub fn bootstrap<Plugin: engine_core::GamePlugin + Default + 'static>(
     let surface = unsafe {
         let display_handle = window.display_handle().unwrap();
         let window_handle = window.window_handle().unwrap();
+        // SAFETY: the SDL3 window is owned by this function's stack frame and
+        // outlives the wgpu surface (the surface is dropped when this function
+        // returns or panics, before `window` is dropped). The display and window
+        // handles point into `window`'s internal state and remain valid for
+        // that lifetime, satisfying wgpu's `create_surface_unsafe` contract.
         instance
             .create_surface_unsafe(
                 wgpu::SurfaceTargetUnsafe::from_display_and_window(&display_handle, &window_handle)
@@ -70,7 +74,7 @@ pub fn bootstrap<Plugin: engine_core::GamePlugin + Default + 'static>(
     app.add_plugin(RenderPlugin);
     app.add_plugin(InputPlugin);
     app.add_plugin(AssetPlugin);
-    app.add_plugin(AudioPlugin);
+    // audio plugin slot — wire up here when the audio crate is ready
 
     // register default fullscreen toggle bindings (F11 or F)
     app.add_startup_system(|mut actions: bevy_ecs::prelude::ResMut<ActionMap>| {
@@ -127,3 +131,4 @@ pub fn bootstrap<Plugin: engine_core::GamePlugin + Default + 'static>(
 
     log::info!("lunar engine shutting down...");
 }
+

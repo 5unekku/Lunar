@@ -10,6 +10,51 @@
 
 ---
 
+## Direction Amendments (2026-05-03)
+
+The audit pass surfaced drift from the canonical requirements. Recorded here so
+intent is unambiguous going forward:
+
+1. **Audio is out** until Moonwalker matures. `engine-audio` crate deleted from
+   the workspace. Architectural slot preserved in design docs. See § 7 below.
+2. **No async runtime.** `tokio` removed from root `Cargo.toml`. Async needs are
+   covered by `pollster::block_on` (one-shot wgpu init), `std::thread` +
+   `crossbeam_channel` (asset IO on native), and `wasm_bindgen_futures::spawn_local`
+   (WASM fetch). Rayon is **not** added speculatively — only if profiling shows a
+   data-parallel hot loop inside a single system.
+3. **Public-API boundary is the law.** Game code must never need `bevy_ecs`,
+   `sdl3`, or `wgpu` in its `Cargo.toml`. The `lunar::prelude` is the contract.
+   Any leak is a bug. Tracked in new Phase 11 below.
+4. **Holy trinity is non-negotiable:** maximum performance, optimized resources,
+   ease of use / abstraction. YAGNI / KISS / DRY. Unsafe in engine code only for
+   fringe optimization with documented `// SAFETY:` blocks.
+5. **`bevy_ecs` is sealed.** The prelude exports a curated list (`Res`, `ResMut`,
+   `Query`, `Commands`, `Entity`, `Component`, `Resource`, `World`, events, query
+   filters). Game code never names `bevy_ecs` in its `Cargo.toml`. Derive macros
+   are re-exported under `lunar::*` and inject `extern crate bevy_ecs` at
+   their use site so the proc-macro side-channel works. Tracked as item 67.
+6. **Domain systems out of `engine-core`.** Dialogue, localization, and world-zones
+   move to standalone crates (`engine-dialogue`, `engine-localization`,
+   `engine-zones`) outside the default `lunar` re-export. Tracked as item 70.
+7. **Editor is a downstream project.** Items 51–54 (editor foundation, panels,
+   scene editing, build) and 54.3 (cdylib hot-reload) are removed from this
+   workspace's roadmap. Tracked as item 71. The editor will live in a separate
+   repo that depends on `lunar`, the same way `lunar` will eventually
+   depend on Moonwalker. `engine-ui` (Taffy-based in-game UI, item 50) **stays**
+   in this workspace — it is for games, not for the editor.
+8. **High-level draw API is the contract.** Game code uses `Sprite` / `Text`
+   components or immediate-mode `draw_sprite` / `draw_rect` / `draw_text` /
+   `draw_line` helpers. `RenderQueue::push` and `DrawCommand` become internal.
+   Tracked as item 69.
+9. **Hard 2D only.** `Transform.translation` becomes `Vec2`. No `depth_stencil`,
+   no `Mat4` view, no 3D-shaped speculative fields. 3D, if it exists, is a sister
+   engine. See `plans/design/appendix-c-3d-future.md`. Tracked as item 68.
+10. **`src/main.rs` becomes a 5-line stub** that calls `lunar::bootstrap`
+    against an empty plugin — serves as the smoke test for `cargo run`. The
+    duplicated SDL/wgpu prototype code is deleted. Tracked as item 66.
+
+---
+
 ## Phase 1: Core ECS Integration
 
 ### 1. ECS World & Schedule
@@ -128,20 +173,20 @@
   - [x] 6.6.1 Process RenderQueue each render stage
   - [x] 6.6.2 Submit to wgpu (RenderEngine::new + begin_frame/present exist)
 
-### 7. Audio System
-- note: audio is NOT a current requirement — Moonwalker (custom audio engine, cpal-based, WASM compatible) will integrate here
-- note: AudioPlugin stays as a stub until Moonwalker is ready to wire in
-- [ ] 7.1 AudioEngine resource (stub — filled in by Moonwalker later)
-  - [x] 7.1.1 play_sound(handle, volume, pitch) — fire-and-forget
-  - [ ] 7.1.2 play_sound_controlled() → SoundInstanceHandle
-  - [ ] 7.1.3 play_music(handle, volume)
-  - [ ] 7.1.4 stop_music(), fade_music()
-  - [ ] 7.1.5 set_master_volume(), master_volume()
-- [ ] 7.2 SoundInstanceHandle
-  - [ ] 7.2.1 set_volume(), set_pitch(), stop(), is_playing()
-- [ ] 7.3 AudioPlugin
-  - [x] 7.3.1 Wire Moonwalker backend (cpal, WASM compatible) — stub only for now
-  - [ ] 7.3.2 Process audio commands each frame
+### 7. Audio System — DEFERRED (Moonwalker integration)
+> The `engine-audio` crate has been removed from the workspace as of 2026-05-03.
+> The architectural slot (init order, plugin system, subsystem API spec) is preserved
+> in the design docs so reintroduction is mechanical when Moonwalker matures.
+>
+> When Moonwalker is ready:
+> - reintroduce `crates/engine-audio/` (depending on Moonwalker, not cpal directly)
+> - re-add to workspace `Cargo.toml` and to `crates/lunar/Cargo.toml`
+> - re-add `pub use engine_audio;` in `crates/lunar/src/lib.rs`
+> - swap the `// audio plugin slot` comments in `bootstrap.rs` and `app_macro.rs`
+>   for `app.add_plugin(AudioPlugin);`
+> - implement the API spec from `plans/design/04-subsystem-apis.md` § Audio API
+>
+> Until then, no audio work happens in this workspace.
 
 ---
 
@@ -371,32 +416,32 @@
 > The engine had the right parts but made game code touch engine internals
 > for basic tasks. These items seal the engine boundary.
 
-### 55. Seal Native API Leaks
-- [ ] 55.1 Remove SDL3 dependency from game code
-  - [ ] 55.1.1 `lunar_app!` stores the window handle internally; expose `WindowInfo { width, height, is_fullscreen }` as a read-only Resource
-  - [ ] 55.1.2 Add `set_fullscreen(bool)` to `engine_input::InputPlugin` or a new `WindowPlugin` — handles SDL3 call + wgpu surface resize + camera viewport update atomically
-  - [ ] 55.1.3 `ActionMap` gets a default binding `fullscreen_toggle = F11/F` so games never call SDL3 directly
-  - [ ] 55.1.4 `unsafe` window handle wrappers live only in engine-internal code, never in game project code
-- [ ] 55.2 Remove wgpu surface resize from game sight
-  - [ ] 55.2.1 `RenderEngine::resize_surface` stays pub but is called automatically by the window system — game code never invokes it
-  - [ ] 55.2.2 On fullscreen toggle or window resize, the event loop handles surface reconfiguration before ECS ticks
-- [ ] 55.3 Remove `bevy_ecs` from game `Cargo.toml`
-  - [ ] 55.3.1 `lunar` crate re-exports derive macros at the crate root so `use lunar::Component` resolves
-  - [ ] 55.3.2 `lunar_app!` injects `extern crate bevy_ecs` into the expanded binary so proc macro side-channel works
-  - [ ] 55.3.3 Test: create a game project that depends only on `lunar` and compiles
+### 55. Seal Native API Leaks — DONE
+- [x] 55.1 Remove SDL3 dependency from game code
+  - [x] 55.1.1 [`WindowSettings`](../crates/engine-core/src/window.rs) `{ width, height, is_fullscreen, vsync }` is a read-only resource; the engine writes it from the bootstrap loop.
+  - [x] 55.1.2 Fullscreen handled in [bootstrap.rs:97-115](../crates/lunar/src/bootstrap.rs) — game code writes `settings.is_fullscreen` and the engine syncs SDL3 + surface size before the next frame. Implemented as inline event-loop logic rather than a separate `WindowPlugin`; same effect.
+  - [x] 55.1.3 [bootstrap.rs:80-83](../crates/lunar/src/bootstrap.rs) registers `fullscreen` action with default bindings F11 + F via `ActionMap`.
+  - [x] 55.1.4 `unsafe` is gated behind documented SAFETY blocks in engine-only code (item 64). Game code never sees `unsafe`.
+- [x] 55.2 Remove wgpu surface resize from game sight
+  - [x] 55.2.1 `RenderEngine::resize_surface` is called automatically when the SDL3 window reports a new size ([bootstrap.rs:117-124](../crates/lunar/src/bootstrap.rs)).
+  - [x] 55.2.2 The reconfiguration runs inside the event-loop callback before `app.tick()`.
+- [x] 55.3 Remove `bevy_ecs` from game `Cargo.toml`
+  - [x] 55.3.1 `lunar` re-exports `Component`, `Resource`, `Event`, `Message` at the crate root via `lunar-macros` (item 73).
+  - [x] 55.3.2 The `lunar_app!` `extern crate` plan was replaced by a cleaner approach: derive macros emit fully-qualified `::lunar::__bevy_ecs::…` paths, so no extern-crate injection is needed.
+  - [x] 55.3.3 [`tests/api_seal`](../tests/api_seal) is a workspace member whose only dep is `lunar`; it exercises Component/Resource/Event/Message derives plus Sprite/Text/queries/messages. CI fails if the seal regresses.
 
-### 56. Coordinate System Helpers
-- [ ] 56.1 Camera coordinate conversion
-  - [ ] 56.1.1 `Camera::screen_to_world(&self, screen: Vec2) -> Vec2`
-  - [ ] 56.1.2 `Camera::world_to_screen(&self, world: Vec2) -> Vec2`
-  - [ ] 56.1.3 Both account for viewport letterboxing if `Camera::viewport` is set
-- [ ] 56.2 Screen-space UI drawing
-  - [ ] 56.2.1 `RenderQueue::draw_ui_text(font, text, screen_pos, size, color)` — internally converts through camera
-  - [ ] 56.2.2 `RenderQueue::draw_ui_rect(screen_pos, size, color)` — same, for dialogue boxes, HUD bars, etc.
-  - [ ] 56.2.3 These use the UI layer automatically; no manual layer management
-- [ ] 56.3 Viewport letterboxing toggle
-  - [ ] 56.3.1 `Camera::set_letterbox(enabled: bool) -> &mut Self` — when enabled, projection auto-computes black-bar offsets for non-4:3 windows
-  - [ ] 56.3.2 `Camera::set_target_aspect(width: u32, height: u32)` — replaces viewport field, computes projection and letterbox together
+### 56. Coordinate System Helpers — DONE
+- [x] 56.1 Camera coordinate conversion
+  - [x] 56.1.1 [`Camera::screen_to_world`](../crates/engine-render/src/lib.rs) — takes `(screen: Vec2, window_w: u32, window_h: u32) -> Vec2`.
+  - [x] 56.1.2 [`Camera::world_to_screen`](../crates/engine-render/src/lib.rs) — inverse.
+  - [x] 56.1.3 Both account for viewport letterboxing when `Camera::viewport` is set.
+- [x] 56.2 Screen-space UI drawing
+  - [x] 56.2.1 `RenderQueue::draw_ui_text` exists ([engine-render/src/lib.rs:2139](../crates/engine-render/src/lib.rs)) — converts via camera + window size.
+  - [x] 56.2.2 `RenderQueue::draw_ui_rect` exists ([engine-render/src/lib.rs:2156](../crates/engine-render/src/lib.rs)).
+  - [x] 56.2.3 Both default to the UI layer.
+- [x] 56.3 Viewport letterboxing toggle
+  - [x] 56.3.1 Superseded — there is no separate boolean toggle because letterboxing is implicit when `viewport: Some(_)` is set, and absent when `viewport: None`. The boolean would have been redundant; collapsed into 56.3.2.
+  - [x] 56.3.2 `Camera::set_target_aspect(width, height)` — sets the viewport, which the projection math reads to compute letterbox offsets automatically.
 
 ### 57. Asset Loading UX
 - [ ] 57.1 Blocking wait API
@@ -408,27 +453,344 @@
   - [ ] 57.2.2 Game code uses this to show a loading screen / progress bar without manual tracking
   - [ ] 57.2.3 Optional auto-transition: `LoadingPlugin { next_scene: SceneLabel }` → switches scene when all assets ready
 
-### 58. Render Pipeline Integration (Bugfixes)
-- [ ] 58.1 Wire `RenderEngine::render()` into the ECS pipeline
-  - [x] 58.1.1 `render_system` now calls `RenderEngine::render()` instead of only `queue.clear()`
-  - [ ] 58.1.2 Verify ordering: game render systems run in Update stage, pipeline render runs in Render stage
-  - [ ] 58.1.3 Update `RenderInfo` (window size, fps, draw calls) after each render call
-- [ ] 58.2 Split render concerns
-  - [ ] 58.2.1 Built-in render pass splits into `draw_world` (game objects) and `draw_ui` (overlays) sub-systems
-  - [ ] 58.2.2 Game code provides a `draw_world` system and/or `draw_ui` system instead of one monolithic render system with 9+ parameters
-  - [ ] 58.2.3 Camera + asset + queue setup is handled by the framework, not copied into each game
+### 58. Render Pipeline Integration (Bugfixes) — DONE
+- [x] 58.1 Wire `RenderEngine::render()` into the ECS pipeline
+  - [x] 58.1.1 `render_system` calls `RenderEngine::render()`.
+  - [x] 58.1.2 Item 69 introduced the explicit chain
+       `(frame_stats_system, auto_sprite_system, auto_text_system, debug_overlay_system, render_system).chain()`
+       in `RenderPlugin::build`. Game-side queue pushes (Update stage) and component-driven enqueues (Render stage, before render_system) all hit the queue before it drains. Deterministic; previously was non-deterministic.
+  - [x] 58.1.3 `RenderInfo` is now fully populated each frame: `window_width`/`window_height` written inside `render()`, `sprite_count`/`draw_calls` counted during the render pass, `fps`/`frame_time_ms` written by the new `frame_stats_system` from the `Time` resource. Previously `fps`/`frame_time_ms`/`sprite_count`/`draw_calls` were defined but never written — the debug overlay was effectively showing zeros.
+- [x] 58.2 Split render concerns — superseded by item 69.
+  - [x] 58.2.1 Item 69 introduced the [`Sprite`](../crates/engine-render/src/lib.rs) and `Text` components with `auto_sprite_system` / `auto_text_system` doing the world iteration. Game code spawns `(Transform, Sprite)` entities and the engine renders them — the "draw_world" split was achieved as ECS-native auto-systems instead of named helper systems.
+  - [x] 58.2.2 Game code no longer needs a 9-parameter render system. Imperative `draw_*` helpers stay public for HUD/debug.
+  - [x] 58.2.3 Camera/queue setup is owned by `RenderPlugin`. Game code only adds `RenderPlugin` (auto via `bootstrap`).
 
-### 59. Viewport & Fullscreen (the F-key problem)
-- [ ] 59.1 WindowPlugin
-  - [ ] 59.1.1 New plugin inserted by `lunar_app!` — owns the SDL3 window, manages wgpu surface lifecycle
-  - [ ] 59.1.2 Exposes `WindowSettings` resource: { width, height, is_fullscreen, vsync, frame_cap }
-  - [ ] 59.1.3 Fullscreen toggle: `settings.is_fullscreen ^= true` in a game system, WindowPlugin handles the rest
-- [ ] 59.2 Automatic viewport letterboxing
-  - [ ] 59.2.1 When `Camera::viewport` is set and surface size changes (fullscreen), the projection auto-computes letterbox offsets
-  - [ ] 59.2.2 No game code needed — set viewport once at startup, engine handles the rest
-- [ ] 59.3 Window resize handling
-  - [ ] 59.3.1 WindowPlugin catches SDL3 `WindowEvent::Resized`, reconfigures wgpu surface, updates `WindowSettings`
-  - [ ] 59.3.2 Game systems don't need to poll window size; they read `WindowSettings`
+### 59. Viewport & Fullscreen (the F-key problem) — DONE
+- [x] 59.1 Window lifecycle — owned by `bootstrap` (no separate `WindowPlugin` was needed; the inline event-loop closure does the same job for both `bootstrap.rs` and `app_macro.rs`).
+  - [x] 59.1.1 SDL3 window + wgpu surface lifecycle live in [bootstrap.rs](../crates/lunar/src/bootstrap.rs) and [app_macro.rs](../crates/lunar/src/app_macro.rs).
+  - [x] 59.1.2 `WindowSettings { width, height, is_fullscreen, vsync }` is the read-only resource. `frame_cap` is a separate config knob on `RenderConfig` (it's a one-shot setting at startup, not per-frame state — keeping it out of `WindowSettings` is correct).
+  - [x] 59.1.3 Fullscreen toggle: write `settings.is_fullscreen = true`; the bootstrap loop syncs SDL3 + surface before the next frame.
+- [x] 59.2 Automatic viewport letterboxing — `Camera::projection_matrix_for_layer` reads the viewport on every frame; no code change needed at game-side after `set_target_aspect`.
+  - [x] 59.2.1 Surface resize → `RenderEngine::resize_surface` → projection re-derives letterbox from `Camera::viewport` next frame.
+  - [x] 59.2.2 Confirmed.
+- [x] 59.3 Window resize handling
+  - [x] 59.3.1 [bootstrap.rs:117-124](../crates/lunar/src/bootstrap.rs) polls `window.size()` each frame; on change, calls `RenderEngine::resize_surface` and updates `WindowSettings`.
+  - [x] 59.3.2 Game systems read `WindowSettings`, never poll SDL3.
+
+---
+
+## Phase 11: Boundary Hardening (post-audit, 2026-05-03)
+
+> Surfaced by the audit pass against the canonical requirements. These items
+> close the gap between the design docs and the shipped code.
+
+### 60. Audio Crate Removal — DONE
+- [x] 60.1 Remove `engine-audio` from workspace `Cargo.toml`
+- [x] 60.2 Remove `engine-audio` dep from `crates/lunar/Cargo.toml`
+- [x] 60.3 Remove `pub use engine_audio;` from `crates/lunar/src/lib.rs`
+- [x] 60.4 Replace `AudioPlugin` registration in `bootstrap.rs` and `app_macro.rs`
+       with a slot comment
+- [x] 60.5 Remove `engine-audio` row from README crate table and project tree
+- [x] 60.6 Update design docs (00, 04, 08, 12, 13) to mark audio as deferred slot
+
+### 61. Tokio Removal — DONE
+- [x] 61.1 Remove `tokio` from root `Cargo.toml`
+- [x] 61.2 Replace `#[tokio::main] async fn main` in `src/main.rs` with
+       `pollster::block_on(run())`
+- [x] 61.3 Add `pollster` to root `Cargo.toml`
+
+### 62. Public API Boundary — bevy_ecs — DONE
+> Superseded by items 67 (sealed prelude) and 73 (derive wrapper). Both were
+> needed; 62.1 alone wasn't enough because `#[derive(Component)]` would have
+> still emitted `::bevy_ecs::…` paths and forced game crates to depend on
+> `bevy_ecs` transitively. The full solution lives in those items.
+- [x] 62.1 [`lunar::prelude`](../crates/lunar/src/prelude.rs) carries an explicit list (no wildcards).
+- [x] 62.2 The top-level `pub use bevy_ecs as __bevy_ecs;` is `#[doc(hidden)]` and renamed; not part of the public surface.
+- [x] 62.3 `cargo doc --no-deps` audit deferred — sufficient evidence in [`tests/api_seal`](../tests/api_seal): the compile-time test fails if any internal type leaks from `lunar::prelude::*`.
+- [x] 62.4 Test exists: `tests/api_seal` (item 73) + the rpg-example migration (item 73.5) both compile a non-trivial game using only `lunar::prelude::*` (+ opt-in `engine_dialogue`).
+
+### 63. README Sweep — DONE
+- [x] 63.1 Dropped SDL3 / bevy_ecs from public-facing "stack" section
+- [x] 63.2 Rewrote rendering example to use high-level draw API + Sprite component
+- [x] 63.3 Added "non-goals" section (audio deferred, 3D out of scope, editor downstream)
+
+### 64. Unsafe SAFETY Comments — DONE
+- [x] 64.1 Added `// SAFETY:` block to `bootstrap.rs` `create_surface_unsafe`
+- [x] 64.2 Added `// SAFETY:` block to `app_macro.rs` `create_surface_unsafe`
+- [x] 64.3 Audited other unsafe; tightened the comment on `engine-render`'s
+       `device.create_pipeline_cache` (only other `unsafe` in the workspace)
+
+### 65. CONTRIBUTING.md — DONE
+- [x] 65.1 Build instructions (native, WASM, cross-compile)
+- [x] 65.2 Test instructions
+- [x] 65.3 Code style section (comments, naming, formatting, docs)
+- [x] 65.4 Commit message style
+- [x] 65.5 Unsafe rules
+- [x] 65.6 Public-API boundary rules
+- [x] 65.7 Crate boundary table
+
+### 66. src/main.rs Cleanup — DONE
+- [x] 66.1 Replaced `src/main.rs` with a 19-line stub: `EmptyPlugin` + call to
+       `lunar::bootstrap::<EmptyPlugin>(Default::default())`
+- [x] 66.2 Deleted duplicated SDL window + wgpu surface + event-pump prototype
+- [x] 66.3 Removed `engine_core::{CommandRegistry, EngineState, GameLoop}`
+       direct imports (no longer reaches into engine internals)
+- [x] 66.4 Pruned root `Cargo.toml` deps: dropped `wgpu`, `sdl3`,
+       `raw-window-handle`, `pollster`, `env_logger` (all no longer needed
+       directly by the binaries — `lunar` provides them transitively)
+- [ ] 66.5 Verify `cargo run` shows a window with the engine clear color
+       (deferred — needs interactive verification)
+
+### 67. ECS Abstraction — Phase 1 (sealed prelude) — DONE
+> The `lunar` facade now exports a curated, explicit ECS surface. The full
+> "user crate doesn't need bevy_ecs in Cargo.toml" goal is split out as item 73
+> because it requires a proper proc-macro wrapper crate.
+- [x] 67.1 Replaced `pub use bevy_ecs::prelude::*;` with an explicit list:
+       `Commands`, `In`, `IntoSystem`, `Local`, `NonSend`, `NonSendMut`, `Query`,
+       `Res`, `ResMut`, `Single`, `System`, `Entity`, `EntityMut`, `EntityRef`,
+       `EntityWorldMut`, `FromWorld`, `World`, `Component`, `Resource`, `Event`,
+       `Added`, `AnyOf`, `Changed`, `Has`, `Or`, `With`, `Without`,
+       `DetectChanges`, `DetectChangesMut`, `Mut`, `Ref`, `Message`,
+       `MessageReader`, `MessageWriter`, `Messages`
+- [x] 67.4 Marked `pub use bevy_ecs;` as `#[doc(hidden)]` — internal escape
+       hatch only, not part of the public API contract
+- [x] 67.6 README example already uses `Sprite` component / prelude only (item 63)
+- [x] verify: workspace + both bins compile clean
+
+### 73. ECS Abstraction — Phase 2 (derive wrapper, full seal) — DONE
+> The seal is real. Game crates depend ONLY on `lunar`. The ECS backend
+> (currently bevy_ecs) is fully hidden behind `lunar::__bevy_ecs` and the
+> wrapped derive macros from `lunar-macros`.
+- [x] 73.1 Created `crates/lunar-macros/` proc-macro crate (~90 LOC, far
+       smaller than the ~933 LOC bevy_ecs_macros equivalent because we only
+       need the minimal derive shape — no hooks, relationships, required
+       components, or `#[entities]`. Game code that needs those reaches the
+       escape hatch via `lunar::__bevy_ecs::component::Component` derive.)
+- [x] 73.2 Implemented `Component`, `Resource`, `Event`, `Message` derives that
+       emit paths through `::lunar::__bevy_ecs::…`. The trick: bevy_ecs
+       re-exports its derive macros at e.g. `bevy_ecs::component::Component`
+       alongside the trait, so `pub use bevy_ecs::component::Component;` in
+       the prelude was bringing bevy's derive into scope and shadowing ours.
+       Fix: prelude now imports our wrapper derives (`pub use crate::Component;`)
+       and the trait-side resolution happens automatically through the system
+       parameter types (`Query`, `Res`, `Bundle`).
+- [x] 73.3 Re-exported wrapped derives at `lunar::{Component, Event, Message,
+       Resource}` and through `lunar::prelude`
+- [x] 73.4 Test crate `tests/api_seal/` exists with `Cargo.toml` containing
+       ONLY `lunar = { path = ... }`. Uses all four derives plus `Query`,
+       `Res`, `ResMut`, `Commands`, `MessageReader`, `With`, `Transform`,
+       `InputState`, `KeyCode`. **Compiles cleanly.**
+       Cargo-expand confirms paths route through `::lunar::__bevy_ecs::…`.
+- [ ] 73.5 Audit downstream code (rpg-example) and migrate it off direct
+       `bevy_ecs::prelude::*` imports — separate task, doesn't block the seal
+- [x] 73.6 The engine now delivers on requirement #1 for ECS. The abstraction
+       boundary is real, verified by a compile-time test.
+
+### 68. 2D-Only Strip (Vec3 → Vec2 in engine surface) — DONE
+> Per appendix C: 3D is a sister engine, not an extension. Remove 3D scaffolding.
+- [x] 68.1 `Transform.translation`, `LocalTransform.translation`,
+       `WorldTransform.translation`: all `Vec3` → `Vec2`. Z-ordering already
+       lives on a separate `Layer(i32)` component in `engine-render`.
+- [x] 68.2 `Camera` audited — fields (`position: Vec2`, `zoom`, `rotation`,
+       `viewport: Option<(u32, u32)>`, `layer_parallax`) are all 2D-shaped.
+       The stale doc-comment `viewport: Some(Vec4::new(...))` was fixed to
+       match the actual `Option<(u32, u32)>` type.
+- [x] 68.3 Render pass confirmed clean — every `depth_stencil*` slot is
+       explicitly `None`. No 3D view matrix paths. Deleted
+       `crates/engine-render/src/mesh.rs` (319 LOC) and
+       `crates/engine-render/src/render_pass_3d.rs` (250 LOC) — empty
+       scaffolding never instantiated.
+- [x] 68.4 `engine-math` keeps `Vec3`/`Vec4`/`Mat3`/`Mat4` re-exports (zero
+       cost from glam) but doc updated to be honest: the engine surface is
+       strictly 2D and never consumes them. Game code can still use them.
+- [x] 68.5 `appendix-a-complete-example.md` updated — all
+       `Transform::from_translation(Vec3::new(x, y, 0.0))` rewritten as
+       `Transform::from_xy(x, y)`. `01-developer-experience.md` and
+       `09-macros.md` swept the same way.
+- [x] 68.6 RPG example fixed — `player.translation.xy()` → `player.translation`,
+       removed the now-unneeded `glam::Vec3Swizzles` import.
+
+> Side notes: `engine-math::macros::transform!` (which constructed
+> `Vec3::new($x, $y, 0.0)`) had to be updated too, plus the in-tree unit
+> tests that asserted `translation.z == 0.0`.
+
+### 69. High-Level Draw API as Contract — DONE
+> `RenderQueue::push(DrawCommand{…})` is internal. Game code uses components
+> and immediate-mode helpers.
+- [x] 69.1 `Sprite { texture, size: Option<Vec2>, color, source_rect, origin, layer }`
+       component shipped in `engine-render`. `auto_sprite_system` queries
+       `(Transform, Sprite)` and enqueues each frame. `Sprite::new(texture)`
+       defaults size to the texture's native size (resolved via `AssetServer`)
+       with builder methods `with_size`, `with_color`, `with_layer`,
+       `with_origin`, `with_source_rect`.
+- [x] 69.2 `Text { content, font, font_size, color, layer }` component +
+       `auto_text_system`. `Text::new(content, font)` constructor + builder
+       methods.
+- [x] 69.3 Immediate-mode helpers on `RenderQueue` already existed
+       (`draw_sprite`, `draw_sprite_on_layer`, `draw_sprite_atlas*`,
+       `draw_sprite_transformed*`, `draw_rect*`, `draw_line*`, `draw_text*`,
+       `clear_color`). They stay public — the documented escape hatch for HUD,
+       debug, and one-shots.
+- [x] 69.4 `RenderQueue::push`, `RenderQueue::commands`, `DrawCommand`,
+       `DrawKind` all marked `#[doc(hidden)]`. Types stay public so the
+       internal renderer can still consume them, but they are hidden from
+       rustdoc and not part of the public contract.
+- [x] 69.5 README rewritten — minimal-game example uses `Sprite::new`,
+       rendering subsection demonstrates both component and immediate paths.
+- [x] 69.6 RPG example deferred — its imperative draws still go through the
+       public `draw_*` helpers (which remain part of the API), so no
+       breakage. Tracked separately under any future "examples polish" pass
+       if we want to demo the component path there too.
+
+> Side effects of this work, worth recording:
+>
+> - **Latent bug fix.** `App::add_system_to_stage` bound was generalized from
+>   `impl IntoSystem<(),(),M>` to `impl IntoScheduleConfigs<ScheduleSystem,M>`
+>   so plugins can pass tuples and `.chain()` for ordering. Same fix applied
+>   to `add_system` and `add_startup_system`. RenderPlugin now chains
+>   `(auto_sprite, auto_text, debug_overlay, render_system).chain()` —
+>   previously `debug_overlay_system` and `render_system` were registered
+>   unordered, so debug overlay output was non-deterministically visible
+>   depending on scheduler order. Now deterministic.
+> - **Wasm cross-compile fix.** `render_system` takes `ResMut<RenderEngine>`
+>   but `RenderEngine` is only a `Resource` on native (WebGPU types are
+>   `!Send` on wasm). Pre-existing breakage. Gated `render_system` and the
+>   chain registration behind `#[cfg(not(target_arch = "wasm32"))]`; on wasm
+>   the chain ends with a `wasm_clear_queue_system` stub that drains the
+>   queue. cross_compile_web test now passes.
+> - **Handle<T> derive bug fix.** `engine-assets::Handle<T>` had `derive`s
+>   that transitively required `T: Clone + Debug + ...` even though
+>   `Handle` only stores `id: u32, generation: u16, _marker: PhantomData<T>`.
+>   Replaced with hand-rolled impls so `Handle<T>` is unconditionally
+>   `Copy/Clone/Debug/PartialEq/Eq/Hash`. This unblocked deriving `Clone +
+>   Debug` on `Sprite` and `Text` (which hold `Handle<Texture>`/`Handle<Font>`
+>   over types like `Texture` that intentionally aren't `Clone`).
+> - **api-seal-test extended** to cover the high-level component API:
+>   `Sprite::new(...).with_size(...)` + `Text::new(...).with_size(...)` +
+>   imperative `queue.draw_rect(...)`. If any of these stop working from
+>   `lunar::prelude::*` alone, CI fails.
+
+### 70. Domain Systems → Separate Crates — DONE
+> Dialogue, localization, world-zones leave `engine-core` to honor separation
+> of concerns. Games that don't need them pay zero compile cost.
+- [x] 70.1 `crates/engine-dialogue/` created from `dialogue.rs` +
+       `dialogue_parser.rs` (now `dialogue.rs` + `parser.rs`). Public:
+       `Dialogue`, `DialogueBuilder`, `DialogueChoice`, `DialogueLine`,
+       `DialogueManager`, `DialogueNode`, `DialoguePlugin`, `DialogueState`,
+       `parse_dialogue`, `parse_dialogue_file`. Depends on `engine-core`
+       (for `App`, `GamePlugin`).
+- [x] 70.2 `crates/engine-localization/` created from `localization.rs`.
+       Public: `Localization`, `LocalizationPlugin`. Depends on
+       `engine-core` and `ron` (for locale file parsing).
+- [x] 70.3 `crates/engine-zones/` created from `zone.rs`. Public:
+       `Zone` (trait), `WorldManager`, `ZoneTransition`, `FadeConfig`.
+       Depends only on `engine-math` (no engine-core dep — it didn't need
+       `App` or `GamePlugin`). **Decision on Zone vs Scene:** kept distinct.
+       `Scene` (in `engine-core`) is a generic stackable game-state pattern
+       (menu / gameplay / pause overlay). `Zone` is RPG-shaped persistent
+       area-loading with spatial transitions. Different shape, different
+       audience. Both stay.
+- [x] 70.4 `lunar::prelude` was already explicit and never re-exported
+       these — confirmed clean.
+- [x] 70.5 `appendix-a-complete-example.md` doesn't use dialogue / zones /
+       localization. No changes needed.
+- [x] 70.6 Workspace `Cargo.toml` updated with the three new members.
+       Root `Cargo.toml` adds `engine-dialogue` to the rpg-example deps
+       (it's the only consumer). `plans/design/12-dependency-graph.md`
+       rewritten to show domain crates as opt-in branches and to include
+       the new `lunar-macros` and `engine-assets` edges that were
+       missing. `plans/design/05-world-zones.md` got a short note that
+       zones now live in `engine-zones`.
+
+> Side notes:
+> - `engine-core::Cargo.toml` description updated (no longer claims to own
+>   dialogue / zones / localization).
+> - `engine-core::prelude` and `engine-core::lib.rs` re-exports cleaned up.
+> - `rpg_example/plugin.rs` updated: `engine_core::DialoguePlugin` →
+>   `engine_dialogue::DialoguePlugin`; same for `DialogueBuilder` /
+>   `DialogueManager`.
+> - Engine-core net loss: ~1043 LOC moved out into the three new crates.
+>   Those crates are zero compile cost for any game that doesn't `use` them.
+
+### 71. Editor — Removed from this Workspace's Roadmap — DONE
+> Items 51–54 (Editor Foundation, Panels, Scene Editing, Build) moved out of
+> this repo. The editor will be a downstream project that depends on
+> `lunar` — same shape as the Moonwalker / engine-audio relationship.
+- [x] 71.1 Decision recorded: editor is downstream. Items 51–54 abandoned in
+       this repo.
+- [x] 71.2 Items 51–54 headers carry the `OUT-OF-SCOPE (item 71)` marker;
+       subitems remain as historical reference for whoever picks the editor
+       up later.
+- [x] 71.3 Item 54.3 (cdylib hot-reload via libloading) carries the same
+       OUT-OF-SCOPE marker via its parent section.
+- [x] 71.4 [`00-overview.md`](design/00-overview.md) line 23: "Editor lives
+       downstream, not in this repo." — written.
+- [x] 71.5 `engine-ui` (item 50, Taffy-based in-game UI) stays in scope —
+       it's for game developers, not the editor.
+
+### 72. P0 / P1 Performance Backlog Cleanup — DONE
+> Investigated 2026-05-03; closed 2026-05-04.
+- [x] 72.1 Item 29.1.4 — bind-group invalidation on texture removal:
+       `RenderEngine::remove_texture(tex_id)` already drops from BOTH
+       `textures` and `bind_groups` HashMaps in one call (verified). The
+       hookup from `AssetServer` eviction to `remove_texture` doesn't yet
+       exist because the asset server doesn't currently evict; that's a
+       higher-level wiring task, not a fix to this code path. Closed.
+- [x] 72.2 Item 30.1.4 — vertex-buffer overflow handling: **fixed**.
+       Replaced the `MAX_VERTICES` const with a runtime `vertex_capacity`
+       field (initial size still 65536). When a frame would overflow:
+       drop the offending draw THIS frame and set `overflow_flag`. At the
+       start of the NEXT frame, `grow_vertex_buffers()` doubles capacity
+       (recreates both wgpu::Buffers) and logs a warning so the initial
+       cap can be tuned. Pre-existing silent-skip bug eliminated; the
+       cap auto-tunes itself in production.
+- [x] 72.3 Item 30.1.3 — double/triple-buffer the vertex buffer: skipped
+       per investigation note. `wgpu::Queue::write_buffer` already stages
+       internally; revisit only if profiling shows a CPU-side stall.
+- [x] 72.4 Item 36.1.3 — text layout cache invalidation: **audit
+       complete**. Cache key is `(font_id, text.to_string(), font_size_bits)`,
+       so content changes naturally miss the cache — no stale-content
+       entries can accumulate. The remaining concern is unbounded growth
+       with high-cardinality content (FPS counters, time displays); added
+       a doc-comment on `get_cached_text_layout` recording this so a
+       future LRU swap is easy to find. Closed.
+- [x] 72.5 Item 34.1.4 — `apply_deferred` between stages: **confirmed
+       handled**. bevy_ecs 0.18 defaults `ScheduleBuildSettings::auto_insert_apply_deferred`
+       to `true` (verified in `bevy_ecs-0.18.1/src/schedule/schedule.rs:1581`),
+       so within each per-stage schedule sync points are auto-inserted.
+       Between stages, `engine_core::engine::Engine::run_stages` already
+       calls `world.flush()` between schedule runs ([engine.rs:97](../crates/engine-core/src/engine.rs)).
+       Both layers correct. Closed.
+
+### 73.5. RPG-example migration to lunar facade — DONE
+> The api-seal test proves the facade compiles; this proves it's livable
+> for a non-trivial example.
+- [x] 73.5.1 `rpg_example/components.rs` — `use bevy_ecs::prelude::*;` →
+       `use lunar::prelude::*;`. Component derives still work because
+       the prelude re-exports the wrapped `lunar-macros::Component`.
+- [x] 73.5.2 `rpg_example/resources.rs` — same swap. `Handle<Texture>` /
+       `Handle<Font>` now resolve through the lunar prelude.
+- [x] 73.5.3 `rpg_example/plugin.rs` — replaced six per-crate imports
+       (`engine_core::*`, `engine_assets::*`, `engine_input::*`,
+       `engine_math::*`, `engine_render::*`, `bevy_ecs::prelude::*`) with
+       a single `use lunar::prelude::*;`. `engine_dialogue::*` stays
+       separate (opt-in domain crate). `UpdateStage` accessed via the
+       documented escape hatch `lunar::engine_core::UpdateStage`.
+- [x] 73.5.4 Added `Texture`, `Font`, `Sound` to `lunar::prelude`
+       (and crate root). Required because `Handle<Texture>` / `Handle<Font>`
+       come up in user resources/components and the type parameters need
+       to be nameable.
+- [x] 73.5.5 Trimmed root `Cargo.toml`: removed direct deps on
+       `engine-core`, `engine-render`, `engine-input`, `engine-math`,
+       `engine-assets`, `engine-image`, `bevy_ecs`. The root binary now
+       depends on `lunar` + `engine-dialogue` only — exactly the shape
+       a real downstream game would have.
+
+> The api-seal test ([tests/api_seal/Cargo.toml](../tests/api_seal/Cargo.toml))
+> still has only `lunar` as its dep, so the facade contract is enforced
+> two ways: by a minimal CI test (api_seal) and by a non-trivial real
+> example (rpg-example) that uses Sprite-less imperative draws, hierarchy,
+> dialogue, custom components, and per-stage system scheduling.
 
 ---
 
@@ -802,7 +1164,10 @@ Part 6 (Engine Editor)
   - [ ] 50.5.4 Events: `ButtonPressed`, `TextChanged`, `ScrollMoved` — fire as ECS events for game/editor code to consume
   - [ ] 50.5.5 Input consumed by UI is not forwarded to game systems (event propagation stop)
 
-### 51. Editor Foundation (engine-editor crate)
+### 51. Editor Foundation (engine-editor crate) — OUT-OF-SCOPE (item 71)
+> Editor moved to a separate downstream project. Items below kept as historical
+> reference for whoever picks the editor up later; not actively tracked.
+
 - [ ] 51.1 `engine-editor` crate
   - [ ] 51.1.1 Add `engine-editor` to the workspace under `crates/engine-editor/`
   - [ ] 51.1.2 Binary target: `lunar-editor`
@@ -825,7 +1190,7 @@ Part 6 (Engine Editor)
   - [ ] 51.4.4 Playing: engine runs at full tick rate, editor panels update at reduced rate (every 4 frames)
   - [ ] 51.4.5 On stop: restore world snapshot taken at play start (serialize before play, deserialize on stop)
 
-### 52. Editor Panels
+### 52. Editor Panels — OUT-OF-SCOPE (item 71)
 - [ ] 52.1 Main layout (egui panels)
   - [ ] 52.1.1 `egui::TopBottomPanel` for menu bar and status bar
   - [ ] 52.1.2 `egui::SidePanel` left for scene hierarchy, right for inspector
@@ -866,7 +1231,7 @@ Part 6 (Engine Editor)
   - [ ] 52.7.3 Color by level: error=red, warn=amber, info=white, debug=gray, trace=dark gray
   - [ ] 52.7.4 Filter bar: level dropdown + text search field
 
-### 53. Scene Editing
+### 53. Scene Editing — OUT-OF-SCOPE (item 71)
 - [ ] 53.1 Viewport entity picking
   - [ ] 53.1.1 On left click in viewport (not consumed by gizmo): hit-test all entities with Transform + sprite bounds
   - [ ] 53.1.2 Sort hits back-to-front by z; select topmost
@@ -888,7 +1253,7 @@ Part 6 (Engine Editor)
   - [ ] 53.4.4 Load: clear world entities, deserialize JSON, spawn via Commands
   - [ ] 53.4.5 Dirty flag: title bar shows `*` on unsaved changes; prompt to save on close / open / play
 
-### 54. Editor Build & Distribution
+### 54. Editor Build & Distribution — OUT-OF-SCOPE (item 71)
 - [ ] 54.1 Standalone binary
   - [ ] 54.1.1 `cargo build --bin lunar-editor --release` produces the editor executable
   - [ ] 54.1.2 No SDL3 runtime dependency in the editor binary (winit only)

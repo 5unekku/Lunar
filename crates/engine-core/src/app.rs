@@ -9,7 +9,8 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use bevy_ecs::prelude::*;
-use bevy_ecs::schedule::ScheduleLabel;
+use bevy_ecs::schedule::{IntoScheduleConfigs, ScheduleLabel};
+use bevy_ecs::system::ScheduleSystem;
 
 use crate::engine::Engine;
 use crate::game_loop::GameLoop;
@@ -169,26 +170,35 @@ impl App {
         self
     }
 
-    /// add a system to the default Update stage
-    pub fn add_system<M>(&mut self, system: impl IntoSystem<(), (), M>) -> &mut Self {
-        self.add_system_to_stage(UpdateStage::Update, system)
+    /// add one or more systems to the default Update stage.
+    /// accepts a single system or a tuple — use `(a, b, c).chain()` to
+    /// enforce ordering when systems share `ResMut` borrows.
+    pub fn add_system<M>(
+        &mut self,
+        systems: impl IntoScheduleConfigs<ScheduleSystem, M>,
+    ) -> &mut Self {
+        self.add_system_to_stage(UpdateStage::Update, systems)
     }
 
-    /// add a system to a specific update stage.
+    /// add one or more systems to a specific update stage.
     /// systems are grouped by stage and run in order each frame:
     /// Input → Physics → Update → Render.
+    /// pass a tuple with `.chain()` to enforce intra-stage ordering.
     pub fn add_system_to_stage<M>(
         &mut self,
         stage: UpdateStage,
-        system: impl IntoSystem<(), (), M>,
+        systems: impl IntoScheduleConfigs<ScheduleSystem, M>,
     ) -> &mut Self {
-        self.engine.stage_schedule_mut(stage).add_systems(system);
+        self.engine.stage_schedule_mut(stage).add_systems(systems);
         self
     }
 
-    /// add a startup system that runs once before the main loop
-    pub fn add_startup_system<M>(&mut self, system: impl IntoSystem<(), (), M>) -> &mut Self {
-        self.engine.startup_schedule_mut().add_systems(system);
+    /// add one or more startup systems that run once before the main loop
+    pub fn add_startup_system<M>(
+        &mut self,
+        systems: impl IntoScheduleConfigs<ScheduleSystem, M>,
+    ) -> &mut Self {
+        self.engine.startup_schedule_mut().add_systems(systems);
         self
     }
 
@@ -329,10 +339,15 @@ impl App {
         }
     }
 
-    /// run a single frame tick (for use with external game loops like requestAnimationFrame)
+    /// run a single frame tick (for use with external game loops like requestAnimationFrame).
+    /// handles plugin build and startup on the first call, so the caller doesn't have to.
     pub fn tick(&mut self) {
         if !self.pending_plugins.is_empty() {
             self.build_plugins();
+        }
+        if !self.startup_run {
+            self.engine.run_startup();
+            self.startup_run = true;
         }
         if let Some(mut time) = self.engine.world_mut().get_resource_mut::<Time>() {
             time.tick();

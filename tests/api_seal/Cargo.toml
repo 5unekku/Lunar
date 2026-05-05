@@ -1,0 +1,15 @@
+[package]
+name = "api-seal-test"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# IMPORTANT: this crate exists to verify the lunar API seal. It MUST depend
+# on `lunar` ONLY. If a future change makes any other crate (bevy_ecs, sdl3,
+# wgpu, etc.) appear here as a direct dependency, that's a regression in the
+# abstraction boundary — fix the engine, not this Cargo.toml.
+[dependencies]
+lunar = { path = "../../crates/lunar" }
+
+[lib]
+path = "src/lib.rs"

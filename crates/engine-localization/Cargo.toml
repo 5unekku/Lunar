@@ -1,0 +1,16 @@
+[package]
+name = "engine-localization"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "localization for lunar: language switching and per-language string tables"
+repository.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
+
+[dependencies]
+bevy_ecs = { workspace = true }
+engine-core = { path = "../engine-core" }
+log = { workspace = true }
+ron = "0.12"

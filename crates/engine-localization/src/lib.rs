@@ -6,7 +6,7 @@
 //! # example
 //!
 //! ```ignore
-//! use engine_core::localization::Localization;
+//! use engine_localization::Localization;
 //!
 //! let mut loc = Localization::new("en");
 //! loc.load_language("fr", "locales/fr/dialogues");
@@ -155,7 +155,7 @@ impl LocalizationPlugin {
     }
 }
 
-impl crate::GamePlugin for LocalizationPlugin {
+impl engine_core::GamePlugin for LocalizationPlugin {
     fn name(&self) -> &'static str {
         "LocalizationPlugin"
     }
@@ -164,7 +164,7 @@ impl crate::GamePlugin for LocalizationPlugin {
         &[]
     }
 
-    fn build(&mut self, app: &mut crate::app::App) {
+    fn build(&mut self, app: &mut engine_core::App) {
         app.insert_resource(Localization::new(&self.default_language));
         log::info!(
             "LocalizationPlugin: default language '{}'",

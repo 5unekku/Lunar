@@ -17,7 +17,7 @@
 //! # example
 //!
 //! ```ignore
-//! use engine_core::dialogue::{DialogueBuilder, DialogueManager};
+//! use engine_dialogue::{DialogueBuilder, DialogueManager};
 //!
 //! let dialogue = DialogueBuilder::new("start")
 //!     .line("greeting", Some("NPC"), "hello there!", Some("farewell"))
@@ -33,7 +33,7 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::app::App;
+use engine_core::App;
 
 /// a dialogue line with optional speaker and choices.
 ///
@@ -339,7 +339,7 @@ impl Default for DialogueManager {
 /// add this plugin to your [`App`] to enable the dialogue system.
 pub struct DialoguePlugin;
 
-impl crate::GamePlugin for DialoguePlugin {
+impl engine_core::GamePlugin for DialoguePlugin {
     fn name(&self) -> &'static str {
         "DialoguePlugin"
     }

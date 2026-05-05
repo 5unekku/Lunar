@@ -2,88 +2,150 @@
 
 a 2D game engine built in Rust.
 
-## stack
+## what it is
 
-- **wgpu** — cross-platform graphics API (Vulkan/DX12/Metal/WebGPU)
-- **SDL3** — windowing and input
-- **bevy_ecs** — entity component system (standalone)
-- **glam** — math library
+- **2D first.** Strict 2D scope. 3D, if it ever exists, will be a sister engine — not an extension. Current code targets the 2D path exclusively.
+- **One dependency for game code.** Games depend on `lunar` and nothing else. Backends (windowing, GPU, ECS) are internal implementation details and can be swapped without breaking game code.
+- **No `unsafe` required.** Game code never needs `unsafe`. The engine uses `unsafe` only for tightly-scoped, documented optimizations.
+- **WASM-compatible.** Compile-time platform selection via `cfg`; the same game code runs on Linux, Windows, macOS, and the web.
+
+## non-goals
+
+- **Audio** — handled by Moonwalker, a separate project. Will return as a crate when mature. Not part of this workspace today.
+- **3D** — out of scope. See `plans/design/appendix-c-3d-future.md`.
+- **Visual editor** — a downstream project that will consume `lunar`, not part of this repo.
 
 ## architecture
 
-- rendering is decoupled from game logic
-- engine owns all memory, game logic operates on handles
-- fixed tickrate correlated to frame cap with three buckets:
-  - frame cap 1-60: 60hz tick
-  - frame cap 61-120: 120hz tick
-  - frame cap 121+: 240hz tick
-- rendering runs uncapped for smooth high-framerate gameplay
+- rendering decoupled from game logic — the engine renders `Sprite` / `Text` components automatically; immediate-mode helpers cover HUD and debug overlays
+- engine owns all memory; game code holds typed `Handle<T>` references
+- fixed tick rate bucketed by frame cap (60 / 120 / 240 Hz); rendering runs uncapped
+- bevy_ecs powers the scheduler under the hood — sealed behind the `lunar::prelude` so game code never names it
 
 ## crates
 
 | crate | purpose |
-|---------|
-| `engine-core` | game loop, ECS wiring, engine state, command registry, zones, dialogue |
-| `engine-render` | wgpu 2D rendering with RenderQueue and DrawCommand |
-| `engine-input` | SDL3 input handling with KeyCode, MouseButton, InputState |
-| `engine-audio` | audio subsystem stub with AudioPlugin |
-| `engine-math` | glam re-exports, Transform, Color, Rect types |
-| `lunar` | public API for game logic |
-| `engine-assets` | asset system with Handle<T>, AssetServer, AssetPlugin |
+|-------|---------|
+| `lunar` | public API facade — the one crate game code depends on |
+| `engine-core` | game loop, scheduler, plugin system, time, scene, hierarchy |
+| `engine-render` | wgpu 2D rendering pipeline (internal) |
+| `engine-input` | input handling (internal) |
+| `engine-math` | math types (`Vec2`, `Mat3`, `Transform`, `Color`, `Rect`) |
+| `engine-assets` | handle-based asset server, async loading, hot-reload |
+| `engine-image` | custom image format (zstd-compressed) |
+| `engine-atlas` | texture atlas packer |
 
 ## getting started
 
-### native (linux)
+### native
 
 ```bash
-# run the engine directly
-cargo run
-
-# or build and run the shooter example
-cargo run --bin shooter
-
-# or use the build script
-./scripts/build-native.sh
-./target/release/shooter
+cargo run                          # smoke test (opens a window)
+cargo run --bin rpg-example        # full RPG-style example
 ```
 
-### browser (wasm)
+### browser (WASM)
 
 ```bash
-# build the wasm binary and generate dist/
-./scripts/build-web.sh
-
-# serve locally with the included go server
-go run scripts/serve.go
-
-# open http://localhost:8080 in your browser
+./scripts/build-web.sh             # build wasm + dist/
+go run scripts/serve.go            # serve at http://localhost:8080
 ```
 
 requirements:
+- a browser with WebGPU support (Chrome 113+, Firefox Nightly with `dom.webgpu.enabled`)
+- `wasm-bindgen-cli` (installed automatically by the build script)
 - `go` 1.21+ (for the dev server)
-- `wasm-bindgen-cli` (installed automatically by build script)
-- a browser with WebGPU support (chrome 113+, firefox nightly)
 
 ## targets
 
-- Windows 7+
-- Windows 10/11
+- Windows 10 / 11
 - Linux
 - macOS
-- Web (via WebGPU + WASM)
+- Web (WebGPU + WASM)
 
-## building for web
+## minimal game
 
-```bash
-rustup target add wasm32-unknown
-cargo build --target wasm32-unknown-unknown --bin lunar-web
-wasm-bindgen --out-dir pkg target/wasm32-unknown-unknown/debug/lunar-web.wasm
+```rust
+use lunar::prelude::*;
+
+#[derive(Default)]
+struct MyGame;
+
+impl GamePlugin for MyGame {
+    fn name(&self) -> &str { "MyGame" }
+    fn build(&mut self, app: &mut App) {
+        app.add_startup_system(spawn_player);
+        app.add_system(move_player);
+    }
+}
+
+fn spawn_player(mut commands: Commands, mut assets: ResMut<AssetServer>) {
+    let texture = assets.load_texture("player.png");
+    commands.spawn((
+        Transform::from_xy(0.0, 0.0),
+        Sprite::new(texture),
+    ));
+}
+
+fn move_player(input: Res<InputState>, mut query: Query<&mut Transform, With<Sprite>>) {
+    for mut transform in &mut query {
+        if input.is_key_held(KeyCode::Right) {
+            transform.translation.x += 100.0 * 0.016;
+        }
+    }
+}
+
+lunar::lunar_app!(MyGame);
 ```
 
-## plugin system
+## subsystems
 
-plugins implement the `GamePlugin` trait and are registered via `App::add_plugin()`.
-the engine resolves plugin dependencies using topological sort (Kahn's algorithm).
+### input
+
+```rust
+fn jump(input: Res<InputState>) {
+    if input.is_key_just_pressed(KeyCode::Space) {
+        // jump!
+    }
+}
+```
+
+### rendering
+
+Game code spawns components; the engine renders them. The render system queries `(Transform, Sprite)` and `(Transform, Text)` each frame and submits draws automatically:
+
+```rust
+fn spawn_label(mut commands: Commands, mut assets: ResMut<AssetServer>) {
+    let font = assets.load_font("ui.ttf");
+    commands.spawn((
+        Transform::from_xy(20.0, 35.0),
+        Text::new("score: 42", font).with_size(16.0),
+    ));
+}
+```
+
+Immediate-mode helpers cover HUD overlays and debug primitives — useful when the thing you're drawing isn't a persistent entity:
+
+```rust
+fn hud_background(mut queue: ResMut<RenderQueue>) {
+    queue.draw_rect(Vec2::new(10.0, 10.0), Vec2::new(200.0, 30.0), Color::BLACK);
+}
+```
+
+Internals (`DrawCommand`, `DrawKind`, `RenderQueue::push`) are hidden — game code never constructs them.
+
+### assets
+
+```rust
+fn load(mut assets: ResMut<AssetServer>) {
+    let texture = assets.load_texture("textures/player.png");
+    if assets.is_texture_ready(&texture) {
+        // ready to use
+    }
+}
+```
+
+## plugins
 
 ```rust
 struct MyPlugin;
@@ -98,94 +160,27 @@ impl GamePlugin for MyPlugin {
 }
 ```
 
-## subsystems
-
-### input
-
-```rust
-fn my_system(input: Res<InputState>) {
-    if input.is_key_just_pressed(KeyCode::Space) {
-        // jump!
-    }
-}
-```
-
-### rendering
-
-```rust
-fn render_system(mut queue: ResMut<RenderQueue>) {
-    queue.push(DrawCommand {
-        entity: 0,
-        kind: DrawKind::Rect {
-            position: (100.0, 100.0),
-            size: (32.0, 32.0),
-            color: (1.0, 0.0, 0.0, 1.0),
-        },
-    });
-}
-```
-
-### assets
-
-```rust
-fn load_system(mut assets: ResMut<AssetServer>) {
-    let tex = assets.load_texture("textures/player.png");
-    if assets.is_texture_ready(&tex) {
-        // use texture
-    }
-}
-```
-
-### world zones
-
-```rust
-struct TownZone;
-
-impl Zone for TownZone {
-    fn on_enter(&mut self, app: &mut App) {
-        // spawn NPCs, set music, etc.
-    }
-    fn on_exit(&mut self, app: &mut App) {
-        // cleanup
-    }
-}
-
-// register and enter
-world_manager.register_zone("town", TownZone);
-world_manager.enter_zone("town");
-```
-
-### dialogue
-
-```rust
-let dialogue = DialogueBuilder::new("start")
-    .line("greeting", Some("npc"), "hello traveler!", Some("choice"))
-    .choice_line("choice", Some("npc"), "what do you want?", vec![
-        ("buy items", "shop"),
-        ("leave", "end"),
-    ])
-    .build();
-
-dialogue_manager.register("town_npc", dialogue);
-dialogue_manager.start("town_npc");
-```
+The engine resolves plugin dependencies via topological sort.
 
 ## project structure
 
 ```
 lunar/
 ├── crates/
-│   ├── engine-core/      # game loop, ECS, plugins, zones, dialogue
+│   ├── lunar/         # public API facade
+│   ├── engine-core/      # game loop, ECS wiring, plugins
 │   ├── engine-render/    # wgpu rendering
-│   ├── engine-input/     # SDL3 input
-│   ├── engine-audio/     # audio stub
+│   ├── engine-input/     # input handling
 │   ├── engine-math/      # math types
-│   ├── lunar/           # public API
-│   └── engine-assets/    # asset system
-├── examples/
-│   └── shooter/          # top-down shooter example
-├── plans/                # design documents
+│   ├── engine-assets/    # asset server
+│   ├── engine-image/     # zstd-compressed image format
+│   └── engine-atlas/     # texture atlas packer
+├── plans/                # design documents and implementation TODO
 └── src/
-    ├── main.rs           # native entry point
+    ├── main.rs           # native smoke-test entry point
     └── web.rs            # WASM entry point
 ```
+
+## contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).

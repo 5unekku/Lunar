@@ -8,12 +8,16 @@ members = [
     "crates/engine-core",
     "crates/engine-render",
     "crates/engine-input",
-    "crates/engine-audio",
     "crates/engine-math",
     "crates/lunar",
+    "crates/lunar-macros",
     "crates/engine-assets",
     "crates/engine-image",
     "crates/engine-atlas",
+    "crates/engine-dialogue",
+    "crates/engine-localization",
+    "crates/engine-zones",
+    "tests/api_seal",
 ]
 resolver = "2"
 
@@ -57,21 +61,19 @@ name = "rpg-example"
 path = "src/bin/rpg_example_main.rs"
 
 [dependencies]
-engine-core = { path = "crates/engine-core" }
-engine-render = { path = "crates/engine-render" }
-engine-input = { path = "crates/engine-input" }
-engine-audio = { path = "crates/engine-audio" }
-engine-math = { path = "crates/engine-math" }
+# `lunar` is the only dependency a real game needs. The rpg-example
+# (item 73.5) was migrated off direct sub-crate imports — every `use` now
+# goes through `lunar::prelude::*` or `lunar::engine_core::…`.
 lunar = { path = "crates/lunar" }
-engine-assets = { path = "crates/engine-assets" }
-engine-image = { path = "crates/engine-image" }
-env_logger = { workspace = true }
+
+# opt-in domain crate — rpg-example uses dialogue; games without dialogue
+# don't add this. Localization and zones aren't used here.
+engine-dialogue = { path = "crates/engine-dialogue" }
+
 log = { workspace = true }
-wgpu = { workspace = true, features = ["vulkan", "metal", "gles", "wgsl"] }
-sdl3 = { workspace = true, features = ["raw-window-handle"] }
-raw-window-handle = { workspace = true }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# web entry point only
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
 console_error_panic_hook = "0.1"
 web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElement", "CanvasRenderingContext2d"] }
-bevy_ecs = { workspace = true }

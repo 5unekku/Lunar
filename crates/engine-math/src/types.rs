@@ -2,13 +2,14 @@
 //!
 //! these are the common types used across all 2D game code.
 
-use crate::{Vec2, Vec3};
+use crate::Vec2;
 use bevy_ecs::prelude::Component;
 
 /// 2D transform component: position, rotation, scale.
 ///
 /// this is the primary way to represent an entity's placement in the world.
-/// it supports translation (x, y, z), rotation (radians), and scale (x, y).
+/// it supports translation (x, y), rotation (radians), and scale (x, y).
+/// for depth sorting, use the `Layer` component from `engine_render`.
 ///
 /// # builder pattern
 ///
@@ -21,8 +22,8 @@ use bevy_ecs::prelude::Component;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub struct Transform {
-    /// x, y position + z layer for depth sorting
-    pub translation: Vec3,
+    /// x, y position
+    pub translation: Vec2,
     /// rotation in radians
     pub rotation: f32,
     /// x, y scale
@@ -31,11 +32,11 @@ pub struct Transform {
 
 impl Transform {
     /// create a transform from a 2D translation.
-    /// sets z to 0.0, rotation to 0, and scale to (1, 1).
+    /// rotation defaults to 0, scale to (1, 1).
     #[must_use]
     pub const fn from_translation(translation: Vec2) -> Self {
         Self {
-            translation: Vec3::new(translation.x, translation.y, 0.0),
+            translation,
             rotation: 0.0,
             scale: Vec2::ONE,
         }
@@ -68,7 +69,7 @@ impl Transform {
 impl Default for Transform {
     fn default() -> Self {
         Self {
-            translation: Vec3::ZERO,
+            translation: Vec2::ZERO,
             rotation: 0.0,
             scale: Vec2::ONE,
         }
@@ -81,8 +82,8 @@ impl Default for Transform {
 /// used in entity hierarchies for parent-child transform propagation.
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub struct LocalTransform {
-    /// x, y position relative to parent + z for depth sorting
-    pub translation: Vec3,
+    /// x, y position relative to parent
+    pub translation: Vec2,
     /// rotation in radians relative to parent
     pub rotation: f32,
     /// x, y scale relative to parent
@@ -94,7 +95,7 @@ impl LocalTransform {
     #[must_use]
     pub const fn from_translation(translation: Vec2) -> Self {
         Self {
-            translation: Vec3::new(translation.x, translation.y, 0.0),
+            translation,
             rotation: 0.0,
             scale: Vec2::ONE,
         }
@@ -124,7 +125,7 @@ impl LocalTransform {
 impl Default for LocalTransform {
     fn default() -> Self {
         Self {
-            translation: Vec3::ZERO,
+            translation: Vec2::ZERO,
             rotation: 0.0,
             scale: Vec2::ONE,
         }
@@ -137,8 +138,8 @@ impl Default for LocalTransform {
 /// parent hierarchy. do not modify directly — use [`LocalTransform`] instead.
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub struct WorldTransform {
-    /// absolute x, y position + z for depth sorting
-    pub translation: Vec3,
+    /// absolute x, y position
+    pub translation: Vec2,
     /// absolute rotation in radians
     pub rotation: f32,
     /// absolute scale
@@ -150,7 +151,7 @@ impl WorldTransform {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            translation: Vec3::ZERO,
+            translation: Vec2::ZERO,
             rotation: 0.0,
             scale: Vec2::ONE,
         }
@@ -160,7 +161,7 @@ impl WorldTransform {
     #[must_use]
     pub const fn from_xy(x: f32, y: f32) -> Self {
         Self {
-            translation: Vec3::new(x, y, 0.0),
+            translation: Vec2::new(x, y),
             rotation: 0.0,
             scale: Vec2::ONE,
         }
@@ -528,7 +529,7 @@ mod transform_tests {
     #[test]
     fn default_transform_is_at_origin() {
         let t = Transform::default();
-        assert_eq!(t.translation, Vec3::ZERO);
+        assert_eq!(t.translation, Vec2::ZERO);
         assert_eq!(t.rotation, 0.0);
         assert_eq!(t.scale, Vec2::ONE);
     }
@@ -538,7 +539,6 @@ mod transform_tests {
         let t = Transform::from_translation(Vec2::new(100.0, 200.0));
         assert_eq!(t.translation.x, 100.0);
         assert_eq!(t.translation.y, 200.0);
-        assert_eq!(t.translation.z, 0.0);
         assert_eq!(t.rotation, 0.0);
         assert_eq!(t.scale, Vec2::ONE);
     }
@@ -576,7 +576,7 @@ mod transform_tests {
     #[test]
     fn local_transform_default() {
         let t = LocalTransform::default();
-        assert_eq!(t.translation, Vec3::ZERO);
+        assert_eq!(t.translation, Vec2::ZERO);
         assert_eq!(t.rotation, 0.0);
         assert_eq!(t.scale, Vec2::ONE);
     }
@@ -584,7 +584,7 @@ mod transform_tests {
     #[test]
     fn world_transform_new_is_at_origin() {
         let t = WorldTransform::new();
-        assert_eq!(t.translation, Vec3::ZERO);
+        assert_eq!(t.translation, Vec2::ZERO);
         assert_eq!(t.rotation, 0.0);
         assert_eq!(t.scale, Vec2::ONE);
     }
@@ -594,6 +594,5 @@ mod transform_tests {
         let t = WorldTransform::from_xy(30.0, 40.0);
         assert_eq!(t.translation.x, 30.0);
         assert_eq!(t.translation.y, 40.0);
-        assert_eq!(t.translation.z, 0.0);
     }
 }

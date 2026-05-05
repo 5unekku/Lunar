@@ -1,7 +1,8 @@
-//! full prelude for game development — re-exports everything from bevy_ecs
-//! plus all engine-core types (scenes, zones, dialogue, localization, etc.).
+//! prelude for engine-core — re-exports bevy_ecs essentials and engine-core's
+//! own types (app/plugin, scenes, hierarchy, world manifest, etc.).
 //!
-//! for subsystem types (render, input, assets), import those crates directly.
+//! domain crates (`engine-dialogue`, `engine-localization`, `engine-zones`)
+//! and subsystem crates (render, input, assets) must be imported separately.
 //!
 //! # example
 //!
@@ -25,14 +26,10 @@ pub use engine_math::{Color, Mat2, Mat3, Mat4, Rect, Transform, Vec2, Vec3, Vec4
 
 // engine-core types
 pub use crate::app::{App, GamePlugin, Time};
-pub use crate::dialogue::{
-    Dialogue, DialogueBuilder, DialogueChoice, DialogueLine, DialogueManager,
-};
 pub use crate::engine::Engine;
 pub use crate::error::{EngineError, EngineResult, ErrorEvent, ErrorSource};
 pub use crate::game_loop::{GameLoop, TickRate};
 pub use crate::hierarchy::{Children, Parent};
-pub use crate::localization::Localization;
 pub use crate::scene::{Scene, SceneManager};
 pub use crate::scene_format::{
     EntityDefinition, SceneEntity, SceneInstance, SceneLayer, SceneLoader, SceneSprite, SceneTags,
@@ -41,4 +38,3 @@ pub use crate::scene_format::{
 pub use crate::schedule::{StageLabelExt, StageOrder, UpdateStage};
 pub use crate::state::EngineState;
 pub use crate::world_manifest::{AdvancedSceneLoader, LoadMode, LoadedScenes, WorldManifest};
-pub use crate::zone::{FadeConfig, WorldManager, Zone, ZoneTransition};

@@ -101,11 +101,47 @@ pub enum LoadState {
 /// # type parameters
 ///
 /// * `T` - the asset type this handle refers to (e.g. [`Texture`], [`Sound`])
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// `Handle<T>` is unconditionally `Copy`, `Clone`, `Debug`, etc. — it stores
+/// only an id, a generation, and a `PhantomData<T>`. the trait impls are
+/// written by hand because `#[derive]` would spuriously bound `T: Clone`,
+/// `T: Debug`, etc., even though `T` is never instantiated inside the handle.
 pub struct Handle<T: Asset> {
     id: u32,
     generation: u16,
     _marker: PhantomData<T>,
+}
+
+impl<T: Asset> Copy for Handle<T> {}
+
+impl<T: Asset> Clone for Handle<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: Asset> std::fmt::Debug for Handle<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Handle")
+            .field("id", &self.id)
+            .field("generation", &self.generation)
+            .finish()
+    }
+}
+
+impl<T: Asset> PartialEq for Handle<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.generation == other.generation
+    }
+}
+
+impl<T: Asset> Eq for Handle<T> {}
+
+impl<T: Asset> std::hash::Hash for Handle<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+        self.generation.hash(state);
+    }
 }
 
 impl<T: Asset> Handle<T> {

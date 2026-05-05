@@ -135,11 +135,8 @@ fn setup_world(
             on_ground: false,
         },
         Velocity(Vec2::ZERO),
-        Transform::from_translation(Vec3::new(400.0, 400.0, 0.0)),
-        Sprite {
-            texture: player_tex,
-            size: Vec2::new(32.0, 48.0),
-        },
+        Transform::from_xy(400.0, 400.0),
+        Sprite::new(player_tex).with_size(Vec2::new(32.0, 48.0)),
         Collider {
             size: Vec2::new(28.0, 44.0),
             offset: Vec2::new(2.0, 2.0),
@@ -149,11 +146,8 @@ fn setup_world(
     // spawn ground platform
     commands.spawn((
         Platform,
-        Transform::from_translation(Vec3::new(640.0, 520.0, 0.0)),
-        Sprite {
-            texture: ground_tex,
-            size: Vec2::new(1280.0, 40.0),
-        },
+        Transform::from_xy(640.0, 520.0),
+        Sprite::new(ground_tex).with_size(Vec2::new(1280.0, 40.0)),
         Collider {
             size: Vec2::new(1280.0, 40.0),
             offset: Vec2::ZERO,
