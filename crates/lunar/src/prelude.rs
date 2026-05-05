@@ -70,7 +70,7 @@ pub use engine_input::{ActionMap, InputState, KeyCode, MouseButton};
 
 // engine-assets types — Texture/Font/Sound are needed as type parameters for
 // Handle<T> when game code stores asset handles in its own resources.
-pub use engine_assets::{AssetServer, Font, Handle, Sound, Texture};
+pub use engine_assets::{AssetServer, AudioFormat, Font, Handle, Sound, Texture};
 
 // lunar marker traits
 pub use crate::{GameComponent, GameResource};

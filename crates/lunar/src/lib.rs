@@ -57,7 +57,7 @@ mod bootstrap_wasm;
 pub use bootstrap_wasm::bootstrap_wasm;
 
 // types re-exported at crate root for direct access (prelude covers glob imports)
-pub use engine_assets::{AssetServer, Font, Handle, Sound, Texture};
+pub use engine_assets::{AssetServer, AudioFormat, Font, Handle, Sound, Texture};
 pub use engine_core::{App, GamePlugin, Time, WindowSettings};
 pub use engine_input::{ActionMap, InputBinding, InputState, KeyCode, MouseButton};
 pub use engine_math::{Color, Mat2, Mat3, Mat4, Rect, Transform, Vec2, Vec3, Vec4};
