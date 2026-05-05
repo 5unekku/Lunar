@@ -699,6 +699,76 @@ impl SoundLoaderTrait for SymphoniaSoundLoader {
     }
 }
 
+/// OGG Opus loader using libopus (the Xiph reference C implementation).
+///
+/// handles `.opus` files only. symphonia has no stable opus codec yet, so this
+/// uses `ogg` for demuxing and the `opus` crate (libopus bindings) for decoding.
+/// opus always outputs at 48 kHz; pre-skip samples from the OpusHead are stripped.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct OpusSoundLoader;
+
+#[cfg(not(target_arch = "wasm32"))]
+impl SoundLoaderTrait for OpusSoundLoader {
+    fn load(&self, bytes: Vec<u8>) -> Result<Sound, String> {
+        use ogg::reading::PacketReader;
+
+        const SAMPLE_RATE: u32 = 48000;
+        // max Opus frame at 48 kHz is 120 ms = 5760 samples per channel
+        const MAX_FRAME: usize = 5760;
+
+        let cursor = std::io::Cursor::new(bytes);
+        let mut reader = PacketReader::new(cursor);
+
+        // OpusHead — magic + channel count + pre-skip
+        let head = reader
+            .read_packet_expected()
+            .map_err(|e| format!("ogg read error: {e}"))?;
+        if head.data.len() < 19 || &head.data[..8] != b"OpusHead" {
+            return Err("not a valid OGG Opus file".to_string());
+        }
+        let channels = head.data[9] as usize;
+        let pre_skip = u16::from_le_bytes([head.data[10], head.data[11]]) as usize;
+        let opus_channels = match channels {
+            1 => opus::Channels::Mono,
+            2 => opus::Channels::Stereo,
+            n => return Err(format!("unsupported opus channel count: {n}")),
+        };
+
+        // OpusTags — skip
+        reader
+            .read_packet_expected()
+            .map_err(|e| format!("ogg read error: {e}"))?;
+
+        let mut decoder = opus::Decoder::new(SAMPLE_RATE, opus_channels)
+            .map_err(|e| format!("failed to create opus decoder: {e}"))?;
+
+        let mut pcm = vec![0i16; MAX_FRAME * channels];
+        let mut samples: Vec<f32> = Vec::new();
+        let mut total_samples = 0usize;
+
+        while let Ok(Some(packet)) = reader.read_packet() {
+            if packet.data.is_empty() {
+                continue;
+            }
+            let n = decoder
+                .decode(&packet.data, &mut pcm, false)
+                .map_err(|e| format!("opus decode error: {e}"))?;
+            let decoded_samples = &pcm[..n * channels];
+            // strip pre-skip from the very beginning of the stream
+            let skip = pre_skip.saturating_sub(total_samples).min(n);
+            for &s in &decoded_samples[skip * channels..] {
+                samples.push(s as f32 / f32::from(i16::MAX));
+            }
+            total_samples += n;
+        }
+
+        Ok(Sound {
+            samples,
+            sample_rate: SAMPLE_RATE,
+        })
+    }
+}
+
 /// loader for ttf/otf font files.
 ///
 /// stores raw bytes; the render system parses the font when needed.
@@ -747,9 +817,16 @@ fn sound_loader_for(path: &str) -> Arc<dyn SoundLoaderTrait> {
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
+
+    // .opus → libopus on native (symphonia has no stable opus codec yet)
+    #[cfg(not(target_arch = "wasm32"))]
+    if ext == "opus" {
+        return Arc::new(OpusSoundLoader);
+    }
+
     let hint = match ext.as_str() {
         "flac" => Some("flac"),
-        "ogg" | "oga" | "opus" => Some("ogg"),
+        "ogg" | "oga" => Some("ogg"),
         "wav" | "wave" => Some("wav"),
         _ => None,
     };
