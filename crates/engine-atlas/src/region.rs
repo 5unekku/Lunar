@@ -19,16 +19,23 @@ pub struct AtlasRegion {
 impl AtlasRegion {
     /// create a new atlas region from pixel coordinates and atlas dimensions.
     #[must_use]
-    pub fn from_pixels(x: u32, y: u32, w: u32, h: u32, atlas_w: u32, atlas_h: u32) -> Self {
+    pub fn from_pixels(
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        atlas_width: u32,
+        atlas_height: u32,
+    ) -> Self {
         #[allow(clippy::cast_precision_loss)]
-        let aw = atlas_w as f32;
+        let atlas_w = atlas_width as f32;
         #[allow(clippy::cast_precision_loss)]
-        let ah = atlas_h as f32;
+        let atlas_h = atlas_height as f32;
         Self {
             #[allow(clippy::cast_precision_loss)]
-            uv_min: Vec2::new(x as f32 / aw, y as f32 / ah),
+            uv_min: Vec2::new(x as f32 / atlas_w, y as f32 / atlas_h),
             #[allow(clippy::cast_precision_loss)]
-            uv_max: Vec2::new((x + w) as f32 / aw, (y + h) as f32 / ah),
+            uv_max: Vec2::new((x + width) as f32 / atlas_w, (y + height) as f32 / atlas_h),
         }
     }
 
@@ -45,35 +52,35 @@ mod tests {
 
     #[test]
     fn from_pixels_origin() {
-        let r = AtlasRegion::from_pixels(0, 0, 100, 50, 200, 100);
-        assert_eq!(r.uv_min.x, 0.0);
-        assert_eq!(r.uv_min.y, 0.0);
-        assert_eq!(r.uv_max.x, 0.5);
-        assert_eq!(r.uv_max.y, 0.5);
+        let region = AtlasRegion::from_pixels(0, 0, 100, 50, 200, 100);
+        assert_eq!(region.uv_min.x, 0.0);
+        assert_eq!(region.uv_min.y, 0.0);
+        assert_eq!(region.uv_max.x, 0.5);
+        assert_eq!(region.uv_max.y, 0.5);
     }
 
     #[test]
     fn from_pixels_middle() {
-        let r = AtlasRegion::from_pixels(100, 50, 100, 50, 200, 100);
-        assert!((r.uv_min.x - 0.5).abs() < 1e-6);
-        assert!((r.uv_min.y - 0.5).abs() < 1e-6);
-        assert!((r.uv_max.x - 1.0).abs() < 1e-6);
-        assert!((r.uv_max.y - 1.0).abs() < 1e-6);
+        let region = AtlasRegion::from_pixels(100, 50, 100, 50, 200, 100);
+        assert!((region.uv_min.x - 0.5).abs() < 1e-6);
+        assert!((region.uv_min.y - 0.5).abs() < 1e-6);
+        assert!((region.uv_max.x - 1.0).abs() < 1e-6);
+        assert!((region.uv_max.y - 1.0).abs() < 1e-6);
     }
 
     #[test]
     fn from_pixels_single_pixel() {
-        let r = AtlasRegion::from_pixels(5, 5, 1, 1, 10, 10);
-        assert!((r.uv_min.x - 0.5).abs() < 1e-6);
-        assert!((r.uv_max.x - 0.6).abs() < 1e-6);
+        let region = AtlasRegion::from_pixels(5, 5, 1, 1, 10, 10);
+        assert!((region.uv_min.x - 0.5).abs() < 1e-6);
+        assert!((region.uv_max.x - 0.6).abs() < 1e-6);
     }
 
     #[test]
     fn from_uv_identity() {
-        let r = AtlasRegion::from_uv(Vec2::new(0.25, 0.25), Vec2::new(0.75, 0.75));
-        assert_eq!(r.uv_min.x, 0.25);
-        assert_eq!(r.uv_min.y, 0.25);
-        assert_eq!(r.uv_max.x, 0.75);
-        assert_eq!(r.uv_max.y, 0.75);
+        let region = AtlasRegion::from_uv(Vec2::new(0.25, 0.25), Vec2::new(0.75, 0.75));
+        assert_eq!(region.uv_min.x, 0.25);
+        assert_eq!(region.uv_min.y, 0.25);
+        assert_eq!(region.uv_max.x, 0.75);
+        assert_eq!(region.uv_max.y, 0.75);
     }
 }

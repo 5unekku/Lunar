@@ -246,12 +246,12 @@ mod tests {
     fn compute_world_transform_no_parent() {
         let parent = WorldTransform::from_xy(0.0, 0.0);
         let local = LocalTransform::from_xy(10.0, 20.0);
-        let wt = compute_world_transform(&parent, &local);
-        assert!((wt.translation.x - 10.0).abs() < 0.001);
-        assert!((wt.translation.y - 20.0).abs() < 0.001);
-        assert!((wt.rotation - 0.0).abs() < 0.001);
-        assert!((wt.scale.x - 1.0).abs() < 0.001);
-        assert!((wt.scale.y - 1.0).abs() < 0.001);
+        let world_transform = compute_world_transform(&parent, &local);
+        assert!((world_transform.translation.x - 10.0).abs() < 0.001);
+        assert!((world_transform.translation.y - 20.0).abs() < 0.001);
+        assert!((world_transform.rotation - 0.0).abs() < 0.001);
+        assert!((world_transform.scale.x - 1.0).abs() < 0.001);
+        assert!((world_transform.scale.y - 1.0).abs() < 0.001);
     }
 
     #[test]
@@ -262,10 +262,10 @@ mod tests {
             scale: Vec2::ONE,
         };
         let local = LocalTransform::from_xy(10.0, 0.0);
-        let wt = compute_world_transform(&parent, &local);
+        let world_transform = compute_world_transform(&parent, &local);
         // parent rotated 90 degrees: local (10, 0) becomes (0, 10) in world space
-        assert!((wt.translation.x - 100.0).abs() < 0.001);
-        assert!((wt.translation.y - 110.0).abs() < 0.001);
+        assert!((world_transform.translation.x - 100.0).abs() < 0.001);
+        assert!((world_transform.translation.y - 110.0).abs() < 0.001);
     }
 
     #[test]
@@ -280,11 +280,11 @@ mod tests {
             rotation: 0.0,
             scale: Vec2::new(1.0, 1.0),
         };
-        let wt = compute_world_transform(&parent, &local);
-        assert!((wt.translation.x - 10.0).abs() < 0.001);
-        assert!((wt.translation.y - 12.0).abs() < 0.001);
-        assert!((wt.scale.x - 2.0).abs() < 0.001);
-        assert!((wt.scale.y - 3.0).abs() < 0.001);
+        let world_transform = compute_world_transform(&parent, &local);
+        assert!((world_transform.translation.x - 10.0).abs() < 0.001);
+        assert!((world_transform.translation.y - 12.0).abs() < 0.001);
+        assert!((world_transform.scale.x - 2.0).abs() < 0.001);
+        assert!((world_transform.scale.y - 3.0).abs() < 0.001);
     }
 
     #[test]
