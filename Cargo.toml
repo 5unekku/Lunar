@@ -6,6 +6,7 @@ wgpu = { path = "vendor/wgpu" }
 [workspace]
 members = [
     "crates/engine-core",
+    "crates/engine-2d",
     "crates/engine-render",
     "crates/engine-input",
     "crates/engine-math",

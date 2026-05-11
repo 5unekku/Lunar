@@ -60,6 +60,9 @@ pub use engine_math::{Color, Mat2, Mat3, Mat4, Rect, Transform, Vec2, Vec3, Vec4
 // engine-core types
 pub use engine_core::{App, GamePlugin, Time, WindowSettings};
 
+// engine-2d types
+pub use engine_2d::{Plugin2d, propagate_transforms};
+
 // engine-render types
 pub use engine_render::{
     Camera, Layer, RenderConfig, RenderEngine, RenderInfo, RenderQueue, Sprite, Text, layers,

@@ -55,10 +55,8 @@ pub use engine::Engine;
 pub use error::{EngineError, EngineResult, ErrorEvent, ErrorSource};
 /// game loop with fixed timestep
 pub use game_loop::{GameLoop, TickRate};
-/// entity hierarchy components and transform propagation
-pub use hierarchy::{
-    Children, HierarchyPlugin, Parent, PostUpdate, propagate_transforms, sync_children,
-};
+/// entity hierarchy components and parent/child sync
+pub use hierarchy::{Children, HierarchyPlugin, Parent, PostUpdate, sync_children};
 /// scene system for game state management
 pub use scene::{Scene, SceneManager};
 /// scene definition format: RON authoring and binary runtime

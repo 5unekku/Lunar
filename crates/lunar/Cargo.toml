@@ -14,6 +14,7 @@ bevy_ecs = { workspace = true }
 lunar-macros = { path = "../lunar-macros" }
 engine-math = { path = "../engine-math" }
 engine-core = { path = "../engine-core" }
+engine-2d = { path = "../engine-2d" }
 engine-render = { path = "../engine-render" }
 engine-input = { path = "../engine-input" }
 engine-assets = { path = "../engine-assets" }
