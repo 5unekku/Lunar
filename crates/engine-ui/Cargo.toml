@@ -1,0 +1,17 @@
+[package]
+name = "engine-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "screen-space ui components for lunar 2d games"
+repository.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
+
+[dependencies]
+engine-core = { path = "../engine-core" }
+engine-math = { path = "../engine-math" }
+engine-render = { path = "../engine-render" }
+engine-assets = { path = "../engine-assets" }
+bevy_ecs = { workspace = true }

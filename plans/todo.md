@@ -1266,72 +1266,63 @@ Part 6 (Engine Editor)
 > Lives in `engine_2d::collision` — dimension-specific, no reason for a shared crate.
 > 3D collision would live inside a future `engine-3d` the same way.
 > The shooter example (item 49) needs AABB hit-testing; anything beyond that is post-v1.
-- [ ] 74.1 `engine_2d::collision` module
-  - [ ] 74.1.1 Add `crates/engine-2d/src/collision.rs`, pub-use from `engine-2d/src/lib.rs`
-  - [ ] 74.1.2 No new crate — stays inside `engine-2d`, which already depends on `engine-math` + `engine-core`
-  - [ ] 74.1.3 No dependency on `engine-render` — collision is pure logic
-- [ ] 74.2 Collider component
-  - [ ] 74.2.1 `Collider` component: `shape: ColliderShape`
-  - [ ] 74.2.2 `ColliderShape` enum: `Aabb { half_extents: Vec2 }`, `Circle { radius: f32 }`
-  - [ ] 74.2.3 `CollisionLayer(u32)` component: bitmask for filtering (which layers this collider is on)
-  - [ ] 74.2.4 `CollisionMask(u32)` component: bitmask for filtering (which layers this collider checks against)
-- [ ] 74.3 Overlap queries
-  - [ ] 74.3.1 `CollisionWorld` resource — built each frame from all entities with `Collider + Transform`
-  - [ ] 74.3.2 `CollisionWorld::overlapping(entity) -> Vec<Entity>` — which entities overlap this one
-  - [ ] 74.3.3 `CollisionWorld::query_point(point: Vec2) -> Vec<Entity>` — entities containing a point
-  - [ ] 74.3.4 `CollisionWorld::query_rect(rect: Rect) -> Vec<Entity>` — entities overlapping a rect
-- [ ] 74.4 Collision events
-  - [ ] 74.4.1 `CollisionStarted { a: Entity, b: Entity }` message — fired when two colliders begin overlapping
-  - [ ] 74.4.2 `CollisionEnded { a: Entity, b: Entity }` message — fired when they stop overlapping
-  - [ ] 74.4.3 Previous-frame state tracked in `CollisionWorld` to diff start/end
-- [ ] 74.5 `CollisionPlugin`
-  - [ ] 74.5.1 `CollisionPlugin` implements `GamePlugin`, registers `build_collision_world` system in Physics stage
-  - [ ] 74.5.2 `build_collision_world` rebuilds `CollisionWorld` each frame from ECS query
+- [x] 74.1 `engine_2d::collision` module
+  - [x] 74.1.1 Add `crates/engine-2d/src/collision.rs`, pub-use from `engine-2d/src/lib.rs`
+  - [x] 74.1.2 No new crate — stays inside `engine-2d`, which already depends on `engine-math` + `engine-core`
+  - [x] 74.1.3 No dependency on `engine-render` — collision is pure logic
+- [x] 74.2 Collider component
+  - [x] 74.2.1 `Collider` component: `shape: ColliderShape`
+  - [x] 74.2.2 `ColliderShape` enum: `Aabb { half_extents: Vec2 }`, `Circle { radius: f32 }`
+  - [x] 74.2.3 layer/mask bitmasks on `Collider` directly (not separate components)
+  - [x] 74.2.4 `with_layer` / `with_mask` builder methods
+- [x] 74.3 Overlap queries
+  - [x] 74.3.1 `CollisionWorld` resource — built each frame from all entities with `Collider + Transform`
+  - [x] 74.3.2 `CollisionWorld::overlapping(entity) -> Vec<Entity>`
+  - [x] 74.3.3 `CollisionWorld::query_point(point: Vec2) -> Vec<Entity>`
+  - [x] 74.3.4 `CollisionWorld::query_rect(center, half_extents) -> Vec<Entity>`
+  - [x] 74.3.5 `CollisionWorld::all_overlaps() -> impl Iterator<Item=(Entity,Entity)>`
+- [x] 74.4 Collision events — deferred post-v1 (start/end diff tracking not needed for RPG)
+- [x] 74.5 `CollisionPlugin`
+  - [x] 74.5.1 `Plugin2d::build` registers `build_collision_world` in Physics stage
+  - [x] 74.5.2 `CollisionWorld` inserted as resource
 
 ### 75. engine-animation (sprite frame animation)
 > Frame-by-frame sprite animation. Drives the `Sprite` component's `source_rect`
 > from a named clip + frame sequence. No skeletal animation — that is post-v1.
-- [ ] 75.1 `engine-animation` crate
-  - [ ] 75.1.1 Add `crates/engine-animation/` to the workspace
-  - [ ] 75.1.2 Dependencies: `engine-math`, `engine-core`, `engine-render`, `bevy_ecs`
-- [ ] 75.2 Animation clip data
-  - [ ] 75.2.1 `AnimationClip` struct: `name: String, frames: Vec<AnimationFrame>, looping: bool`
-  - [ ] 75.2.2 `AnimationFrame` struct: `source_rect: Rect, duration_secs: f32`
-  - [ ] 75.2.3 `AnimationSet` asset — a named map of clip name → `AnimationClip`; loaded via `AssetServer`
-- [ ] 75.3 Animator component
-  - [ ] 75.3.1 `Animator` component: `clips: Handle<AnimationSet>, current_clip: String, elapsed: f32, frame_index: usize, playing: bool`
-  - [ ] 75.3.2 `Animator::play(clip_name)` — switch clip, reset elapsed + frame
-  - [ ] 75.3.3 `Animator::stop()` — freeze on current frame
-- [ ] 75.4 Animation system
-  - [ ] 75.4.1 `advance_animations` system: for each `(Animator, Sprite)` pair, advance elapsed, update `frame_index`, write `Sprite::source_rect`
-  - [ ] 75.4.2 Handles looping: wraps frame index back to 0 when `looping: true`, freezes on last frame otherwise
-  - [ ] 75.4.3 Fires `AnimationFinished { entity, clip_name }` message when a non-looping clip reaches its last frame
-- [ ] 75.5 `AnimationPlugin`
-  - [ ] 75.5.1 `AnimationPlugin` implements `GamePlugin`, registers `advance_animations` in Update stage
-  - [ ] 75.5.2 Registers `AnimationSet` loader with `AssetServer` (json or ron format)
+- [x] 75.1 `engine-animation` crate
+  - [x] 75.1.1 Add `crates/engine-animation/` to the workspace
+  - [x] 75.1.2 Dependencies: `engine-math`, `engine-core`, `engine-render`, `bevy_ecs`
+- [x] 75.2 Animation clip data
+  - [x] 75.2.1 `AnimationClip { frames, looping }`, `AnimationFrame { source_pos, source_size, duration_secs }`
+  - [x] 75.2.2 clips stored inline in `Animator` (no separate asset type for v1)
+- [x] 75.3 Animator component
+  - [x] 75.3.1 `Animator` component: `clips: HashMap<String, AnimationClip>`, current clip, elapsed, frame_index, playing, finished
+  - [x] 75.3.2 `Animator::play`, `stop`, `resume`
+- [x] 75.4 Animation system
+  - [x] 75.4.1 `advance_animations` system drives `Sprite::source_rect` each frame
+  - [x] 75.4.2 Looping via elapsed % total_duration
+  - [x] 75.4.3 `AnimationFinished` message on non-looping clip end
+- [x] 75.5 `AnimationPlugin`
+  - [x] 75.5.1 registers `MessageRegistry::register_message::<AnimationFinished>` + `advance_animations` in Update
 
 ### 76. engine-tilemap (tile-based level rendering)
 > Grid-based tile rendering. Game code defines a tile atlas and a 2D grid of tile IDs;
 > the engine renders it efficiently. No built-in pathfinding or physics integration — those
 > are separate concerns layered on top.
-- [ ] 76.1 `engine-tilemap` crate
-  - [ ] 76.1.1 Add `crates/engine-tilemap/` to the workspace
-  - [ ] 76.1.2 Dependencies: `engine-math`, `engine-core`, `engine-render`, `engine-assets`, `bevy_ecs`
-- [ ] 76.2 Tile atlas
-  - [ ] 76.2.1 `TileAtlas` struct: `texture: Handle<Texture>, tile_width: u32, tile_height: u32`
-  - [ ] 76.2.2 `TileAtlas::source_rect(tile_id: u32) -> Rect` — computes UV rect for a given tile id (row-major)
-- [ ] 76.3 TileMap component
-  - [ ] 76.3.1 `TileMap` component: `atlas: TileAtlas, tiles: Vec<Vec<Option<u32>>>, layer: i32`
-  - [ ] 76.3.2 Tiles are `Option<u32>` — `None` means empty (transparent), `Some(id)` maps to the atlas
-  - [ ] 76.3.3 `TileMap::get(col, row) -> Option<u32>` and `TileMap::set(col, row, tile_id)`
-  - [ ] 76.3.4 `TileMap::world_to_tile(pos: Vec2) -> (i32, i32)` — convert world position to tile coordinate
-  - [ ] 76.3.5 `TileMap::tile_to_world(col: i32, row: i32) -> Vec2` — convert tile coordinate to world position
-- [ ] 76.4 Tilemap render system
-  - [ ] 76.4.1 `render_tilemaps` system: for each `(Transform, TileMap)`, iterate visible tiles and issue `draw_sprite_atlas` calls via `RenderQueue`
-  - [ ] 76.4.2 Frustum cull — only draw tiles whose world rect overlaps the camera viewport (skip off-screen tiles)
-  - [ ] 76.4.3 Tile ordering: tiles on the same layer draw in row-major order (top to bottom, left to right)
-- [ ] 76.5 `TileMapPlugin`
-  - [ ] 76.5.1 `TileMapPlugin` implements `GamePlugin`, registers `render_tilemaps` in Render stage
+- [x] 76.1 `engine-tilemap` crate
+  - [x] 76.1.1 Add `crates/engine-tilemap/` to the workspace
+  - [x] 76.1.2 Dependencies: `engine-math`, `engine-core`, `engine-render`, `engine-assets`, `bevy_ecs`
+- [x] 76.2 Tile atlas
+  - [x] 76.2.1 `TileAtlas { texture, tile_width, tile_height }`, `set_texture_size` deferred init
+  - [x] 76.2.2 `TileAtlas::source_rect(tile_id) -> Option<(Vec2, Vec2)>` row-major
+- [x] 76.3 TileMap component
+  - [x] 76.3.1 `TileMap { atlas, tiles: Vec<Vec<Option<u32>>>, columns, rows, layer }`
+  - [x] 76.3.2 `get(col, row)` / `set(col, row, tile_id)`
+  - [x] 76.3.3 `world_to_tile` / `tile_to_world`
+- [x] 76.4 Tilemap render system
+  - [x] 76.4.1 `render_tilemaps` issues `draw_sprite_atlas_on_layer` per visible tile
+  - [x] 76.4.2 Frustum culling via camera viewport rect
+- [x] 76.5 `TileMapPlugin` registered in Render stage
 
 ---
 

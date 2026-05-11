@@ -295,3 +295,83 @@ pub fn measure_text(atlas: &GlyphAtlas, font_id: u32, text: &str, font_size: f32
     }
     width
 }
+
+/// layout text with word-wrapping at `max_width` pixels.
+///
+/// splits `text` on word boundaries, accumulates words per line until
+/// the line would exceed `max_width`, then starts a new line.
+/// each returned `Vec<TextGlyphQuad>` is one visual line, positioned at
+/// `position + Vec2::new(0, line * line_height)`.
+///
+/// `line_height` defaults to `font_size * 1.25` when passed as 0.0.
+pub fn layout_text_wrapped(
+    atlas: &GlyphAtlas,
+    font_id: u32,
+    text: &str,
+    font_size: f32,
+    position: Vec2,
+    max_width: f32,
+    line_height: f32,
+) -> Vec<Vec<TextGlyphQuad>> {
+    let effective_line_height = if line_height > 0.0 {
+        line_height
+    } else {
+        font_size * 1.25
+    };
+    let mut lines: Vec<Vec<TextGlyphQuad>> = Vec::new();
+    let mut line_y = 0.0f32;
+
+    for paragraph in text.split('\n') {
+        let words: Vec<&str> = paragraph.split_whitespace().collect();
+        let mut current_line = String::new();
+        let mut current_width = 0.0f32;
+
+        for word in words {
+            let word_width = measure_text(atlas, font_id, word, font_size);
+            let space_width = if current_line.is_empty() {
+                0.0
+            } else {
+                measure_text(atlas, font_id, " ", font_size)
+            };
+
+            if !current_line.is_empty() && current_width + space_width + word_width > max_width {
+                // flush current line
+                let line_pos = Vec2::new(position.x, position.y + line_y);
+                lines.push(layout_text(
+                    atlas,
+                    font_id,
+                    &current_line,
+                    font_size,
+                    line_pos,
+                ));
+                line_y += effective_line_height;
+                current_line = word.to_string();
+                current_width = word_width;
+            } else {
+                if !current_line.is_empty() {
+                    current_line.push(' ');
+                    current_width += space_width;
+                }
+                current_line.push_str(word);
+                current_width += word_width;
+            }
+        }
+
+        // flush remaining line (including empty paragraphs as blank lines)
+        let line_pos = Vec2::new(position.x, position.y + line_y);
+        if current_line.is_empty() {
+            lines.push(Vec::new());
+        } else {
+            lines.push(layout_text(
+                atlas,
+                font_id,
+                &current_line,
+                font_size,
+                line_pos,
+            ));
+        }
+        line_y += effective_line_height;
+    }
+
+    lines
+}

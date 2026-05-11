@@ -881,6 +881,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine-ui"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "engine-assets",
+ "engine-core",
+ "engine-math",
+ "engine-render",
+]
+
+[[package]]
 name = "engine-zones"
 version = "0.1.0"
 dependencies = [

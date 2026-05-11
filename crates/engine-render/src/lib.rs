@@ -1368,18 +1368,37 @@ impl RenderEngine {
                             position,
                             font_size,
                             color,
+                            wrap_width,
+                            line_height,
                             ..
                         } => {
                             let font_id = u32::try_from(font.unwrap_or(0)).unwrap_or(u32::MAX);
-                            let quads = self
-                                .get_cached_text_layout(font_id, content, *font_size)
-                                .to_vec();
-                            for quad in quads {
-                                let offset_quad = text::TextGlyphQuad {
-                                    position: quad.position + *position,
-                                    ..quad
-                                };
-                                self.write_text_quad(&offset_quad, *color);
+                            if let Some(max_width) = wrap_width {
+                                let lines = text::layout_text_wrapped(
+                                    &self.glyph_atlas,
+                                    font_id,
+                                    content,
+                                    *font_size,
+                                    *position,
+                                    *max_width,
+                                    *line_height,
+                                );
+                                for line_quads in lines {
+                                    for quad in line_quads {
+                                        self.write_text_quad(&quad, *color);
+                                    }
+                                }
+                            } else {
+                                let quads = self
+                                    .get_cached_text_layout(font_id, content, *font_size)
+                                    .to_vec();
+                                for quad in quads {
+                                    let offset_quad = text::TextGlyphQuad {
+                                        position: quad.position + *position,
+                                        ..quad
+                                    };
+                                    self.write_text_quad(&offset_quad, *color);
+                                }
                             }
                         }
                         DrawKind::Sprite { .. } => {}
@@ -1741,6 +1760,10 @@ pub enum DrawKind {
         font_size: f32,
         color: Color,
         layer: i32,
+        /// if set, text wraps at this pixel width using word boundaries
+        wrap_width: Option<f32>,
+        /// line spacing when wrap_width is set; 0.0 = font_size * 1.25
+        line_height: f32,
     },
 }
 
@@ -2139,6 +2162,8 @@ impl RenderQueue {
                 font_size,
                 color,
                 layer,
+                wrap_width: None,
+                line_height: 0.0,
             },
         });
     }
@@ -2175,6 +2200,51 @@ impl RenderQueue {
     ) {
         let world = camera.screen_to_world(screen_pos, window_width, window_height);
         self.draw_rect_on_layer(world, size, color, layers::UI);
+    }
+
+    /// draw word-wrapped text on the given layer.
+    /// `max_width` is the pixel width at which lines break.
+    /// `line_height` is the vertical spacing per line; 0.0 = font_size * 1.25.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_text_wrapped(
+        &mut self,
+        font: &Handle<Font>,
+        content: &str,
+        position: Vec2,
+        font_size: f32,
+        color: Color,
+        max_width: f32,
+        line_height: f32,
+        layer: i32,
+    ) {
+        self.push(DrawCommand {
+            kind: DrawKind::Text {
+                font: Some(u64::from(font.id())),
+                content: content.to_string(),
+                position,
+                font_size,
+                color,
+                layer,
+                wrap_width: Some(max_width),
+                line_height,
+            },
+        });
+    }
+
+    /// draw a sprite in screen-space coordinates (for UI).
+    /// the position is the top-left corner in screen pixels, y-down.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_ui_sprite(
+        &mut self,
+        texture: &Handle<Texture>,
+        screen_pos: Vec2,
+        size: Vec2,
+        camera: &Camera,
+        window_width: u32,
+        window_height: u32,
+    ) {
+        let world = camera.screen_to_world(screen_pos, window_width, window_height);
+        self.draw_sprite_on_layer(texture, world, size, layers::UI);
     }
 
     /// immediate mode drawing API for debug visualization and quick prototyping.
@@ -2288,6 +2358,8 @@ impl DrawContext<'_> {
                 font_size,
                 color,
                 layer: layers::FOREGROUND,
+                wrap_width: None,
+                line_height: 0.0,
             },
         });
     }
@@ -2600,6 +2672,8 @@ fn auto_text_system(mut queue: ResMut<RenderQueue>, query: Query<(&Transform, &T
                 font_size: text.font_size,
                 color: text.color,
                 layer: text.layer,
+                wrap_width: None,
+                line_height: 0.0,
             },
         });
     }
