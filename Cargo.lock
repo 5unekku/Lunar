@@ -730,6 +730,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
+name = "engine-2d"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "engine-core",
+ "engine-math",
+]
+
+[[package]]
+name = "engine-animation"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "engine-core",
+ "engine-math",
+ "engine-render",
+]
+
+[[package]]
 name = "engine-assets"
 version = "0.1.0"
 dependencies = [
@@ -848,6 +867,17 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "wgpu",
+]
+
+[[package]]
+name = "engine-tilemap"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "engine-assets",
+ "engine-core",
+ "engine-math",
+ "engine-render",
 ]
 
 [[package]]
@@ -1669,6 +1699,7 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "console_log",
+ "engine-2d",
  "engine-assets",
  "engine-core",
  "engine-input",

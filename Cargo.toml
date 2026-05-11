@@ -18,6 +18,8 @@ members = [
     "crates/engine-dialogue",
     "crates/engine-localization",
     "crates/engine-zones",
+    "crates/engine-animation",
+    "crates/engine-tilemap",
     "tests/api_seal",
 ]
 resolver = "2"

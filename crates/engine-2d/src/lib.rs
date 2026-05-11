@@ -1,15 +1,20 @@
-//! 2d transform propagation systems.
+//! 2d-specific systems: transform propagation and collision detection.
 //!
 //! this crate is the 2d-specific layer of the engine. 3d games use engine-3d
-//! instead — no 2d propagation code compiles into them.
+//! instead — no 2d code compiles into them.
 //!
-//! register [`Plugin2d`] in your app to enable 2d transform propagation.
+//! register [`Plugin2d`] in your app to enable 2d transform propagation and
+//! the [`collision::CollisionWorld`] resource.
+
+pub mod collision;
 
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
 use engine_core::{App, GamePlugin, Parent};
 use engine_math::{LocalTransform, Vec2, WorldTransform};
+
+use collision::{CollisionWorld, build_collision_world};
 
 /// plugin that registers the 2d transform propagation system.
 ///
@@ -23,7 +28,9 @@ impl GamePlugin for Plugin2d {
     }
 
     fn build(&mut self, app: &mut App) {
-        app.add_system(propagate_transforms);
+        app.insert_resource(CollisionWorld::default());
+        app.add_system_to_stage(engine_core::UpdateStage::Physics, build_collision_world);
+        app.add_system_to_stage(engine_core::UpdateStage::Update, propagate_transforms);
     }
 }
 
