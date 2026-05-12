@@ -1,0 +1,7 @@
+[alias]
+# Build API docs without embedded source HTML.
+doc-no-source = "doc --workspace --no-deps"
+
+[env]
+# Requires nightly; used by `cargo doc` and the alias above.
+RUSTDOCFLAGS = "-Zunstable-options --html-no-source"

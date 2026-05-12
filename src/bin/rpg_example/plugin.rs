@@ -1,9 +1,6 @@
-use lunar::prelude::*;
-// domain crate — not in lunar prelude because dialogue is opt-in.
 use engine_dialogue::{DialogueBuilder, DialogueManager, DialoguePlugin};
-// `UpdateStage` lives in engine_core; not re-exported through lunar because
-// custom-stage scheduling is an advanced API users typically don't need.
 use lunar::engine_core::UpdateStage;
+use lunar::prelude::*;
 
 use crate::rpg_example::components::*;
 use crate::rpg_example::resources::*;
@@ -35,6 +32,7 @@ pub fn setup(
     let npc_tex1 = assets.load_texture("sprites/npc1.webp");
     let npc_tex2 = assets.load_texture("sprites/npc2.webp");
     let npc_tex3 = assets.load_texture("sprites/npc3.webp");
+    let npc_tex3_emotion = assets.load_texture("sprites/npc3_emotion.webp");
     let font = assets.load_font("fonts/Inconsolata.ttf");
 
     let npc_defs = vec![
@@ -44,7 +42,8 @@ pub fn setup(
             label: "old man".into(),
             dialogue_name: "npc1".into(),
             has_icon: true,
-            icon_color: Color::rgb(200.0 / 255.0, 60.0 / 255.0, 60.0 / 255.0),
+            icon_color: Color::rgb(0.75, 0.19, 0.19),
+            emotion_tex: None,
         },
         NpcData {
             start_x: 1000.0,
@@ -52,7 +51,8 @@ pub fn setup(
             label: "traveler".into(),
             dialogue_name: "npc2".into(),
             has_icon: false,
-            icon_color: Color::rgb(220.0 / 255.0, 200.0 / 255.0, 60.0 / 255.0),
+            icon_color: Color::rgb(0.82, 0.69, 0.24),
+            emotion_tex: None,
         },
         NpcData {
             start_x: 400.0,
@@ -60,17 +60,12 @@ pub fn setup(
             label: "merchant".into(),
             dialogue_name: "npc3".into(),
             has_icon: true,
-            icon_color: Color::rgb(60.0 / 255.0, 180.0 / 255.0, 80.0 / 255.0),
+            icon_color: Color::rgb(0.19, 0.63, 0.25),
+            emotion_tex: Some(npc_tex3_emotion),
         },
     ];
 
-    commands.spawn((Player, Facing::Down, Transform::from_xy(800.0, 600.0)));
-
-    let npc_textures = vec![npc_tex1, npc_tex2, npc_tex3];
-    for (i, def) in npc_defs.iter().enumerate() {
-        commands.spawn((Npc(i), Transform::from_xy(def.start_x, def.start_y)));
-    }
-
+    // npc1 — has a question with two choices; the choice is remembered
     let d1 = DialogueBuilder::new("line1")
         .line(
             "line1",
@@ -91,18 +86,18 @@ pub fn setup(
             "treasure",
             Some(&npc_defs[0].label),
             "Ha! Then head east, past the old ruins. But beware the shadows.",
-            Some("end"),
+            None,
         )
         .line(
             "passing",
             Some(&npc_defs[0].label),
             "Then keep your wits about you. The road ahead is long.",
-            Some("end"),
+            None,
         )
-        .line("end", None, "...", None)
         .build();
     dialogues.register("npc1", d1);
 
+    // npc2 — simple linear dialogue, no icon
     let d2 = DialogueBuilder::new("l1")
         .line(
             "l1",
@@ -119,7 +114,25 @@ pub fn setup(
         .build();
     dialogues.register("npc2", d2);
 
-    let d3 = DialogueBuilder::new("l1")
+    // npc3 — has an icon and emotion sprite; dialogue differs based on npc1's answer.
+    // two registered variants; plugin.rs picks which to start at runtime.
+    let d3_treasure = DialogueBuilder::new("l1")
+        .line(
+            "l1",
+            Some(&npc_defs[2].label),
+            "Ah, a treasure hunter! You'll want sturdy boots for those ruins.",
+            Some("l2"),
+        )
+        .line(
+            "l2",
+            Some(&npc_defs[2].label),
+            "Good luck out there. I have nothing to sell today, sorry!",
+            None,
+        )
+        .build();
+    dialogues.register("npc3_treasure", d3_treasure);
+
+    let d3_passing = DialogueBuilder::new("l1")
         .line(
             "l1",
             Some(&npc_defs[2].label),
@@ -133,7 +146,27 @@ pub fn setup(
             None,
         )
         .build();
-    dialogues.register("npc3", d3);
+    dialogues.register("npc3_passing", d3_passing);
+
+    // walls: border walls + a couple of interior obstacles
+    let walls = Walls(vec![
+        // border walls (player can't leave the room)
+        Wall::new(0.0, 0.0, ROOM_WIDTH, 16.0), // top
+        Wall::new(0.0, ROOM_HEIGHT - 16.0, ROOM_WIDTH, 16.0), // bottom
+        Wall::new(0.0, 0.0, 16.0, ROOM_HEIGHT), // left
+        Wall::new(ROOM_WIDTH - 16.0, 0.0, 16.0, ROOM_HEIGHT), // right
+        // interior obstacles
+        Wall::new(300.0, 300.0, 200.0, 40.0),
+        Wall::new(900.0, 400.0, 40.0, 200.0),
+        Wall::new(700.0, 800.0, 160.0, 40.0),
+    ]);
+
+    commands.spawn((Player, Facing::Down, Transform::from_xy(800.0, 600.0)));
+
+    let npc_textures = vec![npc_tex1, npc_tex2, npc_tex3];
+    for (i, def) in npc_defs.iter().enumerate() {
+        commands.spawn((Npc(i), Transform::from_xy(def.start_x, def.start_y)));
+    }
 
     commands.insert_resource(GameAssets {
         player_tex,
@@ -142,6 +175,8 @@ pub fn setup(
     });
     commands.insert_resource(NpcDefinitions(npc_defs));
     commands.insert_resource(GameMode::Overworld);
+    commands.insert_resource(PlayerChoiceState::default());
+    commands.insert_resource(walls);
     commands.insert_resource(Camera {
         position: Vec2::new(800.0, 600.0),
         zoom: 1.0,
@@ -151,19 +186,22 @@ pub fn setup(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn overworld_input(
     input: Res<InputState>,
     time: Res<Time>,
-    mut query: Query<&mut Transform, With<Player>>,
-    npc_query: Query<(Entity, &Transform, &Npc)>,
+    mut player_query: Query<&mut Transform, With<Player>>,
+    npc_query: Query<(&Transform, &Npc), Without<Player>>,
     npc_defs: Res<NpcDefinitions>,
+    walls: Res<Walls>,
     mut mode: ResMut<GameMode>,
     mut dialogues: ResMut<DialogueManager>,
+    choice_state: Res<PlayerChoiceState>,
 ) {
     if !matches!(*mode, GameMode::Overworld) {
         return;
     }
-    let Ok(mut player) = query.single_mut() else {
+    let Ok(mut player) = player_query.single_mut() else {
         return;
     };
 
@@ -185,26 +223,39 @@ pub fn overworld_input(
     let speed = PLAYER_SPEED * time.delta_seconds();
     if dx != 0.0 || dy != 0.0 {
         let len = dx.hypot(dy);
-        let mut new_x = player.translation.x + dx / len * speed;
-        let mut new_y = player.translation.y + dy / len * speed;
-        new_x = new_x.clamp(SPRITE_W * 0.5, ROOM_WIDTH - SPRITE_W * 0.5);
-        new_y = new_y.clamp(SPRITE_H * 0.5, ROOM_HEIGHT - SPRITE_H * 0.5);
-        player.translation.x = new_x;
-        player.translation.y = new_y;
+        let move_x = dx / len * speed;
+        let move_y = dy / len * speed;
+
+        // resolve x and y independently so the player slides along walls
+        let new_x = player.translation.x + move_x;
+        if !player_collides_walls(new_x, player.translation.y, &walls) {
+            player.translation.x = new_x;
+        }
+        let new_y = player.translation.y + move_y;
+        if !player_collides_walls(player.translation.x, new_y, &walls) {
+            player.translation.y = new_y;
+        }
     }
 
     if input.is_key_just_pressed(KeyCode::Space) || input.is_key_just_pressed(KeyCode::Enter) {
         let px = player.translation.x;
         let py = player.translation.y;
-        for (_, npc_t, npc) in &npc_query {
-            let nx = npc_t.translation.x;
-            let ny = npc_t.translation.y;
-            let d = Vec2::new(px - nx, py - ny);
+        for (npc_t, npc) in &npc_query {
+            let d = Vec2::new(px - npc_t.translation.x, py - npc_t.translation.y);
             if d.length() > INTERACT_RANGE {
                 continue;
             }
             let def = &npc_defs.0[npc.0];
-            dialogues.start(&def.dialogue_name);
+            let dialogue_key = if npc.0 == 2 {
+                // npc3 reacts to npc1's answer
+                match choice_state.npc1_choice {
+                    Some(0) => "npc3_treasure",
+                    _ => "npc3_passing",
+                }
+            } else {
+                &def.dialogue_name
+            };
+            dialogues.start(dialogue_key);
             *mode = GameMode::Dialogue {
                 npc_index: npc.0,
                 text_visible_chars: 0,
@@ -216,36 +267,53 @@ pub fn overworld_input(
     }
 }
 
+/// returns true if a player-sized AABB at (cx, cy) overlaps any wall.
+fn player_collides_walls(cx: f32, cy: f32, walls: &Walls) -> bool {
+    let half_w = SPRITE_W * 0.5;
+    let half_h = SPRITE_H * 0.5;
+    let px0 = cx - half_w;
+    let px1 = cx + half_w;
+    let py0 = cy - half_h;
+    let py1 = cy + half_h;
+    for wall in &walls.0 {
+        let wx1 = wall.x + wall.w;
+        let wy1 = wall.y + wall.h;
+        if px0 < wx1 && px1 > wall.x && py0 < wy1 && py1 > wall.y {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn dialogue_input(
     input: Res<InputState>,
     time: Res<Time>,
     mut mode: ResMut<GameMode>,
     mut dialogues: ResMut<DialogueManager>,
+    mut choice_state: ResMut<PlayerChoiceState>,
 ) {
     let transition = match &mut *mode {
         GameMode::Dialogue {
+            npc_index,
             text_timer,
             text_visible_chars,
             choice_selection,
-            ..
         } => {
             *text_timer += time.delta_seconds();
             let total = dialogues.current_line().map(|l| l.text.len()).unwrap_or(0);
             *text_visible_chars = (*text_timer * CPS) as usize;
 
-            // choice navigation
             if dialogues.has_choices() && *text_visible_chars >= total {
-                let cc = dialogues.choice_labels().len();
+                let count = dialogues.choice_labels().len();
                 if input.is_key_just_pressed(KeyCode::Up) || input.is_key_just_pressed(KeyCode::W) {
                     *choice_selection = choice_selection.saturating_sub(1);
                 }
                 if input.is_key_just_pressed(KeyCode::Down) || input.is_key_just_pressed(KeyCode::S)
                 {
-                    *choice_selection = choice_selection.saturating_add(1).min(cc - 1);
+                    *choice_selection = choice_selection.saturating_add(1).min(count - 1);
                 }
             }
 
-            // advance
             let press = input.is_key_just_pressed(KeyCode::Space)
                 || input.is_key_just_pressed(KeyCode::Enter);
             if !press {
@@ -254,7 +322,13 @@ pub fn dialogue_input(
                 *text_visible_chars = total;
                 None
             } else if dialogues.has_choices() {
-                dialogues.choose(*choice_selection);
+                let chosen = *choice_selection;
+                let npc = *npc_index;
+                dialogues.choose(chosen);
+                // remember npc1's choice
+                if npc == 0 {
+                    choice_state.npc1_choice = Some(chosen);
+                }
                 if !dialogues.is_active() {
                     Some(GameMode::Overworld)
                 } else {
@@ -281,14 +355,27 @@ pub fn dialogue_input(
     }
 }
 
+/// clamp camera to world bounds, per-axis.
+/// if the world is smaller than the viewport on an axis, center it.
 pub fn camera_follow(player_query: Query<&Transform, With<Player>>, mut camera: ResMut<Camera>) {
     let Ok(player) = player_query.single() else {
         return;
     };
-    let px = player.translation.x;
-    let py = player.translation.y;
-    camera.position.x = px.clamp(VIEW_WIDTH * 0.5, ROOM_WIDTH - VIEW_WIDTH * 0.5);
-    camera.position.y = py.clamp(VIEW_HEIGHT * 0.5, ROOM_HEIGHT - VIEW_HEIGHT * 0.5);
+
+    let half_vw = VIEW_WIDTH * 0.5;
+    let half_vh = VIEW_HEIGHT * 0.5;
+
+    camera.position.x = if ROOM_WIDTH <= VIEW_WIDTH {
+        ROOM_WIDTH * 0.5
+    } else {
+        player.translation.x.clamp(half_vw, ROOM_WIDTH - half_vw)
+    };
+
+    camera.position.y = if ROOM_HEIGHT <= VIEW_HEIGHT {
+        ROOM_HEIGHT * 0.5
+    } else {
+        player.translation.y.clamp(half_vh, ROOM_HEIGHT - half_vh)
+    };
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -296,21 +383,33 @@ pub fn render(
     mode: Res<GameMode>,
     assets: Res<GameAssets>,
     npc_defs: Res<NpcDefinitions>,
+    walls: Res<Walls>,
     window: Res<WindowSettings>,
     player_query: Query<&Transform, With<Player>>,
     npc_query: Query<(&Transform, &Npc)>,
     camera: Res<Camera>,
-    _info: Res<RenderInfo>,
     dialogues: Res<DialogueManager>,
     mut queue: ResMut<RenderQueue>,
 ) {
+    // ground
     queue.draw_rect_on_layer(
         Vec2::ZERO,
         Vec2::new(ROOM_WIDTH, ROOM_HEIGHT),
-        Color::rgb(0.2, 0.6, 0.1),
+        Color::rgb(0.2, 0.55, 0.15),
         layers::BACKGROUND,
     );
 
+    // walls
+    for wall in &walls.0 {
+        queue.draw_rect_on_layer(
+            Vec2::new(wall.x, wall.y),
+            Vec2::new(wall.w, wall.h),
+            Color::rgb(0.35, 0.25, 0.15),
+            layers::GAME,
+        );
+    }
+
+    // player
     if let Ok(player) = player_query.single() {
         queue.draw_sprite_on_layer(
             &assets.player_tex,
@@ -319,6 +418,8 @@ pub fn render(
             layers::GAME,
         );
     }
+
+    // npcs
     for (npc_t, npc) in &npc_query {
         queue.draw_sprite_on_layer(
             &assets.npc_textures[npc.0],
@@ -328,6 +429,7 @@ pub fn render(
         );
     }
 
+    // dialogue box
     if let GameMode::Dialogue {
         npc_index,
         text_visible_chars,
@@ -336,45 +438,57 @@ pub fn render(
     } = &*mode
     {
         let def = &npc_defs.0[*npc_index];
-        let text = dialogues
-            .current_line()
-            .map(|l| l.text.as_str())
-            .unwrap_or("");
-        let speaker = dialogues.current_line().and_then(|l| l.speaker.as_deref());
+        let line = dialogues.current_line();
+        let text = line.map(|l| l.text.as_str()).unwrap_or("");
+        let speaker = line.and_then(|l| l.speaker.as_deref());
 
-        let box_origin = camera.screen_to_world(
-            Vec2::new(0.0, VIEW_HEIGHT - DIALOGUE_BOX_H),
-            window.width,
-            window.height,
-        );
+        let box_y = VIEW_HEIGHT - DIALOGUE_BOX_H;
+        let box_origin = camera.screen_to_world(Vec2::new(0.0, box_y), window.width, window.height);
         let box_size = Vec2::new(VIEW_WIDTH, DIALOGUE_BOX_H);
 
+        // box background
         queue.draw_rect_on_layer(
             box_origin,
             box_size,
-            Color::rgba(0.0, 0.0, 0.0, 0.75),
+            Color::rgba(0.0, 0.0, 0.0, 0.78),
             layers::UI,
         );
 
-        let mut text_x = box_origin.x + 8.0;
-        let text_y = box_origin.y + 28.0;
+        // portrait column — always reserved, icon drawn only if has_icon
+        let icon_x = box_origin.x + 4.0;
+        let icon_y = box_origin.y + (DIALOGUE_BOX_H - ICON_SIZE) * 0.5;
 
         if def.has_icon {
-            queue.draw_rect_on_layer(
-                Vec2::new(box_origin.x + 8.0, box_origin.y + 8.0),
-                Vec2::new(16.0, 16.0),
-                def.icon_color,
-                layers::UI,
-            );
-            text_x += 24.0;
+            // use emotion sprite if available, otherwise the base icon color rect
+            if let Some(emotion) = &def.emotion_tex {
+                queue.draw_sprite_on_layer(
+                    emotion,
+                    Vec2::new(icon_x + ICON_SIZE * 0.5, icon_y + ICON_SIZE * 0.5),
+                    Vec2::new(ICON_SIZE, ICON_SIZE),
+                    layers::UI,
+                );
+            } else {
+                queue.draw_rect_on_layer(
+                    Vec2::new(icon_x, icon_y),
+                    Vec2::new(ICON_SIZE, ICON_SIZE),
+                    def.icon_color,
+                    layers::UI,
+                );
+            }
         }
+
+        // text area starts after the icon column regardless of whether the icon is shown
+        let text_x = box_origin.x + ICON_COL_W;
+        let name_y = box_origin.y + 6.0;
+        let text_y = box_origin.y + 26.0;
+
         if let Some(name) = speaker {
             queue.draw_text_on_layer(
                 &assets.font,
                 name,
-                Vec2::new(text_x, box_origin.y + 4.0),
+                Vec2::new(text_x, name_y),
                 14.0,
-                Color::rgb(0.8, 0.8, 0.3),
+                Color::rgb(0.85, 0.85, 0.35),
                 layers::UI,
             );
         }
@@ -391,27 +505,28 @@ pub fn render(
             );
         }
 
+        // choices
         if *text_visible_chars >= text.len() && dialogues.has_choices() {
             let labels = dialogues.choice_labels();
-            let mut cy = text_y + 24.0;
+            let mut cy = text_y + 28.0;
             for (i, label) in labels.iter().enumerate() {
-                let color = if *choice_selection == i {
-                    Color::rgb(1.0, 1.0, 0.5)
-                } else {
-                    Color::rgb(0.7, 0.7, 0.7)
-                };
                 if *choice_selection == i {
                     queue.draw_rect_on_layer(
-                        Vec2::new(text_x - 4.0, cy - 2.0),
-                        Vec2::new(VIEW_WIDTH - 16.0, 20.0),
-                        Color::rgba(0.3, 0.3, 0.5, 0.5),
+                        Vec2::new(text_x - 2.0, cy - 2.0),
+                        Vec2::new(VIEW_WIDTH - ICON_COL_W - 8.0, 20.0),
+                        Color::rgba(0.3, 0.3, 0.55, 0.55),
                         layers::UI,
                     );
                 }
+                let color = if *choice_selection == i {
+                    Color::rgb(1.0, 1.0, 0.5)
+                } else {
+                    Color::rgb(0.72, 0.72, 0.72)
+                };
                 queue.draw_text_on_layer(
                     &assets.font,
                     label,
-                    Vec2::new(text_x + 8.0, cy),
+                    Vec2::new(text_x + 6.0, cy),
                     15.0,
                     color,
                     layers::UI,
@@ -420,9 +535,10 @@ pub fn render(
             }
         }
 
+        // advance indicator
         if *text_visible_chars >= text.len() && !dialogues.has_choices() && dialogues.is_active() {
             let ind = camera.screen_to_world(
-                Vec2::new(VIEW_WIDTH - 100.0, VIEW_HEIGHT - 20.0),
+                Vec2::new(VIEW_WIDTH - 80.0, VIEW_HEIGHT - 18.0),
                 window.width,
                 window.height,
             );
