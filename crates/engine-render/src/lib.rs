@@ -2540,16 +2540,13 @@ impl GamePlugin for RenderPlugin {
         app.insert_resource(RenderQueue::new());
         app.insert_resource(RenderInfo::new());
         app.insert_resource(DebugOverlay::new());
-        // ordering matters: component-driven enqueue → debug overlay enqueue →
-        // render_system drains the queue → clears it. all four mut-borrow
-        // RenderQueue so they serialize anyway; .chain() pins the order.
-        // on wasm the renderer is not yet wired, so the chain ends with a
-        // stub clear instead of render_system (RenderEngine isn't a Resource
-        // on wasm because WebGPU types are !Send).
+        // upload_new_textures_system runs first to ensure any texture that became
+        // ready this frame is on the GPU before auto_sprite_system enqueues draws.
         #[cfg(not(target_arch = "wasm32"))]
         app.add_system_to_stage(
             engine_core::UpdateStage::Render,
             (
+                upload_new_textures_system,
                 frame_stats_system,
                 auto_sprite_system,
                 auto_text_system,
@@ -2562,6 +2559,7 @@ impl GamePlugin for RenderPlugin {
         app.add_system_to_stage(
             engine_core::UpdateStage::Render,
             (
+                wasm_upload_new_textures_system,
                 frame_stats_system,
                 auto_sprite_system,
                 auto_text_system,
@@ -2606,6 +2604,39 @@ fn wasm_render_system(
         }
     });
     queue.clear();
+}
+
+/// uploads textures that became ready in the asset server to the GPU.
+///
+/// drains the pending list from [`AssetServer`] and calls [`RenderEngine::upload_texture`]
+/// for each one. runs before the render chain so draws on the same frame a texture
+/// loads will succeed.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::needless_pass_by_value)]
+fn upload_new_textures_system(mut assets: ResMut<AssetServer>, mut render: ResMut<RenderEngine>) {
+    for id in assets.drain_new_texture_ids() {
+        if let Some(texture) = assets.get_texture_by_id(id) {
+            let handle = Handle::<Texture>::new(id, 0);
+            render.upload_texture(&handle, texture);
+        }
+    }
+}
+
+/// WASM version — accesses the render engine from thread-local storage.
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::needless_pass_by_value)]
+fn wasm_upload_new_textures_system(mut assets: ResMut<AssetServer>) {
+    let ids = assets.drain_new_texture_ids();
+    WASM_RENDER_ENGINE.with(|cell| {
+        if let Some(engine) = cell.borrow_mut().as_mut() {
+            for id in ids {
+                if let Some(texture) = assets.get_texture_by_id(id) {
+                    let handle = Handle::<Texture>::new(id, 0);
+                    engine.upload_texture(&handle, texture);
+                }
+            }
+        }
+    });
 }
 
 /// populate the [`RenderInfo`] resource each frame from [`Time`] so the debug

@@ -322,6 +322,19 @@ impl<T: Asset> AssetStore<T> {
             .filter(|e| e.state == LoadState::Loading)
             .count()
     }
+
+    fn get_by_id(&self, id: u32) -> Option<&T> {
+        self.entries
+            .get(id as usize)
+            .and_then(|e| e.as_ref())
+            .and_then(|entry| {
+                if entry.state == LoadState::Loaded {
+                    entry.data.as_ref()
+                } else {
+                    None
+                }
+            })
+    }
 }
 
 /// result of an async load operation, sent from worker threads back to the main thread
@@ -766,6 +779,10 @@ pub struct AssetServer {
     custom_texture_loaders: Vec<CustomLoaderEntry<dyn TextureLoaderTrait>>,
     custom_sound_loaders: Vec<CustomLoaderEntry<dyn SoundLoaderTrait>>,
     custom_font_loaders: Vec<CustomLoaderEntry<dyn FontLoaderTrait>>,
+    /// IDs of textures ready for GPU upload, drained by the render system each frame.
+    pending_texture_ids: Vec<u32>,
+    /// counter for generating unique synthetic paths for procedural textures.
+    proc_texture_counter: u32,
 }
 
 impl AssetServer {
@@ -780,6 +797,8 @@ impl AssetServer {
             custom_texture_loaders: Vec::new(),
             custom_sound_loaders: Vec::new(),
             custom_font_loaders: Vec::new(),
+            pending_texture_ids: Vec::new(),
+            proc_texture_counter: 0,
         }
     }
 
@@ -993,6 +1012,78 @@ impl AssetServer {
         paths.iter().map(|p| self.load_texture(p)).collect()
     }
 
+    /// drain the list of texture IDs that became ready since the last drain.
+    ///
+    /// the render system calls this once per frame to discover newly loaded
+    /// textures and upload them to the GPU. callers other than the render
+    /// system should generally not call this — it clears the pending list.
+    pub fn drain_new_texture_ids(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.pending_texture_ids)
+    }
+
+    /// get a loaded texture by its raw asset ID.
+    ///
+    /// used by the render system when uploading newly-loaded textures.
+    /// prefer [`get_texture`](Self::get_texture) for normal game code.
+    #[must_use]
+    pub fn get_texture_by_id(&self, id: u32) -> Option<&Texture> {
+        self.texture_store.get_by_id(id)
+    }
+
+    /// create a texture from raw RGBA pixel data without loading from disk.
+    ///
+    /// returns a handle that is immediately ready. the render system will
+    /// upload the texture to the GPU on the next frame.
+    ///
+    /// `pixels` must be exactly `width * height * 4` bytes in RGBA order.
+    ///
+    /// # Panics
+    /// panics in debug mode if `pixels.len() != width * height * 4`.
+    pub fn create_texture(&mut self, width: u32, height: u32, pixels: Vec<u8>) -> Handle<Texture> {
+        debug_assert_eq!(
+            pixels.len(),
+            (width * height * 4) as usize,
+            "pixel buffer size mismatch"
+        );
+        let path = format!("__proc_{}", self.proc_texture_counter);
+        self.proc_texture_counter += 1;
+        let handle = self.texture_store.allocate_slot(path);
+        let id = handle.id();
+        self.texture_store.insert(
+            id,
+            Texture {
+                width,
+                height,
+                pixels,
+            },
+        );
+        self.pending_texture_ids.push(id);
+        handle
+    }
+
+    /// create a solid-color texture.
+    ///
+    /// shorthand for [`create_texture`](Self::create_texture) with all pixels set to one color.
+    pub fn create_solid_color_texture(
+        &mut self,
+        width: u32,
+        height: u32,
+        r: u8,
+        g: u8,
+        b: u8,
+        a: u8,
+    ) -> Handle<Texture> {
+        let pixel_count = (width * height) as usize;
+        let mut pixels = Vec::with_capacity(pixel_count * 4);
+        for _ in 0..pixel_count {
+            pixels.push(r);
+            pixels.push(g);
+            pixels.push(b);
+            pixels.push(a);
+        }
+        self.create_texture(width, height, pixels)
+    }
+
     /// get the number of assets currently loading across all stores.
     #[must_use]
     pub fn loading_count(&self) -> usize {
@@ -1020,6 +1111,7 @@ impl AssetServer {
             match result.data {
                 Ok(data) => {
                     self.texture_store.insert(result.id, data);
+                    self.pending_texture_ids.push(result.id);
                 }
                 Err(err) => {
                     log::warn!("failed to load texture '{}': {}", result.path, err);

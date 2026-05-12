@@ -14,4 +14,5 @@ engine-core = { path = "../engine-core" }
 engine-math = { path = "../engine-math" }
 engine-render = { path = "../engine-render" }
 engine-assets = { path = "../engine-assets" }
+engine-input = { path = "../engine-input" }
 bevy_ecs = { workspace = true }
