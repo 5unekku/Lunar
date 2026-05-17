@@ -273,6 +273,7 @@ pub fn overworld_input(
                 text_visible_chars: 0,
                 text_timer: 0.0,
                 choice_selection: 0,
+                just_started: true,
             };
             break;
         }
@@ -292,7 +293,12 @@ pub fn dialogue_input(
             text_timer,
             text_visible_chars,
             choice_selection,
+            just_started,
         } => {
+            if *just_started {
+                *just_started = false;
+                return;
+            }
             *text_timer += time.delta_seconds();
             let total = dialogues.current_line().map(|l| l.text.len()).unwrap_or(0);
             *text_visible_chars = (*text_timer * CPS) as usize;

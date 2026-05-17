@@ -8,6 +8,9 @@ pub enum GameMode {
         text_visible_chars: usize,
         text_timer: f32,
         choice_selection: usize,
+        /// true on the frame the dialogue opens — suppresses input so the
+        /// opening keypress doesn't immediately advance the first line
+        just_started: bool,
     },
 }
 
