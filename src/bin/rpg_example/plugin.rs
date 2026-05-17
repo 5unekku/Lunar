@@ -314,6 +314,7 @@ pub fn dialogue_input(
                 None
             } else if *text_visible_chars < total && total > 0 {
                 *text_visible_chars = total;
+                *text_timer = total as f32 / CPS;
                 None
             } else if dialogues.has_choices() {
                 let chosen = *choice_selection;
