@@ -1658,6 +1658,7 @@ dependencies = [
 name = "lunar-game"
 version = "0.1.0"
 dependencies = [
+ "bevy_ecs",
  "console_error_panic_hook",
  "engine-dialogue",
  "log",

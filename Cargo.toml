@@ -37,7 +37,7 @@ keywords = ["game-engine", "gamedev", "ecs", "wgpu", "2d"]
 categories = ["game-engines", "graphics", "wasm"]
 
 [workspace.dependencies]
-bevy_ecs = { version = "0.18", features = ["debug"] }
+bevy_ecs = "0.18"
 glam = "0.30"
 wgpu = { version = "29", default-features = false }
 raw-window-handle = "0.6"
@@ -51,6 +51,9 @@ name = "lunar-game"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[features]
+debug = ["bevy_ecs/debug"]
 
 [[bin]]
 name = "lunar"
@@ -74,6 +77,7 @@ lunar = { path = "crates/lunar", package = "lunar-lib" }
 # don't add this. Localization and zones aren't used here.
 engine-dialogue = { path = "crates/engine-dialogue" }
 
+bevy_ecs = { workspace = true }
 log = { workspace = true }
 
 # web entry point only
