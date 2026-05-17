@@ -248,6 +248,9 @@ impl App {
             plugin.build(self);
             built.push(name.clone());
 
+            // absorb any plugins registered during build() before checking deps
+            pending.extend(std::mem::take(&mut self.pending_plugins));
+
             // check if any pending plugins now have all deps met
             for (i, p) in pending.iter().enumerate() {
                 let deps = p.dependencies();
