@@ -1189,17 +1189,6 @@ impl RenderEngine {
             (layer, tex)
         });
 
-        // collect untextured commands (rects, lines, text)
-        let mut rect_commands: Vec<&DrawCommand> = Vec::new();
-        for command in &sorted_commands {
-            if matches!(
-                &command.kind,
-                DrawKind::Rect { .. } | DrawKind::Line { .. } | DrawKind::Text { .. }
-            ) {
-                rect_commands.push(command);
-            }
-        }
-
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1236,28 +1225,29 @@ impl RenderEngine {
             // reset persistent vertex buffer offset for this frame
             self.vertex_offset = 0;
 
-            // draw sprites batched by texture (sorted order means same-tex commands are contiguous)
+            // single pass in sorted order — sprites and rects interleave correctly by layer.
+            // sort gives (layer, tex_id) where rects use u32::MAX, so within a layer sprites
+            // always precede rects, and lower layers are fully drawn before higher ones.
             let mut current_tex: Option<u32> = None;
-            let mut batch_start = 0; // vertex index where current batch started
+            let mut batch_start = 0;
 
             for command in &sorted_commands {
-                let DrawKind::Sprite {
-                    texture: Some(tex_id),
-                    position,
-                    rotation,
-                    scale,
-                    tint,
-                    uv_rect,
-                    origin,
-                    layer,
-                } = &command.kind
-                else {
-                    continue;
+                let layer = match &command.kind {
+                    DrawKind::Sprite { layer, .. }
+                    | DrawKind::Rect { layer, .. }
+                    | DrawKind::Line { layer, .. }
+                    | DrawKind::Text { layer, .. } => *layer,
+                };
+
+                let tex_id = match &command.kind {
+                    DrawKind::Sprite {
+                        texture: Some(id), ..
+                    } => u32::try_from(*id).unwrap_or(u32::MAX),
+                    _ => u32::MAX,
                 };
 
                 // update projection if layer changed (parallax)
-                if current_layer != Some(*layer) {
-                    // flush current batch before projection change
+                if current_layer != Some(layer) {
                     if self.vertex_offset > batch_start
                         && let Some(prev_tex) = current_tex
                     {
@@ -1266,13 +1256,11 @@ impl RenderEngine {
                         draw_calls += 1;
                     }
                     batch_start = self.vertex_offset;
-                    self.update_projection_for_layer(*layer, camera);
-                    current_layer = Some(*layer);
+                    self.update_projection_for_layer(layer, camera);
+                    current_layer = Some(layer);
                 }
 
-                let tex_id = u32::try_from(*tex_id).unwrap_or(u32::MAX);
-
-                // flush and switch texture when it changes
+                // flush and switch bind group when tex changes
                 if current_tex != Some(tex_id) {
                     if self.vertex_offset > batch_start
                         && let Some(prev_tex) = current_tex
@@ -1285,139 +1273,99 @@ impl RenderEngine {
                     current_tex = Some(tex_id);
                 }
 
-                // drop sprite if buffer is full this frame; flag overflow so the
-                // buffers double in size before next frame and the cap raises itself.
                 if self.vertex_offset + 6 * VERTEX_STRIDE > self.vertex_capacity * VERTEX_STRIDE {
                     self.overflow_flag = true;
                     continue;
                 }
 
-                // write vertices directly into persistent buffer
-                self.write_sprite_vertices(&SpriteDrawParams {
-                    position: *position,
-                    rotation: *rotation,
-                    scale: *scale,
-                    tint: *tint,
-                    uv_rect: *uv_rect,
-                    origin: *origin,
-                });
-                sprite_count += 1;
+                match &command.kind {
+                    DrawKind::Sprite {
+                        texture: Some(_),
+                        position,
+                        rotation,
+                        scale,
+                        tint,
+                        uv_rect,
+                        origin,
+                        ..
+                    } => {
+                        self.write_sprite_vertices(&SpriteDrawParams {
+                            position: *position,
+                            rotation: *rotation,
+                            scale: *scale,
+                            tint: *tint,
+                            uv_rect: *uv_rect,
+                            origin: *origin,
+                        });
+                        sprite_count += 1;
+                    }
+                    DrawKind::Sprite { texture: None, .. } => {}
+                    DrawKind::Rect {
+                        position,
+                        size,
+                        color,
+                        ..
+                    } => {
+                        self.write_rect_vertices(*position, *size, *color);
+                    }
+                    DrawKind::Line {
+                        start,
+                        end,
+                        color,
+                        thickness,
+                        ..
+                    } => {
+                        self.write_line_vertices(*start, *end, *color, *thickness);
+                    }
+                    DrawKind::Text {
+                        font,
+                        content,
+                        position,
+                        font_size,
+                        color,
+                        wrap_width,
+                        line_height,
+                        ..
+                    } => {
+                        let font_id = u32::try_from(font.unwrap_or(0)).unwrap_or(u32::MAX);
+                        if let Some(max_width) = wrap_width {
+                            let lines = text::layout_text_wrapped(
+                                &self.glyph_atlas,
+                                font_id,
+                                content,
+                                *font_size,
+                                *position,
+                                *max_width,
+                                *line_height,
+                            );
+                            for line_quads in lines {
+                                for quad in line_quads {
+                                    self.write_text_quad(&quad, *color);
+                                }
+                            }
+                        } else {
+                            let quads = self
+                                .get_cached_text_layout(font_id, content, *font_size)
+                                .to_vec();
+                            for quad in quads {
+                                let offset_quad = text::TextGlyphQuad {
+                                    position: quad.position + *position,
+                                    ..quad
+                                };
+                                self.write_text_quad(&offset_quad, *color);
+                            }
+                        }
+                    }
+                }
             }
 
-            // flush final sprite batch
+            // flush final batch
             if self.vertex_offset > batch_start
                 && let Some(tex_id) = current_tex
             {
                 let vertex_count = (self.vertex_offset - batch_start) / VERTEX_STRIDE;
                 self.draw_vertex_batch(&mut pass, tex_id, batch_start, vertex_count);
                 draw_calls += 1;
-            }
-
-            // draw untextured commands (rects, lines, text) as solid color
-            // these are already sorted by layer from sorted_commands
-            if !rect_commands.is_empty() {
-                let mut rect_batch_start = self.vertex_offset;
-                for command in &rect_commands {
-                    let layer = match &command.kind {
-                        DrawKind::Rect { layer, .. }
-                        | DrawKind::Line { layer, .. }
-                        | DrawKind::Text { layer, .. } => *layer,
-                        DrawKind::Sprite { .. } => continue,
-                    };
-
-                    // update projection if layer changed (parallax)
-                    if current_layer != Some(layer) {
-                        // flush current batch before projection change
-                        if self.vertex_offset > rect_batch_start {
-                            let vertex_count =
-                                (self.vertex_offset - rect_batch_start) / VERTEX_STRIDE;
-                            self.draw_vertex_batch(
-                                &mut pass,
-                                u32::MAX,
-                                rect_batch_start,
-                                vertex_count,
-                            );
-                            draw_calls += 1;
-                        }
-                        rect_batch_start = self.vertex_offset;
-                        self.update_projection_for_layer(layer, camera);
-                        current_layer = Some(layer);
-                    }
-
-                    // drop this command if the buffer is full this frame; flag
-                    // overflow so capacity doubles before next frame.
-                    if self.vertex_offset + 6 * VERTEX_STRIDE > self.vertex_capacity * VERTEX_STRIDE
-                    {
-                        self.overflow_flag = true;
-                        continue;
-                    }
-
-                    match &command.kind {
-                        DrawKind::Rect {
-                            position,
-                            size,
-                            color,
-                            ..
-                        } => {
-                            self.write_rect_vertices(*position, *size, *color);
-                        }
-                        DrawKind::Line {
-                            start,
-                            end,
-                            color,
-                            thickness,
-                            ..
-                        } => {
-                            self.write_line_vertices(*start, *end, *color, *thickness);
-                        }
-                        DrawKind::Text {
-                            font,
-                            content,
-                            position,
-                            font_size,
-                            color,
-                            wrap_width,
-                            line_height,
-                            ..
-                        } => {
-                            let font_id = u32::try_from(font.unwrap_or(0)).unwrap_or(u32::MAX);
-                            if let Some(max_width) = wrap_width {
-                                let lines = text::layout_text_wrapped(
-                                    &self.glyph_atlas,
-                                    font_id,
-                                    content,
-                                    *font_size,
-                                    *position,
-                                    *max_width,
-                                    *line_height,
-                                );
-                                for line_quads in lines {
-                                    for quad in line_quads {
-                                        self.write_text_quad(&quad, *color);
-                                    }
-                                }
-                            } else {
-                                let quads = self
-                                    .get_cached_text_layout(font_id, content, *font_size)
-                                    .to_vec();
-                                for quad in quads {
-                                    let offset_quad = text::TextGlyphQuad {
-                                        position: quad.position + *position,
-                                        ..quad
-                                    };
-                                    self.write_text_quad(&offset_quad, *color);
-                                }
-                            }
-                        }
-                        DrawKind::Sprite { .. } => {}
-                    }
-                }
-
-                if self.vertex_offset > rect_batch_start {
-                    let vertex_count = (self.vertex_offset - rect_batch_start) / VERTEX_STRIDE;
-                    self.draw_vertex_batch(&mut pass, u32::MAX, rect_batch_start, vertex_count);
-                    draw_calls += 1;
-                }
             }
         }
 
