@@ -215,8 +215,8 @@ impl Camera {
             0.0,
             1.0,
             0.0,
-            sx * tx - 1.0,
-            sy * ty + 1.0,
+            sx * tx,
+            sy * ty,
             0.0,
             1.0,
         ]
@@ -254,22 +254,14 @@ impl Camera {
         let (vw, vh) = self.viewport.unwrap_or((window_width, window_height));
         #[allow(clippy::cast_precision_loss)]
         let (vw_f, vh_f) = (vw as f32, vh as f32);
-        #[allow(clippy::cast_precision_loss)]
-        let (ww_f, wh_f) = (window_width as f32, window_height as f32);
-
-        // account for viewport letterboxing offset
-        let letterbox_x = (ww_f - vw_f) * 0.5;
-        let letterbox_y = (wh_f - vh_f) * 0.5;
-        let view_x = screen.x - letterbox_x;
-        let view_y = screen.y - letterbox_y;
 
         let zoom = self.zoom.max(0.001);
         let cos = self.rotation.cos();
         let sin = self.rotation.sin();
 
-        // unapply projection transform
-        let nx = view_x / vw_f - 0.5;
-        let ny = 0.5 - view_y / vh_f; // flip y
+        // unapply projection transform — input is viewport-space (0..vw, 0..vh)
+        let nx = screen.x / vw_f - 0.5;
+        let ny = screen.y / vh_f - 0.5;
         let world_dx = nx * vw_f / zoom;
         let world_dy = ny * vh_f / zoom;
 
@@ -289,8 +281,6 @@ impl Camera {
         let (vw, vh) = self.viewport.unwrap_or((window_width, window_height));
         #[allow(clippy::cast_precision_loss)]
         let (vw_f, vh_f) = (vw as f32, vh as f32);
-        #[allow(clippy::cast_precision_loss)]
-        let (ww_f, wh_f) = (window_width as f32, window_height as f32);
 
         let zoom = self.zoom.max(0.001);
         let cos = self.rotation.cos();
@@ -302,18 +292,11 @@ impl Camera {
         let rx = dx * cos - dy * sin;
         let ry = dx * sin + dy * cos;
 
-        // apply ortho projection
+        // apply ortho projection — output is viewport-space (0..vw, 0..vh)
         let sx = rx * zoom / vw_f;
         let sy = -ry * zoom / vh_f;
 
-        // letterbox offset
-        let letterbox_x = (ww_f - vw_f) * 0.5;
-        let letterbox_y = (wh_f - vh_f) * 0.5;
-
-        Vec2::new(
-            (sx + 0.5) * vw_f + letterbox_x,
-            (0.5 - sy) * vh_f + letterbox_y,
-        )
+        Vec2::new((sx + 0.5) * vw_f, (0.5 - sy) * vh_f)
     }
 
     /// enable or disable viewport letterboxing.
@@ -389,8 +372,6 @@ pub struct RenderEngine {
     sprite_pipeline: wgpu::RenderPipeline,
     uniform_buf: wgpu::Buffer,
     bind_group_layout: wgpu::BindGroupLayout,
-    #[allow(dead_code)]
-    bind_group: wgpu::BindGroup,
     sampler: wgpu::Sampler,
     textures: HashMap<u32, GpuTexture>,
     bind_groups: HashMap<u32, wgpu::BindGroup>,
@@ -605,9 +586,9 @@ impl RenderEngine {
             ],
         });
 
-        // placeholder bind group (no texture yet — created per-frame)
+        // 1x1 white texture used for untextured draws (rects, lines, text)
         let placeholder_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("placeholder"),
+            label: Some("white 1x1"),
             size: wgpu::Extent3d {
                 width: 1,
                 height: 1,
@@ -620,6 +601,25 @@ impl RenderEngine {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &placeholder_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[255u8, 255, 255, 255],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
         let placeholder_view =
             placeholder_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -751,10 +751,13 @@ impl RenderEngine {
             sprite_pipeline,
             uniform_buf,
             bind_group_layout,
-            bind_group,
             sampler,
             textures: HashMap::new(),
-            bind_groups: HashMap::new(),
+            bind_groups: {
+                let mut map = HashMap::new();
+                map.insert(u32::MAX, bind_group);
+                map
+            },
             vertex_bufs,
             vertex_capacity: INITIAL_VERTEX_CAPACITY,
             overflow_flag: false,
@@ -814,7 +817,7 @@ impl RenderEngine {
             // world_x = tx + vp_w/2 → clip_x = right
 
             let sx2 = (right - left) / vp_w;
-            let sy2 = (top - bottom) / vp_h;
+            let sy2 = (bottom - top) / vp_h;
             let tx2 = (right + left) / 2.0;
             let ty2 = (top + bottom) / 2.0;
 
@@ -1328,7 +1331,12 @@ impl RenderEngine {
                         if self.vertex_offset > rect_batch_start {
                             let vertex_count =
                                 (self.vertex_offset - rect_batch_start) / VERTEX_STRIDE;
-                            self.draw_vertex_batch(&mut pass, 0, rect_batch_start, vertex_count);
+                            self.draw_vertex_batch(
+                                &mut pass,
+                                u32::MAX,
+                                rect_batch_start,
+                                vertex_count,
+                            );
                             draw_calls += 1;
                         }
                         rect_batch_start = self.vertex_offset;
@@ -1407,7 +1415,7 @@ impl RenderEngine {
 
                 if self.vertex_offset > rect_batch_start {
                     let vertex_count = (self.vertex_offset - rect_batch_start) / VERTEX_STRIDE;
-                    self.draw_vertex_batch(&mut pass, 0, rect_batch_start, vertex_count);
+                    self.draw_vertex_batch(&mut pass, u32::MAX, rect_batch_start, vertex_count);
                     draw_calls += 1;
                 }
             }

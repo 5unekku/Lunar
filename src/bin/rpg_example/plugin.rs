@@ -155,15 +155,31 @@ pub fn setup(
 
     let player_start = GridPos { col: 25, row: 18 };
     let player_world = grid_to_world(player_start.col, player_start.row);
-    commands.spawn((Player, Facing::Down, player_start, Transform::from_xy(player_world.x, player_world.y)));
+    commands.spawn((
+        Player,
+        Facing::Down,
+        player_start,
+        Transform::from_xy(player_world.x, player_world.y),
+    ));
 
     let npc_textures = vec![npc_tex1, npc_tex2, npc_tex3];
     for (i, def) in npc_defs.iter().enumerate() {
         let world = grid_to_world(def.start_col, def.start_row);
-        commands.spawn((Npc(i), GridPos { col: def.start_col, row: def.start_row }, Transform::from_xy(world.x, world.y)));
+        commands.spawn((
+            Npc(i),
+            GridPos {
+                col: def.start_col,
+                row: def.start_row,
+            },
+            Transform::from_xy(world.x, world.y),
+        ));
     }
 
-    commands.insert_resource(GameAssets { player_tex, npc_textures, font });
+    commands.insert_resource(GameAssets {
+        player_tex,
+        npc_textures,
+        font,
+    });
     commands.insert_resource(NpcDefinitions(npc_defs));
     commands.insert_resource(GameMode::Overworld);
     commands.insert_resource(PlayerChoiceState::default());
@@ -217,7 +233,9 @@ pub fn overworld_input(
             let (dcol, drow) = dir.delta();
             let new_col = grid_pos.col + dcol;
             let new_row = grid_pos.row + drow;
-            let npc_at_target = npc_query.iter().any(|(pos, _)| pos.col == new_col && pos.row == new_row);
+            let npc_at_target = npc_query
+                .iter()
+                .any(|(pos, _)| pos.col == new_col && pos.row == new_row);
             if !tile_grid.is_blocked(new_col, new_row) && !npc_at_target {
                 grid_pos.col = new_col;
                 grid_pos.row = new_row;
@@ -284,7 +302,8 @@ pub fn dialogue_input(
                 if input.is_key_just_pressed(KeyCode::Up) || input.is_key_just_pressed(KeyCode::W) {
                     *choice_selection = choice_selection.saturating_sub(1);
                 }
-                if input.is_key_just_pressed(KeyCode::Down) || input.is_key_just_pressed(KeyCode::S) {
+                if input.is_key_just_pressed(KeyCode::Down) || input.is_key_just_pressed(KeyCode::S)
+                {
                     *choice_selection = choice_selection.saturating_add(1).min(count - 1);
                 }
             }
@@ -330,7 +349,9 @@ pub fn dialogue_input(
 }
 
 pub fn camera_follow(player_query: Query<&Transform, With<Player>>, mut camera: ResMut<Camera>) {
-    let Ok(player) = player_query.single() else { return; };
+    let Ok(player) = player_query.single() else {
+        return;
+    };
 
     let half_vw = VIEW_WIDTH * 0.5;
     let half_vh = VIEW_HEIGHT * 0.5;
@@ -416,7 +437,12 @@ pub fn render(
         let box_origin = camera.screen_to_world(Vec2::new(0.0, box_y), window.width, window.height);
         let box_size = Vec2::new(VIEW_WIDTH, DIALOGUE_BOX_H);
 
-        queue.draw_rect_on_layer(box_origin, box_size, Color::rgba(0.0, 0.0, 0.0, 0.78), layers::UI);
+        queue.draw_rect_on_layer(
+            box_origin,
+            box_size,
+            Color::rgba(0.0, 0.0, 0.0, 0.78),
+            layers::UI,
+        );
 
         let icon_x = box_origin.x + 4.0;
         let icon_y = box_origin.y + (DIALOGUE_BOX_H - ICON_SIZE) * 0.5;
@@ -483,7 +509,14 @@ pub fn render(
                 } else {
                     Color::rgb(0.72, 0.72, 0.72)
                 };
-                queue.draw_text_on_layer(&assets.font, label, Vec2::new(text_x + 6.0, cy), 15.0, color, layers::UI);
+                queue.draw_text_on_layer(
+                    &assets.font,
+                    label,
+                    Vec2::new(text_x + 6.0, cy),
+                    15.0,
+                    color,
+                    layers::UI,
+                );
                 cy += 22.0;
             }
         }

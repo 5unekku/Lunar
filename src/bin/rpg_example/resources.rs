@@ -49,7 +49,11 @@ pub struct TileGrid {
 
 impl TileGrid {
     pub fn new(cols: usize, rows: usize) -> Self {
-        Self { cols, rows, blocked: vec![false; cols * rows] }
+        Self {
+            cols,
+            rows,
+            blocked: vec![false; cols * rows],
+        }
     }
 
     pub fn set_rect(&mut self, col: usize, row: usize, width: usize, height: usize) {
@@ -63,17 +67,25 @@ impl TileGrid {
     }
 
     pub fn is_blocked(&self, col: i32, row: i32) -> bool {
-        if col < 0 || row < 0 { return true; }
+        if col < 0 || row < 0 {
+            return true;
+        }
         let col = col as usize;
         let row = row as usize;
-        if col >= self.cols || row >= self.rows { return true; }
+        if col >= self.cols || row >= self.rows {
+            return true;
+        }
         self.blocked[row * self.cols + col]
     }
 
     pub fn iter_blocked(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
         (0..self.rows).flat_map(move |row| {
             (0..self.cols).filter_map(move |col| {
-                if self.blocked[row * self.cols + col] { Some((col, row)) } else { None }
+                if self.blocked[row * self.cols + col] {
+                    Some((col, row))
+                } else {
+                    None
+                }
             })
         })
     }
@@ -84,7 +96,10 @@ impl TileGrid {
 pub struct MoveTimer(pub f32);
 
 pub fn grid_to_world(col: i32, row: i32) -> Vec2 {
-    Vec2::new(col as f32 * TILE_SIZE + TILE_SIZE * 0.5, row as f32 * TILE_SIZE + TILE_SIZE * 0.5)
+    Vec2::new(
+        col as f32 * TILE_SIZE + TILE_SIZE * 0.5,
+        row as f32 * TILE_SIZE + TILE_SIZE * 0.5,
+    )
 }
 
 pub const TILE_SIZE: f32 = 32.0;
