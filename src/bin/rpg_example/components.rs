@@ -1,12 +1,28 @@
 use lunar::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
-#[allow(dead_code)]
 pub enum Facing {
     Down,
     Up,
     Left,
     Right,
+}
+
+impl Facing {
+    pub fn delta(self) -> (i32, i32) {
+        match self {
+            Facing::Up => (0, -1),
+            Facing::Down => (0, 1),
+            Facing::Left => (-1, 0),
+            Facing::Right => (1, 0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Component)]
+pub struct GridPos {
+    pub col: i32,
+    pub row: i32,
 }
 
 #[derive(Debug, Component)]

@@ -37,8 +37,8 @@ pub fn setup(
 
     let npc_defs = vec![
         NpcData {
-            start_x: 600.0,
-            start_y: 500.0,
+            start_col: 18,
+            start_row: 15,
             label: "old man".into(),
             dialogue_name: "npc1".into(),
             has_icon: true,
@@ -46,8 +46,8 @@ pub fn setup(
             emotion_tex: None,
         },
         NpcData {
-            start_x: 1000.0,
-            start_y: 700.0,
+            start_col: 31,
+            start_row: 21,
             label: "traveler".into(),
             dialogue_name: "npc2".into(),
             has_icon: false,
@@ -55,8 +55,8 @@ pub fn setup(
             emotion_tex: None,
         },
         NpcData {
-            start_x: 400.0,
-            start_y: 900.0,
+            start_col: 12,
+            start_row: 28,
             label: "merchant".into(),
             dialogue_name: "npc3".into(),
             has_icon: true,
@@ -114,8 +114,7 @@ pub fn setup(
         .build();
     dialogues.register("npc2", d2);
 
-    // npc3 — has an icon and emotion sprite; dialogue differs based on npc1's answer.
-    // two registered variants; plugin.rs picks which to start at runtime.
+    // npc3 — two variants depending on npc1's answer
     let d3_treasure = DialogueBuilder::new("l1")
         .line(
             "l1",
@@ -148,37 +147,30 @@ pub fn setup(
         .build();
     dialogues.register("npc3_passing", d3_passing);
 
-    // walls: border walls + a couple of interior obstacles
-    let walls = Walls(vec![
-        // border walls (player can't leave the room)
-        Wall::new(0.0, 0.0, ROOM_WIDTH, 16.0), // top
-        Wall::new(0.0, ROOM_HEIGHT - 16.0, ROOM_WIDTH, 16.0), // bottom
-        Wall::new(0.0, 0.0, 16.0, ROOM_HEIGHT), // left
-        Wall::new(ROOM_WIDTH - 16.0, 0.0, 16.0, ROOM_HEIGHT), // right
-        // interior obstacles
-        Wall::new(300.0, 300.0, 200.0, 40.0),
-        Wall::new(900.0, 400.0, 40.0, 200.0),
-        Wall::new(700.0, 800.0, 160.0, 40.0),
-    ]);
+    // tile grid — border is impassable via out-of-bounds check; interior obstacles here
+    let mut tile_grid = TileGrid::new(GRID_COLS, GRID_ROWS);
+    tile_grid.set_rect(9, 9, 7, 2);
+    tile_grid.set_rect(28, 12, 2, 7);
+    tile_grid.set_rect(21, 25, 6, 2);
 
-    commands.spawn((Player, Facing::Down, Transform::from_xy(800.0, 600.0)));
+    let player_start = GridPos { col: 25, row: 18 };
+    let player_world = grid_to_world(player_start.col, player_start.row);
+    commands.spawn((Player, Facing::Down, player_start, Transform::from_xy(player_world.x, player_world.y)));
 
     let npc_textures = vec![npc_tex1, npc_tex2, npc_tex3];
     for (i, def) in npc_defs.iter().enumerate() {
-        commands.spawn((Npc(i), Transform::from_xy(def.start_x, def.start_y)));
+        let world = grid_to_world(def.start_col, def.start_row);
+        commands.spawn((Npc(i), GridPos { col: def.start_col, row: def.start_row }, Transform::from_xy(world.x, world.y)));
     }
 
-    commands.insert_resource(GameAssets {
-        player_tex,
-        npc_textures,
-        font,
-    });
+    commands.insert_resource(GameAssets { player_tex, npc_textures, font });
     commands.insert_resource(NpcDefinitions(npc_defs));
     commands.insert_resource(GameMode::Overworld);
     commands.insert_resource(PlayerChoiceState::default());
-    commands.insert_resource(walls);
+    commands.insert_resource(tile_grid);
+    commands.insert_resource(MoveTimer(MOVE_COOLDOWN));
     commands.insert_resource(Camera {
-        position: Vec2::new(800.0, 600.0),
+        position: player_world,
         zoom: 1.0,
         rotation: 0.0,
         viewport: Some((VIEW_WIDTH as u32, VIEW_HEIGHT as u32)),
@@ -190,64 +182,66 @@ pub fn setup(
 pub fn overworld_input(
     input: Res<InputState>,
     time: Res<Time>,
-    mut player_query: Query<&mut Transform, With<Player>>,
-    npc_query: Query<(&Transform, &Npc), Without<Player>>,
+    mut player_query: Query<(&mut Transform, &mut GridPos, &mut Facing), With<Player>>,
+    npc_query: Query<(&GridPos, &Npc), Without<Player>>,
     npc_defs: Res<NpcDefinitions>,
-    walls: Res<Walls>,
+    tile_grid: Res<TileGrid>,
     mut mode: ResMut<GameMode>,
     mut dialogues: ResMut<DialogueManager>,
     choice_state: Res<PlayerChoiceState>,
+    mut move_timer: ResMut<MoveTimer>,
 ) {
     if !matches!(*mode, GameMode::Overworld) {
         return;
     }
-    let Ok(mut player) = player_query.single_mut() else {
+    let Ok((mut transform, mut grid_pos, mut facing)) = player_query.single_mut() else {
         return;
     };
 
-    let mut dx: f32 = 0.0;
-    let mut dy: f32 = 0.0;
-    if input.is_key_held(KeyCode::Left) || input.is_key_held(KeyCode::A) {
-        dx -= 1.0;
-    }
-    if input.is_key_held(KeyCode::Right) || input.is_key_held(KeyCode::D) {
-        dx += 1.0;
-    }
-    if input.is_key_held(KeyCode::Up) || input.is_key_held(KeyCode::W) {
-        dy -= 1.0;
-    }
-    if input.is_key_held(KeyCode::Down) || input.is_key_held(KeyCode::S) {
-        dy += 1.0;
-    }
+    let direction = if input.is_key_held(KeyCode::Left) || input.is_key_held(KeyCode::A) {
+        Some(Facing::Left)
+    } else if input.is_key_held(KeyCode::Right) || input.is_key_held(KeyCode::D) {
+        Some(Facing::Right)
+    } else if input.is_key_held(KeyCode::Up) || input.is_key_held(KeyCode::W) {
+        Some(Facing::Up)
+    } else if input.is_key_held(KeyCode::Down) || input.is_key_held(KeyCode::S) {
+        Some(Facing::Down)
+    } else {
+        None
+    };
 
-    let speed = PLAYER_SPEED * time.delta_seconds();
-    if dx != 0.0 || dy != 0.0 {
-        let len = dx.hypot(dy);
-        let move_x = dx / len * speed;
-        let move_y = dy / len * speed;
-
-        // resolve x and y independently so the player slides along walls
-        let new_x = player.translation.x + move_x;
-        if !player_collides_walls(new_x, player.translation.y, &walls) {
-            player.translation.x = new_x;
+    if let Some(dir) = direction {
+        *facing = dir;
+        move_timer.0 += time.delta_seconds();
+        if move_timer.0 >= MOVE_COOLDOWN {
+            let (dcol, drow) = dir.delta();
+            let new_col = grid_pos.col + dcol;
+            let new_row = grid_pos.row + drow;
+            let npc_at_target = npc_query.iter().any(|(pos, _)| pos.col == new_col && pos.row == new_row);
+            if !tile_grid.is_blocked(new_col, new_row) && !npc_at_target {
+                grid_pos.col = new_col;
+                grid_pos.row = new_row;
+                let world = grid_to_world(new_col, new_row);
+                transform.translation.x = world.x;
+                transform.translation.y = world.y;
+            }
+            move_timer.0 = 0.0;
         }
-        let new_y = player.translation.y + move_y;
-        if !player_collides_walls(player.translation.x, new_y, &walls) {
-            player.translation.y = new_y;
-        }
+    } else {
+        // reset so the next keypress moves immediately without waiting for the cooldown
+        move_timer.0 = MOVE_COOLDOWN;
     }
 
     if input.is_key_just_pressed(KeyCode::Space) || input.is_key_just_pressed(KeyCode::Enter) {
-        let px = player.translation.x;
-        let py = player.translation.y;
-        for (npc_t, npc) in &npc_query {
-            let d = Vec2::new(px - npc_t.translation.x, py - npc_t.translation.y);
-            if d.length() > INTERACT_RANGE {
+        let (dfacing_col, dfacing_row) = facing.delta();
+        let target_col = grid_pos.col + dfacing_col;
+        let target_row = grid_pos.row + dfacing_row;
+        for (npc_pos, npc) in &npc_query {
+            if npc_pos.col != target_col || npc_pos.row != target_row {
                 continue;
             }
             let def = &npc_defs.0[npc.0];
             let dialogue_key = if npc.0 == 2 {
-                // npc3 reacts to npc1's answer
                 match choice_state.npc1_choice {
                     Some(0) => "npc3_treasure",
                     _ => "npc3_passing",
@@ -265,24 +259,6 @@ pub fn overworld_input(
             break;
         }
     }
-}
-
-/// returns true if a player-sized AABB at (cx, cy) overlaps any wall.
-fn player_collides_walls(cx: f32, cy: f32, walls: &Walls) -> bool {
-    let half_w = SPRITE_W * 0.5;
-    let half_h = SPRITE_H * 0.5;
-    let px0 = cx - half_w;
-    let px1 = cx + half_w;
-    let py0 = cy - half_h;
-    let py1 = cy + half_h;
-    for wall in &walls.0 {
-        let wx1 = wall.x + wall.w;
-        let wy1 = wall.y + wall.h;
-        if px0 < wx1 && px1 > wall.x && py0 < wy1 && py1 > wall.y {
-            return true;
-        }
-    }
-    false
 }
 
 pub fn dialogue_input(
@@ -308,8 +284,7 @@ pub fn dialogue_input(
                 if input.is_key_just_pressed(KeyCode::Up) || input.is_key_just_pressed(KeyCode::W) {
                     *choice_selection = choice_selection.saturating_sub(1);
                 }
-                if input.is_key_just_pressed(KeyCode::Down) || input.is_key_just_pressed(KeyCode::S)
-                {
+                if input.is_key_just_pressed(KeyCode::Down) || input.is_key_just_pressed(KeyCode::S) {
                     *choice_selection = choice_selection.saturating_add(1).min(count - 1);
                 }
             }
@@ -325,7 +300,6 @@ pub fn dialogue_input(
                 let chosen = *choice_selection;
                 let npc = *npc_index;
                 dialogues.choose(chosen);
-                // remember npc1's choice
                 if npc == 0 {
                     choice_state.npc1_choice = Some(chosen);
                 }
@@ -355,12 +329,8 @@ pub fn dialogue_input(
     }
 }
 
-/// clamp camera to world bounds, per-axis.
-/// if the world is smaller than the viewport on an axis, center it.
 pub fn camera_follow(player_query: Query<&Transform, With<Player>>, mut camera: ResMut<Camera>) {
-    let Ok(player) = player_query.single() else {
-        return;
-    };
+    let Ok(player) = player_query.single() else { return; };
 
     let half_vw = VIEW_WIDTH * 0.5;
     let half_vh = VIEW_HEIGHT * 0.5;
@@ -383,7 +353,7 @@ pub fn render(
     mode: Res<GameMode>,
     assets: Res<GameAssets>,
     npc_defs: Res<NpcDefinitions>,
-    walls: Res<Walls>,
+    tile_grid: Res<TileGrid>,
     window: Res<WindowSettings>,
     player_query: Query<&Transform, With<Player>>,
     npc_query: Query<(&Transform, &Npc)>,
@@ -400,10 +370,10 @@ pub fn render(
     );
 
     // walls
-    for wall in &walls.0 {
+    for (col, row) in tile_grid.iter_blocked() {
         queue.draw_rect_on_layer(
-            Vec2::new(wall.x, wall.y),
-            Vec2::new(wall.w, wall.h),
+            Vec2::new(col as f32 * TILE_SIZE, row as f32 * TILE_SIZE),
+            Vec2::new(TILE_SIZE, TILE_SIZE),
             Color::rgb(0.35, 0.25, 0.15),
             layers::GAME,
         );
@@ -446,20 +416,12 @@ pub fn render(
         let box_origin = camera.screen_to_world(Vec2::new(0.0, box_y), window.width, window.height);
         let box_size = Vec2::new(VIEW_WIDTH, DIALOGUE_BOX_H);
 
-        // box background
-        queue.draw_rect_on_layer(
-            box_origin,
-            box_size,
-            Color::rgba(0.0, 0.0, 0.0, 0.78),
-            layers::UI,
-        );
+        queue.draw_rect_on_layer(box_origin, box_size, Color::rgba(0.0, 0.0, 0.0, 0.78), layers::UI);
 
-        // portrait column — always reserved, icon drawn only if has_icon
         let icon_x = box_origin.x + 4.0;
         let icon_y = box_origin.y + (DIALOGUE_BOX_H - ICON_SIZE) * 0.5;
 
         if def.has_icon {
-            // use emotion sprite if available, otherwise the base icon color rect
             if let Some(emotion) = &def.emotion_tex {
                 queue.draw_sprite_on_layer(
                     emotion,
@@ -477,7 +439,6 @@ pub fn render(
             }
         }
 
-        // text area starts after the icon column regardless of whether the icon is shown
         let text_x = box_origin.x + ICON_COL_W;
         let name_y = box_origin.y + 6.0;
         let text_y = box_origin.y + 26.0;
@@ -505,7 +466,6 @@ pub fn render(
             );
         }
 
-        // choices
         if *text_visible_chars >= text.len() && dialogues.has_choices() {
             let labels = dialogues.choice_labels();
             let mut cy = text_y + 28.0;
@@ -523,19 +483,11 @@ pub fn render(
                 } else {
                     Color::rgb(0.72, 0.72, 0.72)
                 };
-                queue.draw_text_on_layer(
-                    &assets.font,
-                    label,
-                    Vec2::new(text_x + 6.0, cy),
-                    15.0,
-                    color,
-                    layers::UI,
-                );
+                queue.draw_text_on_layer(&assets.font, label, Vec2::new(text_x + 6.0, cy), 15.0, color, layers::UI);
                 cy += 22.0;
             }
         }
 
-        // advance indicator
         if *text_visible_chars >= text.len() && !dialogues.has_choices() && dialogues.is_active() {
             let ind = camera.screen_to_world(
                 Vec2::new(VIEW_WIDTH - 80.0, VIEW_HEIGHT - 18.0),

@@ -1326,6 +1326,43 @@ Part 6 (Engine Editor)
 
 ---
 
+## Phase 13: Game Data
+
+### 77. Baked Binary Game Data Format
+
+> compile-time embedded read-only data store for static game content.
+> game code works with typed ID newtypes (`CharacterId`, `RoomId`, `EmotionId`) backed by flat
+> arrays baked into the binary at build time. O(1) access, zero heap allocation, no runtime parsing.
+>
+> source format: TOML files under `data/` (human-editable).
+> build output: a flat binary blob embedded via `include_bytes!`, with a string pool,
+> per-table record arrays, and `Option<StringId>` for nullable fields (e.g. speaker name
+> override — None means fall through to the character's default name).
+> no linked lists or pointer-chasing; all edges are flat index references.
+>
+> crate split:
+> - `engine-gamedata` — ID newtypes, record structs, reader (zero-copy into the blob)
+> - `engine-gamedata-build` — build.rs helper that compiles TOML source into the binary format
+>
+> tables to support (initial scope):
+> - characters: id, name (string), default_emotion
+> - emotions: id, name, sprite_path
+> - rooms: id, name, tilemap_path, spawn positions
+> - dialogue nodes: speaker (Option<CharacterId>), speaker_name_override (Option<StringId>),
+>   emotion (Option<EmotionId>), text (StringId), next (Option<NodeId>), choices (flat slice ref)
+>
+> open design questions:
+> - dialogue graph format: inline node array per tree vs. global node pool with root id
+> - whether rooms embed their dialogue trees or reference them by id
+> - string pool encoding: null-terminated vs. (offset, length) table
+
+- [ ] 77.1 design doc — finalize binary layout, string pool spec, ID type conventions
+- [ ] 77.2 `engine-gamedata` crate — ID newtypes, record structs, blob reader
+- [ ] 77.3 `engine-gamedata-build` crate — TOML compiler, binary writer
+- [ ] 77.4 migrate rpg-example to use `engine-gamedata` for characters and dialogue
+
+---
+
 ### 54. Editor Build & Distribution — OUT-OF-SCOPE (item 71)
 - [ ] 54.1 Standalone binary
   - [ ] 54.1.1 `cargo build --bin lunar-editor --release` produces the editor executable

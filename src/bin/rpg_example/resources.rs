@@ -19,16 +19,12 @@ pub struct GameAssets {
 }
 
 pub struct NpcData {
-    pub start_x: f32,
-    pub start_y: f32,
+    pub start_col: i32,
+    pub start_row: i32,
     pub label: String,
     pub dialogue_name: String,
-    /// whether to show the portrait icon in the dialogue box.
-    /// when false, the icon column is still reserved so text aligns.
     pub has_icon: bool,
     pub icon_color: Color,
-    /// alternate portrait texture shown during certain dialogue lines.
-    /// None = no emotion variant.
     pub emotion_tex: Option<Handle<Texture>>,
 }
 
@@ -42,34 +38,66 @@ pub struct PlayerChoiceState {
     pub npc1_choice: Option<usize>,
 }
 
-/// axis-aligned wall rectangle in world space.
-pub struct Wall {
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
+/// flat row-major grid of passable/blocked tiles.
+/// out-of-bounds queries return true (impassable).
+#[derive(Resource)]
+pub struct TileGrid {
+    cols: usize,
+    rows: usize,
+    blocked: Vec<bool>,
 }
 
-impl Wall {
-    pub const fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
-        Self { x, y, w, h }
+impl TileGrid {
+    pub fn new(cols: usize, rows: usize) -> Self {
+        Self { cols, rows, blocked: vec![false; cols * rows] }
+    }
+
+    pub fn set_rect(&mut self, col: usize, row: usize, width: usize, height: usize) {
+        for r in row..row + height {
+            for c in col..col + width {
+                if c < self.cols && r < self.rows {
+                    self.blocked[r * self.cols + c] = true;
+                }
+            }
+        }
+    }
+
+    pub fn is_blocked(&self, col: i32, row: i32) -> bool {
+        if col < 0 || row < 0 { return true; }
+        let col = col as usize;
+        let row = row as usize;
+        if col >= self.cols || row >= self.rows { return true; }
+        self.blocked[row * self.cols + col]
+    }
+
+    pub fn iter_blocked(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        (0..self.rows).flat_map(move |row| {
+            (0..self.cols).filter_map(move |col| {
+                if self.blocked[row * self.cols + col] { Some((col, row)) } else { None }
+            })
+        })
     }
 }
 
+/// per-step movement cooldown in seconds.
 #[derive(Resource)]
-pub struct Walls(pub Vec<Wall>);
+pub struct MoveTimer(pub f32);
 
-pub const ROOM_WIDTH: f32 = 1600.0;
-pub const ROOM_HEIGHT: f32 = 1200.0;
+pub fn grid_to_world(col: i32, row: i32) -> Vec2 {
+    Vec2::new(col as f32 * TILE_SIZE + TILE_SIZE * 0.5, row as f32 * TILE_SIZE + TILE_SIZE * 0.5)
+}
+
+pub const TILE_SIZE: f32 = 32.0;
+pub const GRID_COLS: usize = 50;
+pub const GRID_ROWS: usize = 38;
+pub const ROOM_WIDTH: f32 = TILE_SIZE * GRID_COLS as f32;
+pub const ROOM_HEIGHT: f32 = TILE_SIZE * GRID_ROWS as f32;
 pub const VIEW_WIDTH: f32 = 640.0;
 pub const VIEW_HEIGHT: f32 = 480.0;
 pub const SPRITE_W: f32 = 32.0;
 pub const SPRITE_H: f32 = 48.0;
-pub const PLAYER_SPEED: f32 = 120.0;
-pub const INTERACT_RANGE: f32 = 64.0;
+pub const MOVE_COOLDOWN: f32 = 0.15;
 pub const CPS: f32 = 10.0;
 pub const DIALOGUE_BOX_H: f32 = 128.0;
-/// width of the portrait/icon column in the dialogue box.
 pub const ICON_COL_W: f32 = 56.0;
-/// portrait icon size.
 pub const ICON_SIZE: f32 = 48.0;
