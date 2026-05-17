@@ -781,6 +781,8 @@ pub struct AssetServer {
     custom_font_loaders: Vec<CustomLoaderEntry<dyn FontLoaderTrait>>,
     /// IDs of textures ready for GPU upload, drained by the render system each frame.
     pending_texture_ids: Vec<u32>,
+    /// IDs of fonts ready for glyph atlas registration, drained by the render system each frame.
+    pending_font_ids: Vec<u32>,
     /// counter for generating unique synthetic paths for procedural textures.
     proc_texture_counter: u32,
 }
@@ -798,6 +800,7 @@ impl AssetServer {
             custom_sound_loaders: Vec::new(),
             custom_font_loaders: Vec::new(),
             pending_texture_ids: Vec::new(),
+            pending_font_ids: Vec::new(),
             proc_texture_counter: 0,
         }
     }
@@ -1030,6 +1033,22 @@ impl AssetServer {
         self.texture_store.get_by_id(id)
     }
 
+    /// drain the list of font IDs that became ready since the last drain.
+    ///
+    /// the render system calls this once per frame to register new fonts into
+    /// the glyph atlas. callers other than the render system should not call this.
+    pub fn drain_new_font_ids(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.pending_font_ids)
+    }
+
+    /// get a loaded font by its raw asset ID.
+    ///
+    /// used by the render system when registering newly-loaded fonts.
+    #[must_use]
+    pub fn get_font_by_id(&self, id: u32) -> Option<&Font> {
+        self.font_store.get_by_id(id)
+    }
+
     /// create a texture from raw RGBA pixel data without loading from disk.
     ///
     /// returns a handle that is immediately ready. the render system will
@@ -1138,6 +1157,7 @@ impl AssetServer {
             match result.data {
                 Ok(data) => {
                     self.font_store.insert(result.id, data);
+                    self.pending_font_ids.push(result.id);
                 }
                 Err(err) => {
                     log::warn!("failed to load font '{}': {}", result.path, err);

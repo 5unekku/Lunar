@@ -351,6 +351,10 @@ impl Default for RenderConfig {
 /// vertex format: [pos.x, pos.y, u, v] (16 bytes) + [`color_u32`] (4 bytes) = 20 bytes per vertex
 const INITIAL_VERTEX_CAPACITY: usize = 65536;
 
+/// bind group key reserved for the glyph atlas texture used by text draws.
+/// regular sprite textures use their asset ID; the white placeholder uses `u32::MAX`.
+const GLYPH_ATLAS_BIND_ID: u32 = u32::MAX - 1;
+
 /// number of vertex buffers for double-buffering (prevents GPU read/write conflicts)
 const VERTEX_BUFFER_COUNT: usize = 2;
 
@@ -950,6 +954,38 @@ impl RenderEngine {
         self.bind_groups.remove(&tex_id);
     }
 
+    /// register font bytes with the glyph atlas and upload the atlas to the GPU.
+    ///
+    /// the render system calls this once per newly loaded font. after all fonts
+    /// are registered the atlas bind group (keyed at [`GLYPH_ATLAS_BIND_ID`]) is
+    /// updated so text draws sample the correct glyphs.
+    pub fn upload_font(&mut self, font_id: u32, data: &[u8]) {
+        self.glyph_atlas.register_font(font_id, data);
+        self.invalidate_text_cache_for_font(font_id);
+        self.upload_glyph_atlas();
+        if let Some(atlas) = &self.glyph_atlas_texture {
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("glyph atlas bind group"),
+                layout: &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.uniform_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&atlas.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            });
+            self.bind_groups.insert(GLYPH_ATLAS_BIND_ID, bind_group);
+        }
+    }
+
     /// invalidate all cached text layouts.
     /// call this when font data changes or text content changes dynamically.
     pub fn invalidate_text_cache(&mut self) {
@@ -1184,6 +1220,7 @@ impl RenderEngine {
                 DrawKind::Sprite {
                     texture: Some(id), ..
                 } => u32::try_from(*id).unwrap_or(u32::MAX),
+                DrawKind::Text { .. } => GLYPH_ATLAS_BIND_ID,
                 _ => u32::MAX,
             };
             (layer, tex)
@@ -1243,6 +1280,7 @@ impl RenderEngine {
                     DrawKind::Sprite {
                         texture: Some(id), ..
                     } => u32::try_from(*id).unwrap_or(u32::MAX),
+                    DrawKind::Text { .. } => GLYPH_ATLAS_BIND_ID,
                     _ => u32::MAX,
                 };
 
@@ -2503,6 +2541,7 @@ impl GamePlugin for RenderPlugin {
             engine_core::UpdateStage::Render,
             (
                 upload_new_textures_system,
+                upload_new_fonts_system,
                 frame_stats_system,
                 auto_sprite_system,
                 auto_text_system,
@@ -2516,6 +2555,7 @@ impl GamePlugin for RenderPlugin {
             engine_core::UpdateStage::Render,
             (
                 wasm_upload_new_textures_system,
+                wasm_upload_new_fonts_system,
                 frame_stats_system,
                 auto_sprite_system,
                 auto_text_system,
@@ -2589,6 +2629,31 @@ fn wasm_upload_new_textures_system(mut assets: ResMut<AssetServer>) {
                 if let Some(texture) = assets.get_texture_by_id(id) {
                     let handle = Handle::<Texture>::new(id, 0);
                     engine.upload_texture(&handle, texture);
+                }
+            }
+        }
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::needless_pass_by_value)]
+fn upload_new_fonts_system(mut assets: ResMut<AssetServer>, mut render: ResMut<RenderEngine>) {
+    for id in assets.drain_new_font_ids() {
+        if let Some(font) = assets.get_font_by_id(id) {
+            render.upload_font(id, &font.data);
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::needless_pass_by_value)]
+fn wasm_upload_new_fonts_system(mut assets: ResMut<AssetServer>) {
+    let ids = assets.drain_new_font_ids();
+    WASM_RENDER_ENGINE.with(|cell| {
+        if let Some(engine) = cell.borrow_mut().as_mut() {
+            for id in &ids {
+                if let Some(font) = assets.get_font_by_id(*id) {
+                    engine.upload_font(*id, &font.data);
                 }
             }
         }
