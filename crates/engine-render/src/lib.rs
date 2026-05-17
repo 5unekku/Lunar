@@ -1204,6 +1204,56 @@ impl RenderEngine {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        // rasterize any glyphs not yet in the atlas, re-upload if the atlas changed
+        let mut atlas_dirty = false;
+        for cmd in commands.iter() {
+            let DrawKind::Text {
+                font,
+                content,
+                font_size,
+                ..
+            } = &cmd.kind
+            else {
+                continue;
+            };
+            let font_id = u32::try_from(font.unwrap_or(0)).unwrap_or(u32::MAX);
+            for ch in content.chars() {
+                if self
+                    .glyph_atlas
+                    .get_glyph(font_id, ch, *font_size)
+                    .is_none()
+                {
+                    self.glyph_atlas.rasterize_glyph(font_id, ch, *font_size);
+                    atlas_dirty = true;
+                }
+            }
+        }
+        if atlas_dirty {
+            self.text_layout_cache.clear();
+            self.upload_glyph_atlas();
+            if let Some(atlas) = &self.glyph_atlas_texture {
+                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("glyph atlas bind group"),
+                    layout: &self.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self.uniform_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&atlas.view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                    ],
+                });
+                self.bind_groups.insert(GLYPH_ATLAS_BIND_ID, bind_group);
+            }
+        }
+
         // track current layer for parallax — updated as we iterate sorted commands
         let mut current_layer: Option<i32> = None;
 
