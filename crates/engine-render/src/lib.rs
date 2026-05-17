@@ -1219,7 +1219,7 @@ impl RenderEngine {
                             b: 0.07,
                             a: 1.0,
                         }),
-                        store: wgpu::StoreOp::Discard,
+                        store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
                 })],
