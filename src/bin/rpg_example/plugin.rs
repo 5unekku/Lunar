@@ -494,12 +494,15 @@ pub fn render(
         let show = (*text_visible_chars).min(char_count);
         if show > 0 {
             let show_bytes = text.char_indices().nth(show).map_or(text.len(), |(i, _)| i);
-            queue.draw_text_on_layer(
+            let text_max_w = VIEW_WIDTH - ICON_COL_W - 16.0;
+            queue.draw_text_wrapped(
                 &assets.font,
                 &text[..show_bytes],
                 Vec2::new(text_x, text_y),
                 16.0,
                 Color::WHITE,
+                text_max_w,
+                0.0,
                 layers::UI,
             );
         }

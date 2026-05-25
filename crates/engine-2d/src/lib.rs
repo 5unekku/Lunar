@@ -1,12 +1,15 @@
-//! 2d-specific systems: transform propagation and collision detection.
+//! 2d-specific systems: transform propagation, sprite animation, and collision detection.
 //!
 //! this crate is the 2d-specific layer of the engine. 3d games use engine-3d
 //! instead — no 2d code compiles into them.
 //!
-//! register [`Plugin2d`] in your app to enable 2d transform propagation and
-//! the [`collision::CollisionWorld`] resource.
+//! register [`Plugin2d`] in your app to enable 2d transform propagation,
+//! sprite animation, and the [`collision::CollisionWorld`] resource.
 
+pub mod animation;
 pub mod collision;
+
+pub use animation::{SpriteAnimation, advance_sprite_animations};
 
 use std::collections::HashMap;
 
@@ -31,6 +34,10 @@ impl GamePlugin for Plugin2d {
         app.insert_resource(CollisionWorld::default());
         app.add_system_to_stage(engine_core::UpdateStage::Physics, build_collision_world);
         app.add_system_to_stage(engine_core::UpdateStage::Update, propagate_transforms);
+        app.add_system_to_stage(
+            engine_core::UpdateStage::Update,
+            animation::advance_sprite_animations,
+        );
     }
 }
 

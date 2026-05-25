@@ -767,7 +767,7 @@ impl RenderEngine {
             overflow_flag: false,
             frame_index: 0,
             vertex_offset: 0,
-            glyph_atlas: text::GlyphAtlas::new(1024, 1024),
+            glyph_atlas: text::GlyphAtlas::new(2048, 1024),
             glyph_atlas_texture: None,
             text_layout_cache: HashMap::new(),
             render_passes: Vec::new(),

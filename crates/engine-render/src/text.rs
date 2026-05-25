@@ -22,7 +22,8 @@ pub struct GlyphInfo {
     pub height: u32,
     /// horizontal bearing: offset from cursor to glyph left edge.
     pub bearing_x: f32,
-    /// vertical bearing: offset from baseline to glyph top edge.
+    /// vertical bearing: distance from baseline to top of bitmap (positive = above baseline).
+    /// used as: `glyph_y = baseline_y - bearing_y` in screen y-down coordinates.
     pub bearing_y: f32,
     /// how far to advance the cursor after rendering this glyph.
     pub advance: f32,
@@ -133,6 +134,11 @@ impl GlyphAtlas {
         let gw = u32::try_from(metrics.width).unwrap_or(0);
         let gh = u32::try_from(metrics.height).unwrap_or(0);
 
+        // bearing_y = distance from baseline to top of bitmap (fontdue: ymin + height).
+        // ymin is the bottom of the bitmap relative to baseline; negative for descenders.
+        #[allow(clippy::cast_precision_loss)]
+        let bearing_y = (metrics.ymin + metrics.height as i32) as f32;
+
         if gw == 0 || gh == 0 {
             // space or invisible glyph — no bitmap, but still needs advance/bearing
             let info = GlyphInfo {
@@ -142,10 +148,7 @@ impl GlyphAtlas {
                 height: 0,
                 #[allow(clippy::cast_precision_loss)]
                 bearing_x: metrics.xmin as f32,
-                // ymin is bottom of bitmap relative to baseline (negative for descenders).
-                // top of bitmap = ymin + height; for zero-size glyphs height is 0 so this is ymin.
-                #[allow(clippy::cast_precision_loss)]
-                bearing_y: (metrics.ymin + metrics.height as i32) as f32,
+                bearing_y,
                 advance: metrics.advance_width,
             };
             self.glyphs.insert(key, info);
@@ -161,10 +164,14 @@ impl GlyphAtlas {
 
         // atlas full?
         if self.cursor_y + gh > self.height {
+            log::warn!(
+                "glyph atlas full — '{char_code}' at {font_size}px dropped. \
+                 increase atlas dimensions to fit more glyphs."
+            );
             return false;
         }
 
-        // copy bitmap into atlas pixels using row-copy for better performance
+        // copy bitmap into atlas pixels
         for gy in 0..gh {
             let src_row_start = (gy * gw) as usize;
             let src_row = &bitmap[src_row_start..src_row_start + gw as usize];
@@ -188,10 +195,7 @@ impl GlyphAtlas {
             height: gh,
             #[allow(clippy::cast_precision_loss)]
             bearing_x: metrics.xmin as f32,
-            // top of bitmap above baseline = ymin + height (positive = above baseline).
-            // used as: glyph_y = baseline_y - bearing_y (screen y-down coords).
-            #[allow(clippy::cast_precision_loss)]
-            bearing_y: (metrics.ymin + metrics.height as i32) as f32,
+            bearing_y,
             advance: metrics.advance_width,
         };
         self.glyphs.insert(key, info);
@@ -216,6 +220,15 @@ impl GlyphAtlas {
         self.glyphs.get(&key)
     }
 
+    /// kern advance between two adjacent characters at the given size.
+    /// returns 0.0 if the font has no kern pair for these characters.
+    pub fn kern(&self, font_id: u32, left: char, right: char, font_size: f32) -> f32 {
+        self.font_cache
+            .get(&font_id)
+            .and_then(|font| font.horizontal_kern(left, right, font_size))
+            .unwrap_or(0.0)
+    }
+
     /// get the raw pixel data for uploading to the GPU.
     #[allow(dead_code)]
     pub fn pixels(&self) -> &[u8] {
@@ -228,6 +241,7 @@ impl GlyphAtlas {
 /// iterates over each character, looks up its glyph in the atlas,
 /// and computes screen-space positions and UV coordinates.
 /// each quad contains the position, size, and UV bounds for rendering.
+/// kern pairs between adjacent characters are applied automatically.
 pub fn layout_text(
     atlas: &GlyphAtlas,
     font_id: u32,
@@ -238,8 +252,13 @@ pub fn layout_text(
     let mut quads = Vec::new();
     let mut cursor_x = position.x;
     let baseline_y = position.y;
+    let mut prev_char: Option<char> = None;
 
     for ch in text.chars() {
+        if let Some(prev) = prev_char {
+            cursor_x += atlas.kern(font_id, prev, ch, font_size);
+        }
+
         if let Some(info) = atlas.get_glyph(font_id, ch, font_size) {
             if info.width > 0 && info.height > 0 {
                 #[allow(clippy::cast_precision_loss)]
@@ -264,6 +283,8 @@ pub fn layout_text(
             }
             cursor_x += info.advance;
         }
+
+        prev_char = Some(ch);
     }
 
     quads
@@ -287,15 +308,20 @@ pub struct TextGlyphQuad {
 
 /// measure the total advance width of a text string at a given font size.
 ///
-/// sums the advance values of all rasterized glyphs in the string.
-/// invisible or uncached glyphs are skipped.
+/// includes kern adjustments between adjacent characters.
+/// invisible or uncached glyphs contribute 0 width.
 #[allow(dead_code)]
 pub fn measure_text(atlas: &GlyphAtlas, font_id: u32, text: &str, font_size: f32) -> f32 {
     let mut width = 0.0f32;
+    let mut prev_char: Option<char> = None;
     for ch in text.chars() {
+        if let Some(prev) = prev_char {
+            width += atlas.kern(font_id, prev, ch, font_size);
+        }
         if let Some(info) = atlas.get_glyph(font_id, ch, font_size) {
             width += info.advance;
         }
+        prev_char = Some(ch);
     }
     width
 }
@@ -325,6 +351,9 @@ pub fn layout_text_wrapped(
     let mut lines: Vec<Vec<TextGlyphQuad>> = Vec::new();
     let mut line_y = 0.0f32;
 
+    // cache space width once per call — it's the same for every word gap
+    let space_width = measure_text(atlas, font_id, " ", font_size);
+
     for paragraph in text.split('\n') {
         let words: Vec<&str> = paragraph.split_whitespace().collect();
         let mut current_line = String::new();
@@ -332,14 +361,13 @@ pub fn layout_text_wrapped(
 
         for word in words {
             let word_width = measure_text(atlas, font_id, word, font_size);
-            let space_width = if current_line.is_empty() {
+            let gap = if current_line.is_empty() {
                 0.0
             } else {
-                measure_text(atlas, font_id, " ", font_size)
+                space_width
             };
 
-            if !current_line.is_empty() && current_width + space_width + word_width > max_width {
-                // flush current line
+            if !current_line.is_empty() && current_width + gap + word_width > max_width {
                 let line_pos = Vec2::new(position.x, position.y + line_y);
                 lines.push(layout_text(
                     atlas,
@@ -354,14 +382,14 @@ pub fn layout_text_wrapped(
             } else {
                 if !current_line.is_empty() {
                     current_line.push(' ');
-                    current_width += space_width;
+                    current_width += gap;
                 }
                 current_line.push_str(word);
                 current_width += word_width;
             }
         }
 
-        // flush remaining line (including empty paragraphs as blank lines)
+        // flush remaining line (empty paragraphs become blank lines)
         let line_pos = Vec2::new(position.x, position.y + line_y);
         if current_line.is_empty() {
             lines.push(Vec::new());

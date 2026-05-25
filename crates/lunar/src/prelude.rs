@@ -64,7 +64,7 @@ pub use engine_core::{App, GamePlugin, Time, WindowSettings};
 
 // engine-2d types — only available when the 2d feature is enabled
 #[cfg(feature = "2d")]
-pub use engine_2d::{Plugin2d, propagate_transforms};
+pub use engine_2d::{Plugin2d, SpriteAnimation, propagate_transforms};
 
 // engine-3d types — only available when the 3d feature is enabled
 #[cfg(feature = "3d")]
