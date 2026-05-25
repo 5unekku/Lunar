@@ -17,8 +17,7 @@ impl GamePlugin for RpgGame {
     fn build(&mut self, app: &mut App) {
         app.add_plugin(DialoguePlugin);
         app.add_startup_system(setup);
-        app.add_system((overworld_input, player_move_animation).chain());
-        app.add_system(dialogue_input);
+        app.add_system((overworld_input, player_move_animation, dialogue_input).chain());
         app.add_system_to_stage(UpdateStage::Render, (camera_follow, render).chain());
     }
 }
