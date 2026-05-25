@@ -64,7 +64,9 @@ pub use bootstrap_wasm::bootstrap_wasm;
 pub use engine_assets::{AssetServer, AudioFormat, Font, Handle, Sound, Texture};
 pub use engine_core::{App, GamePlugin, Time, WindowSettings};
 pub use engine_input::{ActionMap, InputBinding, InputState, KeyCode, MouseButton};
-pub use engine_math::{Color, Mat2, Mat3, Mat4, Quat, Rect, Transform, Vec2, Vec3, Vec4};
+pub use engine_math::{
+    Color, Mat2, Mat3, Mat4, Quat, Rect, ScreenRect, Transform, Vec2, Vec3, Vec4,
+};
 pub use engine_render::{
     Camera, Layer, RenderConfig, RenderEngine, RenderInfo, RenderQueue, Sprite, Text, layers,
 };

@@ -4,26 +4,13 @@ use engine_math::Color;
 /// directional light — infinite distance, uniform direction across the scene.
 ///
 /// direction is taken from the entity's [`WorldTransform3d`](crate::transform::WorldTransform3d)
-/// forward vector, so rotate the entity to aim the light. equivalent to a sun.
-///
-/// # example
-///
-/// ```ignore
-/// commands.spawn((
-///     LocalTransform3d::default()
-///         .with_rotation(Quat::from_euler(EulerRot::XYZ, -0.8, 0.4, 0.0)),
-///     WorldTransform3d::default(),
-///     DirectionalLight {
-///         color: Color::WHITE,
-///         illuminance: 80_000.0, // roughly outdoor sunlight in lux
-///     },
-/// ));
-/// ```
+/// forward vector. equivalent to a sun or moon — no falloff, no position.
 #[derive(Debug, Clone, Copy, Component)]
 pub struct DirectionalLight {
     pub color: Color,
-    /// light strength in lux. 80_000 ≈ full sun, 1_000 ≈ overcast.
+    /// light strength in lux. 80_000 ≈ full sun, 1_000 ≈ overcast, 100 ≈ indoor.
     pub illuminance: f32,
+    pub casts_shadows: bool,
 }
 
 impl Default for DirectionalLight {
@@ -31,22 +18,36 @@ impl Default for DirectionalLight {
         Self {
             color: Color::WHITE,
             illuminance: 80_000.0,
+            casts_shadows: false,
         }
     }
 }
 
-/// point light — emits uniformly in all directions from the entity's position.
+/// point light — emits uniformly in all directions from the entity's world position.
 ///
-/// position is taken from the entity's [`WorldTransform3d`](crate::transform::WorldTransform3d)
-/// translation. attenuation follows inverse-square law up to `radius`.
+/// # attenuation
+///
+/// the render system uses the ioquake3 formula to avoid a division per fragment:
+///
+/// ```text
+/// norm_dist = radius² / distance²
+/// attenuation = clamp(0.5 * norm_dist - 1.5, 0.0, 1.0)
+/// ```
+///
+/// this gives a physically-motivated falloff that reaches zero at `radius` without
+/// a divide. it is slightly softer than true inverse-square near the source, which
+/// is perceptually preferred and avoids the singularity at d = 0.
+///
+/// `radius` is both the visual falloff range and the culling volume — the render
+/// system skips any surface whose AABB does not intersect the light sphere.
+/// keep radius as small as possible to minimize the number of surfaces lit.
 #[derive(Debug, Clone, Copy, Component)]
 pub struct PointLight {
     pub color: Color,
-    /// luminous intensity in candela.
+    /// luminous intensity in candela. combined with attenuation for final contribution.
     pub intensity: f32,
-    /// world-space radius at which intensity falls to zero (hard cutoff for culling).
+    /// world-space radius. light reaches zero at this distance (hard culling boundary).
     pub radius: f32,
-    /// whether this light casts shadows.
     pub casts_shadows: bool,
 }
 
@@ -63,18 +64,25 @@ impl Default for PointLight {
 
 /// spot light — cone of light from the entity's position in its forward direction.
 ///
-/// the Doom 3 / id Tech 4 lighting model uses these extensively for environment
-/// lighting. inner_angle is fully lit; from inner to outer it falls off smoothly.
+/// uses the same radial attenuation formula as [`PointLight`] plus an angular
+/// falloff between `inner_angle` and `outer_angle` (analogous to the Doom 3
+/// light projection texture approach, computed analytically here).
+///
+/// angular attenuation in the shader:
+/// ```text
+/// cos_inner = cos(inner_angle)
+/// cos_outer = cos(outer_angle)
+/// cos_theta = dot(normalize(fragment_to_light), spot_direction)
+/// spot_factor = clamp((cos_theta - cos_outer) / (cos_inner - cos_outer), 0.0, 1.0)
+/// ```
 #[derive(Debug, Clone, Copy, Component)]
 pub struct SpotLight {
     pub color: Color,
-    /// luminous intensity in candela.
     pub intensity: f32,
-    /// world-space range.
     pub radius: f32,
-    /// inner (full brightness) cone half-angle in radians.
+    /// inner cone half-angle in radians — fully lit inside this cone.
     pub inner_angle: f32,
-    /// outer (zero brightness) cone half-angle in radians.
+    /// outer cone half-angle in radians — no light outside this cone.
     pub outer_angle: f32,
     pub casts_shadows: bool,
 }

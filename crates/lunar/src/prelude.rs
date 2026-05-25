@@ -55,7 +55,9 @@ pub use bevy_ecs::change_detection::{DetectChanges, DetectChangesMut, Mut, Ref};
 pub use bevy_ecs::message::{MessageReader, MessageWriter, Messages};
 
 // engine-math types
-pub use engine_math::{Color, Mat2, Mat3, Mat4, Quat, Rect, Transform, Vec2, Vec3, Vec4};
+pub use engine_math::{
+    Color, Mat2, Mat3, Mat4, Quat, Rect, ScreenRect, Transform, Vec2, Vec3, Vec4,
+};
 
 // engine-core types
 pub use engine_core::{App, GamePlugin, Time, WindowSettings};

@@ -51,6 +51,8 @@ pub type Mat4 = glam::Mat4;
 pub type Quat = glam::Quat;
 
 mod macros;
+mod screen_rect;
 mod types;
 
+pub use screen_rect::ScreenRect;
 pub use types::{Color, LocalTransform, Rect, Transform, WorldTransform};

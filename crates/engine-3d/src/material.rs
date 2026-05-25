@@ -40,28 +40,46 @@ impl Default for CullMode {
 
 /// surface material data.
 ///
-/// defines how a mesh surface responds to light. the render system
-/// reads this and selects the appropriate shader pass.
+/// defines how a mesh surface responds to light. the render system reads this
+/// and selects the appropriate shader pass (one ambient pass + one pass per
+/// affecting light, each scissored to the light's screen projection).
 ///
-/// this is the CPU-side description. the render system creates GPU
-/// bind groups from it. handles can be null (no texture, fall back to
-/// color alone).
+/// # normal map convention
+///
+/// normal maps store only the XY tangent-space components in the R and G channels.
+/// the Z component is reconstructed in the fragment shader as:
+/// `z = sqrt(1.0 - saturate(dot(xy, xy)))`
+/// this matches the Doom 3 / id Tech 4 convention and saves one channel for
+/// other data (e.g. specular intensity packed into B). do not store Z in textures.
+///
+/// # lightmap UV
+///
+/// if `lightmap` is set, the render system samples it using `Vertex3d::uv_lightmap`
+/// (the secondary UV channel) and multiplies the result into the diffuse term.
+/// this replaces real-time ambient for static geometry in levels.
 pub struct MaterialData {
     pub shading: ShadingModel,
     pub cull: CullMode,
-    /// base color / albedo. multiplied with the diffuse texture.
+    /// base color / albedo. multiplied with the diffuse texture sample.
     pub base_color: Color,
-    /// diffuse / albedo texture.
+    /// diffuse / albedo texture. none = use base_color alone.
     pub diffuse: Option<Handle<Texture>>,
-    /// normal map (tangent space). none = flat normals.
+    /// tangent-space normal map. XY channels only — Z reconstructed in shader.
+    /// none = face normals only.
     pub normal_map: Option<Handle<Texture>>,
-    /// specular texture (phong) or roughness/metallic (pbr).
+    /// specular texture:
+    /// - phong: intensity/gloss map (greyscale, sampled from B channel)
+    /// - pbr: roughness (R) + metallic (G) combined texture
     pub specular: Option<Handle<Texture>>,
-    /// phong: specular exponent. pbr: metallic factor (0.0–1.0).
+    /// phong: specular exponent (shininess). typical range 8–128.
+    /// pbr: metallic factor (0.0 = dielectric, 1.0 = full metal).
     pub specular_intensity: f32,
-    /// alpha < 1.0 triggers alpha-blend, otherwise opaque.
+    /// baked lightmap for this surface. sampled via uv_lightmap and multiplied
+    /// into the ambient term. for dynamic objects, leave as none.
+    pub lightmap: Option<Handle<Texture>>,
+    /// alpha < 1.0 triggers alpha-blend; 1.0 = opaque.
     pub alpha: f32,
-    /// whether to write to depth buffer (set false for decals / transparent surfaces).
+    /// set false for decals, transparent surfaces, and particles.
     pub depth_write: bool,
 }
 
@@ -75,6 +93,7 @@ impl Default for MaterialData {
             normal_map: None,
             specular: None,
             specular_intensity: 32.0,
+            lightmap: None,
             alpha: 1.0,
             depth_write: true,
         }
