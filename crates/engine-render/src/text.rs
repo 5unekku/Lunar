@@ -134,7 +134,7 @@ impl GlyphAtlas {
         let gh = u32::try_from(metrics.height).unwrap_or(0);
 
         if gw == 0 || gh == 0 {
-            // space or invisible glyph
+            // space or invisible glyph — no bitmap, but still needs advance/bearing
             let info = GlyphInfo {
                 x: 0,
                 y: 0,
@@ -142,8 +142,10 @@ impl GlyphAtlas {
                 height: 0,
                 #[allow(clippy::cast_precision_loss)]
                 bearing_x: metrics.xmin as f32,
+                // ymin is bottom of bitmap relative to baseline (negative for descenders).
+                // top of bitmap = ymin + height; for zero-size glyphs height is 0 so this is ymin.
                 #[allow(clippy::cast_precision_loss)]
-                bearing_y: -(metrics.ymin as f32),
+                bearing_y: (metrics.ymin + metrics.height as i32) as f32,
                 advance: metrics.advance_width,
             };
             self.glyphs.insert(key, info);
@@ -186,8 +188,10 @@ impl GlyphAtlas {
             height: gh,
             #[allow(clippy::cast_precision_loss)]
             bearing_x: metrics.xmin as f32,
+            // top of bitmap above baseline = ymin + height (positive = above baseline).
+            // used as: glyph_y = baseline_y - bearing_y (screen y-down coords).
             #[allow(clippy::cast_precision_loss)]
-            bearing_y: -(metrics.ymin as f32),
+            bearing_y: (metrics.ymin + metrics.height as i32) as f32,
             advance: metrics.advance_width,
         };
         self.glyphs.insert(key, info);

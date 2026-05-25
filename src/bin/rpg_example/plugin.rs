@@ -300,7 +300,10 @@ pub fn dialogue_input(
                 return;
             }
             *text_timer += time.delta_seconds();
-            let total = dialogues.current_line().map(|l| l.text.len()).unwrap_or(0);
+            let total = dialogues
+                .current_line()
+                .map(|l| l.text.chars().count())
+                .unwrap_or(0);
             *text_visible_chars = (*text_timer * CPS) as usize;
 
             if dialogues.has_choices() && *text_visible_chars >= total {
@@ -487,11 +490,13 @@ pub fn render(
             );
         }
 
-        let show = (*text_visible_chars).min(text.len());
+        let char_count = text.chars().count();
+        let show = (*text_visible_chars).min(char_count);
         if show > 0 {
+            let show_bytes = text.char_indices().nth(show).map_or(text.len(), |(i, _)| i);
             queue.draw_text_on_layer(
                 &assets.font,
-                &text[..show],
+                &text[..show_bytes],
                 Vec2::new(text_x, text_y),
                 16.0,
                 Color::WHITE,
@@ -499,7 +504,7 @@ pub fn render(
             );
         }
 
-        if *text_visible_chars >= text.len() && dialogues.has_choices() {
+        if *text_visible_chars >= char_count && dialogues.has_choices() {
             let labels = dialogues.choice_labels();
             let mut cy = text_y + 28.0;
             for (i, label) in labels.iter().enumerate() {
@@ -528,7 +533,7 @@ pub fn render(
             }
         }
 
-        if *text_visible_chars >= text.len() && !dialogues.has_choices() && dialogues.is_active() {
+        if *text_visible_chars >= char_count && !dialogues.has_choices() && dialogues.is_active() {
             let ind = camera.screen_to_world(
                 Vec2::new(VIEW_WIDTH - 80.0, VIEW_HEIGHT - 18.0),
                 window.width,
