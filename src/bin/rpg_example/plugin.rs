@@ -323,8 +323,8 @@ pub fn dialogue_input(
                 }
             }
 
-            let press = input.is_key_just_pressed(KeyCode::Space)
-                || input.is_key_just_pressed(KeyCode::Enter);
+            let press = input.is_key_just_released(KeyCode::Space)
+                || input.is_key_just_released(KeyCode::Enter);
             if !press {
                 None
             } else if *text_visible_chars < total && total > 0 {
