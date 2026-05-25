@@ -4,7 +4,11 @@ use lunar::prelude::*;
 pub enum GameMode {
     /// `just_returned` is true for one frame after returning from dialogue,
     /// preventing the same keypress from immediately re-opening a conversation.
-    Overworld { just_returned: bool },
+    Overworld {
+        just_returned: bool,
+        /// whether Space/Enter was held on the previous tick — rising edge triggers interaction
+        interact_was_held: bool,
+    },
     Dialogue {
         npc_index: usize,
         text_visible_chars: usize,

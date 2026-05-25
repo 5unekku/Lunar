@@ -183,6 +183,7 @@ pub fn setup(
     commands.insert_resource(NpcDefinitions(npc_defs));
     commands.insert_resource(GameMode::Overworld {
         just_returned: false,
+        interact_was_held: false,
     });
     commands.insert_resource(PlayerChoiceState::default());
     commands.insert_resource(tile_grid);
@@ -209,7 +210,7 @@ pub fn overworld_input(
     choice_state: Res<PlayerChoiceState>,
     mut move_timer: ResMut<MoveTimer>,
 ) {
-    let GameMode::Overworld { just_returned } = &mut *mode else {
+    let GameMode::Overworld { just_returned, interact_was_held } = &mut *mode else {
         return;
     };
     if *just_returned {
@@ -256,7 +257,11 @@ pub fn overworld_input(
         move_timer.0 = MOVE_COOLDOWN;
     }
 
-    if input.is_key_just_pressed(KeyCode::Space) || input.is_key_just_pressed(KeyCode::Enter) {
+    let interact_held = input.is_key_held(KeyCode::Space) || input.is_key_held(KeyCode::Enter);
+    let interact_press = interact_held && !*interact_was_held;
+    *interact_was_held = interact_held;
+
+    if interact_press {
         let (dfacing_col, dfacing_row) = facing.delta();
         let target_col = grid_pos.col + dfacing_col;
         let target_row = grid_pos.row + dfacing_row;
@@ -348,6 +353,7 @@ pub fn dialogue_input(
                     if !dialogues.is_active() {
                         Some(GameMode::Overworld {
                             just_returned: true,
+                            interact_was_held: true,
                         })
                     } else {
                         *text_visible_chars = 0;
@@ -360,6 +366,7 @@ pub fn dialogue_input(
                     if !dialogues.is_active() {
                         Some(GameMode::Overworld {
                             just_returned: true,
+                            interact_was_held: true,
                         })
                     } else {
                         *text_visible_chars = 0;
