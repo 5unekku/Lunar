@@ -27,20 +27,20 @@ impl Default for DirectionalLight {
 ///
 /// # attenuation
 ///
-/// the render system uses the ioquake3 formula to avoid a division per fragment:
+/// `radius` defines both the falloff range and the culling volume — the render
+/// system skips any surface whose AABB does not intersect the light sphere. keep
+/// it as tight as possible to minimize lit surface count.
+///
+/// the WGSL shader should use a physically-motivated formula. recommended (Frostbite):
 ///
 /// ```text
-/// norm_dist = radius² / distance²
-/// attenuation = clamp(0.5 * norm_dist - 1.5, 0.0, 1.0)
+/// window     = clamp(1.0 - (distance / radius)^4, 0.0, 1.0)^2
+/// attenuation = window / (distance^2 + 1.0)
 /// ```
 ///
-/// this gives a physically-motivated falloff that reaches zero at `radius` without
-/// a divide. it is slightly softer than true inverse-square near the source, which
-/// is perceptually preferred and avoids the singularity at d = 0.
-///
-/// `radius` is both the visual falloff range and the culling volume — the render
-/// system skips any surface whose AABB does not intersect the light sphere.
-/// keep radius as small as possible to minimize the number of surfaces lit.
+/// the `+ 1.0` prevents the singularity at d = 0; `window` provides a smooth
+/// hard cutoff at `radius` without an abrupt cliff. this is physically based
+/// (inverse-square in the falloff region) and well-behaved at the origin.
 #[derive(Debug, Clone, Copy, Component)]
 pub struct PointLight {
     pub color: Color,

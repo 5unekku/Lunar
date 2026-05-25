@@ -2,42 +2,43 @@ use bevy_ecs::prelude::Component;
 use engine_assets::{Asset, Handle};
 use engine_math::{Vec2, Vec3};
 
-/// a single vertex in a 3D mesh.
+/// a vertex in a rigid (non-skinned) 3D mesh.
 ///
-/// # layout (matches the wgpu vertex buffer descriptor)
+/// # layout
 ///
 /// - `position`: local model space xyz
 /// - `normal`: unit surface normal
 /// - `tangent`: tangent space +T vector; `w` stores handedness (±1.0).
-///   bitangent is reconstructed in the vertex shader as `cross(normal, tangent.xyz) * tangent.w`
-///   to avoid storing a redundant vec3 per vertex.
+///   bitangent is reconstructed in the vertex shader as `cross(normal, tangent.xyz) * tangent.w`,
+///   which is the glTF 2.0 standard convention.
 /// - `uv`: primary texture coordinate (diffuse, normal map, specular)
-/// - `uv_lightmap`: secondary UV for baked lightmaps. if no lightmap, set equal to `uv`.
-/// - `color`: per-vertex RGBA8 color. used for vertex-baked ambient contribution or tinting.
-/// - `bone_indices`: up to 4 skeletal joint indices (u8 — max 255 joints per mesh).
-/// - `bone_weights`: blend weights summing to 1.0. for rigid meshes, set [1,0,0,0].
+/// - `uv_lightmap`: secondary UV for baked lightmaps. mirrors `uv` if no lightmap is used.
+/// - `color`: per-vertex RGBA8 linear color. multiplied with diffuse in the shader.
+///   use [255,255,255,255] (white) for no tinting.
+///
+/// # normal map convention
+///
+/// normal maps store only the XY tangent-space components (RG channels).
+/// the shader reconstructs Z as `sqrt(1.0 - saturate(dot(xy, xy)))`.
+/// this aligns with BC5 block compression, which only stores two channels anyway.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C)]
 pub struct Vertex3d {
     pub position: Vec3,
     pub normal: Vec3,
-    /// tangent xyz + handedness w. bitangent = cross(normal, tangent.xyz) * tangent.w.
+    /// tangent xyz + handedness w (±1.0). bitangent = cross(normal, tangent.xyz) * tangent.w.
     pub tangent: [f32; 4],
     pub uv: Vec2,
     /// secondary UV for lightmap sampling. mirrors `uv` if no lightmap.
     pub uv_lightmap: Vec2,
-    /// vertex color (RGBA8 linear). multiplied with the diffuse sample in the shader.
+    /// per-vertex RGBA8 linear color. [255,255,255,255] = no tint.
     pub color: [u8; 4],
-    /// skeletal joint indices (indices into the bone matrix array, max 255 joints).
-    pub bone_indices: [u8; 4],
-    /// blend weights for each bone. must sum to 1.0. use [1,0,0,0] for rigid meshes.
-    pub bone_weights: [f32; 4],
 }
 
 impl Vertex3d {
-    /// create a rigid (non-skinned) vertex with the most common fields.
+    /// create a vertex with sensible defaults (white, uv_lightmap mirrors uv).
     #[must_use]
-    pub fn rigid(position: Vec3, normal: Vec3, tangent: [f32; 4], uv: Vec2) -> Self {
+    pub fn new(position: Vec3, normal: Vec3, tangent: [f32; 4], uv: Vec2) -> Self {
         Self {
             position,
             normal,
@@ -45,15 +46,48 @@ impl Vertex3d {
             uv,
             uv_lightmap: uv,
             color: [255, 255, 255, 255],
-            bone_indices: [0; 4],
+        }
+    }
+}
+
+/// additional per-vertex data for skeletal (skinned) meshes.
+///
+/// stored separately from [`Vertex3d`] so static geometry does not pay for
+/// bone data it never uses. the render system selects the vertex layout based
+/// on whether a skeleton is present.
+///
+/// up to 4 joint influences per vertex (sufficient for characters; 2 covers
+/// most rigid-body joints). weights must sum to 1.0; unused slots are zero.
+/// joint indices address into the bone matrix array uploaded per draw call.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(C)]
+pub struct SkinWeights {
+    /// indices into the bone matrix array. max 255 joints per mesh.
+    pub bone_indices: [u8; 4],
+    /// blend weights. must sum to 1.0. unused influences = 0.0.
+    pub bone_weights: [f32; 4],
+}
+
+impl SkinWeights {
+    /// rigid binding to a single joint (weight 1.0 on bone 0, rest zero).
+    #[must_use]
+    pub const fn rigid(bone: u8) -> Self {
+        Self {
+            bone_indices: [bone, 0, 0, 0],
             bone_weights: [1.0, 0.0, 0.0, 0.0],
         }
     }
 }
 
+impl Default for SkinWeights {
+    fn default() -> Self {
+        Self::rigid(0)
+    }
+}
+
 /// index format — 16-bit for meshes under 65536 verts, 32-bit for larger ones.
 ///
-/// prefer u16 where possible: smaller memory footprint, better GPU cache utilization.
+/// prefer u16 where possible: half the index buffer size, better GPU cache utilization.
 #[derive(Debug, Clone)]
 pub enum IndexBuffer {
     U16(Vec<u16>),
@@ -75,45 +109,69 @@ impl IndexBuffer {
     }
 }
 
-/// how often this mesh's vertex data changes.
+/// how often this mesh's vertex data changes on the GPU.
 ///
-/// the render system uses this to pick the right GPU buffer strategy.
-/// matches the DM_STATIC / DM_CACHED / DM_CONTINUOUS distinction from id Tech 4.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// the render system uses this to pick the appropriate buffer strategy.
+///
+/// - `Static`: uploaded once, never modified. world geometry, props, architecture.
+/// - `Cached`: re-uploaded when the source data changes (e.g. after a pose update).
+///   skeletal pose results, destructibles after a state change.
+/// - `Streaming`: rebuilt and re-uploaded every frame. particles, cloth, water, debug lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MeshUsage {
-    /// uploaded once, never changed. world geometry, props, static architecture.
+    #[default]
     Static,
-    /// updated infrequently — when the source data changes, not every frame.
-    /// skeletal pose results, destructible objects after state change.
     Cached,
-    /// rebuilt every frame. particles, cloth, water surfaces, debug lines.
     Streaming,
-}
-
-impl Default for MeshUsage {
-    fn default() -> Self {
-        Self::Static
-    }
 }
 
 /// raw mesh data: vertex and index buffers in CPU memory.
 ///
 /// the render system uploads this to the GPU. normals and tangents are expected
 /// to be pre-computed before upload; see [`MeshData::compute_flat_normals`].
+///
+/// skinned meshes additionally provide [`SkinWeights`] parallel to `vertices`.
 pub struct MeshData {
     pub vertices: Vec<Vertex3d>,
     pub indices: IndexBuffer,
-    /// upload strategy hint. see [`MeshUsage`].
+    /// per-vertex skin weights. `None` for rigid (non-animated) meshes.
+    /// when `Some`, must have the same length as `vertices`.
+    pub skin: Option<Vec<SkinWeights>>,
     pub usage: MeshUsage,
 }
 
 impl MeshData {
+    /// create a rigid (non-skinned) static mesh.
     #[must_use]
     pub fn new(vertices: Vec<Vertex3d>, indices: IndexBuffer) -> Self {
         Self {
             vertices,
             indices,
+            skin: None,
             usage: MeshUsage::Static,
+        }
+    }
+
+    /// create a skinned mesh with bone weights.
+    ///
+    /// # Panics
+    /// panics (debug only) if `skin.len() != vertices.len()`.
+    #[must_use]
+    pub fn new_skinned(
+        vertices: Vec<Vertex3d>,
+        indices: IndexBuffer,
+        skin: Vec<SkinWeights>,
+    ) -> Self {
+        debug_assert_eq!(
+            vertices.len(),
+            skin.len(),
+            "skin weights must match vertex count"
+        );
+        Self {
+            vertices,
+            indices,
+            skin: Some(skin),
+            usage: MeshUsage::Cached,
         }
     }
 
@@ -131,11 +189,9 @@ impl MeshData {
             IndexBuffer::U16(v) => v.iter().map(|&i| i as usize).collect(),
             IndexBuffer::U32(v) => v.iter().map(|&i| i as usize).collect(),
         };
-
         for vertex in &mut self.vertices {
             vertex.normal = Vec3::ZERO;
         }
-
         for tri in indices.chunks_exact(3) {
             let a = self.vertices[tri[0]].position;
             let b = self.vertices[tri[1]].position;
