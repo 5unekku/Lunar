@@ -280,7 +280,7 @@ pub fn overworld_input(
                 text_timer: 0.0,
                 choice_selection: 0,
                 just_started: true,
-                waiting_for_release: false,
+                space_was_held: false,
             };
             break;
         }
@@ -301,10 +301,13 @@ pub fn dialogue_input(
             text_visible_chars,
             choice_selection,
             just_started,
-            waiting_for_release,
+            space_was_held,
         } => {
+            let space_held = input.is_key_held(KeyCode::Space) || input.is_key_held(KeyCode::Enter);
             if *just_started {
                 *just_started = false;
+                // sync held state so we don't fire immediately on the opening press
+                *space_was_held = space_held;
                 return;
             }
             *text_timer += time.delta_seconds();
@@ -325,20 +328,12 @@ pub fn dialogue_input(
                 }
             }
 
-            let advance_released = input.is_key_just_released(KeyCode::Space)
-                || input.is_key_just_released(KeyCode::Enter);
-            if *waiting_for_release {
-                if advance_released {
-                    *waiting_for_release = false;
-                }
-                return;
-            }
-            let press = input.is_key_just_pressed(KeyCode::Space)
-                || input.is_key_just_pressed(KeyCode::Enter);
+            // rising edge: advance only on the first tick the key transitions from not-held to held
+            let press = space_held && !*space_was_held;
+            *space_was_held = space_held;
             if !press {
                 None
             } else {
-                *waiting_for_release = true;
                 if *text_visible_chars < total && total > 0 {
                     *text_visible_chars = total;
                     *text_timer = total as f32 / CPS;
