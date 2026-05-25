@@ -1,85 +1,144 @@
-//! SIMD utility functions for image processing.
+//! pixel processing utilities with SIMD acceleration where available.
 //!
-//! provides runtime-detected SIMD acceleration for common image operations.
-//! falls back to scalar implementations when SIMD is unavailable.
+//! deinterleave/reinterleave are the hot path — they run on every encode/decode.
+//! NEON uses vld4q_u8/vst4q_u8 which deinterleave 64 bytes in a single instruction.
+//! x86 falls back to scalar; LLVM auto-vectorises the inner loop well on AVX2 targets.
 
-/// SIMD capability level detected at runtime.
+/// deinterleave RGBA → [R...][G...][B...][A...] contiguous planes.
 ///
-/// used to select the optimal implementation for image processing
-/// operations. detected automatically via [`SimdLevel::detect`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SimdLevel {
-    /// no SIMD support, scalar fallback.
-    Scalar,
-    /// x86 SSE2 (128-bit vectors).
-    Sse2,
-    /// x86 AVX2 (256-bit vectors).
-    Avx2,
-    /// ARM NEON (128-bit vectors).
-    Neon,
-    /// WebAssembly SIMD128 (128-bit vectors).
-    WasmSimd128,
+/// zstd compresses each channel plane far better than interleaved data because
+/// each plane has coherent statistics. a solid-color sprite's alpha plane is
+/// all-255, a 4-byte run becomes a ~5-byte output from zstd — not possible
+/// when the 255s are scattered every 4 bytes through interleaved data.
+pub fn deinterleave_rgba(rgba: &[u8]) -> Vec<u8> {
+    assert_eq!(rgba.len() % 4, 0, "rgba length must be a multiple of 4");
+    let n = rgba.len() / 4;
+    let mut out = vec![0u8; rgba.len()];
+
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        deinterleave_neon(rgba, &mut out, n);
+        return out;
+    }
+
+    #[cfg_attr(target_arch = "aarch64", allow(unreachable_code))]
+    deinterleave_scalar(rgba, &mut out, n);
+    out
 }
 
-impl SimdLevel {
-    /// detect the best available SIMD level for the current platform.
-    /// checks CPU features on `x86_64`, assumes NEON on aarch64,
-    /// and checks for wasm simd128 on WebAssembly.
-    #[must_use]
-    pub fn detect() -> Self {
-        #[cfg(target_arch = "x86_64")]
-        {
-            if std::is_x86_feature_detected!("avx2") {
-                return Self::Avx2;
-            }
-            if std::is_x86_feature_detected!("sse2") {
-                return Self::Sse2;
-            }
-        }
-        #[cfg(target_arch = "aarch64")]
-        {
-            return SimdLevel::Neon;
-        }
-        #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
-        {
-            return SimdLevel::WasmSimd128;
-        }
-        Self::Scalar
+/// reinterleave [R...][G...][B...][A...] planes back to RGBA.
+pub fn reinterleave_rgba(planar: &[u8], n_pixels: usize) -> Vec<u8> {
+    assert_eq!(
+        planar.len(),
+        n_pixels * 4,
+        "planar length must be n_pixels * 4"
+    );
+    let mut out = vec![0u8; planar.len()];
+
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        reinterleave_neon(planar, &mut out, n_pixels);
+        return out;
+    }
+
+    #[cfg_attr(target_arch = "aarch64", allow(unreachable_code))]
+    reinterleave_scalar(planar, &mut out, n_pixels);
+    out
+}
+
+fn deinterleave_scalar(rgba: &[u8], out: &mut [u8], n: usize) {
+    let (r, rest) = out.split_at_mut(n);
+    let (g, rest) = rest.split_at_mut(n);
+    let (b, a) = rest.split_at_mut(n);
+    for (i, px) in rgba.chunks_exact(4).enumerate() {
+        r[i] = px[0];
+        g[i] = px[1];
+        b[i] = px[2];
+        a[i] = px[3];
     }
 }
 
-/// convert sRGB byte values to linear f32 color values.
-///
-/// each input byte (0-255) is normalized to 0.0-1.0 and converted
-/// using the standard sRGB transfer function. the output array must
-/// be exactly 4 times the input length (one f32 per channel per pixel).
-///
-/// # Panics
-/// panics if the output length is not exactly 4 times the input length.
-pub fn srgb_to_linear_simd(input: &[u8], output: &mut [f32], _level: SimdLevel) {
-    assert_eq!(
-        input.len() * 4,
-        output.len(),
-        "output must be 4x input length (rgba -> 4xf32 per pixel)"
-    );
-    for (i, &byte) in input.iter().enumerate() {
-        let s = f32::from(byte) / 255.0;
-        output[i] = if s <= 0.04045 {
-            s / 12.92
-        } else {
-            ((s + 0.055) / 1.055).powf(2.4)
-        };
+fn reinterleave_scalar(planar: &[u8], out: &mut [u8], n: usize) {
+    let (r, rest) = planar.split_at(n);
+    let (g, rest) = rest.split_at(n);
+    let (b, a) = rest.split_at(n);
+    for (i, px) in out.chunks_exact_mut(4).enumerate() {
+        px[0] = r[i];
+        px[1] = g[i];
+        px[2] = b[i];
+        px[3] = a[i];
+    }
+}
+
+/// neon deinterleave using vld4q_u8 — loads 64 bytes and splits into 4 x 16-byte
+/// channel registers in a single instruction.
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn deinterleave_neon(rgba: &[u8], out: &mut [u8], n: usize) {
+    use std::arch::aarch64::*;
+    let n_blocks = n / 16;
+    let remainder = n % 16;
+    let src = rgba.as_ptr();
+    let r_ptr = out.as_mut_ptr();
+    let g_ptr = r_ptr.add(n);
+    let b_ptr = g_ptr.add(n);
+    let a_ptr = b_ptr.add(n);
+    for i in 0..n_blocks {
+        let quad = vld4q_u8(src.add(i * 64));
+        vst1q_u8(r_ptr.add(i * 16), quad.0);
+        vst1q_u8(g_ptr.add(i * 16), quad.1);
+        vst1q_u8(b_ptr.add(i * 16), quad.2);
+        vst1q_u8(a_ptr.add(i * 16), quad.3);
+    }
+    // scalar tail
+    let done = n_blocks * 16;
+    for j in 0..remainder {
+        let px = src.add((done + j) * 4);
+        *r_ptr.add(done + j) = *px;
+        *g_ptr.add(done + j) = *px.add(1);
+        *b_ptr.add(done + j) = *px.add(2);
+        *a_ptr.add(done + j) = *px.add(3);
+    }
+}
+
+/// neon reinterleave using vst4q_u8 — interleaves 4 x 16-byte channel registers
+/// into 64 bytes of RGBA in a single instruction.
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn reinterleave_neon(planar: &[u8], out: &mut [u8], n: usize) {
+    use std::arch::aarch64::*;
+    let n_blocks = n / 16;
+    let remainder = n % 16;
+    let r_ptr = planar.as_ptr();
+    let g_ptr = r_ptr.add(n);
+    let b_ptr = g_ptr.add(n);
+    let a_ptr = b_ptr.add(n);
+    let dst = out.as_mut_ptr();
+    for i in 0..n_blocks {
+        let quad = uint8x16x4_t(
+            vld1q_u8(r_ptr.add(i * 16)),
+            vld1q_u8(g_ptr.add(i * 16)),
+            vld1q_u8(b_ptr.add(i * 16)),
+            vld1q_u8(a_ptr.add(i * 16)),
+        );
+        vst4q_u8(dst.add(i * 64), quad);
+    }
+    // scalar tail
+    let done = n_blocks * 16;
+    for j in 0..remainder {
+        let base = (done + j) * 4;
+        out[base] = *r_ptr.add(done + j);
+        out[base + 1] = *g_ptr.add(done + j);
+        out[base + 2] = *b_ptr.add(done + j);
+        out[base + 3] = *a_ptr.add(done + j);
     }
 }
 
 /// premultiply RGB channels by the alpha value in-place.
 ///
-/// converts RGBA pixel data so that RGB values are scaled by alpha.
-/// the buffer must be a multiple of 4 bytes (complete RGBA pixels).
-///
 /// # Panics
 /// panics if the rgba buffer length is not a multiple of 4.
-pub fn premultiply_alpha_simd(rgba: &mut [u8], _level: SimdLevel) {
+pub fn premultiply_alpha(rgba: &mut [u8]) {
     assert_eq!(
         rgba.len() % 4,
         0,
@@ -88,31 +147,41 @@ pub fn premultiply_alpha_simd(rgba: &mut [u8], _level: SimdLevel) {
     for chunk in rgba.chunks_exact_mut(4) {
         let a = f32::from(chunk[3]) / 255.0;
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let r = (f32::from(chunk[0]) * a).clamp(0.0, 255.0) as u8;
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let g = (f32::from(chunk[1]) * a).clamp(0.0, 255.0) as u8;
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let b = (f32::from(chunk[2]) * a).clamp(0.0, 255.0) as u8;
-        chunk[0] = r;
-        chunk[1] = g;
-        chunk[2] = b;
+        {
+            chunk[0] = (f32::from(chunk[0]) * a).clamp(0.0, 255.0) as u8;
+            chunk[1] = (f32::from(chunk[1]) * a).clamp(0.0, 255.0) as u8;
+            chunk[2] = (f32::from(chunk[2]) * a).clamp(0.0, 255.0) as u8;
+        }
     }
 }
 
-/// convert RGBA pixel data to BGRA order by swapping red and blue channels.
-///
-/// both input and output buffers must be the same size and a multiple
-/// of 4 bytes (complete RGBA pixels).
+/// convert RGBA to BGRA by swapping red and blue channels in-place.
 ///
 /// # Panics
-/// panics if input and output lengths differ, or if input is not a multiple of 4.
-pub fn rgba_to_bgra_simd(input: &[u8], output: &mut [u8], _level: SimdLevel) {
-    assert_eq!(input.len(), output.len());
-    assert_eq!(input.len() % 4, 0);
-    for (src, dst) in input.chunks_exact(4).zip(output.chunks_exact_mut(4)) {
-        dst[0] = src[2];
-        dst[1] = src[1];
-        dst[2] = src[0];
-        dst[3] = src[3];
+/// panics if the buffer length is not a multiple of 4.
+pub fn rgba_to_bgra(buf: &mut [u8]) {
+    assert_eq!(buf.len() % 4, 0, "buffer must be a multiple of 4 bytes");
+    for chunk in buf.chunks_exact_mut(4) {
+        chunk.swap(0, 2);
+    }
+}
+
+/// convert sRGB byte values to linear f32. output must be 4x input length.
+///
+/// # Panics
+/// panics if output length is not exactly 4x input length.
+pub fn srgb_to_linear(input: &[u8], output: &mut [f32]) {
+    assert_eq!(
+        input.len() * 4,
+        output.len(),
+        "output must be 4x input length"
+    );
+    for (i, &byte) in input.iter().enumerate() {
+        let s = f32::from(byte) / 255.0;
+        output[i] = if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        };
     }
 }

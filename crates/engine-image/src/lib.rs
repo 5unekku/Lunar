@@ -22,4 +22,6 @@ mod simd;
 pub use decode::{Image, decode};
 pub use encode::{EncodeOptions, encode, encode_with_opts};
 pub use error::{DecodeError, EncodeError};
-pub use simd::{SimdLevel, premultiply_alpha_simd, rgba_to_bgra_simd, srgb_to_linear_simd};
+pub use simd::{
+    deinterleave_rgba, premultiply_alpha, reinterleave_rgba, rgba_to_bgra, srgb_to_linear,
+};

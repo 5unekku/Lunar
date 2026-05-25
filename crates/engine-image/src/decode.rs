@@ -1,5 +1,6 @@
 use crate::error::DecodeError;
 use crate::format::{self, ChunkType, Header};
+use crate::simd;
 
 /// a decoded image in RGBA format.
 ///
@@ -121,19 +122,22 @@ pub fn decode(data: &[u8]) -> Result<Image, DecodeError> {
                 if pixels.is_some() {
                     return Err(DecodeError::MultiplePixelData);
                 }
-                let mut decompressed = vec![0u8; chunk_header.uncompressed_size as usize];
-                zstd::decode_all(std::io::Cursor::new(compressed))
-                    .map_err(DecodeError::ZstdError)
-                    .map(|src| {
-                        decompressed.copy_from_slice(&src);
-                    })?;
+                let decompressed = zstd::decode_all(std::io::Cursor::new(compressed))
+                    .map_err(DecodeError::ZstdError)?;
                 if decompressed.len() != expected_bytes {
                     return Err(DecodeError::SizeMismatch {
                         expected: expected_bytes,
                         actual: decompressed.len(),
                     });
                 }
-                pixels = Some(decompressed);
+                // reinterleave if planar flag is set (all files encoded since v1.1)
+                let rgba = if header.flags & format::FLAG_PLANAR != 0 {
+                    let n_pixels = header.width as usize * header.height as usize;
+                    simd::reinterleave_rgba(&decompressed, n_pixels)
+                } else {
+                    decompressed
+                };
+                pixels = Some(rgba);
             }
             ChunkType::Metadata => {
                 let decompressed = zstd::decode_all(std::io::Cursor::new(compressed))

@@ -1,31 +1,26 @@
 use crate::error::EncodeError;
 use crate::format::{self, ChunkType};
+use crate::simd;
 
 /// options for encoding an image to .mi format.
-///
-/// controls compression, alpha handling, and optional metadata.
-/// use [`EncodeOptions::default()`] for sensible defaults, then override
-/// specific fields as needed.
 #[derive(Debug, Clone)]
 pub struct EncodeOptions {
-    /// zstd compression level (1-22, default 3).
-    /// higher levels produce smaller files but take longer to compress.
+    /// zstd compression level (1-22).
+    /// level 9 sits at the pareto knee — ~80% of max ratio for ~20% of max encode cost.
+    /// encoding is a build-time operation so levels above 3 are always worth it.
     pub compression_level: i32,
     /// whether the image contains alpha channel data.
-    /// when false, the alpha channel is assumed to be fully opaque.
     pub has_alpha: bool,
     /// whether the pixel data has premultiplied alpha.
-    /// this affects how the image is composited during rendering.
     pub premultiplied: bool,
     /// optional metadata string (e.g. json) embedded in the file.
-    /// stored in a separate compressed chunk.
     pub metadata: Option<String>,
 }
 
 impl Default for EncodeOptions {
     fn default() -> Self {
         Self {
-            compression_level: 3,
+            compression_level: 9,
             has_alpha: true,
             premultiplied: false,
             metadata: None,
@@ -35,9 +30,6 @@ impl Default for EncodeOptions {
 
 /// encode RGBA pixels to .mi format bytes using default options.
 ///
-/// the pixel buffer must contain exactly `width * height * 4` bytes
-/// in RGBA order. returns the encoded .mi file data on success.
-///
 /// # Errors
 /// returns an error if the pixel buffer size does not match `width * height * 4`.
 pub fn encode(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, EncodeError> {
@@ -46,8 +38,9 @@ pub fn encode(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, EncodeErr
 
 /// encode RGBA pixels to .mi format bytes with custom options.
 ///
-/// the pixel buffer must contain exactly `width * height * 4` bytes
-/// in RGBA order. returns the encoded .mi file data on success.
+/// pixel data is deinterleaved into channel planes before compression.
+/// this gives zstd coherent per-channel statistics and significantly better ratios,
+/// especially for sprites with solid or near-solid regions.
 ///
 /// # Errors
 /// returns an error if the pixel buffer size does not match `width * height * 4`,
@@ -68,37 +61,33 @@ pub fn encode_with_opts(
 
     let mut out = Vec::with_capacity(expected_bytes / 2);
 
-    // Build flags
-    let mut flags = 0u16;
+    let mut flags = format::FLAG_PLANAR;
     if opts.has_alpha {
         flags |= format::FLAG_HAS_ALPHA;
     }
     if opts.premultiplied {
         flags |= format::FLAG_PREMULTIPLIED;
     }
-    let has_metadata = opts.metadata.as_ref().is_some();
-    if has_metadata {
+    if opts.metadata.is_some() {
         flags |= format::FLAG_HAS_METADATA;
     }
 
-    // Write header
     format::write_header(&mut out, width, height, flags);
 
-    // Compress pixel data
-    let compressed =
-        zstd::encode_all(rgba, opts.compression_level).map_err(EncodeError::ZstdError)?;
+    // deinterleave then compress — channels separate means zstd sees coherent data
+    let planar = simd::deinterleave_rgba(rgba);
+    let compressed = zstd::encode_all(planar.as_slice(), opts.compression_level)
+        .map_err(EncodeError::ZstdError)?;
 
-    // Write pixel data chunk
     format::ChunkHeader::write(
         &mut out,
         ChunkType::PixelData,
         u32::try_from(expected_bytes).unwrap_or(u32::MAX),
         u32::try_from(compressed.len()).unwrap_or(u32::MAX),
-        0, // no dictionary
+        0,
     );
     out.extend_from_slice(&compressed);
 
-    // Write metadata chunk if present
     if let Some(meta) = &opts.metadata {
         let meta_bytes = meta.as_bytes();
         let compressed_meta =

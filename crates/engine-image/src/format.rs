@@ -50,9 +50,12 @@ pub const FLAG_HAS_METADATA: u16 = 1 << 1;
 pub const FLAG_HAS_ICC: u16 = 1 << 2;
 /// flag bit: pixel data uses premultiplied alpha.
 pub const FLAG_PREMULTIPLIED: u16 = 1 << 3;
+/// flag bit: pixel data is stored as planar channels (RRRR...GGGG...BBBB...AAAA...)
+/// rather than interleaved RGBA. planar layout compresses significantly better.
+pub const FLAG_PLANAR: u16 = 1 << 4;
 /// mask of all known flag bits.
 pub const FLAG_ALL_KNOWN: u16 =
-    FLAG_HAS_ALPHA | FLAG_HAS_METADATA | FLAG_HAS_ICC | FLAG_PREMULTIPLIED;
+    FLAG_HAS_ALPHA | FLAG_HAS_METADATA | FLAG_HAS_ICC | FLAG_PREMULTIPLIED | FLAG_PLANAR;
 
 /// parsed header from a .mi file.
 ///
