@@ -223,6 +223,7 @@ impl App {
         // simple topological sort using Kahn's algorithm
         let mut built = std::mem::take(&mut self.built_plugins);
         let mut pending = std::mem::take(&mut self.pending_plugins);
+        let mut ready: Vec<Box<dyn GamePlugin>> = Vec::new();
 
         let mut queue = VecDeque::new();
 
@@ -247,6 +248,7 @@ impl App {
 
             plugin.build(self);
             built.push(name.clone());
+            ready.push(plugin);
 
             // absorb any plugins registered during build() before checking deps
             pending.extend(std::mem::take(&mut self.pending_plugins));
@@ -269,6 +271,11 @@ impl App {
                 "{} plugins could not be built (missing dependencies or circular deps)",
                 self.pending_plugins.len()
             );
+        }
+
+        // second pass: finish all successfully built plugins
+        for mut plugin in ready {
+            plugin.finish(self);
         }
     }
 

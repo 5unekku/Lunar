@@ -6,7 +6,7 @@
 )]
 //!
 //! decoupled from game logic. handles 2D rendering with wgpu.
-//! 2D-only by design; 3D, if it ever exists, will be a sister engine.
+//! currently 2D; a future `engine-render-3d` crate will slot in alongside this one.
 //!
 //! # rendering model
 //!

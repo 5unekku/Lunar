@@ -544,10 +544,11 @@ fn parse_hex_color(hex: &str) -> Option<Color> {
     let hex = hex.trim_start_matches('#');
     let (r, g, b, a) = match hex.len() {
         3 => {
-            let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
-            let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
-            let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
-            (r, g, b, 255)
+            // duplicate each nibble: #rgb → #rrggbb without allocating
+            let r = u8::from_str_radix(&hex[0..1], 16).ok()?;
+            let g = u8::from_str_radix(&hex[1..2], 16).ok()?;
+            let b = u8::from_str_radix(&hex[2..3], 16).ok()?;
+            ((r << 4) | r, (g << 4) | g, (b << 4) | b, 255)
         }
         6 => {
             let r = u8::from_str_radix(&hex[0..2], 16).ok()?;

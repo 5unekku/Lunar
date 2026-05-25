@@ -9,12 +9,19 @@ readme.workspace = true
 categories.workspace = true
 keywords.workspace = true
 
+[features]
+# select a rendering dimension. exactly one should be enabled per build.
+# default is 2d; future builds targeting 3d will disable default and enable dim3.
+default = ["dim2"]
+dim2 = ["dep:engine-2d"]
+# dim3 = ["dep:engine-3d"]  # slot — wire up when engine-3d exists
+
 [dependencies]
 bevy_ecs = { workspace = true }
 lunar-macros = { path = "../lunar-macros" }
 engine-math = { path = "../engine-math" }
 engine-core = { path = "../engine-core" }
-engine-2d = { path = "../engine-2d" }
+engine-2d = { path = "../engine-2d", optional = true }
 engine-render = { path = "../engine-render" }
 engine-input = { path = "../engine-input" }
 engine-assets = { path = "../engine-assets" }

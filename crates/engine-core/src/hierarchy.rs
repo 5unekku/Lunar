@@ -5,6 +5,7 @@
 //! (or a future `engine_3d::Plugin3d`) to register the appropriate system.
 
 use bevy_ecs::prelude::*;
+use bevy_ecs::query::Added;
 use bevy_ecs::schedule::ScheduleLabel;
 
 use crate::App;
@@ -66,12 +67,16 @@ impl Default for Children {
 /// (no command deferral) — children are visible to other systems in the same frame
 /// a `Parent` component is added.
 pub fn sync_children(world: &mut World) {
-    // collect all (child, parent_entity) pairs first to avoid borrow conflicts
+    // only process entities where Parent was just added — fast-path skips stable hierarchies
     let pairs: Vec<(Entity, Entity)> = world
-        .query::<(Entity, &Parent)>()
+        .query_filtered::<(Entity, &Parent), Added<Parent>>()
         .iter(world)
         .map(|(child, parent)| (child, parent.0))
         .collect();
+
+    if pairs.is_empty() {
+        return;
+    }
 
     for (child_entity, parent_entity) in pairs {
         // insert Children component if the parent doesn't have one yet

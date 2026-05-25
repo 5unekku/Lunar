@@ -60,7 +60,8 @@ pub use engine_math::{Color, Mat2, Mat3, Mat4, Rect, Transform, Vec2, Vec3, Vec4
 // engine-core types
 pub use engine_core::{App, GamePlugin, Time, WindowSettings};
 
-// engine-2d types
+// engine-2d types — only available when the dim2 feature is enabled
+#[cfg(feature = "dim2")]
 pub use engine_2d::{Plugin2d, propagate_transforms};
 
 // engine-render types

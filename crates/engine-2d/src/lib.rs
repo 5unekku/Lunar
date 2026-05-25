@@ -58,13 +58,7 @@ pub fn propagate_transforms(world: &mut World) {
 
     let mut depths: HashMap<Entity, u32> = HashMap::with_capacity(snapshot.len());
     for &(entity, _, _) in &snapshot {
-        let mut depth = 0u32;
-        let mut current = entity;
-        while let Some(&parent_entity) = parent_of.get(&current) {
-            depth += 1;
-            current = parent_entity;
-        }
-        depths.insert(entity, depth);
+        depth_of(entity, &parent_of, &mut depths);
     }
 
     let mut sorted = snapshot;
@@ -95,6 +89,23 @@ pub fn propagate_transforms(world: &mut World) {
             world.entity_mut(entity).insert(world_transform);
         }
     }
+}
+
+/// memoized depth lookup — O(N) total across all entities (each computed at most once)
+fn depth_of(
+    entity: Entity,
+    parent_of: &HashMap<Entity, Entity>,
+    cache: &mut HashMap<Entity, u32>,
+) -> u32 {
+    if let Some(&d) = cache.get(&entity) {
+        return d;
+    }
+    let d = parent_of
+        .get(&entity)
+        .map(|&parent| depth_of(parent, parent_of, cache) + 1)
+        .unwrap_or(0);
+    cache.insert(entity, d);
+    d
 }
 
 fn compute_world_transform(parent: &WorldTransform, local: &LocalTransform) -> WorldTransform {
