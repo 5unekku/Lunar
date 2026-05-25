@@ -38,7 +38,7 @@ pub struct Engine {
     /// the startup schedule (run once before main loop)
     startup_schedule: Schedule,
     /// per-stage schedules for ordered system execution
-    stage_schedules: [Schedule; 4],
+    stage_schedules: [Schedule; 5],
 }
 
 impl Engine {
@@ -54,6 +54,7 @@ impl Engine {
                 Schedule::new(UpdateStage::Physics),
                 Schedule::new(UpdateStage::Update),
                 Schedule::new(UpdateStage::Render),
+                Schedule::new(UpdateStage::PostUpdate),
             ],
         }
     }
@@ -86,13 +87,12 @@ impl Engine {
         self.startup_schedule.run(&mut self.world);
     }
 
-    /// run all stage schedules in order: Input → Physics → Update → Render
+    /// run all stage schedules in order: Input → Physics → Update → Render → PostUpdate
     /// applies deferred commands between each stage so entity changes are visible.
     pub fn run_stages(&mut self) {
-        const STAGE_COUNT: usize = 4;
+        const STAGE_COUNT: usize = 5;
         for i in 0..STAGE_COUNT {
             self.stage_schedules[i].run(&mut self.world);
-            // apply deferred commands between stages (but not after the last one)
             if i < STAGE_COUNT - 1 {
                 self.world.flush();
             }

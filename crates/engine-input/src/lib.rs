@@ -682,7 +682,7 @@ impl GamePlugin for InputPlugin {
     fn build(&mut self, app: &mut App) {
         app.insert_resource(InputState::new());
         app.insert_resource(ActionMap::new());
-        app.add_system_to_stage(engine_core::UpdateStage::Input, begin_input_tick);
+        app.add_system_to_stage(engine_core::UpdateStage::PostUpdate, begin_input_tick);
         log::info!("InputPlugin: input state and action map resources registered");
     }
 }

@@ -1,7 +1,8 @@
 //! system scheduling with stage ordering
 //!
 //! systems run in registration order by default, but can be grouped into stages
-//! for explicit ordering. stages run in a fixed order: Input → Physics → Update → Render.
+//! for explicit ordering. stages run in a fixed order:
+//! Input → Physics → Update → Render → PostUpdate.
 //!
 //! # stage ordering
 //!
@@ -10,6 +11,7 @@
 //! 2. [`Physics`](UpdateStage::Physics) — collision detection, physics simulation
 //! 3. [`Update`](UpdateStage::Update) — general game logic
 //! 4. [`Render`](UpdateStage::Render) — queue render commands
+//! 5. [`PostUpdate`](UpdateStage::PostUpdate) — end-of-tick cleanup (e.g. clearing edge-triggered input)
 
 use bevy_ecs::schedule::ScheduleLabel;
 
@@ -26,6 +28,8 @@ pub enum UpdateStage {
     Update,
     /// queue render commands
     Render,
+    /// end-of-tick cleanup — runs after Render
+    PostUpdate,
 }
 
 /// relative stage ordering for custom stage placement.
