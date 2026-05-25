@@ -739,6 +739,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine-3d"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "engine-assets",
+ "engine-core",
+ "engine-math",
+ "log",
+]
+
+[[package]]
 name = "engine-animation"
 version = "0.1.0"
 dependencies = [
@@ -1676,6 +1687,7 @@ dependencies = [
  "bevy_ecs",
  "console_log",
  "engine-2d",
+ "engine-3d",
  "engine-assets",
  "engine-core",
  "engine-input",

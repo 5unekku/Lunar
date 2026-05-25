@@ -55,7 +55,7 @@ pub use bevy_ecs::change_detection::{DetectChanges, DetectChangesMut, Mut, Ref};
 pub use bevy_ecs::message::{MessageReader, MessageWriter, Messages};
 
 // engine-math types
-pub use engine_math::{Color, Mat2, Mat3, Mat4, Rect, Transform, Vec2, Vec3, Vec4};
+pub use engine_math::{Color, Mat2, Mat3, Mat4, Quat, Rect, Transform, Vec2, Vec3, Vec4};
 
 // engine-core types
 pub use engine_core::{App, GamePlugin, Time, WindowSettings};
@@ -63,6 +63,14 @@ pub use engine_core::{App, GamePlugin, Time, WindowSettings};
 // engine-2d types — only available when the dim2 feature is enabled
 #[cfg(feature = "dim2")]
 pub use engine_2d::{Plugin2d, propagate_transforms};
+
+// engine-3d types — only available when the dim3 feature is enabled
+#[cfg(feature = "dim3")]
+pub use engine_3d::{
+    ActiveCamera3d, AmbientLight, Camera3d, CullMode, DirectionalLight, IndexBuffer,
+    LocalTransform3d, Material3d, MaterialData, Mesh3d, MeshData, Plugin3d, PointLight, Projection,
+    ShadingModel, SpotLight, Vertex3d, WorldTransform3d, propagate_transforms_3d,
+};
 
 // engine-render types
 pub use engine_render::{

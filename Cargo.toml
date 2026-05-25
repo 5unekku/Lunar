@@ -7,6 +7,7 @@ wgpu = { path = "vendor/wgpu" }
 members = [
     "crates/engine-core",
     "crates/engine-2d",
+    "crates/engine-3d",
     "crates/engine-render",
     "crates/engine-input",
     "crates/engine-math",
@@ -29,7 +30,7 @@ resolver = "2"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-description = "a 2D game engine for Rust with ECS, wgpu rendering, and WASM support"
+description = "a game engine for Rust with ECS, wgpu rendering, and WASM support"
 repository = "https://github.com/jimmy/Lunar"
 homepage = "https://github.com/jimmy/Lunar"
 readme = "README.md"
