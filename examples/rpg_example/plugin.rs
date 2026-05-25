@@ -26,7 +26,41 @@ pub fn setup(
     mut commands: Commands,
     mut assets: ResMut<AssetServer>,
     mut dialogues: ResMut<DialogueManager>,
+    mut actions: ResMut<ActionMap>,
 ) {
+    actions.bind("move_left", InputBinding::Key(KeyCode::Left));
+    actions.bind("move_left", InputBinding::Key(KeyCode::A));
+    actions.bind("move_left", InputBinding::GamepadButton(0, GamepadButton::DpadLeft));
+    actions.bind("move_left", InputBinding::GamepadAxis(0, GamepadAxis::LeftStickX, -0.5));
+
+    actions.bind("move_right", InputBinding::Key(KeyCode::Right));
+    actions.bind("move_right", InputBinding::Key(KeyCode::D));
+    actions.bind("move_right", InputBinding::GamepadButton(0, GamepadButton::DpadRight));
+    actions.bind("move_right", InputBinding::GamepadAxis(0, GamepadAxis::LeftStickX, 0.5));
+
+    actions.bind("move_up", InputBinding::Key(KeyCode::Up));
+    actions.bind("move_up", InputBinding::Key(KeyCode::W));
+    actions.bind("move_up", InputBinding::GamepadButton(0, GamepadButton::DpadUp));
+    actions.bind("move_up", InputBinding::GamepadAxis(0, GamepadAxis::LeftStickY, -0.5));
+
+    actions.bind("move_down", InputBinding::Key(KeyCode::Down));
+    actions.bind("move_down", InputBinding::Key(KeyCode::S));
+    actions.bind("move_down", InputBinding::GamepadButton(0, GamepadButton::DpadDown));
+    actions.bind("move_down", InputBinding::GamepadAxis(0, GamepadAxis::LeftStickY, 0.5));
+
+    actions.bind("interact", InputBinding::Key(KeyCode::Space));
+    actions.bind("interact", InputBinding::Key(KeyCode::Enter));
+    actions.bind("interact", InputBinding::GamepadButton(0, GamepadButton::South));
+
+    actions.bind("nav_up", InputBinding::Key(KeyCode::Up));
+    actions.bind("nav_up", InputBinding::Key(KeyCode::W));
+    actions.bind("nav_up", InputBinding::GamepadButton(0, GamepadButton::DpadUp));
+    actions.bind("nav_up", InputBinding::GamepadAxis(0, GamepadAxis::LeftStickY, -0.5));
+
+    actions.bind("nav_down", InputBinding::Key(KeyCode::Down));
+    actions.bind("nav_down", InputBinding::Key(KeyCode::S));
+    actions.bind("nav_down", InputBinding::GamepadButton(0, GamepadButton::DpadDown));
+    actions.bind("nav_down", InputBinding::GamepadAxis(0, GamepadAxis::LeftStickY, 0.5));
     let player_tex = assets.load_texture("sprites/player.webp");
     let npc_tex1 = assets.load_texture("sprites/npc1.webp");
     let npc_tex2 = assets.load_texture("sprites/npc2.webp");
@@ -201,6 +235,7 @@ pub fn setup(
 #[allow(clippy::too_many_arguments)]
 pub fn overworld_input(
     input: Res<InputState>,
+    actions: Res<ActionMap>,
     time: Res<Time>,
     mut player_query: Query<(&mut GridPos, &mut Facing, &mut PlayerMoveAnimation), With<Player>>,
     npc_query: Query<(&GridPos, &Npc), Without<Player>>,
@@ -218,13 +253,13 @@ pub fn overworld_input(
         return;
     };
 
-    let direction = if input.is_key_held(KeyCode::Left) || input.is_key_held(KeyCode::A) {
+    let direction = if actions.is_action_held(&input, "move_left") {
         Some(Facing::Left)
-    } else if input.is_key_held(KeyCode::Right) || input.is_key_held(KeyCode::D) {
+    } else if actions.is_action_held(&input, "move_right") {
         Some(Facing::Right)
-    } else if input.is_key_held(KeyCode::Up) || input.is_key_held(KeyCode::W) {
+    } else if actions.is_action_held(&input, "move_up") {
         Some(Facing::Up)
-    } else if input.is_key_held(KeyCode::Down) || input.is_key_held(KeyCode::S) {
+    } else if actions.is_action_held(&input, "move_down") {
         Some(Facing::Down)
     } else {
         None
@@ -255,7 +290,7 @@ pub fn overworld_input(
         move_timer.0 = MOVE_COOLDOWN;
     }
 
-    if input.is_key_just_pressed(KeyCode::Space) || input.is_key_just_pressed(KeyCode::Enter) {
+    if actions.is_action_just_pressed(&input, "interact") {
         let (dfacing_col, dfacing_row) = facing.delta();
         let target_col = grid_pos.col + dfacing_col;
         let target_row = grid_pos.row + dfacing_row;
@@ -301,6 +336,7 @@ pub fn player_move_animation(
 
 pub fn dialogue_input(
     input: Res<InputState>,
+    actions: Res<ActionMap>,
     time: Res<Time>,
     mut mode: ResMut<GameMode>,
     mut dialogues: ResMut<DialogueManager>,
@@ -327,19 +363,15 @@ pub fn dialogue_input(
 
             if dialogues.has_choices() && *text_visible_chars >= total {
                 let count = dialogues.choice_labels().len();
-                if input.is_key_just_pressed(KeyCode::Up) || input.is_key_just_pressed(KeyCode::W)
-                {
+                if actions.is_action_just_pressed(&input, "nav_up") {
                     *choice_selection = choice_selection.saturating_sub(1);
                 }
-                if input.is_key_just_pressed(KeyCode::Down)
-                    || input.is_key_just_pressed(KeyCode::S)
-                {
+                if actions.is_action_just_pressed(&input, "nav_down") {
                     *choice_selection = choice_selection.saturating_add(1).min(count - 1);
                 }
             }
 
-            let press =
-                input.is_key_just_pressed(KeyCode::Space) || input.is_key_just_pressed(KeyCode::Enter);
+            let press = actions.is_action_just_pressed(&input, "interact");
             if !press {
                 None
             } else if *text_visible_chars < total && total > 0 {

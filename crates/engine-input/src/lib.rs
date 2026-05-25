@@ -151,6 +151,10 @@ impl Default for ActionMap {
 }
 
 impl InputBinding {
+    fn axis_active(value: f32, threshold: f32) -> bool {
+        if threshold >= 0.0 { value > threshold } else { value < threshold }
+    }
+
     fn is_held(&self, input: &InputState) -> bool {
         match self {
             Self::Key(key) => input.is_key_held(*key),
@@ -160,7 +164,7 @@ impl InputBinding {
                 .is_some_and(|gp| gp.is_button_held(*button)),
             Self::GamepadAxis(index, axis, threshold) => input
                 .gamepad(*index)
-                .is_some_and(|gp| gp.axis(*axis).abs() > *threshold),
+                .is_some_and(|gp| Self::axis_active(gp.axis(*axis), *threshold)),
         }
     }
 
@@ -171,12 +175,10 @@ impl InputBinding {
             Self::GamepadButton(index, button) => input
                 .gamepad(*index)
                 .is_some_and(|gp| gp.is_button_just_pressed(*button)),
-            Self::GamepadAxis(index, axis, threshold) => {
-                // axis doesn't have edge-triggered press — treat as held check
-                input
-                    .gamepad(*index)
-                    .is_some_and(|gp| gp.axis(*axis).abs() > *threshold)
-            }
+            // axis has no edge-triggered press — treat as held
+            Self::GamepadAxis(index, axis, threshold) => input
+                .gamepad(*index)
+                .is_some_and(|gp| Self::axis_active(gp.axis(*axis), *threshold)),
         }
     }
 
@@ -187,10 +189,8 @@ impl InputBinding {
             Self::GamepadButton(index, button) => input
                 .gamepad(*index)
                 .is_some_and(|gp| gp.is_button_just_released(*button)),
-            Self::GamepadAxis(_index, _axis, _threshold) => {
-                // axis doesn't have edge-triggered release
-                false
-            }
+            // axis has no edge-triggered release
+            Self::GamepadAxis(..) => false,
         }
     }
 }
@@ -687,86 +687,108 @@ impl GamePlugin for InputPlugin {
     }
 }
 
-/// initialize SDL3 and return an event pump.
+/// bundles the SDL3 event pump and gamepad subsystem.
 ///
-/// call this once at startup on native targets.
-/// the returned pump should be used with [`process_events`].
-///
-/// # Panics
-/// panics if SDL3 cannot be initialized or if the event pump cannot be created.
+/// create this once at startup and pass it to [`process_events`] each frame.
 #[cfg(not(target_arch = "wasm32"))]
-#[must_use]
-pub fn init_sdl() -> sdl3::EventPump {
-    let sdl = sdl3::init().expect("failed to initialize SDL3");
-    sdl.event_pump().expect("failed to get event pump")
+pub struct SdlInputContext {
+    pub event_pump: sdl3::EventPump,
+    gamepad_subsystem: sdl3::GamepadSubsystem,
+    /// maps SDL joystick id → (open gamepad handle, engine gamepad index)
+    open_gamepads: HashMap<u32, (sdl3::gamepad::Gamepad, usize)>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl SdlInputContext {
+    /// create a new context from an already-initialized SDL3 event pump and gamepad subsystem.
+    #[must_use]
+    pub fn new(event_pump: sdl3::EventPump, gamepad_subsystem: sdl3::GamepadSubsystem) -> Self {
+        Self { event_pump, gamepad_subsystem, open_gamepads: HashMap::new() }
+    }
 }
 
 /// process SDL3 events and update the input state.
 ///
-/// this function should be called once per frame before the ECS tick.
-/// pass the event pump returned from [`init_sdl`] to poll events.
+/// call once per frame before the ECS tick.
 ///
 /// # quit handling
 ///
 /// if a quit event is received, the [`EngineState`] is set to [`EngineState::Stopping`].
-///
-/// # platform
-///
-/// this function is only available on non-WASM targets.
-/// use [`process_events`] on WASM for the web-compatible version.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn process_events(event_pump: &mut sdl3::EventPump, world: &mut bevy_ecs::prelude::World) {
+pub fn process_events(ctx: &mut SdlInputContext, world: &mut bevy_ecs::prelude::World) {
     use sdl3::event::Event;
 
-    let events: Vec<Event> = event_pump.poll_iter().collect();
+    let events: Vec<Event> = ctx.event_pump.poll_iter().collect();
     let mut got_quit = false;
 
     if let Some(mut input) = world.get_resource_mut::<InputState>() {
         for event in &events {
             match event {
-                Event::KeyDown {
-                    keycode: Some(key), ..
-                } => {
+                Event::KeyDown { keycode: Some(key), .. } => {
                     if let Some(code) = keycode_from_sdl(*key) {
                         input.press_key(code);
                     }
                 }
-                Event::KeyUp {
-                    keycode: Some(key), ..
-                } => {
+                Event::KeyUp { keycode: Some(key), .. } => {
                     if let Some(code) = keycode_from_sdl(*key) {
                         input.release_key(code);
                     }
                 }
-                Event::MouseButtonDown {
-                    mouse_btn: button,
-                    x,
-                    y,
-                    ..
-                } => {
+                Event::MouseButtonDown { mouse_btn: button, x, y, .. } => {
                     if let Some(mouse_button) = mouse_button_from_sdl(*button) {
                         input.set_mouse_position(*x, *y);
                         input.press_mouse_button(mouse_button);
                     }
                 }
-                Event::MouseButtonUp {
-                    mouse_btn: button,
-                    x,
-                    y,
-                    ..
-                } => {
+                Event::MouseButtonUp { mouse_btn: button, x, y, .. } => {
                     if let Some(mouse_button) = mouse_button_from_sdl(*button) {
                         input.set_mouse_position(*x, *y);
                         input.release_mouse_button(mouse_button);
                     }
                 }
-                Event::MouseMotion {
-                    x, y, xrel, yrel, ..
-                } => {
+                Event::MouseMotion { x, y, xrel, yrel, .. } => {
                     input.add_mouse_delta(*xrel, *yrel);
                     input.set_mouse_position(*x, *y);
                 }
-                // gamepad events require hidapi feature — stubbed for now
+                Event::ControllerDeviceAdded { which, .. } => {
+                    let joystick_id = sdl3::sys::joystick::SDL_JoystickID(*which);
+                    match ctx.gamepad_subsystem.open(joystick_id) {
+                        Ok(gamepad) => {
+                            let engine_index = input.add_gamepad();
+                            ctx.open_gamepads.insert(*which, (gamepad, engine_index));
+                            log::info!("gamepad {} connected (engine index {})", which, engine_index);
+                        }
+                        Err(error) => log::warn!("failed to open gamepad {}: {}", which, error),
+                    }
+                }
+                Event::ControllerDeviceRemoved { which, .. } => {
+                    if let Some((_, engine_index)) = ctx.open_gamepads.remove(which) {
+                        input.remove_gamepad(engine_index);
+                        log::info!("gamepad {} disconnected", which);
+                    }
+                }
+                Event::ControllerButtonDown { which, button, .. } => {
+                    if let Some((_, engine_index)) = ctx.open_gamepads.get(which) {
+                        if let Some(mapped) = gamepad_button_from_sdl(*button) {
+                            input.press_gamepad_button(*engine_index, mapped);
+                        }
+                    }
+                }
+                Event::ControllerButtonUp { which, button, .. } => {
+                    if let Some((_, engine_index)) = ctx.open_gamepads.get(which) {
+                        if let Some(mapped) = gamepad_button_from_sdl(*button) {
+                            input.release_gamepad_button(*engine_index, mapped);
+                        }
+                    }
+                }
+                Event::ControllerAxisMotion { which, axis, value, .. } => {
+                    if let Some((_, engine_index)) = ctx.open_gamepads.get(which) {
+                        if let Some(mapped) = gamepad_axis_from_sdl(*axis) {
+                            let normalized = (*value as f32 / 32767.0).clamp(-1.0, 1.0);
+                            input.set_gamepad_axis(*engine_index, mapped, normalized);
+                        }
+                    }
+                }
                 Event::Quit { .. } => got_quit = true,
                 _ => {}
             }
@@ -850,7 +872,41 @@ const fn mouse_button_from_sdl(button: sdl3::mouse::MouseButton) -> Option<Mouse
     }
 }
 
-// gamepad event mapping requires hidapi feature — stubbed for now
+#[cfg(not(target_arch = "wasm32"))]
+const fn gamepad_button_from_sdl(button: sdl3::gamepad::Button) -> Option<GamepadButton> {
+    use sdl3::gamepad::Button as SdlBtn;
+    match button {
+        SdlBtn::South => Some(GamepadButton::South),
+        SdlBtn::East => Some(GamepadButton::East),
+        SdlBtn::West => Some(GamepadButton::West),
+        SdlBtn::North => Some(GamepadButton::North),
+        SdlBtn::LeftShoulder => Some(GamepadButton::LeftBumper),
+        SdlBtn::RightShoulder => Some(GamepadButton::RightBumper),
+        SdlBtn::LeftStick => Some(GamepadButton::LeftStick),
+        SdlBtn::RightStick => Some(GamepadButton::RightStick),
+        SdlBtn::Back => Some(GamepadButton::Back),
+        SdlBtn::Start => Some(GamepadButton::Start),
+        SdlBtn::Guide => Some(GamepadButton::Home),
+        SdlBtn::DPadUp => Some(GamepadButton::DpadUp),
+        SdlBtn::DPadDown => Some(GamepadButton::DpadDown),
+        SdlBtn::DPadLeft => Some(GamepadButton::DpadLeft),
+        SdlBtn::DPadRight => Some(GamepadButton::DpadRight),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const fn gamepad_axis_from_sdl(axis: sdl3::gamepad::Axis) -> Option<GamepadAxis> {
+    use sdl3::gamepad::Axis as SdlAxis;
+    match axis {
+        SdlAxis::LeftX => Some(GamepadAxis::LeftStickX),
+        SdlAxis::LeftY => Some(GamepadAxis::LeftStickY),
+        SdlAxis::RightX => Some(GamepadAxis::RightStickX),
+        SdlAxis::RightY => Some(GamepadAxis::RightStickY),
+        SdlAxis::TriggerLeft => Some(GamepadAxis::LeftTrigger),
+        SdlAxis::TriggerRight => Some(GamepadAxis::RightTrigger),
+    }
+}
 
 /// web input event queue (populated by JS callbacks via wasm-bindgen)
 #[cfg(target_arch = "wasm32")]

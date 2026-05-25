@@ -27,7 +27,7 @@ pub fn bootstrap<Plugin: engine_core::GamePlugin + Default + 'static>(
 ) {
     use engine_assets::AssetPlugin;
     use engine_core::{App, WindowSettings};
-    use engine_input::{ActionMap, InputBinding, InputPlugin, InputState, KeyCode, process_events};
+    use engine_input::{ActionMap, InputBinding, InputPlugin, InputState, KeyCode, SdlInputContext, process_events};
     use engine_render::{RenderEngine, RenderPlugin};
     use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
@@ -84,14 +84,16 @@ pub fn bootstrap<Plugin: engine_core::GamePlugin + Default + 'static>(
 
     app.add_plugin(Plugin::default());
 
-    let mut event_pump = sdl.event_pump().expect("failed to get event pump");
+    let gamepad_subsystem = sdl.gamepad().expect("failed to get gamepad subsystem");
+    let event_pump = sdl.event_pump().expect("failed to get event pump");
+    let mut sdl_input = SdlInputContext::new(event_pump, gamepad_subsystem);
     let mut window = window;
     let mut actual_fullscreen = false;
     let mut last_window_w = config.width;
     let mut last_window_h = config.height;
 
     app.run_with_events(config.frame_cap, |world| {
-        process_events(&mut event_pump, world);
+        process_events(&mut sdl_input, world);
 
         // handle fullscreen toggle via action map
         if let Some(actions) = world.get_resource::<ActionMap>()

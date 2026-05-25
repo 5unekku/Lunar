@@ -80,7 +80,7 @@ pub use engine_render::{
 };
 
 // engine-input types
-pub use engine_input::{ActionMap, InputState, KeyCode, MouseButton};
+pub use engine_input::{ActionMap, GamepadAxis, GamepadButton, InputBinding, InputState, KeyCode, MouseButton};
 
 // engine-assets types — Texture/Font/Sound are needed as type parameters for
 // Handle<T> when game code stores asset handles in its own resources.
