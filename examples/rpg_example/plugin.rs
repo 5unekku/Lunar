@@ -25,39 +25,39 @@ pub fn setup(
     mut dialogues: ResMut<DialogueManager>,
     mut actions: ResMut<ActionMap>,
 ) {
-    actions.bind("move_left", InputBinding::Key(KeyCode::Left));
-    actions.bind("move_left", InputBinding::Key(KeyCode::A));
-    actions.bind("move_left", InputBinding::GamepadButton(0, GamepadButton::DpadLeft));
-    actions.bind("move_left", InputBinding::GamepadAxis(0, GamepadAxis::LeftStickX, -0.5));
+    actions.action("move_left")
+        .key(KeyCode::Left).key(KeyCode::A)
+        .button(GamepadButton::DpadLeft)
+        .axis(GamepadAxis::LeftStickX, -0.5);
 
-    actions.bind("move_right", InputBinding::Key(KeyCode::Right));
-    actions.bind("move_right", InputBinding::Key(KeyCode::D));
-    actions.bind("move_right", InputBinding::GamepadButton(0, GamepadButton::DpadRight));
-    actions.bind("move_right", InputBinding::GamepadAxis(0, GamepadAxis::LeftStickX, 0.5));
+    actions.action("move_right")
+        .key(KeyCode::Right).key(KeyCode::D)
+        .button(GamepadButton::DpadRight)
+        .axis(GamepadAxis::LeftStickX, 0.5);
 
-    actions.bind("move_up", InputBinding::Key(KeyCode::Up));
-    actions.bind("move_up", InputBinding::Key(KeyCode::W));
-    actions.bind("move_up", InputBinding::GamepadButton(0, GamepadButton::DpadUp));
-    actions.bind("move_up", InputBinding::GamepadAxis(0, GamepadAxis::LeftStickY, -0.5));
+    actions.action("move_up")
+        .key(KeyCode::Up).key(KeyCode::W)
+        .button(GamepadButton::DpadUp)
+        .axis(GamepadAxis::LeftStickY, -0.5);
 
-    actions.bind("move_down", InputBinding::Key(KeyCode::Down));
-    actions.bind("move_down", InputBinding::Key(KeyCode::S));
-    actions.bind("move_down", InputBinding::GamepadButton(0, GamepadButton::DpadDown));
-    actions.bind("move_down", InputBinding::GamepadAxis(0, GamepadAxis::LeftStickY, 0.5));
+    actions.action("move_down")
+        .key(KeyCode::Down).key(KeyCode::S)
+        .button(GamepadButton::DpadDown)
+        .axis(GamepadAxis::LeftStickY, 0.5);
 
-    actions.bind("interact", InputBinding::Key(KeyCode::Space));
-    actions.bind("interact", InputBinding::Key(KeyCode::Enter));
-    actions.bind("interact", InputBinding::GamepadButton(0, GamepadButton::South));
+    actions.action("interact")
+        .key(KeyCode::Space).key(KeyCode::Enter)
+        .button(GamepadButton::South);
 
-    actions.bind("nav_up", InputBinding::Key(KeyCode::Up));
-    actions.bind("nav_up", InputBinding::Key(KeyCode::W));
-    actions.bind("nav_up", InputBinding::GamepadButton(0, GamepadButton::DpadUp));
-    actions.bind("nav_up", InputBinding::GamepadAxis(0, GamepadAxis::LeftStickY, -0.5));
+    actions.action("nav_up")
+        .key(KeyCode::Up).key(KeyCode::W)
+        .button(GamepadButton::DpadUp)
+        .axis(GamepadAxis::LeftStickY, -0.5);
 
-    actions.bind("nav_down", InputBinding::Key(KeyCode::Down));
-    actions.bind("nav_down", InputBinding::Key(KeyCode::S));
-    actions.bind("nav_down", InputBinding::GamepadButton(0, GamepadButton::DpadDown));
-    actions.bind("nav_down", InputBinding::GamepadAxis(0, GamepadAxis::LeftStickY, 0.5));
+    actions.action("nav_down")
+        .key(KeyCode::Down).key(KeyCode::S)
+        .button(GamepadButton::DpadDown)
+        .axis(GamepadAxis::LeftStickY, 0.5);
     let player_tex = assets.load_texture("sprites/player.webp");
     let npc_tex1 = assets.load_texture("sprites/npc1.webp");
     let npc_tex2 = assets.load_texture("sprites/npc2.webp");

@@ -142,11 +142,87 @@ impl ActionMap {
     pub fn actions(&self) -> impl Iterator<Item = &str> {
         self.bindings.keys().map(std::string::String::as_str)
     }
+
+    /// begin a fluent binding definition for an action.
+    ///
+    /// returns an [`ActionBuilder`] that lets you chain bindings without repeating
+    /// the action name. bindings are committed when the builder is dropped.
+    ///
+    /// gamepad methods default to gamepad index 0 (player one). use the `_for`
+    /// variants to target a specific gamepad index in multiplayer games.
+    ///
+    /// # example
+    ///
+    /// ```ignore
+    /// actions.action("jump")
+    ///     .key(KeyCode::Space)
+    ///     .button(GamepadButton::South);
+    /// ```
+    pub fn action(&mut self, name: &str) -> ActionBuilder<'_> {
+        ActionBuilder { action_map: self, name: name.to_string(), bindings: Vec::new() }
+    }
 }
 
 impl Default for ActionMap {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// fluent builder returned by [`ActionMap::action`].
+///
+/// chain binding methods then let the builder drop — bindings are committed on drop.
+pub struct ActionBuilder<'a> {
+    action_map: &'a mut ActionMap,
+    name: String,
+    bindings: Vec<InputBinding>,
+}
+
+impl<'a> ActionBuilder<'a> {
+    /// bind a keyboard key
+    pub fn key(mut self, key: KeyCode) -> Self {
+        self.bindings.push(InputBinding::Key(key));
+        self
+    }
+
+    /// bind a mouse button
+    pub fn mouse(mut self, button: MouseButton) -> Self {
+        self.bindings.push(InputBinding::Mouse(button));
+        self
+    }
+
+    /// bind a gamepad button on gamepad 0
+    pub fn button(mut self, button: GamepadButton) -> Self {
+        self.bindings.push(InputBinding::GamepadButton(0, button));
+        self
+    }
+
+    /// bind a gamepad button on a specific gamepad
+    pub fn button_for(mut self, gamepad: usize, button: GamepadButton) -> Self {
+        self.bindings.push(InputBinding::GamepadButton(gamepad, button));
+        self
+    }
+
+    /// bind a gamepad axis on gamepad 0.
+    /// positive threshold triggers when the axis exceeds the value in that direction
+    /// (e.g. `0.5` = pushed right/down, `-0.5` = pushed left/up).
+    pub fn axis(mut self, axis: GamepadAxis, threshold: f32) -> Self {
+        self.bindings.push(InputBinding::GamepadAxis(0, axis, threshold));
+        self
+    }
+
+    /// bind a gamepad axis on a specific gamepad
+    pub fn axis_for(mut self, gamepad: usize, axis: GamepadAxis, threshold: f32) -> Self {
+        self.bindings.push(InputBinding::GamepadAxis(gamepad, axis, threshold));
+        self
+    }
+}
+
+impl Drop for ActionBuilder<'_> {
+    fn drop(&mut self) {
+        for binding in self.bindings.drain(..) {
+            self.action_map.bind(&self.name, binding);
+        }
     }
 }
 
