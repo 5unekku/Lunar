@@ -13,6 +13,8 @@ pub enum GameMode {
         /// true on the frame the dialogue opens — suppresses input so the
         /// opening keypress doesn't immediately advance the first line
         just_started: bool,
+        /// true after a press fires — blocks further advances until Space/Enter is released
+        waiting_for_release: bool,
     },
 }
 

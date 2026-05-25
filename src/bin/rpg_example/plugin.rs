@@ -280,6 +280,7 @@ pub fn overworld_input(
                 text_timer: 0.0,
                 choice_selection: 0,
                 just_started: true,
+                waiting_for_release: false,
             };
             break;
         }
@@ -300,6 +301,7 @@ pub fn dialogue_input(
             text_visible_chars,
             choice_selection,
             just_started,
+            waiting_for_release,
         } => {
             if *just_started {
                 *just_started = false;
@@ -323,41 +325,52 @@ pub fn dialogue_input(
                 }
             }
 
-            let press = input.is_key_just_released(KeyCode::Space)
+            let advance_released = input.is_key_just_released(KeyCode::Space)
                 || input.is_key_just_released(KeyCode::Enter);
+            if *waiting_for_release {
+                if advance_released {
+                    *waiting_for_release = false;
+                }
+                return;
+            }
+            let press = input.is_key_just_pressed(KeyCode::Space)
+                || input.is_key_just_pressed(KeyCode::Enter);
             if !press {
                 None
-            } else if *text_visible_chars < total && total > 0 {
-                *text_visible_chars = total;
-                *text_timer = total as f32 / CPS;
-                None
-            } else if dialogues.has_choices() {
-                let chosen = *choice_selection;
-                let npc = *npc_index;
-                dialogues.choose(chosen);
-                if npc == 0 {
-                    choice_state.npc1_choice = Some(chosen);
-                }
-                if !dialogues.is_active() {
-                    Some(GameMode::Overworld {
-                        just_returned: true,
-                    })
-                } else {
-                    *text_visible_chars = 0;
-                    *text_timer = 0.0;
-                    *choice_selection = 0;
-                    None
-                }
             } else {
-                dialogues.advance();
-                if !dialogues.is_active() {
-                    Some(GameMode::Overworld {
-                        just_returned: true,
-                    })
-                } else {
-                    *text_visible_chars = 0;
-                    *text_timer = 0.0;
+                *waiting_for_release = true;
+                if *text_visible_chars < total && total > 0 {
+                    *text_visible_chars = total;
+                    *text_timer = total as f32 / CPS;
                     None
+                } else if dialogues.has_choices() {
+                    let chosen = *choice_selection;
+                    let npc = *npc_index;
+                    dialogues.choose(chosen);
+                    if npc == 0 {
+                        choice_state.npc1_choice = Some(chosen);
+                    }
+                    if !dialogues.is_active() {
+                        Some(GameMode::Overworld {
+                            just_returned: true,
+                        })
+                    } else {
+                        *text_visible_chars = 0;
+                        *text_timer = 0.0;
+                        *choice_selection = 0;
+                        None
+                    }
+                } else {
+                    dialogues.advance();
+                    if !dialogues.is_active() {
+                        Some(GameMode::Overworld {
+                            just_returned: true,
+                        })
+                    } else {
+                        *text_visible_chars = 0;
+                        *text_timer = 0.0;
+                        None
+                    }
                 }
             }
         }
