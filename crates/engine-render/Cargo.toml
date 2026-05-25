@@ -19,7 +19,7 @@ engine-atlas = { path = "../engine-atlas" }
 bevy_ecs = { workspace = true }
 log = { workspace = true }
 bytemuck = "1.23"
-fontdue = "0.9"
+cosmic-text = "0.12"
 guillotiere = "0.6"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

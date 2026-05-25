@@ -394,8 +394,6 @@ pub struct RenderEngine {
     glyph_atlas: text::GlyphAtlas,
     #[allow(dead_code)]
     glyph_atlas_texture: Option<GpuTexture>,
-    /// cache of text layout results keyed by (`font_id`, text, `font_size_bits`)
-    text_layout_cache: HashMap<(u32, String, u32), Vec<text::TextGlyphQuad>>,
     render_passes: Vec<Box<dyn RenderPass>>,
     /// vulkan pipeline cache for faster startup on subsequent launches
     #[cfg(not(target_arch = "wasm32"))]
@@ -769,7 +767,6 @@ impl RenderEngine {
             vertex_offset: 0,
             glyph_atlas: text::GlyphAtlas::new(2048, 1024),
             glyph_atlas_texture: None,
-            text_layout_cache: HashMap::new(),
             render_passes: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             pipeline_cache: Self::load_pipeline_cache(device),
@@ -954,69 +951,10 @@ impl RenderEngine {
         self.bind_groups.remove(&tex_id);
     }
 
-    /// register font bytes with the glyph atlas and upload the atlas to the GPU.
-    ///
-    /// the render system calls this once per newly loaded font. after all fonts
-    /// are registered the atlas bind group (keyed at [`GLYPH_ATLAS_BIND_ID`]) is
-    /// updated so text draws sample the correct glyphs.
+    /// register font bytes with the glyph atlas. glyphs are rasterized on demand
+    /// during render() and the atlas is uploaded then.
     pub fn upload_font(&mut self, font_id: u32, data: &[u8]) {
         self.glyph_atlas.register_font(font_id, data);
-        self.invalidate_text_cache_for_font(font_id);
-        self.upload_glyph_atlas();
-        if let Some(atlas) = &self.glyph_atlas_texture {
-            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("glyph atlas bind group"),
-                layout: &self.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.uniform_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&atlas.view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                ],
-            });
-            self.bind_groups.insert(GLYPH_ATLAS_BIND_ID, bind_group);
-        }
-    }
-
-    /// invalidate all cached text layouts.
-    /// call this when font data changes or text content changes dynamically.
-    pub fn invalidate_text_cache(&mut self) {
-        self.text_layout_cache.clear();
-    }
-
-    /// invalidate cached text layouts matching a specific font id.
-    pub fn invalidate_text_cache_for_font(&mut self, font_id: u32) {
-        self.text_layout_cache.retain(|key, _| key.0 != font_id);
-    }
-
-    /// get cached text layout for (`font_id`, text, `font_size`).
-    /// computes and caches the result on first use.
-    ///
-    /// the key includes the full text content, so changing text naturally
-    /// misses the cache — no stale-content invalidation needed. however, the
-    /// cache grows unboundedly if the game renders many distinct strings
-    /// (e.g. an FPS counter changing every frame). if that becomes a memory
-    /// issue, swap this `HashMap` for an LRU. for now, games can call
-    /// [`Self::invalidate_text_cache`] periodically as a workaround.
-    fn get_cached_text_layout(
-        &mut self,
-        font_id: u32,
-        text: &str,
-        font_size: f32,
-    ) -> &[text::TextGlyphQuad] {
-        // use f32::to_bits() for hashable key since f32 doesn't implement Hash/Eq
-        let key = (font_id, text.to_string(), font_size.to_bits());
-        self.text_layout_cache.entry(key).or_insert_with(|| {
-            text::layout_text(&self.glyph_atlas, font_id, text, font_size, Vec2::ZERO)
-        })
     }
 
     /// upload a texture to the GPU, returns its handle id.
@@ -1215,36 +1153,50 @@ impl RenderEngine {
         } else {
             1.0
         };
-        if self.glyph_atlas.set_scale(text_scale) {
-            self.text_layout_cache.clear();
-        }
+        self.glyph_atlas.set_scale(text_scale);
 
-        // rasterize any glyphs not yet in the atlas, re-upload if the atlas changed
-        let mut atlas_dirty = false;
-        for cmd in commands.iter() {
+        // pre-compute text layouts (fills atlas as a side effect)
+        let mut text_quads: std::collections::HashMap<usize, Vec<text::TextGlyphQuad>> =
+            std::collections::HashMap::new();
+        for (i, cmd) in commands.iter().enumerate() {
             let DrawKind::Text {
                 font,
                 content,
+                position,
                 font_size,
+                wrap_width,
+                line_height,
                 ..
             } = &cmd.kind
             else {
                 continue;
             };
             let font_id = u32::try_from(font.unwrap_or(0)).unwrap_or(u32::MAX);
-            for ch in content.chars() {
-                if self
-                    .glyph_atlas
-                    .get_glyph(font_id, ch, *font_size)
-                    .is_none()
-                {
-                    self.glyph_atlas.rasterize_glyph(font_id, ch, *font_size);
-                    atlas_dirty = true;
-                }
-            }
+            let flat: Vec<text::TextGlyphQuad> = if let Some(max_w) = wrap_width {
+                text::layout_text_wrapped(
+                    &mut self.glyph_atlas,
+                    font_id,
+                    content,
+                    *font_size,
+                    *position,
+                    *max_w,
+                    *line_height,
+                )
+                .into_iter()
+                .flatten()
+                .collect()
+            } else {
+                text::layout_text(
+                    &mut self.glyph_atlas,
+                    font_id,
+                    content,
+                    *font_size,
+                    *position,
+                )
+            };
+            text_quads.insert(i, flat);
         }
-        if atlas_dirty {
-            self.text_layout_cache.clear();
+        if std::mem::take(&mut self.glyph_atlas.dirty) {
             self.upload_glyph_atlas();
             if let Some(atlas) = &self.glyph_atlas_texture {
                 let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1273,8 +1225,8 @@ impl RenderEngine {
         let mut current_layer: Option<i32> = None;
 
         // sort by (layer, texture_id) — same-texture commands are contiguous, no HashMap needed
-        let mut sorted_commands: Vec<&DrawCommand> = commands.iter().collect();
-        sorted_commands.sort_by_key(|cmd| {
+        let mut sorted_commands: Vec<(usize, &DrawCommand)> = commands.iter().enumerate().collect();
+        sorted_commands.sort_by_key(|(_, cmd)| {
             let layer = match &cmd.kind {
                 DrawKind::Sprite { layer, .. }
                 | DrawKind::Rect { layer, .. }
@@ -1333,7 +1285,7 @@ impl RenderEngine {
             let mut current_tex: Option<u32> = None;
             let mut batch_start = 0;
 
-            for command in &sorted_commands {
+            for (orig_idx, command) in &sorted_commands {
                 let layer = match &command.kind {
                     DrawKind::Sprite { layer, .. }
                     | DrawKind::Rect { layer, .. }
@@ -1420,42 +1372,10 @@ impl RenderEngine {
                     } => {
                         self.write_line_vertices(*start, *end, *color, *thickness);
                     }
-                    DrawKind::Text {
-                        font,
-                        content,
-                        position,
-                        font_size,
-                        color,
-                        wrap_width,
-                        line_height,
-                        ..
-                    } => {
-                        let font_id = u32::try_from(font.unwrap_or(0)).unwrap_or(u32::MAX);
-                        if let Some(max_width) = wrap_width {
-                            let lines = text::layout_text_wrapped(
-                                &self.glyph_atlas,
-                                font_id,
-                                content,
-                                *font_size,
-                                *position,
-                                *max_width,
-                                *line_height,
-                            );
-                            for line_quads in lines {
-                                for quad in line_quads {
-                                    self.write_text_quad(&quad, *color);
-                                }
-                            }
-                        } else {
-                            let quads = self
-                                .get_cached_text_layout(font_id, content, *font_size)
-                                .to_vec();
+                    DrawKind::Text { color, .. } => {
+                        if let Some(quads) = text_quads.get(orig_idx) {
                             for quad in quads {
-                                let offset_quad = text::TextGlyphQuad {
-                                    position: quad.position + *position,
-                                    ..quad
-                                };
-                                self.write_text_quad(&offset_quad, *color);
+                                self.write_text_quad(quad, *color);
                             }
                         }
                     }
