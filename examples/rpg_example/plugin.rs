@@ -17,7 +17,7 @@ impl GamePlugin for RpgGame {
     fn build(&mut self, app: &mut App) {
         app.add_plugin(DialoguePlugin);
         app.add_startup_system(setup);
-        app.add_system(overworld_input);
+        app.add_system((overworld_input, player_move_animation).chain());
         app.add_system(dialogue_input);
         app.add_system_to_stage(UpdateStage::Render, (camera_follow, render).chain());
     }
@@ -160,6 +160,11 @@ pub fn setup(
         Facing::Down,
         player_start,
         Transform::from_xy(player_world.x, player_world.y),
+        PlayerMoveAnimation {
+            source: player_world,
+            target: player_world,
+            elapsed: MOVE_ANIM_DURATION,
+        },
     ));
 
     let npc_textures = vec![npc_tex1, npc_tex2, npc_tex3];
@@ -198,7 +203,7 @@ pub fn setup(
 pub fn overworld_input(
     input: Res<InputState>,
     time: Res<Time>,
-    mut player_query: Query<(&mut Transform, &mut GridPos, &mut Facing), With<Player>>,
+    mut player_query: Query<(&mut GridPos, &mut Facing, &mut PlayerMoveAnimation), With<Player>>,
     npc_query: Query<(&GridPos, &Npc), Without<Player>>,
     npc_defs: Res<NpcDefinitions>,
     tile_grid: Res<TileGrid>,
@@ -210,7 +215,7 @@ pub fn overworld_input(
     if !matches!(*mode, GameMode::Overworld) {
         return;
     }
-    let Ok((mut transform, mut grid_pos, mut facing)) = player_query.single_mut() else {
+    let Ok((mut grid_pos, mut facing, mut anim)) = player_query.single_mut() else {
         return;
     };
 
@@ -237,11 +242,12 @@ pub fn overworld_input(
                 .iter()
                 .any(|(pos, _)| pos.col == new_col && pos.row == new_row);
             if !tile_grid.is_blocked(new_col, new_row) && !npc_at_target {
+                let old_world = grid_to_world(grid_pos.col, grid_pos.row);
                 grid_pos.col = new_col;
                 grid_pos.row = new_row;
-                let world = grid_to_world(new_col, new_row);
-                transform.translation.x = world.x;
-                transform.translation.y = world.y;
+                anim.source = old_world;
+                anim.target = grid_to_world(new_col, new_row);
+                anim.elapsed = 0.0;
             }
             move_timer.0 = 0.0;
         }
@@ -278,6 +284,20 @@ pub fn overworld_input(
             break;
         }
     }
+}
+
+pub fn player_move_animation(
+    time: Res<Time>,
+    mut query: Query<(&mut Transform, &mut PlayerMoveAnimation), With<Player>>,
+) {
+    let Ok((mut transform, mut anim)) = query.single_mut() else { return; };
+    if anim.elapsed >= MOVE_ANIM_DURATION {
+        return;
+    }
+    anim.elapsed += time.delta_seconds();
+    let t = (anim.elapsed / MOVE_ANIM_DURATION).min(1.0);
+    transform.translation.x = anim.source.x + (anim.target.x - anim.source.x) * t;
+    transform.translation.y = anim.source.y + (anim.target.y - anim.source.y) * t;
 }
 
 pub fn dialogue_input(

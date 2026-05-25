@@ -30,3 +30,10 @@ pub struct Player;
 
 #[derive(Debug, Component)]
 pub struct Npc(pub usize);
+
+#[derive(Component)]
+pub struct PlayerMoveAnimation {
+    pub source: Vec2,
+    pub target: Vec2,
+    pub elapsed: f32,
+}

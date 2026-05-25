@@ -115,6 +115,7 @@ pub const VIEW_HEIGHT: f32 = 480.0;
 pub const SPRITE_W: f32 = 32.0;
 pub const SPRITE_H: f32 = 48.0;
 pub const MOVE_COOLDOWN: f32 = 0.15;
+pub const MOVE_ANIM_DURATION: f32 = MOVE_COOLDOWN * 0.5;
 pub const CPS: f32 = 10.0;
 pub const DIALOGUE_BOX_H: f32 = 128.0;
 pub const ICON_COL_W: f32 = 56.0;
