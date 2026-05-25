@@ -1715,7 +1715,6 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "console_error_panic_hook",
- "engine-dialogue",
  "log",
  "lunar-lib",
  "wasm-bindgen",
@@ -1733,6 +1732,7 @@ dependencies = [
  "engine-3d",
  "engine-assets",
  "engine-core",
+ "engine-dialogue",
  "engine-input",
  "engine-math",
  "engine-render",

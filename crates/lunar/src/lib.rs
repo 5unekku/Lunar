@@ -43,6 +43,8 @@ pub use engine_2d;
 pub use engine_3d;
 pub use engine_assets;
 pub use engine_core;
+#[cfg(feature = "dialogue")]
+pub use engine_dialogue;
 pub use engine_input;
 pub use engine_math;
 pub use engine_render;

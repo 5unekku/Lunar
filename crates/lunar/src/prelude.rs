@@ -60,7 +60,7 @@ pub use engine_math::{
 };
 
 // engine-core types
-pub use engine_core::{App, GamePlugin, Time, WindowSettings};
+pub use engine_core::{App, GamePlugin, Time, UpdateStage, WindowSettings};
 
 // engine-2d types — only available when the 2d feature is enabled
 #[cfg(feature = "2d")]
@@ -85,6 +85,10 @@ pub use engine_input::{ActionMap, GamepadAxis, GamepadButton, InputBinding, Inpu
 // engine-assets types — Texture/Font/Sound are needed as type parameters for
 // Handle<T> when game code stores asset handles in its own resources.
 pub use engine_assets::{AssetServer, AudioFormat, Font, Handle, Sound, Texture};
+
+// optional engine modules — included in prelude when the feature is enabled
+#[cfg(feature = "dialogue")]
+pub use engine_dialogue::{DialogueBuilder, DialogueManager, DialoguePlugin};
 
 // lunar marker traits
 pub use crate::{GameComponent, GameResource};

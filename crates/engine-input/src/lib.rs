@@ -687,38 +687,119 @@ impl GamePlugin for InputPlugin {
     }
 }
 
-/// bundles the SDL3 event pump and gamepad subsystem.
+/// abstraction over a source of gamepad events.
 ///
-/// create this once at startup and pass it to [`process_events`] each frame.
+/// implement this to provide gamepad input from any backend (gilrs, custom HID, etc.).
+/// the SDL3 implementation is [`SdlGamepadProvider`].
+///
+/// # swapping backends
+///
+/// to use a different gamepad library:
+/// 1. implement this trait for your provider type
+/// 2. call `provider.poll(input)` in your game loop, after [`process_events`]
+/// 3. pass `&mut NoGamepad` to [`process_events`] so it ignores SDL3 controller events
+pub trait GamepadProvider {
+    /// poll for new gamepad events and apply them to `input`
+    fn poll(&mut self, input: &mut InputState);
+}
+
+/// no-op gamepad provider. use this when a separate backend handles gamepads.
+pub struct NoGamepad;
+
+impl GamepadProvider for NoGamepad {
+    fn poll(&mut self, _input: &mut InputState) {}
+}
+
+/// SDL3-backed gamepad provider.
+///
+/// receives gamepad events routed from [`process_events`] via the SDL3 event pump.
+/// event routing happens inside [`process_events`] because SDL3 delivers all input
+/// (keyboard, mouse, controller) through a single event pump — they cannot be split.
+///
+/// to swap to a different backend (e.g. gilrs):
+/// - pass `&mut NoGamepad` to [`process_events`]
+/// - call `your_provider.poll(input)` after `process_events` returns
 #[cfg(not(target_arch = "wasm32"))]
-pub struct SdlInputContext {
-    pub event_pump: sdl3::EventPump,
+pub struct SdlGamepadProvider {
     gamepad_subsystem: sdl3::GamepadSubsystem,
     /// maps SDL joystick id → (open gamepad handle, engine gamepad index)
     open_gamepads: HashMap<u32, (sdl3::gamepad::Gamepad, usize)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl SdlInputContext {
-    /// create a new context from an already-initialized SDL3 event pump and gamepad subsystem.
+impl SdlGamepadProvider {
+    /// create a new provider from an already-initialized SDL3 gamepad subsystem.
     #[must_use]
-    pub fn new(event_pump: sdl3::EventPump, gamepad_subsystem: sdl3::GamepadSubsystem) -> Self {
-        Self { event_pump, gamepad_subsystem, open_gamepads: HashMap::new() }
+    pub fn new(gamepad_subsystem: sdl3::GamepadSubsystem) -> Self {
+        Self { gamepad_subsystem, open_gamepads: HashMap::new() }
+    }
+
+    fn handle_event(&mut self, event: &sdl3::event::Event, input: &mut InputState) {
+        use sdl3::event::Event;
+        match event {
+            Event::ControllerDeviceAdded { which, .. } => {
+                let joystick_id = sdl3::sys::joystick::SDL_JoystickID(*which);
+                match self.gamepad_subsystem.open(joystick_id) {
+                    Ok(gamepad) => {
+                        let engine_index = input.add_gamepad();
+                        self.open_gamepads.insert(*which, (gamepad, engine_index));
+                        log::info!("gamepad {} connected (engine index {})", which, engine_index);
+                    }
+                    Err(error) => log::warn!("failed to open gamepad {}: {}", which, error),
+                }
+            }
+            Event::ControllerDeviceRemoved { which, .. } => {
+                if let Some((_, engine_index)) = self.open_gamepads.remove(which) {
+                    input.remove_gamepad(engine_index);
+                    log::info!("gamepad {} disconnected", which);
+                }
+            }
+            Event::ControllerButtonDown { which, button, .. } => {
+                if let Some((_, engine_index)) = self.open_gamepads.get(which) {
+                    if let Some(mapped) = gamepad_button_from_sdl(*button) {
+                        input.press_gamepad_button(*engine_index, mapped);
+                    }
+                }
+            }
+            Event::ControllerButtonUp { which, button, .. } => {
+                if let Some((_, engine_index)) = self.open_gamepads.get(which) {
+                    if let Some(mapped) = gamepad_button_from_sdl(*button) {
+                        input.release_gamepad_button(*engine_index, mapped);
+                    }
+                }
+            }
+            Event::ControllerAxisMotion { which, axis, value, .. } => {
+                if let Some((_, engine_index)) = self.open_gamepads.get(which) {
+                    if let Some(mapped) = gamepad_axis_from_sdl(*axis) {
+                        let normalized = (*value as f32 / 32767.0).clamp(-1.0, 1.0);
+                        input.set_gamepad_axis(*engine_index, mapped, normalized);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 }
 
 /// process SDL3 events and update the input state.
 ///
-/// call once per frame before the ECS tick.
+/// call once per frame before the ECS tick. collects all SDL3 events and routes
+/// keyboard/mouse events internally, controller events to `gamepad`.
+///
+/// pass `&mut NoGamepad` when a separate library handles controller input.
 ///
 /// # quit handling
 ///
 /// if a quit event is received, the [`EngineState`] is set to [`EngineState::Stopping`].
 #[cfg(not(target_arch = "wasm32"))]
-pub fn process_events(ctx: &mut SdlInputContext, world: &mut bevy_ecs::prelude::World) {
+pub fn process_events(
+    event_pump: &mut sdl3::EventPump,
+    gamepad: &mut SdlGamepadProvider,
+    world: &mut bevy_ecs::prelude::World,
+) {
     use sdl3::event::Event;
 
-    let events: Vec<Event> = ctx.event_pump.poll_iter().collect();
+    let events: Vec<Event> = event_pump.poll_iter().collect();
     let mut got_quit = false;
 
     if let Some(mut input) = world.get_resource_mut::<InputState>() {
@@ -750,47 +831,8 @@ pub fn process_events(ctx: &mut SdlInputContext, world: &mut bevy_ecs::prelude::
                     input.add_mouse_delta(*xrel, *yrel);
                     input.set_mouse_position(*x, *y);
                 }
-                Event::ControllerDeviceAdded { which, .. } => {
-                    let joystick_id = sdl3::sys::joystick::SDL_JoystickID(*which);
-                    match ctx.gamepad_subsystem.open(joystick_id) {
-                        Ok(gamepad) => {
-                            let engine_index = input.add_gamepad();
-                            ctx.open_gamepads.insert(*which, (gamepad, engine_index));
-                            log::info!("gamepad {} connected (engine index {})", which, engine_index);
-                        }
-                        Err(error) => log::warn!("failed to open gamepad {}: {}", which, error),
-                    }
-                }
-                Event::ControllerDeviceRemoved { which, .. } => {
-                    if let Some((_, engine_index)) = ctx.open_gamepads.remove(which) {
-                        input.remove_gamepad(engine_index);
-                        log::info!("gamepad {} disconnected", which);
-                    }
-                }
-                Event::ControllerButtonDown { which, button, .. } => {
-                    if let Some((_, engine_index)) = ctx.open_gamepads.get(which) {
-                        if let Some(mapped) = gamepad_button_from_sdl(*button) {
-                            input.press_gamepad_button(*engine_index, mapped);
-                        }
-                    }
-                }
-                Event::ControllerButtonUp { which, button, .. } => {
-                    if let Some((_, engine_index)) = ctx.open_gamepads.get(which) {
-                        if let Some(mapped) = gamepad_button_from_sdl(*button) {
-                            input.release_gamepad_button(*engine_index, mapped);
-                        }
-                    }
-                }
-                Event::ControllerAxisMotion { which, axis, value, .. } => {
-                    if let Some((_, engine_index)) = ctx.open_gamepads.get(which) {
-                        if let Some(mapped) = gamepad_axis_from_sdl(*axis) {
-                            let normalized = (*value as f32 / 32767.0).clamp(-1.0, 1.0);
-                            input.set_gamepad_axis(*engine_index, mapped, normalized);
-                        }
-                    }
-                }
                 Event::Quit { .. } => got_quit = true,
-                _ => {}
+                _ => gamepad.handle_event(event, &mut input),
             }
         }
     }

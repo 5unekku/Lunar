@@ -193,6 +193,27 @@ impl App {
         self
     }
 
+    /// add systems to the default Update stage, enforcing sequential execution order.
+    /// equivalent to `add_system((a, b, c).chain())` but without needing to import
+    /// `IntoScheduleConfigs` in game code.
+    pub fn add_ordered_systems<M>(
+        &mut self,
+        systems: impl IntoScheduleConfigs<ScheduleSystem, M>,
+    ) -> &mut Self {
+        self.add_system(systems.chain())
+    }
+
+    /// add systems to a specific stage, enforcing sequential execution order.
+    /// equivalent to `add_system_to_stage(stage, (a, b, c).chain())` but without
+    /// needing to import `IntoScheduleConfigs` in game code.
+    pub fn add_ordered_systems_to_stage<M>(
+        &mut self,
+        stage: UpdateStage,
+        systems: impl IntoScheduleConfigs<ScheduleSystem, M>,
+    ) -> &mut Self {
+        self.add_system_to_stage(stage, systems.chain())
+    }
+
     /// add one or more startup systems that run once before the main loop
     pub fn add_startup_system<M>(
         &mut self,

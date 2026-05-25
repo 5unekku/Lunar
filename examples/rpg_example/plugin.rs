@@ -1,6 +1,3 @@
-use bevy_ecs::prelude::IntoScheduleConfigs;
-use engine_dialogue::{DialogueBuilder, DialogueManager, DialoguePlugin};
-use lunar::engine_core::UpdateStage;
 use lunar::prelude::*;
 
 use crate::components::*;
@@ -17,8 +14,8 @@ impl GamePlugin for RpgGame {
     fn build(&mut self, app: &mut App) {
         app.add_plugin(DialoguePlugin);
         app.add_startup_system(setup);
-        app.add_system((overworld_input, player_move_animation, dialogue_input).chain());
-        app.add_system_to_stage(UpdateStage::Render, (camera_follow, render).chain());
+        app.add_ordered_systems((overworld_input, player_move_animation, dialogue_input));
+        app.add_ordered_systems_to_stage(UpdateStage::Render, (camera_follow, render));
     }
 }
 

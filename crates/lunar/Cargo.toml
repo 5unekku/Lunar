@@ -14,6 +14,8 @@ keywords.workspace = true
 default = ["2d"]
 2d = ["dep:engine-2d"]
 3d = ["dep:engine-3d"]
+# optional engine modules — enable only what your game uses
+dialogue = ["dep:engine-dialogue"]
 
 [dependencies]
 bevy_ecs = { workspace = true }
@@ -25,6 +27,7 @@ engine-3d = { path = "../engine-3d", optional = true }
 engine-render = { path = "../engine-render" }
 engine-input = { path = "../engine-input" }
 engine-assets = { path = "../engine-assets" }
+engine-dialogue = { path = "../engine-dialogue", optional = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 # wgsl is the shader language on every platform — declared once here
