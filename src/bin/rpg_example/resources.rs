@@ -19,6 +19,9 @@ pub enum GameMode {
         just_started: bool,
         /// whether Space/Enter was held on the previous tick — used to compute rising edge
         space_was_held: bool,
+        /// held state for choice navigation — rising edge moves selection one step
+        up_was_held: bool,
+        down_was_held: bool,
     },
 }
 

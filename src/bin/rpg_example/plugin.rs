@@ -286,6 +286,8 @@ pub fn overworld_input(
                 choice_selection: 0,
                 just_started: true,
                 space_was_held: false,
+                up_was_held: false,
+                down_was_held: false,
             };
             break;
         }
@@ -307,12 +309,17 @@ pub fn dialogue_input(
             choice_selection,
             just_started,
             space_was_held,
+            up_was_held,
+            down_was_held,
         } => {
             let space_held = input.is_key_held(KeyCode::Space) || input.is_key_held(KeyCode::Enter);
+            let up_held = input.is_key_held(KeyCode::Up) || input.is_key_held(KeyCode::W);
+            let down_held = input.is_key_held(KeyCode::Down) || input.is_key_held(KeyCode::S);
             if *just_started {
                 *just_started = false;
-                // sync held state so we don't fire immediately on the opening press
                 *space_was_held = space_held;
+                *up_was_held = up_held;
+                *down_was_held = down_held;
                 return;
             }
             *text_timer += time.delta_seconds();
@@ -324,14 +331,15 @@ pub fn dialogue_input(
 
             if dialogues.has_choices() && *text_visible_chars >= total {
                 let count = dialogues.choice_labels().len();
-                if input.is_key_just_pressed(KeyCode::Up) || input.is_key_just_pressed(KeyCode::W) {
+                if up_held && !*up_was_held {
                     *choice_selection = choice_selection.saturating_sub(1);
                 }
-                if input.is_key_just_pressed(KeyCode::Down) || input.is_key_just_pressed(KeyCode::S)
-                {
+                if down_held && !*down_was_held {
                     *choice_selection = choice_selection.saturating_add(1).min(count - 1);
                 }
             }
+            *up_was_held = up_held;
+            *down_was_held = down_held;
 
             // rising edge: advance only on the first tick the key transitions from not-held to held
             let press = space_held && !*space_was_held;
