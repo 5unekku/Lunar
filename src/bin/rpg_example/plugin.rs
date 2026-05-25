@@ -181,7 +181,9 @@ pub fn setup(
         font,
     });
     commands.insert_resource(NpcDefinitions(npc_defs));
-    commands.insert_resource(GameMode::Overworld);
+    commands.insert_resource(GameMode::Overworld {
+        just_returned: false,
+    });
     commands.insert_resource(PlayerChoiceState::default());
     commands.insert_resource(tile_grid);
     commands.insert_resource(MoveTimer(MOVE_COOLDOWN));
@@ -207,7 +209,11 @@ pub fn overworld_input(
     choice_state: Res<PlayerChoiceState>,
     mut move_timer: ResMut<MoveTimer>,
 ) {
-    if !matches!(*mode, GameMode::Overworld) {
+    let GameMode::Overworld { just_returned } = &mut *mode else {
+        return;
+    };
+    if *just_returned {
+        *just_returned = false;
         return;
     }
     let Ok((mut transform, mut grid_pos, mut facing)) = player_query.single_mut() else {
@@ -333,7 +339,9 @@ pub fn dialogue_input(
                     choice_state.npc1_choice = Some(chosen);
                 }
                 if !dialogues.is_active() {
-                    Some(GameMode::Overworld)
+                    Some(GameMode::Overworld {
+                        just_returned: true,
+                    })
                 } else {
                     *text_visible_chars = 0;
                     *text_timer = 0.0;
@@ -343,7 +351,9 @@ pub fn dialogue_input(
             } else {
                 dialogues.advance();
                 if !dialogues.is_active() {
-                    Some(GameMode::Overworld)
+                    Some(GameMode::Overworld {
+                        just_returned: true,
+                    })
                 } else {
                     *text_visible_chars = 0;
                     *text_timer = 0.0;

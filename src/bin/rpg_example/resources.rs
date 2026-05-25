@@ -2,7 +2,9 @@ use lunar::prelude::*;
 
 #[derive(Resource)]
 pub enum GameMode {
-    Overworld,
+    /// `just_returned` is true for one frame after returning from dialogue,
+    /// preventing the same keypress from immediately re-opening a conversation.
+    Overworld { just_returned: bool },
     Dialogue {
         npc_index: usize,
         text_visible_chars: usize,

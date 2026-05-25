@@ -1204,6 +1204,21 @@ impl RenderEngine {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        // update atlas rasterization scale from the viewport so glyphs are sharp
+        // even when the game viewport is letterboxed into a larger window
+        let text_scale = if let Some(cam) = camera
+            && let Some((vp_w, vp_h)) = cam.viewport
+        {
+            let sx = self.config.width as f32 / vp_w as f32;
+            let sy = self.config.height as f32 / vp_h as f32;
+            sx.min(sy)
+        } else {
+            1.0
+        };
+        if self.glyph_atlas.set_scale(text_scale) {
+            self.text_layout_cache.clear();
+        }
+
         // rasterize any glyphs not yet in the atlas, re-upload if the atlas changed
         let mut atlas_dirty = false;
         for cmd in commands.iter() {
