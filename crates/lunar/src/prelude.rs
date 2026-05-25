@@ -60,12 +60,12 @@ pub use engine_math::{Color, Mat2, Mat3, Mat4, Quat, Rect, Transform, Vec2, Vec3
 // engine-core types
 pub use engine_core::{App, GamePlugin, Time, WindowSettings};
 
-// engine-2d types — only available when the dim2 feature is enabled
-#[cfg(feature = "dim2")]
+// engine-2d types — only available when the 2d feature is enabled
+#[cfg(feature = "2d")]
 pub use engine_2d::{Plugin2d, propagate_transforms};
 
-// engine-3d types — only available when the dim3 feature is enabled
-#[cfg(feature = "dim3")]
+// engine-3d types — only available when the 3d feature is enabled
+#[cfg(feature = "3d")]
 pub use engine_3d::{
     ActiveCamera3d, AmbientLight, Camera3d, CullMode, DirectionalLight, IndexBuffer,
     LocalTransform3d, Material3d, MaterialData, Mesh3d, MeshData, Plugin3d, PointLight, Projection,

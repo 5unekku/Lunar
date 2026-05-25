@@ -37,9 +37,9 @@ pub use bevy_ecs as __bevy_ecs;
 // through `::lunar::__bevy_ecs::…`.
 pub use lunar_macros::{Component, Event, Message, Resource};
 
-#[cfg(feature = "dim2")]
+#[cfg(feature = "2d")]
 pub use engine_2d;
-#[cfg(feature = "dim3")]
+#[cfg(feature = "3d")]
 pub use engine_3d;
 pub use engine_assets;
 pub use engine_core;
