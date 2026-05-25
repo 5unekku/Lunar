@@ -670,6 +670,10 @@ impl Default for InputState {
 /// on web, call the platform input setup function before running.
 pub struct InputPlugin;
 
+fn begin_input_tick(mut input: ResMut<InputState>) {
+    input.begin_frame();
+}
+
 impl GamePlugin for InputPlugin {
     fn name(&self) -> &'static str {
         "InputPlugin"
@@ -678,6 +682,7 @@ impl GamePlugin for InputPlugin {
     fn build(&mut self, app: &mut App) {
         app.insert_resource(InputState::new());
         app.insert_resource(ActionMap::new());
+        app.add_system_to_stage(engine_core::UpdateStage::Input, begin_input_tick);
         log::info!("InputPlugin: input state and action map resources registered");
     }
 }
@@ -717,7 +722,6 @@ pub fn process_events(event_pump: &mut sdl3::EventPump, world: &mut bevy_ecs::pr
     let mut got_quit = false;
 
     if let Some(mut input) = world.get_resource_mut::<InputState>() {
-        input.begin_frame();
         for event in &events {
             match event {
                 Event::KeyDown {
@@ -1087,7 +1091,6 @@ mod web_input {
 #[cfg(target_arch = "wasm32")]
 pub fn process_events(_event_pump: &mut (), world: &mut bevy_ecs::prelude::World) {
     if let Some(mut input) = world.get_resource_mut::<InputState>() {
-        input.begin_frame();
         web_input::drain_to_input(&mut input);
         poll_gamepads(&mut input);
     }

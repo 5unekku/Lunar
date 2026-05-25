@@ -2,8 +2,8 @@ use engine_dialogue::{DialogueBuilder, DialogueManager, DialoguePlugin};
 use lunar::engine_core::UpdateStage;
 use lunar::prelude::*;
 
-use crate::rpg_example::components::*;
-use crate::rpg_example::resources::*;
+use crate::components::*;
+use crate::resources::*;
 
 #[derive(Default)]
 pub struct RpgGame;
@@ -181,10 +181,7 @@ pub fn setup(
         font,
     });
     commands.insert_resource(NpcDefinitions(npc_defs));
-    commands.insert_resource(GameMode::Overworld {
-        just_returned: false,
-        interact_was_held: false,
-    });
+    commands.insert_resource(GameMode::Overworld);
     commands.insert_resource(PlayerChoiceState::default());
     commands.insert_resource(tile_grid);
     commands.insert_resource(MoveTimer(MOVE_COOLDOWN));
@@ -210,11 +207,7 @@ pub fn overworld_input(
     choice_state: Res<PlayerChoiceState>,
     mut move_timer: ResMut<MoveTimer>,
 ) {
-    let GameMode::Overworld { just_returned, interact_was_held } = &mut *mode else {
-        return;
-    };
-    if *just_returned {
-        *just_returned = false;
+    if !matches!(*mode, GameMode::Overworld) {
         return;
     }
     let Ok((mut transform, mut grid_pos, mut facing)) = player_query.single_mut() else {
@@ -257,11 +250,7 @@ pub fn overworld_input(
         move_timer.0 = MOVE_COOLDOWN;
     }
 
-    let interact_held = input.is_key_held(KeyCode::Space) || input.is_key_held(KeyCode::Enter);
-    let interact_press = interact_held && !*interact_was_held;
-    *interact_was_held = interact_held;
-
-    if interact_press {
+    if input.is_key_just_pressed(KeyCode::Space) || input.is_key_just_pressed(KeyCode::Enter) {
         let (dfacing_col, dfacing_row) = facing.delta();
         let target_col = grid_pos.col + dfacing_col;
         let target_row = grid_pos.row + dfacing_row;
@@ -285,9 +274,6 @@ pub fn overworld_input(
                 text_timer: 0.0,
                 choice_selection: 0,
                 just_started: true,
-                space_was_held: false,
-                up_was_held: false,
-                down_was_held: false,
             };
             break;
         }
@@ -308,18 +294,9 @@ pub fn dialogue_input(
             text_visible_chars,
             choice_selection,
             just_started,
-            space_was_held,
-            up_was_held,
-            down_was_held,
         } => {
-            let space_held = input.is_key_held(KeyCode::Space) || input.is_key_held(KeyCode::Enter);
-            let up_held = input.is_key_held(KeyCode::Up) || input.is_key_held(KeyCode::W);
-            let down_held = input.is_key_held(KeyCode::Down) || input.is_key_held(KeyCode::S);
             if *just_started {
                 *just_started = false;
-                *space_was_held = space_held;
-                *up_was_held = up_held;
-                *down_was_held = down_held;
                 return;
             }
             *text_timer += time.delta_seconds();
@@ -331,56 +308,48 @@ pub fn dialogue_input(
 
             if dialogues.has_choices() && *text_visible_chars >= total {
                 let count = dialogues.choice_labels().len();
-                if up_held && !*up_was_held {
+                if input.is_key_just_pressed(KeyCode::Up) || input.is_key_just_pressed(KeyCode::W)
+                {
                     *choice_selection = choice_selection.saturating_sub(1);
                 }
-                if down_held && !*down_was_held {
+                if input.is_key_just_pressed(KeyCode::Down)
+                    || input.is_key_just_pressed(KeyCode::S)
+                {
                     *choice_selection = choice_selection.saturating_add(1).min(count - 1);
                 }
             }
-            *up_was_held = up_held;
-            *down_was_held = down_held;
 
-            // rising edge: advance only on the first tick the key transitions from not-held to held
-            let press = space_held && !*space_was_held;
-            *space_was_held = space_held;
+            let press =
+                input.is_key_just_pressed(KeyCode::Space) || input.is_key_just_pressed(KeyCode::Enter);
             if !press {
                 None
-            } else {
-                if *text_visible_chars < total && total > 0 {
-                    *text_visible_chars = total;
-                    *text_timer = total as f32 / CPS;
-                    None
-                } else if dialogues.has_choices() {
-                    let chosen = *choice_selection;
-                    let npc = *npc_index;
-                    dialogues.choose(chosen);
-                    if npc == 0 {
-                        choice_state.npc1_choice = Some(chosen);
-                    }
-                    if !dialogues.is_active() {
-                        Some(GameMode::Overworld {
-                            just_returned: true,
-                            interact_was_held: true,
-                        })
-                    } else {
-                        *text_visible_chars = 0;
-                        *text_timer = 0.0;
-                        *choice_selection = 0;
-                        None
-                    }
+            } else if *text_visible_chars < total && total > 0 {
+                *text_visible_chars = total;
+                *text_timer = total as f32 / CPS;
+                None
+            } else if dialogues.has_choices() {
+                let chosen = *choice_selection;
+                let npc = *npc_index;
+                dialogues.choose(chosen);
+                if npc == 0 {
+                    choice_state.npc1_choice = Some(chosen);
+                }
+                if !dialogues.is_active() {
+                    Some(GameMode::Overworld)
                 } else {
-                    dialogues.advance();
-                    if !dialogues.is_active() {
-                        Some(GameMode::Overworld {
-                            just_returned: true,
-                            interact_was_held: true,
-                        })
-                    } else {
-                        *text_visible_chars = 0;
-                        *text_timer = 0.0;
-                        None
-                    }
+                    *text_visible_chars = 0;
+                    *text_timer = 0.0;
+                    *choice_selection = 0;
+                    None
+                }
+            } else {
+                dialogues.advance();
+                if !dialogues.is_active() {
+                    Some(GameMode::Overworld)
+                } else {
+                    *text_visible_chars = 0;
+                    *text_timer = 0.0;
+                    None
                 }
             }
         }

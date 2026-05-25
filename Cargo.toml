@@ -64,9 +64,9 @@ path = "src/main.rs"
 name = "lunar-web"
 path = "src/web.rs"
 
-[[bin]]
-name = "rpg-example"
-path = "src/bin/rpg_example_main.rs"
+[[example]]
+name = "rpg_example"
+path = "examples/rpg_example/main.rs"
 
 [dependencies]
 # `lunar` is the only dependency a real game needs. The rpg-example
