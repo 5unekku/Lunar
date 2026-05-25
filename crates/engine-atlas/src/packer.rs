@@ -61,35 +61,26 @@ impl AtlasPacker {
         let mut sorted: Vec<&SourceImage> = sources.iter().collect();
         sorted.sort_by_key(|b| std::cmp::Reverse(b.image.height));
 
+        // pass 1: compute placements without allocating any pixel memory
         let mut shelves: Vec<Shelf> = Vec::new();
         let mut current_y: u32 = 0;
         let mut regions: HashMap<String, ManifestRegion> = HashMap::new();
-
-        // track actual used dimensions
         let mut used_w: u32 = 0;
         let mut used_h: u32 = 0;
 
-        // pre-allocate canvas at max size
-        let canvas_size = (self.max_width * self.max_height * 4) as usize;
-        let mut canvas = vec![0u8; canvas_size];
-
-        for source in sorted {
+        for source in &sorted {
             let img = &source.image;
             let w = img.width;
             let h = img.height;
 
-            // try to place on an existing shelf
             let mut placed = false;
             for shelf in &mut shelves {
                 if shelf.height >= h && shelf.cursor_x + w <= self.max_width {
                     let x = shelf.cursor_x;
                     let y = shelf.y;
                     shelf.cursor_x += w;
-
-                    Self::blit(&mut canvas, self.max_width, x, y, img);
                     used_w = used_w.max(x + w);
                     used_h = used_h.max(y + h);
-
                     regions.insert(source.name.clone(), ManifestRegion { x, y, w, h });
                     placed = true;
                     break;
@@ -97,14 +88,12 @@ impl AtlasPacker {
             }
 
             if !placed {
-                // need a new shelf
                 if current_y + h > self.max_height {
                     return Err(format!(
                         "image '{}' ({}x{}) does not fit in atlas ({}x{})",
                         source.name, img.width, img.height, self.max_width, self.max_height
                     ));
                 }
-
                 let x = 0;
                 let y = current_y;
                 shelves.push(Shelf {
@@ -113,16 +102,12 @@ impl AtlasPacker {
                     cursor_x: w,
                 });
                 current_y += h;
-
-                Self::blit(&mut canvas, self.max_width, x, y, img);
                 used_w = used_w.max(w);
                 used_h = used_h.max(y + h);
-
                 regions.insert(source.name.clone(), ManifestRegion { x, y, w, h });
             }
         }
 
-        // handle empty case
         if used_w == 0 || used_h == 0 {
             return Ok(PackedAtlas {
                 image: Image::new(1, 1),
@@ -134,14 +119,18 @@ impl AtlasPacker {
             });
         }
 
-        // trim to actual used dimensions — row-copy is much faster than pixel-by-pixel
+        // pass 2: allocate exact canvas and blit — no over-allocation
         let mut packed = Image::new(used_w, used_h);
-        let row_bytes = (used_w * 4) as usize;
-        for y in 0..used_h {
-            let src_start = (y * self.max_width * 4) as usize;
-            let dst_start = (y * used_w * 4) as usize;
-            packed.pixels[dst_start..dst_start + row_bytes]
-                .copy_from_slice(&canvas[src_start..src_start + row_bytes]);
+        for source in &sorted {
+            if let Some(region) = regions.get(&source.name) {
+                Self::blit(
+                    &mut packed.pixels,
+                    used_w,
+                    region.x,
+                    region.y,
+                    &source.image,
+                );
+            }
         }
 
         let manifest = AtlasManifest {

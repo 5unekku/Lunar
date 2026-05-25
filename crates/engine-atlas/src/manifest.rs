@@ -6,7 +6,7 @@
 //! # binary format
 //!
 //! ```text
-//! Header (16 bytes):
+//! Header (18 bytes):
 //!   - magic: [u8; 4] = b'ATLS'
 //!   - version: u16
 //!   - atlas_width: u32

@@ -1359,41 +1359,6 @@ impl GamePlugin for AssetWatcherPlugin {
     }
 }
 
-/// raw texture data from .mi files (kept for backward compat).
-pub struct RawTextureData {
-    pub width: u32,
-    pub height: u32,
-    pub pixels: Vec<u8>,
-}
-
-/// loader for lunar image format (`.mi`) files.
-///
-/// decodes .mi bytes into [`RawTextureData`] which the render
-/// system can upload to a GPU texture.
-///
-/// # example
-///
-/// ```ignore
-/// let loader = MiLoader;
-/// let data = loader.load(&file_bytes)?;
-/// // upload data.pixels to GPU
-/// ```
-pub struct MiLoader;
-
-impl MiLoader {
-    /// decode .mi bytes into raw texture data
-    /// # Errors
-    /// returns an error if the bytes are not a valid .mi file.
-    pub fn load(&self, bytes: &[u8]) -> Result<RawTextureData, engine_image::DecodeError> {
-        let image = engine_image::decode(bytes)?;
-        Ok(RawTextureData {
-            width: image.width,
-            height: image.height,
-            pixels: image.pixels,
-        })
-    }
-}
-
 /// convenience macro to implement the [`Asset`] trait for a custom type.
 ///
 /// # example
