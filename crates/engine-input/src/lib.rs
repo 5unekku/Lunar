@@ -389,10 +389,10 @@ pub enum GamepadButton {
     West,
     /// face button north (Y on xbox, triangle on playstation)
     North,
-    /// left bumper
-    LeftBumper,
-    /// right bumper
-    RightBumper,
+    /// left shoulder button (L1 / LB)
+    LeftShoulder,
+    /// right shoulder button (R1 / RB)
+    RightShoulder,
     /// left stick button
     LeftStick,
     /// right stick button
@@ -922,8 +922,8 @@ const fn gamepad_button_from_sdl(button: sdl3::gamepad::Button) -> Option<Gamepa
         SdlBtn::East => Some(GamepadButton::East),
         SdlBtn::West => Some(GamepadButton::West),
         SdlBtn::North => Some(GamepadButton::North),
-        SdlBtn::LeftShoulder => Some(GamepadButton::LeftBumper),
-        SdlBtn::RightShoulder => Some(GamepadButton::RightBumper),
+        SdlBtn::LeftShoulder => Some(GamepadButton::LeftShoulder),
+        SdlBtn::RightShoulder => Some(GamepadButton::RightShoulder),
         SdlBtn::LeftStick => Some(GamepadButton::LeftStick),
         SdlBtn::RightStick => Some(GamepadButton::RightStick),
         SdlBtn::Back => Some(GamepadButton::Back),
@@ -1230,8 +1230,8 @@ fn poll_gamepads(_input: &mut InputState) {
                 1 => Some(GamepadButton::East),
                 2 => Some(GamepadButton::West),
                 3 => Some(GamepadButton::North),
-                4 => Some(GamepadButton::LeftBumper),
-                5 => Some(GamepadButton::RightBumper),
+                4 => Some(GamepadButton::LeftShoulder),
+                5 => Some(GamepadButton::RightShoulder),
                 8 => Some(GamepadButton::Back),
                 9 => Some(GamepadButton::Start),
                 10 => Some(GamepadButton::LeftStick),
