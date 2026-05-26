@@ -343,26 +343,26 @@ impl App {
         let mut game_loop = GameLoop::new(frame_cap);
 
         while game_loop.is_running() {
-            // process native events (SDL3 input, etc.)
+            let ticks = game_loop.tick();
+
+            // run ECS ticks — render stage blocks on vsync inside here.
+            // PostUpdate (last stage) resets edge-triggered input state.
+            for _ in 0..ticks {
+                if let Some(mut time) = self.engine.world_mut().get_resource_mut::<Time>() {
+                    time.tick();
+                }
+                self.engine.run_stages();
+            }
+
+            // process native events AFTER render so mouse delta covers exactly one
+            // vsync/frame period. events that arrived during the vsync wait are
+            // drained here, immediately before the next frame's update uses them.
             process_events(self.engine.world_mut());
 
-            // check if the engine state signals stop
             if let Some(state) = self.engine.world().get_resource::<EngineState>()
                 && state.is_stopping()
             {
                 break;
-            }
-
-            let ticks = game_loop.tick();
-
-            // run ECS ticks
-            for _ in 0..ticks {
-                // update time
-                if let Some(mut time) = self.engine.world_mut().get_resource_mut::<Time>() {
-                    time.tick();
-                }
-                // run all stage schedules in order
-                self.engine.run_stages();
             }
 
             // apply frame cap for sleep
