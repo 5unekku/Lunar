@@ -1,28 +1,39 @@
 //! dialogue system for lunar.
 //!
-//! provides multi-stage conversations, speaker identification, branching
-//! choices, and narrator text. extracted from `engine-core` so games that
-//! don't need it pay zero compile cost.
+//! conversations are flat arrays of [`Block`]s linked by integer indices.
+//! branching is handled by [`Next::Choice`] — each choice carries a label and
+//! a target block index, so selecting option `i` jumps to `choices[i].target`.
+//!
+//! use [`ScriptBuilder`] to author scripts in code, or [`parse_script`] for
+//! RON files. register characters first with [`DialogueManager::add_character`].
 //!
 //! # quick start
 //!
 //! ```ignore
-//! use engine_dialogue::{DialogueBuilder, DialogueManager, DialoguePlugin};
+//! use engine_dialogue::{DialogueManager, DialoguePlugin, ScriptBuilder};
 //! use engine_core::App;
 //!
 //! let mut app = App::new();
 //! app.add_plugin(DialoguePlugin);
 //!
-//! let dialogue = DialogueBuilder::new("start")
-//!     .line("greeting", Some("NPC"), "hello there!", Some("farewell"))
-//!     .build();
+//! // in a setup system:
+//! fn setup(mut dialogues: ResMut<DialogueManager>) {
+//!     let npc = dialogues.add_character("old man");
+//!
+//!     let script = ScriptBuilder::new("greeting")
+//!         .block("greeting", npc, 0, "hello there!", Some("farewell"))
+//!         .block("farewell", npc, 0, "safe travels.", None)
+//!         .build()
+//!         .unwrap();
+//!
+//!     dialogues.register("intro", script);
+//! }
 //! ```
 
 mod dialogue;
 mod parser;
 
 pub use dialogue::{
-    Dialogue, DialogueBuilder, DialogueChoice, DialogueLine, DialogueManager, DialogueNode,
-    DialoguePlugin, DialogueState,
+    Block, Character, Choice, DialogueManager, DialoguePlugin, Next, Script, ScriptBuilder,
 };
-pub use parser::{parse_dialogue, parse_dialogue_file};
+pub use parser::{parse_script, parse_script_file};

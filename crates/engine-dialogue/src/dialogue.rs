@@ -1,330 +1,379 @@
-//! dialogue and text system
+//! dialogue data structures and runtime manager.
 //!
-//! provides multi-stage conversations, speaker identification, branching choices,
-//! and narrator text. designed for RPG-style dialogue without requiring games
-//! to implement their own solutions.
+//! conversations are stored as flat arrays of [`Block`]s linked by integer indices,
+//! like a graph of nodes. each block carries who is speaking, their emotion, the
+//! text, and a [`Next`] that describes what comes after — either nothing, a single
+//! block, or a set of labelled choices each pointing to a different block.
 //!
-//! # architecture
+//! # structure
 //!
-//! dialogue is structured as a graph of [`DialogueNode`]s:
-//! - each node contains a [`DialogueLine`] with optional speaker and text
-//! - nodes can auto-advance to a [`next`](DialogueNode::next) node
-//! - nodes can present [`choices`](DialogueLine::choices) for branching
+//! ```text
+//! Script
+//!   blocks: Box<[Block]>   ← flat array; blocks reference each other by index
+//!   start: u32             ← index of first block
 //!
-//! use [`DialogueBuilder`] to construct dialogues fluently, then
-//! register them with the [`DialogueManager`] resource.
+//! Block
+//!   character: u32         ← 0 = no speaker; 1..n = character index
+//!   emotion:   u16         ← index into that character's clip list
+//!   text:      Box<str>
+//!   next:      Next
 //!
-//! # example
+//! Next::End
+//! Next::Line(u32)          ← advance to this block
+//! Next::Choice(Box<[Choice]>)
+//!   Choice { label: Box<str>, target: u32 }
+//!     labels[i] displayed, selecting i jumps to links[i].target
+//! ```
+//!
+//! # building scripts
+//!
+//! use [`ScriptBuilder`] — assign string IDs to blocks during construction,
+//! they are resolved to integer indices when [`ScriptBuilder::build`] is called.
 //!
 //! ```ignore
-//! use engine_dialogue::{DialogueBuilder, DialogueManager};
+//! let npc = manager.add_character("old man");
 //!
-//! let dialogue = DialogueBuilder::new("start")
-//!     .line("greeting", Some("NPC"), "hello there!", Some("farewell"))
-//!     .choice_line("farewell", None, "what do you do?", &[
-//!         ("leave", "end"),
-//!         ("ask more", "more_info"),
-//!     ])
-//!     .build();
+//! let script = ScriptBuilder::new("greeting")
+//!     .block("greeting", npc, 0, "hello there!", Some("farewell"))
+//!     .block("farewell", npc, 0, "safe travels.", None)
+//!     .build()
+//!     .unwrap();
 //!
-//! manager.register("intro", dialogue);
-//! manager.start("intro");
+//! manager.register("npc1", script);
+//! manager.start("npc1");
 //! ```
 
-use bevy_ecs::prelude::*;
+use std::collections::HashMap;
 
+use bevy_ecs::prelude::*;
 use engine_core::App;
 
-/// a dialogue line with optional speaker and choices.
+/// a named character that can speak in a dialogue.
 ///
-/// represents a single line of text in a conversation.
-/// if [`speaker`](DialogueLine::speaker) is `None`, the text is treated as narrator text.
-#[derive(Debug, Clone)]
-pub struct DialogueLine {
-    /// speaker identifier, none for narrator text
-    pub speaker: Option<String>,
-    /// the text content
-    pub text: String,
-    /// optional sprite change for the speaker
-    pub sprite_change: Option<String>,
-    /// optional choices for branching
-    pub choices: Vec<DialogueChoice>,
+/// registered with [`DialogueManager::add_character`], referenced in blocks by index.
+/// index `0` is reserved — use it to indicate no speaker (narrator text).
+pub struct Character {
+    pub name: Box<str>,
 }
 
-/// a branching choice in a dialogue.
-///
-/// presents the player with an option that leads to a different dialogue node.
-#[derive(Debug, Clone)]
-pub struct DialogueChoice {
-    /// the text shown to the player
-    pub label: String,
-    /// the next dialogue node id if chosen
-    pub target: String,
+/// a single step in a conversation.
+pub struct Block {
+    /// 0 = no speaker (narrator). 1..n = index from [`DialogueManager::add_character`].
+    pub character: u32,
+    /// index into the character's emotion/animation clip list.
+    pub emotion: u16,
+    pub text: Box<str>,
+    pub next: Next,
 }
 
-/// a named dialogue node within a conversation.
-///
-/// each node represents a single step in the dialogue graph.
-/// if [`next`](DialogueNode::next) is set and there are no choices,
-/// the dialogue auto-advances to that node.
-#[derive(Debug, Clone)]
-pub struct DialogueNode {
-    /// unique identifier within the conversation
-    pub id: String,
-    /// the line of dialogue
-    pub line: DialogueLine,
-    /// next node id if no choices (auto-advance)
-    pub next: Option<String>,
+/// what follows a [`Block`] after it is read.
+pub enum Next {
+    /// the conversation ends here.
+    End,
+    /// advance unconditionally to this block index.
+    Line(u32),
+    /// present the player with labelled choices; `choices[i].target` is where choice `i` leads.
+    Choice(Box<[Choice]>),
 }
 
-/// a complete conversation or dialogue tree.
-///
-/// contains all nodes and a [`start`](Dialogue::start) entry point.
-/// use [`DialogueBuilder`] to construct this fluently.
-#[derive(Debug, Clone)]
-pub struct Dialogue {
-    /// the entry point node id
-    pub start: String,
-    /// all nodes in this dialogue
-    pub nodes: Vec<DialogueNode>,
+/// one branch in a [`Next::Choice`].
+pub struct Choice {
+    /// text shown to the player.
+    pub label: Box<str>,
+    /// block index to jump to when this choice is selected.
+    pub target: u32,
 }
 
-impl Dialogue {
-    /// create a new dialogue with a start node
+/// a complete conversation: a flat block array plus an entry point.
+pub struct Script {
+    pub blocks: Box<[Block]>,
+    pub start: u32,
+}
+
+// ── builder ──────────────────────────────────────────────────────────────────
+
+struct BuildEntry {
+    id: String,
+    character: u32,
+    emotion: u16,
+    text: String,
+    next: BuildNext,
+}
+
+enum BuildNext {
+    End,
+    Goto(String),
+    Choice(Vec<(String, String)>),
+}
+
+/// builds a [`Script`] using human-friendly string IDs for blocks.
+///
+/// string IDs are resolved to integer indices when [`build`](ScriptBuilder::build)
+/// is called, so forward references work — you can reference a block before it is
+/// declared as long as it exists by the time `build()` runs.
+pub struct ScriptBuilder {
+    start: String,
+    entries: Vec<BuildEntry>,
+}
+
+impl ScriptBuilder {
+    /// start a new script; `start` is the string ID of the first block to show.
     #[must_use]
     pub fn new(start: &str) -> Self {
         Self {
             start: start.to_string(),
-            nodes: Vec::new(),
+            entries: Vec::new(),
         }
     }
 
-    /// add a node to this dialogue
-    pub fn add_node(&mut self, node: DialogueNode) {
-        self.nodes.push(node);
-    }
-
-    /// get a node by id
+    /// add a block that auto-advances to `next`, or ends if `next` is `None`.
     #[must_use]
-    pub fn get_node(&self, id: &str) -> Option<&DialogueNode> {
-        self.nodes.iter().find(|n| n.id == id)
-    }
-}
-
-/// a builder for constructing dialogue trees.
-///
-/// provides a fluent interface for adding lines and choices.
-/// call [`build`](DialogueBuilder::build) when finished to get a [`Dialogue`].
-pub struct DialogueBuilder {
-    dialogue: Dialogue,
-}
-
-impl DialogueBuilder {
-    /// create a new dialogue builder with the given start node id
-    #[must_use]
-    pub fn new(start: &str) -> Self {
-        Self {
-            dialogue: Dialogue::new(start),
-        }
-    }
-
-    /// add a simple line with auto-advance
-    #[must_use]
-    pub fn line(mut self, id: &str, speaker: Option<&str>, text: &str, next: Option<&str>) -> Self {
-        self.dialogue.nodes.push(DialogueNode {
+    pub fn block(
+        mut self,
+        id: &str,
+        character: u32,
+        emotion: u16,
+        text: &str,
+        next: Option<&str>,
+    ) -> Self {
+        self.entries.push(BuildEntry {
             id: id.to_string(),
-            line: DialogueLine {
-                speaker: speaker.map(String::from),
-                text: text.to_string(),
-                sprite_change: None,
-                choices: Vec::new(),
-            },
-            next: next.map(String::from),
+            character,
+            emotion,
+            text: text.to_string(),
+            next: next.map_or(BuildNext::End, |n| BuildNext::Goto(n.to_string())),
         });
         self
     }
 
-    /// add a line with choices
+    /// add a block that presents choices; `choices` is a list of `(label, target_id)` pairs.
     #[must_use]
-    pub fn choice_line(
+    pub fn choice(
         mut self,
         id: &str,
-        speaker: Option<&str>,
+        character: u32,
+        emotion: u16,
         text: &str,
         choices: Vec<(&str, &str)>,
     ) -> Self {
-        self.dialogue.nodes.push(DialogueNode {
+        self.entries.push(BuildEntry {
             id: id.to_string(),
-            line: DialogueLine {
-                speaker: speaker.map(String::from),
-                text: text.to_string(),
-                sprite_change: None,
-                choices: choices
+            character,
+            emotion,
+            text: text.to_string(),
+            next: BuildNext::Choice(
+                choices
                     .into_iter()
-                    .map(|(label, target)| DialogueChoice {
-                        label: label.to_string(),
-                        target: target.to_string(),
-                    })
+                    .map(|(label, target)| (label.to_string(), target.to_string()))
                     .collect(),
-            },
-            next: None,
+            ),
         });
         self
     }
 
-    /// finish building
-    #[must_use]
-    pub fn build(self) -> Dialogue {
-        self.dialogue
+    /// resolve all string IDs to integer indices and produce a [`Script`].
+    ///
+    /// # Errors
+    /// returns an error if the start ID or any `next`/choice target does not match a declared block.
+    pub fn build(self) -> Result<Script, String> {
+        let id_to_index: HashMap<&str, u32> = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.id.as_str(), i as u32))
+            .collect();
+
+        let start = *id_to_index
+            .get(self.start.as_str())
+            .ok_or_else(|| format!("start block '{}' not found", self.start))?;
+
+        let blocks: Result<Vec<Block>, String> = self
+            .entries
+            .iter()
+            .map(|entry| {
+                let next = match &entry.next {
+                    BuildNext::End => Next::End,
+                    BuildNext::Goto(target) => {
+                        let idx = id_to_index.get(target.as_str()).ok_or_else(|| {
+                            format!(
+                                "block '{}' references unknown target '{target}'",
+                                entry.id
+                            )
+                        })?;
+                        Next::Line(*idx)
+                    }
+                    BuildNext::Choice(choices) => {
+                        let resolved: Result<Vec<Choice>, String> = choices
+                            .iter()
+                            .map(|(label, target)| {
+                                let idx =
+                                    id_to_index.get(target.as_str()).ok_or_else(|| {
+                                        format!(
+                                            "choice in '{}' targets unknown block '{target}'",
+                                            entry.id
+                                        )
+                                    })?;
+                                Ok(Choice {
+                                    label: label.as_str().into(),
+                                    target: *idx,
+                                })
+                            })
+                            .collect();
+                        Next::Choice(resolved?.into_boxed_slice())
+                    }
+                };
+                Ok(Block {
+                    character: entry.character,
+                    emotion: entry.emotion,
+                    text: entry.text.as_str().into(),
+                    next,
+                })
+            })
+            .collect();
+
+        Ok(Script {
+            blocks: blocks?.into_boxed_slice(),
+            start,
+        })
     }
 }
 
-/// dialogue state for an active conversation.
-///
-/// tracks the current node and whether the dialogue is still active.
-/// managed internally by the [`DialogueManager`].
-#[derive(Debug, Clone)]
-pub struct DialogueState {
-    /// the current dialogue definition
-    pub dialogue: Dialogue,
-    /// the current node id
-    pub current_node: String,
-    /// whether the dialogue is active
-    pub active: bool,
-}
+// ── runtime ───────────────────────────────────────────────────────────────────
 
-impl DialogueState {
-    /// create a new dialogue state from a dialogue
-    #[must_use]
-    pub fn new(dialogue: Dialogue) -> Self {
-        let start = dialogue.start.clone();
-        Self {
-            dialogue,
-            current_node: start,
-            active: true,
-        }
-    }
-
-    /// get the current line
-    #[must_use]
-    pub fn current_line(&self) -> Option<&DialogueLine> {
-        self.dialogue.get_node(&self.current_node).map(|n| &n.line)
-    }
-
-    /// advance to the next node (auto-advance, no choice)
-    pub fn advance(&mut self) {
-        if let Some(node) = self.dialogue.get_node(&self.current_node) {
-            if let Some(ref next) = node.next {
-                self.current_node = next.clone();
-            } else if node.line.choices.is_empty() {
-                self.active = false;
-            }
-        }
-    }
-
-    /// choose a branch
-    pub fn choose(&mut self, index: usize) {
-        if let Some(node) = self.dialogue.get_node(&self.current_node)
-            && let Some(choice) = node.line.choices.get(index)
-        {
-            self.current_node = choice.target.clone();
-        }
-    }
-
-    /// check if there are choices available
-    #[must_use]
-    pub fn has_choices(&self) -> bool {
-        self.current_line()
-            .is_some_and(|line| !line.choices.is_empty())
-    }
+struct ActiveDialogue {
+    key: String,
+    current: u32,
 }
 
 /// dialogue manager resource.
 ///
-/// stores registered dialogues and manages the active conversation state.
-/// access this resource from systems to start, advance, and close dialogues.
+/// holds the character registry, all registered scripts, and the active
+/// conversation state. access via [`ResMut<DialogueManager>`] from systems.
 #[derive(Resource)]
 pub struct DialogueManager {
-    /// registered dialogues by name
-    dialogues: std::collections::HashMap<String, Dialogue>,
-    /// the currently active dialogue state
-    active_dialogue: Option<DialogueState>,
+    /// index 0 is reserved — `character(0)` always returns `None`.
+    characters: Vec<Character>,
+    scripts: HashMap<String, Script>,
+    active: Option<ActiveDialogue>,
 }
 
 impl DialogueManager {
-    /// create a new dialogue manager
     #[must_use]
     pub fn new() -> Self {
         Self {
-            dialogues: std::collections::HashMap::new(),
-            active_dialogue: None,
+            characters: vec![Character { name: "".into() }],
+            scripts: HashMap::new(),
+            active: None,
         }
     }
 
-    /// register a dialogue by name
-    pub fn register(&mut self, name: &str, dialogue: Dialogue) {
-        self.dialogues.insert(name.to_string(), dialogue);
-        log::info!("DialogueManager: registered dialogue '{name}'");
+    /// register a named character, returns the index to use in [`ScriptBuilder::block`].
+    pub fn add_character(&mut self, name: &str) -> u32 {
+        let index = self.characters.len() as u32;
+        self.characters.push(Character { name: name.into() });
+        index
     }
 
-    /// start a dialogue by name
+    /// look up a character by index. returns `None` for index 0 (no speaker).
+    #[must_use]
+    pub fn character(&self, index: u32) -> Option<&Character> {
+        if index == 0 {
+            return None;
+        }
+        self.characters.get(index as usize)
+    }
+
+    /// register a script under a name for later use with [`start`](Self::start).
+    pub fn register(&mut self, name: &str, script: Script) {
+        self.scripts.insert(name.to_string(), script);
+        log::info!("DialogueManager: registered script '{name}'");
+    }
+
+    /// begin a conversation by name.
     pub fn start(&mut self, name: &str) {
-        if let Some(dialogue) = self.dialogues.get(name).cloned() {
-            self.active_dialogue = Some(DialogueState::new(dialogue));
-            log::info!("DialogueManager: started dialogue '{name}'");
+        if let Some(script) = self.scripts.get(name) {
+            self.active = Some(ActiveDialogue {
+                key: name.to_string(),
+                current: script.start,
+            });
+            log::info!("DialogueManager: started '{name}'");
         } else {
-            log::warn!("DialogueManager: dialogue '{name}' not found");
+            log::warn!("DialogueManager: script '{name}' not found");
         }
     }
 
-    /// get the current line if a dialogue is active
+    /// the block currently being shown, or `None` if no dialogue is active.
     #[must_use]
-    pub fn current_line(&self) -> Option<&DialogueLine> {
-        self.active_dialogue.as_ref().and_then(|s| s.current_line())
+    pub fn current_block(&self) -> Option<&Block> {
+        let active = self.active.as_ref()?;
+        self.scripts
+            .get(&active.key)?
+            .blocks
+            .get(active.current as usize)
     }
 
-    /// advance the current dialogue
+    /// advance past a non-choice block. ends the conversation if the block has no next.
     pub fn advance(&mut self) {
-        if let Some(state) = &mut self.active_dialogue {
-            state.advance();
-            if !state.active {
-                self.active_dialogue = None;
-            }
+        let next = self
+            .active
+            .as_ref()
+            .and_then(|a| self.scripts.get(&a.key))
+            .and_then(|s| s.blocks.get(self.active.as_ref().unwrap().current as usize))
+            .map(|b| match &b.next {
+                Next::Line(idx) => Some(*idx),
+                _ => None,
+            });
+
+        match next {
+            Some(Some(idx)) => self.active.as_mut().unwrap().current = idx,
+            _ => self.active = None,
         }
     }
 
-    /// choose a branch in the current dialogue
+    /// select choice `index` and jump to its target block.
     pub fn choose(&mut self, index: usize) {
-        if let Some(state) = &mut self.active_dialogue {
-            state.choose(index);
+        let target = self
+            .active
+            .as_ref()
+            .and_then(|a| self.scripts.get(&a.key))
+            .and_then(|s| s.blocks.get(self.active.as_ref().unwrap().current as usize))
+            .and_then(|b| match &b.next {
+                Next::Choice(choices) => choices.get(index).map(|c| c.target),
+                _ => None,
+            });
+
+        if let Some(target) = target {
+            self.active.as_mut().unwrap().current = target;
         }
     }
 
-    /// check if a dialogue is active
-    #[must_use]
-    pub fn is_active(&self) -> bool {
-        self.active_dialogue.as_ref().is_some_and(|s| s.active)
-    }
-
-    /// check if the current line has choices
+    /// whether the current block is a choice block.
     #[must_use]
     pub fn has_choices(&self) -> bool {
-        self.active_dialogue
-            .as_ref()
-            .is_some_and(DialogueState::has_choices)
+        matches!(
+            self.current_block().map(|b| &b.next),
+            Some(Next::Choice(_))
+        )
     }
 
-    /// get the choice labels for the current line
+    /// the labels for the current choices, in order.
     #[must_use]
     pub fn choice_labels(&self) -> Vec<&str> {
-        self.current_line()
-            .map(|line| line.choices.iter().map(|c| c.label.as_str()).collect())
-            .unwrap_or_default()
+        match self.current_block().map(|b| &b.next) {
+            Some(Next::Choice(choices)) => choices.iter().map(|c| c.label.as_ref()).collect(),
+            _ => Vec::new(),
+        }
     }
 
-    /// close the active dialogue
+    /// whether a dialogue is currently active.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.active.is_some()
+    }
+
+    /// close the active dialogue immediately.
     pub fn close(&mut self) {
-        self.active_dialogue = None;
+        self.active = None;
     }
 }
 
@@ -334,9 +383,7 @@ impl Default for DialogueManager {
     }
 }
 
-/// dialogue plugin, registers the dialogue manager resource.
-///
-/// add this plugin to your [`App`] to enable the dialogue system.
+/// dialogue plugin, registers [`DialogueManager`] as an ECS resource.
 pub struct DialoguePlugin;
 
 impl engine_core::GamePlugin for DialoguePlugin {

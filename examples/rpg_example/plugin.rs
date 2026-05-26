@@ -65,6 +65,10 @@ pub fn setup(
     let npc_tex3_emotion = assets.load_texture(texture!("sprites/npc3_emotion"));
     let font = assets.load_font("fonts/Inconsolata.ttf");
 
+    let old_man = dialogues.add_character("old man");
+    let traveler = dialogues.add_character("traveler");
+    let merchant = dialogues.add_character("merchant");
+
     let npc_defs = vec![
         NpcData {
             start_col: 18,
@@ -96,85 +100,39 @@ pub fn setup(
     ];
 
     // npc1 — has a question with two choices; the choice is remembered
-    let d1 = DialogueBuilder::new("line1")
-        .line(
-            "line1",
-            Some(&npc_defs[0].label),
-            "Halt, traveler. These are dangerous roads.",
-            Some("line2"),
-        )
-        .choice_line(
-            "line2",
-            Some(&npc_defs[0].label),
-            "Are you looking for something?",
-            vec![
-                ("I seek treasure.", "treasure"),
-                ("Just passing through.", "passing"),
-            ],
-        )
-        .line(
-            "treasure",
-            Some(&npc_defs[0].label),
-            "Ha! Then head east, past the old ruins. But beware the shadows.",
-            None,
-        )
-        .line(
-            "passing",
-            Some(&npc_defs[0].label),
-            "Then keep your wits about you. The road ahead is long.",
-            None,
-        )
-        .build();
+    let d1 = ScriptBuilder::new("line1")
+        .block("line1", old_man, 0, "Halt, traveler. These are dangerous roads.", Some("line2"))
+        .choice("line2", old_man, 0, "Are you looking for something?", vec![
+            ("I seek treasure.", "treasure"),
+            ("Just passing through.", "passing"),
+        ])
+        .block("treasure", old_man, 0, "Ha! Then head east, past the old ruins. But beware the shadows.", None)
+        .block("passing", old_man, 0, "Then keep your wits about you. The road ahead is long.", None)
+        .build()
+        .expect("npc1 script");
     dialogues.register("npc1", d1);
 
     // npc2 — simple linear dialogue, no icon
-    let d2 = DialogueBuilder::new("l1")
-        .line(
-            "l1",
-            Some(&npc_defs[1].label),
-            "The weather is lovely today, isn't it?",
-            Some("l2"),
-        )
-        .line(
-            "l2",
-            Some(&npc_defs[1].label),
-            "I've been walking for hours. Not a single cloud.",
-            None,
-        )
-        .build();
+    let d2 = ScriptBuilder::new("l1")
+        .block("l1", traveler, 0, "The weather is lovely today, isn't it?", Some("l2"))
+        .block("l2", traveler, 0, "I've been walking for hours. Not a single cloud.", None)
+        .build()
+        .expect("npc2 script");
     dialogues.register("npc2", d2);
 
     // npc3 — two variants depending on npc1's answer
-    let d3_treasure = DialogueBuilder::new("l1")
-        .line(
-            "l1",
-            Some(&npc_defs[2].label),
-            "Ah, a treasure hunter! You'll want sturdy boots for those ruins.",
-            Some("l2"),
-        )
-        .line(
-            "l2",
-            Some(&npc_defs[2].label),
-            "Good luck out there. I have nothing to sell today, sorry!",
-            None,
-        )
-        .build();
+    let d3_treasure = ScriptBuilder::new("l1")
+        .block("l1", merchant, 0, "Ah, a treasure hunter! You'll want sturdy boots for those ruins.", Some("l2"))
+        .block("l2", merchant, 0, "Good luck out there. I have nothing to sell today, sorry!", None)
+        .build()
+        .expect("npc3_treasure script");
     dialogues.register("npc3_treasure", d3_treasure);
 
-    let d3_passing = DialogueBuilder::new("l1")
-        .line(
-            "l1",
-            Some(&npc_defs[2].label),
-            "Welcome to my humble stall.",
-            Some("l2"),
-        )
-        .line(
-            "l2",
-            Some(&npc_defs[2].label),
-            "I have nothing to sell today. Sorry!",
-            None,
-        )
-        .build();
+    let d3_passing = ScriptBuilder::new("l1")
+        .block("l1", merchant, 0, "Welcome to my humble stall.", Some("l2"))
+        .block("l2", merchant, 0, "I have nothing to sell today. Sorry!", None)
+        .build()
+        .expect("npc3_passing script");
     dialogues.register("npc3_passing", d3_passing);
 
     // tile grid — border is impassable via out-of-bounds check; interior obstacles here
@@ -353,8 +311,8 @@ pub fn dialogue_input(
             }
             *text_timer += time.delta_seconds();
             let total = dialogues
-                .current_line()
-                .map(|l| l.text.chars().count())
+                .current_block()
+                .map(|b| b.text.chars().count())
                 .unwrap_or(0);
             *text_visible_chars = (*text_timer * CPS) as usize;
 
@@ -489,9 +447,9 @@ pub fn render(
     } = &*mode
     {
         let def = &npc_defs.0[*npc_index];
-        let line = dialogues.current_line();
-        let text = line.map(|l| l.text.as_str()).unwrap_or("");
-        let speaker = line.and_then(|l| l.speaker.as_deref());
+        let block = dialogues.current_block();
+        let text = block.map(|b| b.text.as_ref()).unwrap_or("");
+        let speaker = block.and_then(|b| dialogues.character(b.character)).map(|c| c.name.as_ref());
 
         let box_y = VIEW_HEIGHT - DIALOGUE_BOX_H;
         let box_origin = camera.screen_to_world(Vec2::new(0.0, box_y), window.width, window.height);

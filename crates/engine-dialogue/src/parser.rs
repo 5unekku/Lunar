@@ -1,300 +1,257 @@
-//! dialogue authoring format parser
+//! RON-based authoring format for dialogue scripts.
 //!
-//! provides a RON-based format for writing dialogue files that compile
-//! into the engine's [`Dialogue`](crate::dialogue::Dialogue) data structures.
+//! the format mirrors the runtime structure: blocks are keyed by string IDs
+//! which the parser resolves to integer indices, matching what [`ScriptBuilder`]
+//! does at runtime. characters are referenced by their u32 index — register them
+//! with [`DialogueManager::add_character`] before parsing.
 //!
 //! # format
 //!
-//! dialogue files are written in RON with the following structure:
-//!
 //! ```ron
-//! Dialogue(
+//! Script(
 //!     start: "greeting",
-//!     nodes: {
-//!         "greeting": (
-//!             speaker: Some("NPC"),
-//!             text: "hello there, traveler!",
-//!             sprite_change: Some("npc_happy"),
-//!             next: Some("farewell"),
-//!         ),
+//!     blocks: {
+//!         "greeting": (character: 1, emotion: 0, text: "hello!", next: Some("farewell")),
 //!         "farewell": (
-//!             speaker: Some("NPC"),
+//!             character: 1,
+//!             emotion: 0,
 //!             text: "what would you like to do?",
 //!             choices: [
-//!                 (label: "leave", target: "end"),
-//!                 (label: "ask more", target: "more_info"),
+//!                 (label: "leave",    target: "end"),
+//!                 (label: "ask more", target: "more"),
 //!             ],
 //!         ),
-//!         "more_info": (
-//!             text: "the world is full of wonders...",
-//!             next: Some("farewell"),
-//!         ),
-//!         "end": (
-//!             text: "safe travels!",
-//!         ),
+//!         "more": (character: 1, emotion: 0, text: "the world is full of wonders.", next: Some("farewell")),
+//!         "end":  (character: 1, emotion: 0, text: "safe travels!"),
 //!     },
 //! )
-//! ```
-//!
-//! # example
-//!
-//! ```ignore
-//! use engine_dialogue::parse_dialogue;
-//!
-//! let ron = r#"
-//! Dialogue(
-//!     start: "greeting",
-//!     nodes: {
-//!         "greeting": (speaker: Some("NPC"), text: "hello!", next: Some("end")),
-//!         "end": (text: "bye!"),
-//!     },
-//! )
-//! "#;
-//!
-//! let dialogue = parse_dialogue(ron).expect("failed to parse dialogue");
 //! ```
 
-use crate::dialogue::{Dialogue, DialogueChoice, DialogueLine, DialogueNode};
+use std::collections::HashMap;
+
 use serde::Deserialize;
 
-/// raw RON representation of a dialogue file.
-///
-/// deserialized directly from the RON source before validation.
+use crate::dialogue::{Block, Choice, Next, Script};
+
 #[derive(Debug, Deserialize)]
-#[serde(rename = "Dialogue")]
-struct RawDialogue {
-    /// the entry point node id.
+#[serde(rename = "Script")]
+struct RawScript {
     start: String,
-    /// all nodes in this dialogue, keyed by their unique id.
-    nodes: std::collections::HashMap<String, RawNode>,
+    blocks: HashMap<String, RawBlock>,
 }
 
-/// raw RON representation of a single dialogue node.
 #[derive(Debug, Deserialize)]
-struct RawNode {
-    /// optional speaker identifier (none for narrator text).
-    speaker: Option<String>,
-    /// the displayed text content.
-    text: String,
-    /// optional sprite change trigger for the speaker.
+struct RawBlock {
     #[serde(default)]
-    sprite_change: Option<String>,
-    /// optional next node id for auto-advance (none if choices are present).
+    character: u32,
+    #[serde(default)]
+    emotion: u16,
+    text: String,
     #[serde(default)]
     next: Option<String>,
-    /// optional branching choices for player selection.
     #[serde(default)]
     choices: Vec<RawChoice>,
 }
 
-/// raw RON representation of a dialogue choice.
 #[derive(Debug, Deserialize)]
 struct RawChoice {
-    /// the text label shown to the player.
     label: String,
-    /// the target node id to jump to if selected.
     target: String,
 }
 
-/// parse a RON dialogue string into a [`Dialogue`](crate::dialogue::Dialogue).
+/// parse a RON script string into a [`Script`].
 ///
-/// validates that the start node exists, all `next` references are valid,
-/// and all choice targets point to existing nodes.
-/// returns an error if the yaml is malformed or references invalid nodes.
+/// validates that the start block exists, all `next` references point to declared
+/// blocks, and all choice targets are valid.
 ///
 /// # Errors
-/// returns an error if the yaml is invalid or contains references to non-existent nodes.
-pub fn parse_dialogue(source: &str) -> Result<Dialogue, String> {
-    let raw: RawDialogue = ron::from_str(source).map_err(|e| format!("ron parse error: {e}"))?;
+/// returns an error string if the RON is malformed or any reference is invalid.
+pub fn parse_script(source: &str) -> Result<Script, String> {
+    let raw: RawScript =
+        ron::from_str(source).map_err(|e| format!("ron parse error: {e}"))?;
 
-    let start = raw.start.clone();
-
-    if !raw.nodes.contains_key(&start) {
-        return Err(format!("start node '{start}' does not exist in nodes"));
+    if !raw.blocks.contains_key(&raw.start) {
+        return Err(format!(
+            "start block '{}' does not exist",
+            raw.start
+        ));
     }
 
-    let mut nodes = Vec::new();
+    // assign a stable order for the blocks (sorted by key for determinism)
+    let mut ordered: Vec<(&str, &RawBlock)> = raw
+        .blocks
+        .iter()
+        .map(|(k, v)| (k.as_str(), v))
+        .collect();
+    ordered.sort_by_key(|(id, _)| *id);
 
-    for (id, raw_node) in &raw.nodes {
-        // validate that next targets exist
-        if let Some(ref next) = raw_node.next
-            && !raw.nodes.contains_key(next)
-        {
-            return Err(format!(
-                "node '{id}' references non-existent next node '{next}'"
-            ));
-        }
+    let id_to_index: HashMap<&str, u32> = ordered
+        .iter()
+        .enumerate()
+        .map(|(i, (id, _))| (*id, i as u32))
+        .collect();
 
-        // validate that choice targets exist
-        for choice in &raw_node.choices {
-            if !raw.nodes.contains_key(&choice.target) {
+    let start = *id_to_index
+        .get(raw.start.as_str())
+        .ok_or_else(|| format!("start block '{}' not found after ordering", raw.start))?;
+
+    let blocks: Result<Vec<Block>, String> = ordered
+        .iter()
+        .map(|(id, raw_block)| {
+            if let Some(ref next_id) = raw_block.next
+                && !raw.blocks.contains_key(next_id)
+            {
                 return Err(format!(
-                    "node '{id}' has choice targeting non-existent node '{}'",
-                    choice.target
+                    "block '{id}' references unknown next block '{next_id}'"
                 ));
             }
-        }
 
-        let node = DialogueNode {
-            id: id.clone(),
-            line: DialogueLine {
-                speaker: raw_node.speaker.clone(),
-                text: raw_node.text.clone(),
-                sprite_change: raw_node.sprite_change.clone(),
-                choices: raw_node
+            let next = if !raw_block.choices.is_empty() {
+                let choices: Result<Vec<Choice>, String> = raw_block
                     .choices
                     .iter()
-                    .map(|c| DialogueChoice {
-                        label: c.label.clone(),
-                        target: c.target.clone(),
+                    .map(|c| {
+                        let target = *id_to_index.get(c.target.as_str()).ok_or_else(|| {
+                            format!("choice in '{id}' targets unknown block '{}'", c.target)
+                        })?;
+                        Ok(Choice {
+                            label: c.label.as_str().into(),
+                            target,
+                        })
                     })
-                    .collect(),
-            },
-            next: raw_node.next.clone(),
-        };
-        nodes.push(node);
-    }
+                    .collect();
+                Next::Choice(choices?.into_boxed_slice())
+            } else if let Some(ref next_id) = raw_block.next {
+                let target = *id_to_index.get(next_id.as_str()).ok_or_else(|| {
+                    format!("block '{id}' references unknown next '{next_id}'")
+                })?;
+                Next::Line(target)
+            } else {
+                Next::End
+            };
 
-    Ok(Dialogue { start, nodes })
+            Ok(Block {
+                character: raw_block.character,
+                emotion: raw_block.emotion,
+                text: raw_block.text.as_str().into(),
+                next,
+            })
+        })
+        .collect();
+
+    Ok(Script {
+        blocks: blocks?.into_boxed_slice(),
+        start,
+    })
 }
 
-/// parse a dialogue file from disk.
-///
-/// reads the file at the given path and parses it as yaml.
-/// returns an error if the file can't be read or contains invalid content.
+/// parse a RON script file from disk.
 ///
 /// # Errors
-/// returns an error if the file cannot be read or if its contents are invalid.
-pub fn parse_dialogue_file(path: &str) -> Result<Dialogue, String> {
+/// returns an error if the file cannot be read or contains invalid content.
+pub fn parse_script_file(path: &str) -> Result<Script, String> {
     let source = std::fs::read_to_string(path)
-        .map_err(|e| format!("failed to read dialogue file '{path}': {e}"))?;
-    parse_dialogue(&source)
+        .map_err(|e| format!("failed to read script file '{path}': {e}"))?;
+    parse_script(&source)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dialogue::Next;
 
     #[test]
-    fn parse_simple_dialogue() {
+    fn parse_simple_script() {
         let ron = r##"
-Dialogue(
+Script(
     start: "greeting",
-    nodes: {
-        "greeting": (speaker: Some("NPC"), text: "hello!", next: Some("end")),
-        "end": (text: "bye!"),
+    blocks: {
+        "greeting": (character: 1, emotion: 0, text: "hello!", next: Some("end")),
+        "end": (character: 0, text: "bye!"),
     },
 )
 "##;
-        let dialogue = parse_dialogue(ron).expect("should parse");
-        assert_eq!(dialogue.start, "greeting");
-        assert_eq!(dialogue.nodes.len(), 2);
+        let script = parse_script(ron).expect("should parse");
+        assert_eq!(script.blocks.len(), 2);
     }
 
     #[test]
-    fn parse_dialogue_with_choices() {
+    fn parse_script_with_choices() {
         let ron = r##"
-Dialogue(
+Script(
     start: "question",
-    nodes: {
+    blocks: {
         "question": (
-            speaker: Some("NPC"),
+            character: 1,
+            emotion: 0,
             text: "what do you want?",
             choices: [
                 (label: "yes", target: "yes_path"),
-                (label: "no", target: "no_path"),
+                (label: "no",  target: "no_path"),
             ],
         ),
-        "yes_path": (text: "you said yes!"),
-        "no_path": (text: "you said no!"),
+        "yes_path": (character: 1, emotion: 0, text: "you said yes!"),
+        "no_path":  (character: 1, emotion: 0, text: "you said no!"),
     },
 )
 "##;
-        let dialogue = parse_dialogue(ron).expect("should parse");
-        let question = dialogue
-            .get_node("question")
-            .expect("should have question node");
-        assert_eq!(question.line.choices.len(), 2);
-        assert_eq!(question.line.choices[0].label, "yes");
-        assert_eq!(question.line.choices[1].target, "no_path");
+        let script = parse_script(ron).expect("should parse");
+        let start_block = &script.blocks[script.start as usize];
+        assert!(matches!(start_block.next, Next::Choice(_)));
+        if let Next::Choice(ref choices) = start_block.next {
+            assert_eq!(choices.len(), 2);
+            assert_eq!(choices[0].label.as_ref(), "yes");
+        }
     }
 
     #[test]
-    fn parse_invalid_next_fails() {
+    fn invalid_next_fails() {
         let ron = r##"
-Dialogue(
+Script(
     start: "a",
-    nodes: {
-        "a": (text: "hello", next: Some("nonexistent")),
-    },
+    blocks: { "a": (character: 0, text: "hi", next: Some("nonexistent")) },
 )
 "##;
-        let result = parse_dialogue(ron);
-        assert!(result.is_err());
+        assert!(parse_script(ron).is_err());
     }
 
     #[test]
-    fn parse_invalid_choice_target_fails() {
+    fn invalid_choice_target_fails() {
         let ron = r##"
-Dialogue(
+Script(
     start: "a",
-    nodes: {
-        "a": (
-            text: "hello",
-            choices: [(label: "go", target: "nowhere")],
-        ),
+    blocks: {
+        "a": (character: 0, text: "hi", choices: [(label: "go", target: "nowhere")]),
     },
 )
 "##;
-        let result = parse_dialogue(ron);
-        assert!(result.is_err());
+        assert!(parse_script(ron).is_err());
     }
 
     #[test]
-    fn parse_narrator_text() {
+    fn invalid_start_fails() {
         let ron = r##"
-Dialogue(
-    start: "narration",
-    nodes: {
-        "narration": (text: "the wind howls through the trees...", next: Some("end")),
-        "end": (text: "the end."),
-    },
-)
-"##;
-        let dialogue = parse_dialogue(ron).expect("should parse");
-        let narration = dialogue
-            .get_node("narration")
-            .expect("should have narration node");
-        assert!(narration.line.speaker.is_none());
-    }
-
-    #[test]
-    fn parse_invalid_start_fails() {
-        let ron = r##"
-Dialogue(
+Script(
     start: "nonexistent",
-    nodes: {
-        "a": (text: "hello"),
-    },
+    blocks: { "a": (character: 0, text: "hello") },
 )
 "##;
-        let result = parse_dialogue(ron);
-        assert!(result.is_err());
+        assert!(parse_script(ron).is_err());
     }
 
     #[test]
-    fn parse_sprite_change() {
+    fn narrator_block_character_zero() {
         let ron = r##"
-Dialogue(
-    start: "greet",
-    nodes: {
-        "greet": (speaker: Some("NPC"), text: "hi!", sprite_change: Some("npc_angry"), next: Some("end")),
-        "end": (text: "bye"),
+Script(
+    start: "narration",
+    blocks: {
+        "narration": (character: 0, text: "the wind howls...", next: Some("end")),
+        "end": (character: 0, text: "the end."),
     },
 )
 "##;
-        let dialogue = parse_dialogue(ron).expect("should parse");
-        let greet = dialogue.get_node("greet").expect("should have greet node");
-        assert_eq!(greet.line.sprite_change, Some("npc_angry".to_string()));
+        let script = parse_script(ron).expect("should parse");
+        let start_block = &script.blocks[script.start as usize];
+        assert_eq!(start_block.character, 0);
     }
 }

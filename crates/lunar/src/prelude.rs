@@ -91,7 +91,9 @@ pub use crate::texture;
 
 // optional engine modules — included in prelude when the feature is enabled
 #[cfg(feature = "dialogue")]
-pub use engine_dialogue::{DialogueBuilder, DialogueManager, DialoguePlugin};
+pub use engine_dialogue::{
+    Block, Character, Choice, DialogueManager, DialoguePlugin, Next, Script, ScriptBuilder,
+};
 
 // lunar marker traits
 pub use crate::{GameComponent, GameResource};
