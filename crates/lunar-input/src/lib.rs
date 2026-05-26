@@ -228,7 +228,7 @@ impl Drop for ActionBuilder<'_> {
 
 impl InputBinding {
     fn axis_active(value: f32, threshold: f32) -> bool {
-        if threshold >= 0.0 { value > threshold } else { value < threshold }
+        value.abs() >= threshold.abs()
     }
 
     fn is_held(&self, input: &InputState) -> bool {
