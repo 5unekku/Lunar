@@ -756,6 +756,36 @@ impl<L: AssetLoader<Asset = Font> + Send + Sync> FontLoaderTrait for FontLoaderA
     }
 }
 
+/// source for a texture load — either a file path or embedded bytes.
+///
+/// game code typically passes one of:
+/// - `"sprites/player"` — resolved from `assets/` and loaded asynchronously
+/// - `texture!("sprites/player")` — bytes baked in at compile time, decoded synchronously
+pub enum TextureSource<'a> {
+    /// file path, resolved relative to `assets/`
+    Path(&'a str),
+    /// raw `.mi` bytes already embedded in the binary via [`texture!`]
+    Embedded(&'static [u8]),
+}
+
+impl<'a> From<&'a str> for TextureSource<'a> {
+    fn from(path: &'a str) -> Self {
+        TextureSource::Path(path)
+    }
+}
+
+impl From<&'static [u8]> for TextureSource<'static> {
+    fn from(bytes: &'static [u8]) -> Self {
+        TextureSource::Embedded(bytes)
+    }
+}
+
+impl<const N: usize> From<&'static [u8; N]> for TextureSource<'static> {
+    fn from(bytes: &'static [u8; N]) -> Self {
+        TextureSource::Embedded(bytes as &[u8])
+    }
+}
+
 /// asset server resource, manages loading and handles.
 ///
 /// the asset server is the primary interface for loading game assets.
@@ -904,14 +934,44 @@ impl AssetServer {
 
     /// load a texture, returns immediately with a handle.
     ///
+    /// accepts either a path string (async disk/network load) or embedded bytes
+    /// from the [`texture!`](lunar_macros::texture) macro (synchronous, already in memory).
+    ///
+    /// # path loading
     /// the texture loads asynchronously in the background.
     /// use [`is_texture_ready`](Self::is_texture_ready) to check when it's usable.
-    pub fn load_texture(&mut self, path: &str) -> Handle<Texture> {
-        let resolved = resolve_asset_path(path);
-        let handle = self.texture_store.allocate_slot(resolved.clone());
-        let loader = self.resolve_texture_loader(&resolved);
-        self.io_pool.load_texture(resolved, handle.id(), loader);
-        handle
+    ///
+    /// # embedded loading
+    /// bytes are decoded immediately — the handle is ready on the same frame.
+    pub fn load_texture<'a>(&mut self, source: impl Into<TextureSource<'a>>) -> Handle<Texture> {
+        match source.into() {
+            TextureSource::Path(path) => {
+                let resolved = resolve_asset_path(path);
+                let handle = self.texture_store.allocate_slot(resolved.clone());
+                let loader = self.resolve_texture_loader(&resolved);
+                self.io_pool.load_texture(resolved, handle.id(), loader);
+                handle
+            }
+            TextureSource::Embedded(bytes) => {
+                let key = format!("__embedded_{:p}", bytes.as_ptr());
+                let handle = self.texture_store.allocate_slot(key);
+                if self.texture_store.is_ready(&handle) {
+                    return handle;
+                }
+                let id = handle.id();
+                match MiTextureLoader.load(bytes.to_vec()) {
+                    Ok(texture) => {
+                        self.texture_store.insert(id, texture);
+                        self.pending_texture_ids.push(id);
+                    }
+                    Err(err) => {
+                        log::warn!("failed to decode embedded texture: {err}");
+                        self.texture_store.mark_failed(id);
+                    }
+                }
+                handle
+            }
+        }
     }
 
     /// load a sound, returns immediately with a handle.
@@ -1012,7 +1072,7 @@ impl AssetServer {
 
     /// load a batch of textures, returns handles immediately
     pub fn load_textures(&mut self, paths: &[&str]) -> Vec<Handle<Texture>> {
-        paths.iter().map(|p| self.load_texture(p)).collect()
+        paths.iter().map(|p| self.load_texture(*p)).collect()
     }
 
     /// drain the list of texture IDs that became ready since the last drain.

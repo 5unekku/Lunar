@@ -13,3 +13,5 @@ proc-macro = true
 syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "webp"] }
+engine-image = { path = "../engine-image" }

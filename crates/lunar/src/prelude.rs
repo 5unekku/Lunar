@@ -84,7 +84,10 @@ pub use engine_input::{ActionMap, GamepadAxis, GamepadButton, InputBinding, Inpu
 
 // engine-assets types — Texture/Font/Sound are needed as type parameters for
 // Handle<T> when game code stores asset handles in its own resources.
-pub use engine_assets::{AssetServer, AudioFormat, Font, Handle, Sound, Texture};
+pub use engine_assets::{AssetServer, AudioFormat, Font, Handle, Sound, Texture, TextureSource};
+
+// texture! macro — embeds and converts image assets at compile time
+pub use crate::texture;
 
 // optional engine modules — included in prelude when the feature is enabled
 #[cfg(feature = "dialogue")]

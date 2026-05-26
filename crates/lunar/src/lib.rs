@@ -35,7 +35,7 @@ pub use bevy_ecs as __bevy_ecs;
 // wrapped ECS derives — game code writes `#[derive(Component)]` etc. without
 // ever naming bevy_ecs in its Cargo.toml. The derives expand to impls routed
 // through `::lunar::__bevy_ecs::…`.
-pub use lunar_macros::{Component, Event, Message, Resource};
+pub use lunar_macros::{Component, Event, Message, Resource, texture};
 
 #[cfg(feature = "2d")]
 pub use engine_2d;

@@ -23,3 +23,6 @@
 
 # test artifacts
 test-results/
+
+# texture macro compile cache
+**/.lunar/

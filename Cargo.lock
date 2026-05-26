@@ -1753,6 +1753,8 @@ dependencies = [
 name = "lunar-macros"
 version = "0.1.0"
 dependencies = [
+ "engine-image",
+ "image",
  "proc-macro2",
  "quote",
  "syn",
