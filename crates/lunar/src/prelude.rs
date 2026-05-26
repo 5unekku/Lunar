@@ -69,9 +69,22 @@ pub use lunar_2d::{Plugin2d, SpriteAnimation, propagate_transforms};
 // lunar-3d types — only available when the 3d feature is enabled
 #[cfg(feature = "3d")]
 pub use lunar_3d::{
+    // core
     ActiveCamera3d, AmbientLight, Camera3d, CullMode, DirectionalLight, IndexBuffer,
-    LocalTransform3d, Material3d, MaterialData, Mesh3d, MeshData, Plugin3d, PointLight, Projection,
-    ShadingModel, SpotLight, Vertex3d, WorldTransform3d, propagate_transforms_3d,
+    LocalTransform3d, Material3d, MaterialData, Mesh3d, MeshData, MeshUsage, Plugin3d,
+    PointLight, Projection, ShadingModel, SkinWeights, SpotLight, Vertex3d, WorldTransform3d,
+    propagate_transforms_3d,
+    // animation
+    AnimationClip, AnimationPlayer, AnimationTarget, JointTrack, Keyframe, advance_animations,
+    // collision
+    Collider3d, ColliderShape3d, CollisionWorld3d, build_collision_world_3d,
+    // fog
+    Fog, FogFalloff,
+    // visibility
+    Aabb3d, ComputedVisibility, Frustum, RenderLayers, ShadowCaster, ShadowReceiver,
+    Visibility, propagate_visibility, update_frustum,
+    // primitives
+    primitives,
 };
 
 // lunar-render types
