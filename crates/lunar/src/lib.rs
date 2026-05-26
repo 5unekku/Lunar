@@ -59,6 +59,11 @@ mod bootstrap;
 #[cfg(not(target_arch = "wasm32"))]
 pub use bootstrap::bootstrap;
 
+#[cfg(all(not(target_arch = "wasm32"), feature = "3d"))]
+mod bootstrap_3d;
+#[cfg(all(not(target_arch = "wasm32"), feature = "3d"))]
+pub use bootstrap_3d::bootstrap_3d;
+
 #[cfg(target_arch = "wasm32")]
 mod bootstrap_wasm;
 #[cfg(target_arch = "wasm32")]

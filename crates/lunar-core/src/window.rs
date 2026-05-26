@@ -34,6 +34,10 @@ pub struct WindowSettings {
     pub is_fullscreen: bool,
     /// vsync enabled
     pub vsync: bool,
+    /// whether the cursor is locked (relative mouse mode, hidden).
+    /// set this to true in a setup system to capture the cursor for fps-style input.
+    /// the bootstrap loop applies it via SDL3 before the next frame.
+    pub cursor_locked: bool,
 }
 
 impl WindowSettings {
@@ -44,6 +48,7 @@ impl WindowSettings {
             height,
             is_fullscreen: false,
             vsync,
+            cursor_locked: false,
         }
     }
 }
