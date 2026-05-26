@@ -1,16 +1,16 @@
 //! 3D components and systems for the Lunar engine.
 //!
 //! this crate provides the building blocks for 3D scenes: transforms, cameras,
-//! meshes, materials, lights, skeletal animation, and collision detection.
-//! it is intentionally decoupled from any rendering backend — no wgpu code lives here.
-//! the render system (a future `lunar-render-3d` crate) reads these components and
-//! issues GPU draw calls.
+//! meshes, materials, lights, skeletal animation, collision detection, and frustum culling.
+//! it is intentionally decoupled from any rendering backend.
 //!
 //! # design
 //!
-//! the component model mirrors id Tech 4 (Doom 3) more than id Tech 3 (Quake 3):
-//! per-pixel lighting with normal maps is the baseline, not lightmaps. this suits
-//! the Halo CE visual target (dynamic lights, per-object specular, skeletal meshes).
+//! the component model mirrors id Tech 4 (Doom 3): per-pixel lighting with normal maps
+//! is the baseline, not lightmaps. targets the Halo CE visual quality level.
+//!
+//! all propagation systems use persistent scratch resources to avoid per-frame heap
+//! allocations — steady-state operation (no new entities) is fully allocation-free.
 //!
 //! # quick start
 //!
@@ -18,37 +18,22 @@
 //! use lunar::prelude::*;
 //!
 //! fn setup(mut commands: Commands) {
-//!     // camera
-//!     commands.spawn((
-//!         LocalTransform3d::from_xyz(0.0, 2.0, 10.0),
-//!         WorldTransform3d::default(),
-//!         Camera3d::default(),
-//!     ));
+//!     commands.spawn(Camera3dBundle {
+//!         local: LocalTransform3d::from_xyz(0.0, 2.0, 10.0),
+//!         ..default()
+//!     });
 //!
-//!     // mesh entity (static, no shadows)
-//!     commands.spawn((
-//!         LocalTransform3d::from_xyz(0.0, 0.0, 0.0),
-//!         WorldTransform3d::default(),
-//!         Mesh3d(mesh_handle),
-//!         Material3d(material_handle),
-//!         Visibility::Visible,
-//!         ComputedVisibility::default(),
-//!         RenderLayers::DEFAULT,
-//!     ));
-//!
-//!     // mesh with shadow casting and frustum culling bounds
-//!     commands.spawn((
-//!         LocalTransform3d::from_xyz(5.0, 0.0, 0.0),
-//!         WorldTransform3d::default(),
-//!         Mesh3d(mesh_handle),
-//!         Material3d(material_handle),
-//!         Aabb3d::from_positions(&[...]),
-//!         ShadowCaster,
-//!     ));
+//!     commands.spawn(Mesh3dBundle {
+//!         local: LocalTransform3d::from_xyz(0.0, 0.0, 0.0),
+//!         mesh: Mesh3d(mesh_handle),
+//!         material: Material3d(mat_handle),
+//!         ..default()
+//!     });
 //! }
 //! ```
 
 pub mod animation;
+pub mod bundles;
 pub mod collision;
 pub mod fog;
 pub mod primitives;
@@ -65,6 +50,10 @@ mod transform;
 pub use animation::{
     AnimationClip, AnimationPlayer, AnimationTarget, JointTrack, Keyframe, advance_animations,
 };
+pub use bundles::{
+    Camera3dBundle, DirectionalLightBundle, Mesh3dBundle, PointLightBundle, ShadowMesh3dBundle,
+    SpotLightBundle,
+};
 pub use camera::{ActiveCamera3d, AmbientLight, Camera3d, Projection, update_active_camera};
 pub use collision::{
     Collider3d, ColliderShape3d, CollisionWorld3d, build_collision_world_3d,
@@ -74,9 +63,9 @@ pub use light::{DirectionalLight, PointLight, SpotLight};
 pub use material::{CullMode, Material3d, MaterialData, ShadingModel};
 pub use mesh::{IndexBuffer, Mesh3d, MeshData, MeshUsage, SkinWeights, Vertex3d};
 pub use plugin::Plugin3d;
-pub use systems::propagate_transforms_3d;
+pub use systems::{TransformScratch3d, propagate_transforms_3d};
 pub use transform::{LocalTransform3d, WorldTransform3d};
 pub use visibility::{
     Aabb3d, ComputedVisibility, Frustum, RenderLayers, ShadowCaster, ShadowReceiver, Visibility,
-    propagate_visibility, update_frustum,
+    ViewportAspect, VisibilityScratch, propagate_visibility, update_frustum,
 };

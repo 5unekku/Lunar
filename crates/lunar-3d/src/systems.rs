@@ -2,54 +2,74 @@ use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
 use lunar_core::Parent;
-use lunar_math::{Mat4, Quat, Vec3};
+use lunar_math::Mat4;
 
 use crate::transform::{LocalTransform3d, WorldTransform3d};
 
+/// scratch storage for transform propagation — allocated once, reused every frame.
+#[derive(Resource, Default)]
+pub struct TransformScratch3d {
+    snapshot: Vec<(Entity, LocalTransform3d, Option<Entity>)>,
+    parent_of: HashMap<Entity, Entity>,
+    depths: HashMap<Entity, u32>,
+    world_mats: HashMap<Entity, Mat4>,
+}
+
 /// propagate [`LocalTransform3d`] through the entity hierarchy to produce [`WorldTransform3d`].
 ///
-/// mirrors the 2D version: O(N) memoized depth sort, then one matrix multiply per entity.
+/// O(N) memoized depth sort, then one matrix multiply per entity.
 /// entities without a parent treat their local transform as world space.
+///
+/// uses a persistent scratch resource to avoid per-frame heap allocations.
 pub fn propagate_transforms_3d(world: &mut World) {
-    // snapshot all entities with a local transform
-    let snapshot: Vec<(Entity, LocalTransform3d, Option<Entity>)> = world
+    let mut scratch = world
+        .remove_resource::<TransformScratch3d>()
+        .unwrap_or_default();
+
+    scratch.snapshot.clear();
+    scratch.parent_of.clear();
+    scratch.depths.clear();
+    scratch.world_mats.clear();
+
+    world
         .query::<(Entity, &LocalTransform3d, Option<&Parent>)>()
         .iter(world)
-        .map(|(entity, local, parent)| (entity, *local, parent.map(|p| p.0)))
-        .collect();
+        .for_each(|(entity, local, parent)| {
+            scratch
+                .snapshot
+                .push((entity, *local, parent.map(|p| p.0)));
+        });
 
-    if snapshot.is_empty() {
+    if scratch.snapshot.is_empty() {
+        world.insert_resource(scratch);
         return;
     }
 
-    // build parent lookup map
-    let parent_of: HashMap<Entity, Entity> = snapshot
-        .iter()
-        .filter_map(|(entity, _, parent)| parent.map(|p| (*entity, p)))
-        .collect();
-
-    // memoized depth for stable topological sort
-    let mut depths: HashMap<Entity, u32> = HashMap::new();
-    for &(entity, _, _) in &snapshot {
-        depth_of(entity, &parent_of, &mut depths);
+    for &(entity, _, parent) in &scratch.snapshot {
+        if let Some(parent_entity) = parent {
+            scratch.parent_of.insert(entity, parent_entity);
+        }
     }
 
-    let mut sorted = snapshot;
-    sorted.sort_by_key(|(entity, _, _)| depths.get(entity).copied().unwrap_or(0));
+    for i in 0..scratch.snapshot.len() {
+        let entity = scratch.snapshot[i].0;
+        depth_of(entity, &scratch.parent_of, &mut scratch.depths);
+    }
 
-    // compute world transforms top-down; cache matrices for parent lookups
-    let mut world_mats: HashMap<Entity, Mat4> = HashMap::with_capacity(sorted.len());
+    scratch
+        .snapshot
+        .sort_by_key(|(entity, _, _)| scratch.depths.get(entity).copied().unwrap_or(0));
 
-    for (entity, local, parent_entity) in sorted {
+    for (entity, local, parent_entity) in scratch.snapshot.iter().copied() {
         let local_mat = local.to_matrix();
-        let world_mat = if let Some(parent) = parent_entity {
-            world_mats.get(&parent).copied().unwrap_or(Mat4::IDENTITY) * local_mat
-        } else {
-            local_mat
+        let world_mat = match parent_entity {
+            Some(parent) => {
+                scratch.world_mats.get(&parent).copied().unwrap_or(Mat4::IDENTITY) * local_mat
+            }
+            None => local_mat,
         };
-        world_mats.insert(entity, world_mat);
+        scratch.world_mats.insert(entity, world_mat);
 
-        // decompose back to TRS for WorldTransform3d
         let (scale, rotation, translation) = world_mat.to_scale_rotation_translation();
         let computed = WorldTransform3d {
             translation,
@@ -59,10 +79,12 @@ pub fn propagate_transforms_3d(world: &mut World) {
 
         if let Some(mut existing) = world.get_mut::<WorldTransform3d>(entity) {
             *existing = computed;
-        } else if let Some(mut entity_ref) = world.get_entity_mut(entity).ok() {
+        } else if let Ok(mut entity_ref) = world.get_entity_mut(entity) {
             entity_ref.insert(computed);
         }
     }
+
+    world.insert_resource(scratch);
 }
 
 fn depth_of(
@@ -70,17 +92,13 @@ fn depth_of(
     parent_of: &HashMap<Entity, Entity>,
     cache: &mut HashMap<Entity, u32>,
 ) -> u32 {
-    if let Some(&d) = cache.get(&entity) {
-        return d;
+    if let Some(&depth) = cache.get(&entity) {
+        return depth;
     }
-    let d = parent_of
+    let depth = parent_of
         .get(&entity)
         .map(|&parent| depth_of(parent, parent_of, cache) + 1)
         .unwrap_or(0);
-    cache.insert(entity, d);
-    d
+    cache.insert(entity, depth);
+    depth
 }
-
-// silence unused import warning — Vec3/Quat are used via lunar_math re-exports
-const _: Vec3 = Vec3::ZERO;
-const _: Quat = Quat::IDENTITY;

@@ -17,14 +17,11 @@ pub struct Keyframe<T: Copy> {
 /// animation track for one named joint.
 ///
 /// stores translation, rotation, and scale keyframes separately. any channel
-/// may be empty — if a channel has no keyframes, that component of the transform
-/// is left unchanged.
+/// may be empty — if empty, that component of the transform is left unchanged.
 ///
-/// keyframes must be sorted by ascending time before use.
+/// keyframes must be sorted by ascending time before the clip is used.
 #[derive(Debug, Clone)]
 pub struct JointTrack {
-    /// name matched against [`AnimationTarget::joint_name`] at bind time.
-    pub joint_name: String,
     pub translations: Vec<Keyframe<Vec3>>,
     pub rotations: Vec<Keyframe<Quat>>,
     pub scales: Vec<Keyframe<Vec3>>,
@@ -48,10 +45,7 @@ fn sample_vec3(keyframes: &[Keyframe<Vec3>], time: f32) -> Option<Vec3> {
     if keyframes.is_empty() {
         return None;
     }
-    if keyframes.len() == 1 {
-        return Some(keyframes[0].value);
-    }
-    if time <= keyframes[0].time {
+    if keyframes.len() == 1 || time <= keyframes[0].time {
         return Some(keyframes[0].value);
     }
     let last = keyframes.last().unwrap();
@@ -69,10 +63,7 @@ fn sample_quat(keyframes: &[Keyframe<Quat>], time: f32) -> Option<Quat> {
     if keyframes.is_empty() {
         return None;
     }
-    if keyframes.len() == 1 {
-        return Some(keyframes[0].value);
-    }
-    if time <= keyframes[0].time {
+    if keyframes.len() == 1 || time <= keyframes[0].time {
         return Some(keyframes[0].value);
     }
     let last = keyframes.last().unwrap();
@@ -88,48 +79,67 @@ fn sample_quat(keyframes: &[Keyframe<Quat>], time: f32) -> Option<Quat> {
 
 /// collection of joint tracks with a total duration.
 ///
-/// wrap in an `Arc` and share across `AnimationPlayer` components — the clip
-/// data is read-only at runtime. build clips at startup and hand them to players.
+/// tracks are keyed by joint name for O(1) lookup at sample time.
+/// wrap in an `Arc` and share across `AnimationPlayer` components.
 ///
 /// # example
 ///
 /// ```ignore
-/// let clip = Arc::new(AnimationClip::new(vec![
-///     JointTrack { joint_name: "spine".to_string(), translations: vec![], rotations: walk_keys, scales: vec![] },
-/// ], 1.2));
-/// commands.spawn((mesh_entity, AnimationPlayer::new(clip)));
+/// let clip = Arc::new(AnimationClip::new(
+///     HashMap::from([
+///         ("spine".to_string(), JointTrack { translations: vec![], rotations: walk_keys, scales: vec![] }),
+///     ]),
+///     1.2,
+/// ));
+/// commands.spawn(AnimationPlayer::new(clip));
 /// ```
 #[derive(Debug)]
 pub struct AnimationClip {
-    pub tracks: Vec<JointTrack>,
+    /// tracks keyed by joint name — O(1) lookup by `AnimationTarget::joint_name`.
+    pub tracks: HashMap<String, JointTrack>,
     /// total clip length in seconds.
     pub duration: f32,
 }
 
 impl AnimationClip {
     #[must_use]
-    pub fn new(tracks: Vec<JointTrack>, duration: f32) -> Self {
+    pub fn new(tracks: HashMap<String, JointTrack>, duration: f32) -> Self {
         Self { tracks, duration }
+    }
+
+    /// convenience: build from an iterator of `(name, track)` pairs.
+    #[must_use]
+    pub fn from_tracks(
+        tracks: impl IntoIterator<Item = (impl Into<String>, JointTrack)>,
+        duration: f32,
+    ) -> Self {
+        Self {
+            tracks: tracks
+                .into_iter()
+                .map(|(name, track)| (name.into(), track))
+                .collect(),
+            duration,
+        }
     }
 }
 
-/// links a joint entity to its animation player and the joint name to bind against.
+/// links a joint entity to its animation player and joint name.
 ///
 /// place on each joint entity (child of the animated mesh) alongside `LocalTransform3d`.
-/// the advance_animations system writes to `LocalTransform3d` based on the clip track
-/// whose `joint_name` matches this component.
+/// the advance_animations system writes to `LocalTransform3d` based on the matching
+/// track in the clip.
 #[derive(Debug, Clone, Component)]
 pub struct AnimationTarget {
     /// the entity that holds the `AnimationPlayer` driving this joint.
     pub player: Entity,
-    /// matched against `JointTrack::joint_name` in the clip.
+    /// matched against the key in `AnimationClip::tracks`.
     pub joint_name: String,
 }
 
 /// playback state for a skeletal animation. attach to the root entity of a skeleton.
 ///
-/// the clip is shared via `Arc` — multiple players can reference the same clip
-/// at no extra cost.
+/// the clip is shared via `Arc` — multiple players can reference the same clip at no
+/// extra memory cost.
 ///
 /// # example
 ///
@@ -178,7 +188,7 @@ impl AnimationPlayer {
         self
     }
 
-    /// jump to a specific time and resume playing.
+    /// jump to a specific time.
     pub fn seek(&mut self, time: f32) {
         self.time = time.clamp(0.0, self.clip.duration);
     }
@@ -192,14 +202,15 @@ impl AnimationPlayer {
 
 /// advance all animation players by delta time, then write sampled transforms to joint entities.
 ///
-/// register in the Update stage after input, before transform propagation, so joints have
-/// correct local transforms when the propagation pass runs.
+/// uses a `Local` scratch map to avoid per-frame allocation — the map's capacity grows to fit
+/// the scene and is never freed, so steady-state operation is allocation-free.
 pub fn advance_animations(
     time: Res<Time>,
     mut players: Query<(Entity, &mut AnimationPlayer)>,
     mut targets: Query<(&AnimationTarget, &mut LocalTransform3d)>,
+    mut scratch: Local<HashMap<Entity, (Arc<AnimationClip>, f32)>>,
 ) {
-    let mut player_states: HashMap<Entity, (Arc<AnimationClip>, f32)> = HashMap::new();
+    scratch.clear();
 
     for (entity, mut player) in &mut players {
         if !player.playing {
@@ -208,29 +219,21 @@ pub fn advance_animations(
         player.time += time.delta_seconds() * player.speed;
         let duration = player.clip.duration.max(f32::EPSILON);
         if player.looping {
-            if player.speed >= 0.0 {
-                player.time %= duration;
-            } else {
-                player.time = player.time.rem_euclid(duration);
-            }
+            player.time = player.time.rem_euclid(duration);
         } else {
             player.time = player.time.clamp(0.0, duration);
             if player.time >= duration {
                 player.playing = false;
             }
         }
-        player_states.insert(entity, (player.clip.clone(), player.time));
+        scratch.insert(entity, (player.clip.clone(), player.time));
     }
 
     for (target, mut transform) in &mut targets {
-        let Some((clip, time)) = player_states.get(&target.player) else {
+        let Some((clip, time)) = scratch.get(&target.player) else {
             continue;
         };
-        let Some(track) = clip
-            .tracks
-            .iter()
-            .find(|track| track.joint_name == target.joint_name)
-        else {
+        let Some(track) = clip.tracks.get(&target.joint_name) else {
             continue;
         };
 

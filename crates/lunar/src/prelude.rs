@@ -69,11 +69,14 @@ pub use lunar_2d::{Plugin2d, SpriteAnimation, propagate_transforms};
 // lunar-3d types — only available when the 3d feature is enabled
 #[cfg(feature = "3d")]
 pub use lunar_3d::{
-    // core
+    // core transforms / camera / mesh / material / lights
     ActiveCamera3d, AmbientLight, Camera3d, CullMode, DirectionalLight, IndexBuffer,
     LocalTransform3d, Material3d, MaterialData, Mesh3d, MeshData, MeshUsage, Plugin3d,
     PointLight, Projection, ShadingModel, SkinWeights, SpotLight, Vertex3d, WorldTransform3d,
     propagate_transforms_3d,
+    // bundles
+    Camera3dBundle, DirectionalLightBundle, Mesh3dBundle, PointLightBundle, ShadowMesh3dBundle,
+    SpotLightBundle,
     // animation
     AnimationClip, AnimationPlayer, AnimationTarget, JointTrack, Keyframe, advance_animations,
     // collision
@@ -82,10 +85,13 @@ pub use lunar_3d::{
     Fog, FogFalloff,
     // visibility
     Aabb3d, ComputedVisibility, Frustum, RenderLayers, ShadowCaster, ShadowReceiver,
-    Visibility, propagate_visibility, update_frustum,
+    Visibility, ViewportAspect, propagate_visibility, update_frustum,
     // primitives
     primitives,
 };
+// Bundle derive — needed for game code that defines its own bundles
+#[cfg(feature = "3d")]
+pub use bevy_ecs::bundle::Bundle;
 
 // lunar-render types
 pub use lunar_render::{

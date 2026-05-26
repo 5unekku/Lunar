@@ -2,24 +2,20 @@ use lunar_core::{App, GamePlugin, UpdateStage};
 
 use crate::camera::{ActiveCamera3d, AmbientLight, update_active_camera};
 use crate::collision::{CollisionWorld3d, build_collision_world_3d};
-use crate::systems::propagate_transforms_3d;
-use crate::visibility::{Frustum, propagate_visibility, update_frustum};
+use crate::systems::{TransformScratch3d, propagate_transforms_3d};
+use crate::visibility::{
+    Frustum, ViewportAspect, VisibilityScratch, propagate_visibility, update_frustum,
+};
 
 /// core 3D plugin.
 ///
-/// registers:
-/// - transform propagation (local → world through the hierarchy)
-/// - visibility propagation (Visibility → ComputedVisibility)
-/// - active camera selection and frustum update
-/// - skeletal animation advancement
-/// - 3D collision world rebuild
-/// - default resources: [`ActiveCamera3d`], [`AmbientLight`], [`CollisionWorld3d`], [`Frustum`]
+/// registers all 3D systems and inserts default resources. the Update stage systems
+/// run in this order (registration order is preserved):
 ///
-/// system order within the Update stage (in registration order):
-/// 1. `advance_animations` — write joint local transforms from the active clip
+/// 1. `advance_animations` — write joint local transforms from active clips
 /// 2. `propagate_transforms_3d` — propagate local → world transforms
-/// 3. `update_active_camera` — select the highest-priority Camera3d
-/// 4. `update_frustum` — recompute frustum from the active camera
+/// 3. `update_active_camera` — select highest-priority active Camera3d
+/// 4. `update_frustum` — recompute frustum from active camera + ViewportAspect
 /// 5. `propagate_visibility` — propagate Visibility → ComputedVisibility
 pub struct Plugin3d;
 
@@ -37,6 +33,9 @@ impl GamePlugin for Plugin3d {
         app.insert_resource(AmbientLight::default());
         app.insert_resource(CollisionWorld3d::default());
         app.insert_resource(Frustum::default());
+        app.insert_resource(ViewportAspect::default());
+        app.insert_resource(TransformScratch3d::default());
+        app.insert_resource(VisibilityScratch::default());
 
         app.add_system_to_stage(UpdateStage::Physics, build_collision_world_3d);
 
