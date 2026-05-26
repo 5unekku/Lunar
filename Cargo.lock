@@ -1668,6 +1668,7 @@ dependencies = [
  "lunar-macros",
  "lunar-math",
  "lunar-render",
+ "lunar-render-3d",
  "pollster",
  "raw-window-handle",
  "sdl3",
@@ -1725,6 +1726,20 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "wgpu",
+]
+
+[[package]]
+name = "lunar-render-3d"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "log",
+ "lunar-3d",
+ "lunar-assets",
+ "lunar-core",
+ "lunar-math",
+ "pollster",
  "wgpu",
 ]
 

@@ -41,6 +41,8 @@ pub use lunar_macros::{Component, Event, Message, Resource, texture};
 pub use lunar_2d;
 #[cfg(feature = "3d")]
 pub use lunar_3d;
+#[cfg(feature = "3d")]
+pub use lunar_render_3d;
 pub use lunar_assets;
 pub use lunar_core;
 #[cfg(feature = "dialogue")]

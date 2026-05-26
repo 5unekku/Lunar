@@ -9,6 +9,7 @@ members = [
     "crates/lunar-2d",
     "crates/lunar-3d",
     "crates/lunar-render",
+    "crates/lunar-render-3d",
     "crates/lunar-input",
     "crates/lunar-math",
     "crates/lunar",

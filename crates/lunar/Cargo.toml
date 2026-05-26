@@ -13,7 +13,7 @@ keywords.workspace = true
 # select rendering dimensions. enable any combination, or neither for headless/text games.
 default = ["2d"]
 2d = ["dep:lunar-2d"]
-3d = ["dep:lunar-3d"]
+3d = ["dep:lunar-3d", "dep:lunar-render-3d"]
 # optional engine modules — enable only what your game uses
 dialogue = ["dep:lunar-dialogue"]
 
@@ -24,6 +24,7 @@ lunar-math = { path = "../lunar-math" }
 lunar-core = { path = "../lunar-core" }
 lunar-2d = { path = "../lunar-2d", optional = true }
 lunar-3d = { path = "../lunar-3d", optional = true }
+lunar-render-3d = { path = "../lunar-render-3d", optional = true }
 lunar-render = { path = "../lunar-render" }
 lunar-input = { path = "../lunar-input" }
 lunar-assets = { path = "../lunar-assets" }

@@ -36,6 +36,7 @@ impl GamePlugin for Plugin3d {
         app.insert_resource(ViewportAspect::default());
         app.insert_resource(TransformScratch3d::default());
         app.insert_resource(VisibilityScratch::default());
+        app.insert_resource(crate::mesh_registry::MeshRegistry::default());
 
         app.add_system_to_stage(UpdateStage::Physics, build_collision_world_3d);
 

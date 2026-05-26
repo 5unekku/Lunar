@@ -36,6 +36,7 @@ pub mod animation;
 pub mod bundles;
 pub mod collision;
 pub mod fog;
+pub mod mesh_registry;
 pub mod primitives;
 pub mod visibility;
 
@@ -62,6 +63,7 @@ pub use fog::{Fog, FogFalloff};
 pub use light::{DirectionalLight, PointLight, SpotLight};
 pub use material::{CullMode, Material3d, MaterialData, ShadingModel};
 pub use mesh::{IndexBuffer, Mesh3d, MeshData, MeshUsage, SkinWeights, Vertex3d};
+pub use mesh_registry::MeshRegistry;
 pub use plugin::Plugin3d;
 pub use systems::{TransformScratch3d, propagate_transforms_3d};
 pub use transform::{LocalTransform3d, WorldTransform3d};

@@ -1,0 +1,32 @@
+[package]
+name = "lunar-render-3d"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "3d wgpu renderer for lunar"
+repository.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
+
+[dependencies]
+lunar-3d     = { path = "../lunar-3d" }
+lunar-assets = { path = "../lunar-assets" }
+lunar-core   = { path = "../lunar-core" }
+lunar-math   = { path = "../lunar-math" }
+bevy_ecs    = { workspace = true }
+wgpu        = { workspace = true, features = ["wgsl"] }
+log         = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wgpu     = { workspace = true, features = ["vulkan", "gles"] }
+pollster = "0.4"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { workspace = true, features = ["dx12"] }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+wgpu = { workspace = true, features = ["metal"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, features = ["web"] }
