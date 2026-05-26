@@ -58,11 +58,11 @@ pub fn setup(
         .key(KeyCode::Down).key(KeyCode::S)
         .button(GamepadButton::DpadDown)
         .axis(GamepadAxis::LeftStickY, 0.5);
-    let player_tex = assets.load_texture(texture!("sprites/player.webp"));
-    let npc_tex1 = assets.load_texture(texture!("sprites/npc1.webp"));
-    let npc_tex2 = assets.load_texture(texture!("sprites/npc2.webp"));
-    let npc_tex3 = assets.load_texture(texture!("sprites/npc3.webp"));
-    let npc_tex3_emotion = assets.load_texture(texture!("sprites/npc3_emotion.webp"));
+    let player_tex = assets.load_texture(texture!("sprites/player"));
+    let npc_tex1 = assets.load_texture(texture!("sprites/npc1"));
+    let npc_tex2 = assets.load_texture(texture!("sprites/npc2"));
+    let npc_tex3 = assets.load_texture(texture!("sprites/npc3"));
+    let npc_tex3_emotion = assets.load_texture(texture!("sprites/npc3_emotion"));
     let font = assets.load_font("fonts/Inconsolata.ttf");
 
     let npc_defs = vec![
