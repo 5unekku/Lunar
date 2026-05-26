@@ -112,8 +112,10 @@ fn fps_controller(
     let Ok(mut transform) = camera.single_mut() else { return; };
 
     // ── move input: WASD + left stick ─────────────────────────────────────
-    let forward = Vec3::new(yaw.sin(), 0.0, yaw.cos());
-    let right = Vec3::new(forward.z, 0.0, -forward.x);
+    // camera forward is -Z in local space, rotated by yaw around Y.
+    // from_rotation_y(yaw) * (0,0,-1) = (-sin(yaw), 0, -cos(yaw))
+    let forward = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
+    let right   = Vec3::new(-forward.z, 0.0, forward.x);
 
     let stick_mx = apply_deadzone(input.gamepad(0).map_or(0.0, |gp| gp.axis(GamepadAxis::LeftStickX)));
     let stick_my = apply_deadzone(input.gamepad(0).map_or(0.0, |gp| gp.axis(GamepadAxis::LeftStickY)));
@@ -144,10 +146,11 @@ fn fps_controller(
     pos.y = EYE_HEIGHT;
 
     transform.translation = pos;
-    // yaw around world Y, then pitch around local X
-    // pitch = π/2 → level; 0 → straight up; π → straight down
+    // yaw around world Y, then pitch around local X.
+    // zenith pitch: 0 = up, π/2 = level, π = down.
+    // rotation_x(π/2 - pitch): at pitch=π/2 → 0 (level); at pitch=0 → +π/2 (up); at pitch=π → -π/2 (down).
     transform.rotation = Quat::from_rotation_y(*yaw)
-        * Quat::from_rotation_x(*pitch - std::f32::consts::FRAC_PI_2);
+        * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2 - *pitch);
 }
 
 fn quit_on_escape(input: Res<InputState>) {

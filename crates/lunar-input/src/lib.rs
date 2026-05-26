@@ -695,9 +695,10 @@ impl InputState {
         }
     }
 
-    /// set mouse position
+    /// update stored mouse position without affecting delta.
+    /// delta comes exclusively from `add_mouse_delta` so that relative mouse
+    /// mode (xrel/yrel from SDL) is never clobbered by absolute position diffs.
     pub fn set_mouse_position(&mut self, x: f32, y: f32) {
-        self.mouse_delta = (x - self.mouse_position.0, y - self.mouse_position.1);
         self.mouse_position = (x, y);
     }
 
