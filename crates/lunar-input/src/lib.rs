@@ -875,46 +875,52 @@ pub fn process_events(
 ) {
     use sdl3::event::Event;
 
-    let events: Vec<Event> = event_pump.poll_iter().collect();
     let mut got_quit = false;
 
-    if let Some(mut input) = world.get_resource_mut::<InputState>() {
-        for event in &events {
-            match event {
-                Event::KeyDown { keycode: Some(key), .. } => {
-                    if let Some(code) = keycode_from_sdl(*key) {
-                        input.press_key(code);
+    // process events directly from the iterator — no intermediate Vec allocation.
+    // the InputState borrow must be released before we can access EngineState below,
+    // so it lives in its own block.
+    {
+        if let Some(mut input) = world.get_resource_mut::<InputState>() {
+            for event in event_pump.poll_iter() {
+                match &event {
+                    Event::KeyDown { keycode: Some(key), .. } => {
+                        if let Some(code) = keycode_from_sdl(*key) {
+                            input.press_key(code);
+                        }
                     }
-                }
-                Event::KeyUp { keycode: Some(key), .. } => {
-                    if let Some(code) = keycode_from_sdl(*key) {
-                        input.release_key(code);
+                    Event::KeyUp { keycode: Some(key), .. } => {
+                        if let Some(code) = keycode_from_sdl(*key) {
+                            input.release_key(code);
+                        }
                     }
-                }
-                Event::MouseButtonDown { mouse_btn: button, x, y, .. } => {
-                    if let Some(mouse_button) = mouse_button_from_sdl(*button) {
+                    Event::MouseButtonDown { mouse_btn: button, x, y, .. } => {
+                        if let Some(mouse_button) = mouse_button_from_sdl(*button) {
+                            input.set_mouse_position(*x, *y);
+                            input.press_mouse_button(mouse_button);
+                        }
+                    }
+                    Event::MouseButtonUp { mouse_btn: button, x, y, .. } => {
+                        if let Some(mouse_button) = mouse_button_from_sdl(*button) {
+                            input.set_mouse_position(*x, *y);
+                            input.release_mouse_button(mouse_button);
+                        }
+                    }
+                    Event::MouseMotion { x, y, xrel, yrel, .. } => {
+                        input.add_mouse_delta(*xrel, *yrel);
                         input.set_mouse_position(*x, *y);
-                        input.press_mouse_button(mouse_button);
                     }
+                    Event::Quit { .. } => got_quit = true,
+                    _ => gamepad.handle_event(&event, &mut input),
                 }
-                Event::MouseButtonUp { mouse_btn: button, x, y, .. } => {
-                    if let Some(mouse_button) = mouse_button_from_sdl(*button) {
-                        input.set_mouse_position(*x, *y);
-                        input.release_mouse_button(mouse_button);
-                    }
-                }
-                Event::MouseMotion { x, y, xrel, yrel, .. } => {
-                    input.add_mouse_delta(*xrel, *yrel);
-                    input.set_mouse_position(*x, *y);
-                }
-                Event::Quit { .. } => got_quit = true,
-                _ => gamepad.handle_event(event, &mut input),
             }
         }
     }
 
-    if got_quit && let Some(mut state) = world.get_resource_mut::<EngineState>() {
-        *state = EngineState::Stopping;
+    if got_quit {
+        if let Some(mut state) = world.get_resource_mut::<EngineState>() {
+            *state = EngineState::Stopping;
+        }
     }
 }
 

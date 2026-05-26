@@ -398,6 +398,12 @@ pub struct RenderEngine {
     /// vulkan pipeline cache for faster startup on subsequent launches
     #[cfg(not(target_arch = "wasm32"))]
     pipeline_cache: Option<wgpu::PipelineCache>,
+    /// persistent scratch — reused each frame to sort draw commands by (layer, texture).
+    /// avoids a per-frame Vec allocation proportional to the draw list size.
+    sorted_indices: Vec<usize>,
+    /// persistent scratch — reused each frame for text glyph quad layout results.
+    /// keyed by command index. avoids a per-frame HashMap + inner Vec allocation.
+    text_quads: HashMap<usize, Vec<text::TextGlyphQuad>>,
 }
 
 /// gpu-ready texture: texture + view + sampler
@@ -770,6 +776,8 @@ impl RenderEngine {
             render_passes: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             pipeline_cache: Self::load_pipeline_cache(device),
+            sorted_indices: Vec::new(),
+            text_quads: HashMap::new(),
         }
     }
 
@@ -1155,9 +1163,9 @@ impl RenderEngine {
         };
         self.glyph_atlas.set_scale(text_scale);
 
-        // pre-compute text layouts (fills atlas as a side effect)
-        let mut text_quads: std::collections::HashMap<usize, Vec<text::TextGlyphQuad>> =
-            std::collections::HashMap::new();
+        // pre-compute text layouts (fills atlas as a side effect).
+        // reuse the persistent HashMap — clear() retains capacity from previous frames.
+        self.text_quads.clear();
         for (i, cmd) in commands.iter().enumerate() {
             let DrawKind::Text {
                 font,
@@ -1194,7 +1202,7 @@ impl RenderEngine {
                     *position,
                 )
             };
-            text_quads.insert(i, flat);
+            self.text_quads.insert(i, flat);
         }
         if std::mem::take(&mut self.glyph_atlas.dirty) {
             self.upload_glyph_atlas();
@@ -1224,9 +1232,12 @@ impl RenderEngine {
         // track current layer for parallax — updated as we iterate sorted commands
         let mut current_layer: Option<i32> = None;
 
-        // sort by (layer, texture_id) — same-texture commands are contiguous, no HashMap needed
-        let mut sorted_commands: Vec<(usize, &DrawCommand)> = commands.iter().enumerate().collect();
-        sorted_commands.sort_by_key(|(_, cmd)| {
+        // sort by (layer, texture_id) — same-texture commands are contiguous, no HashMap needed.
+        // reuse the persistent Vec — clear() retains capacity from previous frames.
+        self.sorted_indices.clear();
+        self.sorted_indices.extend(0..commands.len());
+        self.sorted_indices.sort_by_key(|&i| {
+            let cmd = &commands[i];
             let layer = match &cmd.kind {
                 DrawKind::Sprite { layer, .. }
                 | DrawKind::Rect { layer, .. }
@@ -1285,7 +1296,9 @@ impl RenderEngine {
             let mut current_tex: Option<u32> = None;
             let mut batch_start = 0;
 
-            for (orig_idx, command) in &sorted_commands {
+            for i in 0..self.sorted_indices.len() {
+                let orig_idx = self.sorted_indices[i];
+                let command = &commands[orig_idx];
                 let layer = match &command.kind {
                     DrawKind::Sprite { layer, .. }
                     | DrawKind::Rect { layer, .. }
@@ -1373,10 +1386,11 @@ impl RenderEngine {
                         self.write_line_vertices(*start, *end, *color, *thickness);
                     }
                     DrawKind::Text { color, .. } => {
-                        if let Some(quads) = text_quads.get(orig_idx) {
-                            for quad in quads {
-                                self.write_text_quad(quad, *color);
-                            }
+                        let color = *color;
+                        let count = self.text_quads.get(&orig_idx).map(|q| q.len()).unwrap_or(0);
+                        for qi in 0..count {
+                            let quad = self.text_quads[&orig_idx][qi]; // Copy
+                            self.write_text_quad(&quad, color);
                         }
                     }
                 }

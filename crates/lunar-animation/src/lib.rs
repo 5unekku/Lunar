@@ -184,27 +184,35 @@ pub fn advance_animations(
         if !animator.playing {
             continue;
         }
-        let Some(clip_name) = animator.current_clip.clone() else {
+
+        // extract what we need as copies so no String/Vec is cloned.
+        // the borrow ends at the `;` — after that we can mutate `animator` freely.
+        let Some((frame_count, looping, total_duration)) = animator
+            .current_clip
+            .as_deref()
+            .and_then(|name| animator.clips.get(name))
+            .map(|clip| (clip.frames.len(), clip.looping, clip.total_duration()))
+        else {
             continue;
         };
-        let Some(clip) = animator.clips.get(&clip_name).cloned() else {
-            continue;
-        };
-        if clip.frames.is_empty() {
+
+        if frame_count == 0 {
             continue;
         }
 
         animator.elapsed += delta;
 
-        // find the frame for current elapsed time
-        let mut accumulated = 0.0;
+        // re-borrow clip after mutation — no conflict because the earlier borrow ended
+        let clip_name = animator.current_clip.as_deref().unwrap();
+        let clip = animator.clips.get(clip_name).unwrap();
+
+        let mut accumulated = 0.0_f32;
         let mut new_index = 0;
         let mut finished = false;
 
-        if clip.looping {
-            let total = clip.total_duration();
-            let looped_elapsed = if total > 0.0 {
-                animator.elapsed % total
+        if looping {
+            let looped_elapsed = if total_duration > 0.0 {
+                animator.elapsed % total_duration
             } else {
                 0.0
             };
@@ -228,21 +236,28 @@ pub fn advance_animations(
                 new_index = index;
             }
             if past_end {
-                new_index = clip.frames.len() - 1;
+                new_index = frame_count - 1;
                 if !animator.finished {
                     finished = true;
                 }
-                animator.finished = true;
-                animator.playing = false;
             }
         }
 
+        // copy frame rect before borrow ends, then write back
+        let frame_rect = (clip.frames[new_index].source_pos, clip.frames[new_index].source_size);
+        // clip borrow ends here — animator mutation is now safe
+
         animator.frame_index = new_index;
-        let frame = &clip.frames[new_index];
-        sprite.source_rect = Some((frame.source_pos, frame.source_size));
+        if finished {
+            animator.finished = true;
+            animator.playing = false;
+        }
+        sprite.source_rect = Some(frame_rect);
 
         if finished {
-            finished_writer.write(AnimationFinished { entity, clip_name });
+            // to_string only on clip completion (at most once per playthrough, not per frame)
+            let name = animator.current_clip.as_deref().unwrap_or("").to_string();
+            finished_writer.write(AnimationFinished { entity, clip_name: name });
         }
     }
 }

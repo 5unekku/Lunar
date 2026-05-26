@@ -19,7 +19,7 @@ struct AtlasEntry {
 }
 
 /// a single positioned glyph quad for rendering.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct TextGlyphQuad {
     /// top-left position in game-unit screen space.
     pub position: Vec2,
