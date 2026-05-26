@@ -69,10 +69,14 @@ path = "src/web.rs"
 name = "rpg_example"
 path = "examples/rpg_example/main.rs"
 
+[[example]]
+name = "platform_demo"
+path = "examples/platform_demo/main.rs"
+
 [dependencies]
 # `lunar` is the only dependency a real game needs. enable optional modules
-# via feature flags; the example uses dialogue.
-lunar = { path = "crates/lunar", package = "lunar-lib", features = ["dialogue"] }
+# via feature flags.
+lunar = { path = "crates/lunar", package = "lunar-lib", features = ["dialogue", "3d"] }
 
 bevy_ecs = { workspace = true }
 log = { workspace = true }

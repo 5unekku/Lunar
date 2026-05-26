@@ -91,6 +91,8 @@ pub use lunar_3d::{
     Visibility, ViewportAspect, propagate_visibility, update_frustum,
     // primitives
     primitives,
+    // mesh registry
+    MeshRegistry,
 };
 // lunar-render-3d types — only available when the 3d feature is enabled
 #[cfg(feature = "3d")]
