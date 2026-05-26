@@ -64,7 +64,10 @@ pub use lunar_core::{App, GamePlugin, Time, UpdateStage, WindowSettings};
 
 // lunar-2d types — only available when the 2d feature is enabled
 #[cfg(feature = "2d")]
-pub use lunar_2d::{Plugin2d, SpriteAnimation, propagate_transforms};
+pub use lunar_2d::{
+    Collider, Collider2dBundle, ColliderShape, CollisionWorld, Plugin2d, SpriteAnimation,
+    propagate_transforms,
+};
 
 // lunar-3d types — only available when the 3d feature is enabled
 #[cfg(feature = "3d")]

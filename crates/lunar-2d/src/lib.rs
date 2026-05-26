@@ -10,6 +10,7 @@ pub mod animation;
 pub mod collision;
 
 pub use animation::{SpriteAnimation, advance_sprite_animations};
+pub use collision::{Collider, Collider2dBundle, ColliderShape, CollisionWorld};
 
 use std::collections::HashMap;
 
@@ -17,7 +18,15 @@ use bevy_ecs::prelude::*;
 use lunar_core::{App, GamePlugin, Parent};
 use lunar_math::{LocalTransform, Vec2, WorldTransform};
 
-use collision::{CollisionWorld, build_collision_world};
+use collision::build_collision_world;
+
+/// scratch buffers for `propagate_transforms` — allocated once, reused every frame.
+#[derive(Default, Resource)]
+struct TransformScratch2d {
+    snapshot: Vec<(Entity, LocalTransform, Option<Entity>)>,
+    parent_of: HashMap<Entity, Entity>,
+    depths: HashMap<Entity, u32>,
+}
 
 /// plugin that registers the 2d transform propagation system.
 ///
@@ -32,6 +41,7 @@ impl GamePlugin for Plugin2d {
 
     fn build(&mut self, app: &mut App) {
         app.insert_resource(CollisionWorld::default());
+        app.insert_resource(TransformScratch2d::default());
         app.add_system_to_stage(lunar_core::UpdateStage::Physics, build_collision_world);
         app.add_system_to_stage(lunar_core::UpdateStage::Update, propagate_transforms);
         app.add_system_to_stage(
@@ -43,35 +53,42 @@ impl GamePlugin for Plugin2d {
 
 /// exclusive system that propagates 2d transforms from parents to children.
 ///
-/// runs as an exclusive world system so `WorldTransform` is written immediately
-/// (no command deferral) — entities have correct world transforms in the same frame
-/// they are spawned.
-///
-/// uses a topological sort so each entity is processed exactly once, giving
-/// O(N) propagation regardless of hierarchy depth.
-///
-/// entities without a parent get their `WorldTransform` directly from `LocalTransform`.
+/// uses a persistent scratch resource to avoid per-frame heap allocations.
+/// topological sort gives O(N) propagation regardless of hierarchy depth.
 pub fn propagate_transforms(world: &mut World) {
-    let snapshot: Vec<(Entity, LocalTransform, Option<Entity>)> = world
-        .query::<(Entity, &LocalTransform, Option<&Parent>)>()
-        .iter(world)
-        .map(|(entity, local, parent)| (entity, *local, parent.map(|p| p.0)))
-        .collect();
+    let mut scratch = world
+        .remove_resource::<TransformScratch2d>()
+        .unwrap_or_default();
 
-    let parent_of: HashMap<Entity, Entity> = snapshot
-        .iter()
-        .filter_map(|(entity, _, parent)| parent.map(|parent_entity| (*entity, parent_entity)))
-        .collect();
+    scratch.snapshot.clear();
+    scratch.parent_of.clear();
+    scratch.depths.clear();
 
-    let mut depths: HashMap<Entity, u32> = HashMap::with_capacity(snapshot.len());
-    for &(entity, _, _) in &snapshot {
-        depth_of(entity, &parent_of, &mut depths);
+    scratch.snapshot.extend(
+        world
+            .query::<(Entity, &LocalTransform, Option<&Parent>)>()
+            .iter(world)
+            .map(|(entity, local, parent)| (entity, *local, parent.map(|p| p.0))),
+    );
+
+    for &(entity, _, parent) in &scratch.snapshot {
+        if let Some(parent_entity) = parent {
+            scratch.parent_of.insert(entity, parent_entity);
+        }
     }
 
-    let mut sorted = snapshot;
-    sorted.sort_by_key(|(entity, _, _)| depths.get(entity).copied().unwrap_or(0));
+    // compute depths — iterate snapshot by index to avoid borrow conflict
+    for i in 0..scratch.snapshot.len() {
+        let entity = scratch.snapshot[i].0;
+        depth_of(entity, &scratch.parent_of, &mut scratch.depths);
+    }
 
-    for (entity, local, parent_entity) in sorted {
+    scratch
+        .snapshot
+        .sort_by_key(|(entity, _, _)| scratch.depths.get(entity).copied().unwrap_or(0));
+
+    for i in 0..scratch.snapshot.len() {
+        let (entity, local, parent_entity) = scratch.snapshot[i];
         let world_transform = if let Some(parent) = parent_entity {
             if let Some(parent_wt) = world.get::<WorldTransform>(parent).copied() {
                 compute_world_transform(&parent_wt, &local)
@@ -96,6 +113,8 @@ pub fn propagate_transforms(world: &mut World) {
             world.entity_mut(entity).insert(world_transform);
         }
     }
+
+    world.insert_resource(scratch);
 }
 
 /// memoized depth lookup — O(N) total across all entities (each computed at most once)
@@ -189,6 +208,7 @@ mod tests {
     #[test]
     fn propagate_transforms_writes_immediately() {
         let mut world = World::new();
+        world.insert_resource(TransformScratch2d::default());
         let parent = world.spawn(LocalTransform::from_xy(100.0, 0.0)).id();
         let child = world
             .spawn((LocalTransform::from_xy(10.0, 0.0), Parent(parent)))

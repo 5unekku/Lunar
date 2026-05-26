@@ -7,22 +7,23 @@
 //! # usage
 //!
 //! ```ignore
-//! use lunar_2d::collision::{Collider, ColliderShape, CollisionWorld};
+//! use lunar_2d::collision::{Collider, Collider2dBundle, ColliderShape, CollisionWorld};
 //!
-//! // spawn a collider
-//! commands.spawn((
-//!     Transform::from_xy(0.0, 0.0),
-//!     Collider::aabb(Vec2::new(16.0, 16.0)),
-//! ));
+//! // spawn a collider using the bundle
+//! commands.spawn(Collider2dBundle {
+//!     transform: Transform::from_xy(0.0, 0.0),
+//!     collider: Collider::aabb(Vec2::new(16.0, 16.0)),
+//! });
 //!
 //! // query overlaps in a system
 //! fn check_hits(world: Res<CollisionWorld>) {
-//!     for (entity, others) in world.all_overlaps() {
+//!     for (a, b) in world.all_overlaps() {
 //!         // handle collision
 //!     }
 //! }
 //! ```
 
+use bevy_ecs::bundle::Bundle;
 use bevy_ecs::prelude::*;
 use lunar_math::{Transform, Vec2};
 
@@ -37,8 +38,8 @@ pub enum ColliderShape {
 
 /// component that makes an entity participate in 2d collision detection.
 ///
-/// attach alongside a [`Transform`] component. the `CollisionWorld` resource
-/// is rebuilt from all entities that have both every physics tick.
+/// attach alongside a [`Transform`] component, or use [`Collider2dBundle`].
+/// the `CollisionWorld` resource is rebuilt from all entities that have both every physics tick.
 #[derive(Debug, Clone, Component)]
 pub struct Collider {
     pub shape: ColliderShape,
@@ -86,7 +87,16 @@ impl Collider {
     }
 }
 
+/// convenience bundle — pairs a [`Transform`] with a [`Collider`].
+#[derive(Bundle)]
+pub struct Collider2dBundle {
+    pub transform: Transform,
+    pub collider: Collider,
+}
+
 /// a single entry in the collision world snapshot.
+///
+/// `min_x` / `max_x` are precomputed for the sweep-and-prune broad phase.
 #[derive(Debug, Clone)]
 struct ColliderEntry {
     entity: Entity,
@@ -94,11 +104,22 @@ struct ColliderEntry {
     shape: ColliderShape,
     layer: u32,
     mask: u32,
+    min_x: f32,
+    max_x: f32,
 }
 
 impl ColliderEntry {
+    fn new(entity: Entity, position: Vec2, shape: ColliderShape, layer: u32, mask: u32) -> Self {
+        let (min_x, max_x) = match shape {
+            ColliderShape::Aabb { half_extents } => {
+                (position.x - half_extents.x, position.x + half_extents.x)
+            }
+            ColliderShape::Circle { radius } => (position.x - radius, position.x + radius),
+        };
+        Self { entity, position, shape, layer, mask, min_x, max_x }
+    }
+
     fn overlaps(&self, other: &Self) -> bool {
-        // layer/mask filter: both must agree
         if self.mask & other.layer == 0 || other.mask & self.layer == 0 {
             return false;
         }
@@ -114,19 +135,14 @@ fn shapes_overlap(
 ) -> bool {
     match (shape_a, shape_b) {
         (
-            ColliderShape::Aabb {
-                half_extents: half_a,
-            },
-            ColliderShape::Aabb {
-                half_extents: half_b,
-            },
+            ColliderShape::Aabb { half_extents: half_a },
+            ColliderShape::Aabb { half_extents: half_b },
         ) => {
             (pos_a.x - pos_b.x).abs() < half_a.x + half_b.x
                 && (pos_a.y - pos_b.y).abs() < half_a.y + half_b.y
         }
         (ColliderShape::Circle { radius: ra }, ColliderShape::Circle { radius: rb }) => {
-            let distance_sq = (pos_a - pos_b).length_squared();
-            distance_sq < (ra + rb) * (ra + rb)
+            (pos_a - pos_b).length_squared() < (ra + rb) * (ra + rb)
         }
         (ColliderShape::Aabb { half_extents }, ColliderShape::Circle { radius })
         | (ColliderShape::Circle { radius }, ColliderShape::Aabb { half_extents }) => {
@@ -143,13 +159,15 @@ fn shapes_overlap(
                     .y
                     .clamp(aabb_pos.y - half_extents.y, aabb_pos.y + half_extents.y),
             );
-            let distance_sq = (circle_pos - closest).length_squared();
-            distance_sq < radius * radius
+            (circle_pos - closest).length_squared() < radius * radius
         }
     }
 }
 
 /// resource rebuilt every physics tick — holds the current frame's collider snapshot.
+///
+/// entries are sorted by `min_x` so `all_overlaps` can use a sweep-and-prune
+/// early exit and skip pairs that can't possibly overlap along X.
 ///
 /// read this from any system in the Update stage or later to query overlaps.
 #[derive(Debug, Default, Resource)]
@@ -158,50 +176,53 @@ pub struct CollisionWorld {
 }
 
 impl CollisionWorld {
-    /// all entities that overlap `entity` this frame, filtered by layer/mask.
-    #[must_use]
-    pub fn overlapping(&self, entity: Entity) -> Vec<Entity> {
-        let Some(target) = self.entries.iter().find(|e| e.entity == entity) else {
-            return Vec::new();
-        };
-        self.entries
-            .iter()
-            .filter(|other| other.entity != entity && target.overlaps(other))
-            .map(|other| other.entity)
-            .collect()
+    /// iterator over all entities that overlap `entity` this frame, filtered by layer/mask.
+    pub fn overlapping(&self, entity: Entity) -> impl Iterator<Item = Entity> + '_ {
+        let target = self.entries.iter().find(|e| e.entity == entity);
+        self.entries.iter().filter_map(move |other| {
+            if other.entity == entity {
+                return None;
+            }
+            let overlaps = target.is_some_and(|t| t.overlaps(other));
+            overlaps.then_some(other.entity)
+        })
     }
 
-    /// all entities whose collider contains `point`.
-    #[must_use]
-    pub fn query_point(&self, point: Vec2) -> Vec<Entity> {
-        self.entries
-            .iter()
-            .filter(|entry| point_in_shape(point, entry.position, &entry.shape))
-            .map(|entry| entry.entity)
-            .collect()
+    /// iterator over all entities whose collider contains `point`.
+    pub fn query_point(&self, point: Vec2) -> impl Iterator<Item = Entity> + '_ {
+        self.entries.iter().filter_map(move |entry| {
+            point_in_shape(point, entry.position, &entry.shape).then_some(entry.entity)
+        })
     }
 
-    /// all entities whose collider overlaps `rect` (given as center + half_extents).
-    #[must_use]
-    pub fn query_rect(&self, center: Vec2, half_extents: Vec2) -> Vec<Entity> {
+    /// iterator over all entities whose collider overlaps `rect` (center + half_extents).
+    pub fn query_rect(
+        &self,
+        center: Vec2,
+        half_extents: Vec2,
+    ) -> impl Iterator<Item = Entity> + '_ {
         let rect_shape = ColliderShape::Aabb { half_extents };
-        self.entries
-            .iter()
-            .filter(|entry| shapes_overlap(center, &rect_shape, entry.position, &entry.shape))
-            .map(|entry| entry.entity)
-            .collect()
+        self.entries.iter().filter_map(move |entry| {
+            shapes_overlap(center, &rect_shape, entry.position, &entry.shape)
+                .then_some(entry.entity)
+        })
     }
 
     /// iterator over all overlapping pairs this frame. each pair appears once.
+    ///
+    /// uses a sweep-and-prune broad phase: entries are sorted by `min_x`, so the
+    /// inner loop breaks as soon as the next entry's left edge exceeds the current
+    /// entry's right edge — skipping all remaining pairs along X.
     pub fn all_overlaps(&self) -> impl Iterator<Item = (Entity, Entity)> + '_ {
         (0..self.entries.len()).flat_map(move |i| {
-            ((i + 1)..self.entries.len()).filter_map(move |j| {
-                if self.entries[i].overlaps(&self.entries[j]) {
-                    Some((self.entries[i].entity, self.entries[j].entity))
-                } else {
-                    None
-                }
-            })
+            let max_x_i = self.entries[i].max_x;
+            ((i + 1)..self.entries.len())
+                .take_while(move |&j| self.entries[j].min_x < max_x_i)
+                .filter_map(move |j| {
+                    self.entries[i]
+                        .overlaps(&self.entries[j])
+                        .then_some((self.entries[i].entity, self.entries[j].entity))
+                })
         })
     }
 }
@@ -218,6 +239,7 @@ fn point_in_shape(point: Vec2, position: Vec2, shape: &ColliderShape) -> bool {
 
 /// system that rebuilds [`CollisionWorld`] from all entities with `Collider + Transform`.
 ///
+/// entries are sorted by `min_x` after insertion to enable sweep-and-prune in `all_overlaps`.
 /// runs in the Physics stage so `CollisionWorld` is ready for Update systems.
 pub fn build_collision_world(
     query: Query<(Entity, &Transform, &Collider)>,
@@ -225,14 +247,15 @@ pub fn build_collision_world(
 ) {
     collision_world.entries.clear();
     for (entity, transform, collider) in &query {
-        collision_world.entries.push(ColliderEntry {
+        collision_world.entries.push(ColliderEntry::new(
             entity,
-            position: transform.translation,
-            shape: collider.shape,
-            layer: collider.layer,
-            mask: collider.mask,
-        });
+            transform.translation,
+            collider.shape,
+            collider.layer,
+            collider.mask,
+        ));
     }
+    collision_world.entries.sort_unstable_by(|a, b| a.min_x.total_cmp(&b.min_x));
 }
 
 #[cfg(test)]
@@ -258,16 +281,18 @@ mod tests {
         (world, entity_a, entity_b)
     }
 
+    fn run_build(world: &mut World) {
+        let mut system = IntoSystem::into_system(build_collision_world);
+        system.initialize(world);
+        let _ = system.run((), world);
+    }
+
     #[test]
     fn aabb_overlap_detected() {
         let (mut world, entity_a, entity_b) = make_world_with_aabbs();
-        let mut system = IntoSystem::into_system(build_collision_world);
-        system.initialize(&mut world);
-        let _ = system.run((), &mut world);
-
+        run_build(&mut world);
         let collision_world = world.resource::<CollisionWorld>();
-        let overlaps = collision_world.overlapping(entity_a);
-        assert!(overlaps.contains(&entity_b), "a and b should overlap");
+        assert!(collision_world.overlapping(entity_a).any(|e| e == entity_b));
     }
 
     #[test]
@@ -280,20 +305,15 @@ mod tests {
                 Collider::aabb(Vec2::new(10.0, 10.0)),
             ))
             .id();
-        let _entity_b = world
-            .spawn((
-                Transform::from_xy(100.0, 0.0),
-                Collider::aabb(Vec2::new(10.0, 10.0)),
-            ))
-            .id();
+        world.spawn((
+            Transform::from_xy(100.0, 0.0),
+            Collider::aabb(Vec2::new(10.0, 10.0)),
+        ));
 
-        let mut system = IntoSystem::into_system(build_collision_world);
-        system.initialize(&mut world);
-        let _ = system.run((), &mut world);
+        run_build(&mut world);
 
         let collision_world = world.resource::<CollisionWorld>();
-        let overlaps = collision_world.overlapping(entity_a);
-        assert!(overlaps.is_empty(), "far-apart aabbs should not overlap");
+        assert!(collision_world.overlapping(entity_a).next().is_none());
     }
 
     #[test]
@@ -307,30 +327,22 @@ mod tests {
             .spawn((Transform::from_xy(15.0, 0.0), Collider::circle(10.0)))
             .id();
 
-        let mut system = IntoSystem::into_system(build_collision_world);
-        system.initialize(&mut world);
-        let _ = system.run((), &mut world);
+        run_build(&mut world);
 
         let collision_world = world.resource::<CollisionWorld>();
-        let overlaps = collision_world.overlapping(entity_a);
-        assert!(
-            overlaps.contains(&entity_b),
-            "circles at distance 15 with radius 10 each should overlap"
-        );
+        assert!(collision_world.overlapping(entity_a).any(|e| e == entity_b));
     }
 
     #[test]
     fn layer_mask_filtering() {
         let mut world = World::new();
         world.insert_resource(CollisionWorld::default());
-        // entity_a is on layer 1, only checks layer 2
         world.spawn((
             Transform::from_xy(0.0, 0.0),
             Collider::aabb(Vec2::new(20.0, 20.0))
                 .with_layer(1)
                 .with_mask(2),
         ));
-        // entity_b is on layer 1, only checks layer 1 — but a doesn't check layer 1
         let entity_b = world
             .spawn((
                 Transform::from_xy(5.0, 0.0),
@@ -340,29 +352,54 @@ mod tests {
             ))
             .id();
 
-        let mut system = IntoSystem::into_system(build_collision_world);
-        system.initialize(&mut world);
-        let _ = system.run((), &mut world);
+        run_build(&mut world);
 
         let collision_world = world.resource::<CollisionWorld>();
-        // b checks layer 1 which a is on, but a's mask=2 doesn't include b's layer=1
-        // so the pair is filtered out
-        let overlaps = collision_world.overlapping(entity_b);
-        assert!(
-            overlaps.is_empty(),
-            "layer/mask mismatch should suppress overlap"
-        );
+        assert!(collision_world.overlapping(entity_b).next().is_none());
     }
 
     #[test]
     fn query_point_hits_aabb() {
         let (mut world, entity_a, _) = make_world_with_aabbs();
-        let mut system = IntoSystem::into_system(build_collision_world);
-        system.initialize(&mut world);
-        let _ = system.run((), &mut world);
+        run_build(&mut world);
+        let collision_world = world.resource::<CollisionWorld>();
+        assert!(collision_world.query_point(Vec2::new(5.0, 5.0)).any(|e| e == entity_a));
+    }
+
+    #[test]
+    fn sweep_and_prune_skips_far_pairs() {
+        // three AABBs: a and c are far apart (no x overlap), b is between them
+        let mut world = World::new();
+        world.insert_resource(CollisionWorld::default());
+        let entity_a = world
+            .spawn((Transform::from_xy(0.0, 0.0), Collider::aabb(Vec2::new(10.0, 10.0))))
+            .id();
+        let entity_b = world
+            .spawn((Transform::from_xy(8.0, 0.0), Collider::aabb(Vec2::new(10.0, 10.0))))
+            .id();
+        let entity_c = world
+            .spawn((Transform::from_xy(200.0, 0.0), Collider::aabb(Vec2::new(10.0, 10.0))))
+            .id();
+
+        run_build(&mut world);
 
         let collision_world = world.resource::<CollisionWorld>();
-        let hits = collision_world.query_point(Vec2::new(5.0, 5.0));
-        assert!(hits.contains(&entity_a));
+        let pairs: Vec<_> = collision_world.all_overlaps().collect();
+        assert!(pairs.contains(&(entity_a, entity_b)) || pairs.contains(&(entity_b, entity_a)));
+        assert!(!pairs.iter().any(|&(x, y)| x == entity_c || y == entity_c));
+    }
+
+    #[test]
+    fn collider2d_bundle_spawns() {
+        let mut world = World::new();
+        world.insert_resource(CollisionWorld::default());
+        let entity = world
+            .spawn(Collider2dBundle {
+                transform: Transform::from_xy(1.0, 2.0),
+                collider: Collider::circle(5.0),
+            })
+            .id();
+        assert!(world.get::<Collider>(entity).is_some());
+        assert!(world.get::<Transform>(entity).is_some());
     }
 }
