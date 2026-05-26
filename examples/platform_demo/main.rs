@@ -30,6 +30,22 @@ const EYE_HEIGHT: f32 = 1.7;
 const WALK_SPEED: f32 = 4.0;
 // mouse sensitivity in radians per pixel
 const SENSITIVITY: f32 = 0.002;
+// right stick look sensitivity in radians per second
+const STICK_LOOK_SPEED: f32 = 2.5;
+// analog stick deadzone (applied before movement/look)
+const DEADZONE: f32 = 0.15;
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+/// rescales an axis value to [0, 1] outside the deadzone, returning 0 inside it.
+fn apply_deadzone(value: f32) -> f32 {
+    let sign = value.signum();
+    let magnitude = value.abs();
+    if magnitude < DEADZONE {
+        return 0.0;
+    }
+    sign * (magnitude - DEADZONE) / (1.0 - DEADZONE)
+}
 
 // ── systems ─────────────────────────────────────────────────────────────────
 
@@ -82,23 +98,44 @@ fn fps_controller(
         *pitch = std::f32::consts::FRAC_PI_2;
     }
 
+    let dt = time.delta_seconds();
+
+    // ── look input: mouse + right stick ───────────────────────────────────
     let (dx, dy) = input.mouse_delta();
-    *yaw -= dx * SENSITIVITY;
-    *pitch = (*pitch + dy * SENSITIVITY).clamp(0.001, std::f32::consts::PI - 0.001);
+    let stick_rx = apply_deadzone(input.gamepad(0).map_or(0.0, |gp| gp.axis(GamepadAxis::RightStickX)));
+    let stick_ry = apply_deadzone(input.gamepad(0).map_or(0.0, |gp| gp.axis(GamepadAxis::RightStickY)));
+
+    *yaw -= dx * SENSITIVITY + stick_rx * STICK_LOOK_SPEED * dt;
+    *pitch = (*pitch + dy * SENSITIVITY + stick_ry * STICK_LOOK_SPEED * dt)
+        .clamp(0.001, std::f32::consts::PI - 0.001);
 
     let Ok(mut transform) = camera.single_mut() else { return; };
 
-    // horizontal forward vector (no vertical component) for WASD movement
+    // ── move input: WASD + left stick ─────────────────────────────────────
     let forward = Vec3::new(yaw.sin(), 0.0, yaw.cos());
     let right = Vec3::new(forward.z, 0.0, -forward.x);
 
-    let mut pos = transform.translation;
-    let speed = WALK_SPEED * time.delta_seconds();
+    let stick_mx = apply_deadzone(input.gamepad(0).map_or(0.0, |gp| gp.axis(GamepadAxis::LeftStickX)));
+    let stick_my = apply_deadzone(input.gamepad(0).map_or(0.0, |gp| gp.axis(GamepadAxis::LeftStickY)));
 
-    if input.is_key_held(KeyCode::W) { pos += forward * speed; }
-    if input.is_key_held(KeyCode::S) { pos -= forward * speed; }
-    if input.is_key_held(KeyCode::A) { pos -= right * speed; }
-    if input.is_key_held(KeyCode::D) { pos += right * speed; }
+    let mut move_x = stick_mx;
+    let mut move_z = stick_my;
+    if input.is_key_held(KeyCode::D) { move_x += 1.0; }
+    if input.is_key_held(KeyCode::A) { move_x -= 1.0; }
+    if input.is_key_held(KeyCode::S) { move_z += 1.0; }
+    if input.is_key_held(KeyCode::W) { move_z -= 1.0; }
+    // clamp combined input to unit length so diagonal + stick don't stack
+    let input_len = (move_x * move_x + move_z * move_z).sqrt().min(1.0);
+    let (move_x, move_z) = if input_len > 0.0 {
+        (move_x / input_len.max(f32::EPSILON) * input_len,
+         move_z / input_len.max(f32::EPSILON) * input_len)
+    } else {
+        (0.0, 0.0)
+    };
+
+    let mut pos = transform.translation;
+    let speed = WALK_SPEED * dt;
+    pos += forward * (-move_z * speed) + right * (move_x * speed);
 
     // keep inside the platform
     let limit = HALF_PLATFORM - 0.1;
@@ -114,7 +151,11 @@ fn fps_controller(
 }
 
 fn quit_on_escape(input: Res<InputState>) {
-    if input.is_key_just_pressed(KeyCode::Escape) {
+    let keyboard_quit = input.is_key_just_pressed(KeyCode::Escape);
+    let controller_quit = input.gamepad(0)
+        .is_some_and(|gp| gp.is_button_just_pressed(GamepadButton::Start)
+            || gp.is_button_just_pressed(GamepadButton::Back));
+    if keyboard_quit || controller_quit {
         std::process::exit(0);
     }
 }
