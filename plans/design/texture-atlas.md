@@ -155,16 +155,16 @@ impl AssetServer {
 
 ### 7. New Crate or Existing?
 
-**Option A: New `engine-atlas` crate**
+**Option A: New `lunar-atlas` crate**
 - Clean separation of concerns
-- Depends on `engine-image` (for .mi decode) and `engine-assets` (for Handle<Texture>)
+- Depends on `lunar-image` (for .mi decode) and `lunar-assets` (for Handle<Texture>)
 - Contains: bin-packing, manifest parsing, TextureAtlas resource
 
-**Option B: Add to `engine-assets`**
+**Option B: Add to `lunar-assets`**
 - Simpler, fewer crates
 - But mixes concerns (asset loading vs atlas-specific logic)
 
-**Recommendation: Option A** — new `engine-atlas` crate. The atlas system is substantial enough (bin-packing, manifest format, build-time tooling) to warrant its own crate.
+**Recommendation: Option A** — new `lunar-atlas` crate. The atlas system is substantial enough (bin-packing, manifest format, build-time tooling) to warrant its own crate.
 
 ### 8. No Texture Bleeding
 
@@ -181,11 +181,11 @@ With exact UV math, no padding is needed. The GPU samples exactly the right pixe
 ## Dependencies
 
 ```toml
-# engine-atlas/Cargo.toml
+# lunar-atlas/Cargo.toml
 [dependencies]
-engine-image = { path = "../engine-image" }
-engine-assets = { path = "../engine-assets" }
-engine-math = { path = "../engine-math" }
+lunar-image = { path = "../lunar-image" }
+lunar-assets = { path = "../lunar-assets" }
+lunar-math = { path = "../lunar-math" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"  # for JSON5 authoring format parsing
 ```

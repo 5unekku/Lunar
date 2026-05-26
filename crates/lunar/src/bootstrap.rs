@@ -22,13 +22,13 @@
 /// }
 /// ```
 #[cfg(not(target_arch = "wasm32"))]
-pub fn bootstrap<Plugin: engine_core::GamePlugin + Default + 'static>(
-    config: engine_render::RenderConfig,
+pub fn bootstrap<Plugin: lunar_core::GamePlugin + Default + 'static>(
+    config: lunar_render::RenderConfig,
 ) {
-    use engine_assets::AssetPlugin;
-    use engine_core::{App, WindowSettings};
-    use engine_input::{ActionMap, InputBinding, InputPlugin, InputState, KeyCode, SdlGamepadProvider, process_events};
-    use engine_render::{RenderEngine, RenderPlugin};
+    use lunar_assets::AssetPlugin;
+    use lunar_core::{App, WindowSettings};
+    use lunar_input::{ActionMap, InputBinding, InputPlugin, InputState, KeyCode, SdlGamepadProvider, process_events};
+    use lunar_render::{RenderEngine, RenderPlugin};
     use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
     env_logger::init();

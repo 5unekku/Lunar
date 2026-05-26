@@ -54,44 +54,44 @@ pub use bevy_ecs::change_detection::{DetectChanges, DetectChangesMut, Mut, Ref};
 // ECS messaging (bevy_ecs 0.18 renamed events → messages for buffered streams)
 pub use bevy_ecs::message::{MessageReader, MessageWriter, Messages};
 
-// engine-math types
-pub use engine_math::{
+// lunar-math types
+pub use lunar_math::{
     Color, Mat2, Mat3, Mat4, Quat, Rect, ScreenRect, Transform, Vec2, Vec3, Vec4,
 };
 
-// engine-core types
-pub use engine_core::{App, GamePlugin, Time, UpdateStage, WindowSettings};
+// lunar-core types
+pub use lunar_core::{App, GamePlugin, Time, UpdateStage, WindowSettings};
 
-// engine-2d types — only available when the 2d feature is enabled
+// lunar-2d types — only available when the 2d feature is enabled
 #[cfg(feature = "2d")]
-pub use engine_2d::{Plugin2d, SpriteAnimation, propagate_transforms};
+pub use lunar_2d::{Plugin2d, SpriteAnimation, propagate_transforms};
 
-// engine-3d types — only available when the 3d feature is enabled
+// lunar-3d types — only available when the 3d feature is enabled
 #[cfg(feature = "3d")]
-pub use engine_3d::{
+pub use lunar_3d::{
     ActiveCamera3d, AmbientLight, Camera3d, CullMode, DirectionalLight, IndexBuffer,
     LocalTransform3d, Material3d, MaterialData, Mesh3d, MeshData, Plugin3d, PointLight, Projection,
     ShadingModel, SpotLight, Vertex3d, WorldTransform3d, propagate_transforms_3d,
 };
 
-// engine-render types
-pub use engine_render::{
+// lunar-render types
+pub use lunar_render::{
     Camera, Layer, RenderConfig, RenderEngine, RenderInfo, RenderQueue, Sprite, Text, layers,
 };
 
-// engine-input types
-pub use engine_input::{ActionMap, GamepadAxis, GamepadButton, InputBinding, InputState, KeyCode, MouseButton};
+// lunar-input types
+pub use lunar_input::{ActionMap, GamepadAxis, GamepadButton, InputBinding, InputState, KeyCode, MouseButton};
 
-// engine-assets types — Texture/Font/Sound are needed as type parameters for
+// lunar-assets types — Texture/Font/Sound are needed as type parameters for
 // Handle<T> when game code stores asset handles in its own resources.
-pub use engine_assets::{AssetServer, AudioFormat, Font, Handle, Sound, Texture, TextureSource};
+pub use lunar_assets::{AssetServer, AudioFormat, Font, Handle, Sound, Texture, TextureSource};
 
 // texture! macro — embeds and converts image assets at compile time
 pub use crate::texture;
 
 // optional engine modules — included in prelude when the feature is enabled
 #[cfg(feature = "dialogue")]
-pub use engine_dialogue::{
+pub use lunar_dialogue::{
     Block, Character, Choice, DialogueManager, DialoguePlugin, Next, Script, ScriptBuilder,
 };
 

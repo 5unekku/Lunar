@@ -204,7 +204,7 @@ fn convert_to_mi(
     let img = image::load_from_memory(&bytes)
         .map_err(|e| syn::Error::new(span, format!("failed to decode image: {e}")))?;
     let rgba = img.to_rgba8();
-    let mi = engine_image::encode(rgba.width(), rgba.height(), &rgba)
+    let mi = lunar_image::encode(rgba.width(), rgba.height(), &rgba)
         .map_err(|e| syn::Error::new(span, format!("failed to encode .mi: {e}")))?;
     std::fs::write(dest, mi)
         .map_err(|e| syn::Error::new(span, format!("failed to write cache: {e}")))?;

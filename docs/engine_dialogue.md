@@ -3,7 +3,7 @@
 dialogue system for lunar.
 
 provides multi-stage conversations, speaker identification, branching
-choices, and narrator text. extracted from `engine-core` so games that
+choices, and narrator text. extracted from `lunar-core` so games that
 don't need it pay zero compile cost.
 
 # quick start

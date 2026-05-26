@@ -20,7 +20,7 @@ project that may share architectural patterns and lower-level building blocks
 
 - `Transform.translation` should be `Vec2`, not `Vec3`.
 - `Camera` drops 3D-shaped fields it doesn't use.
-- `engine-math` keeps `Mat4`/`Vec3`/`Vec4` re-exports (glam provides them; cost is
+- `lunar-math` keeps `Mat4`/`Vec3`/`Vec4` re-exports (glam provides them; cost is
   zero) but the engine's own APIs use 2D types.
 - The render pipeline assumes orthographic 2D throughout — no `depth_stencil`,
   no view matrix beyond camera transform.

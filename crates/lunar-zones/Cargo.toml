@@ -1,0 +1,15 @@
+[package]
+name = "lunar-zones"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "world zones for lunar: persistent loaded chunks with enter/exit lifecycle"
+repository.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
+
+[dependencies]
+bevy_ecs = { workspace = true }
+lunar-math = { path = "../lunar-math" }
+log = { workspace = true }

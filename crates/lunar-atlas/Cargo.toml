@@ -1,0 +1,18 @@
+[package]
+name = "lunar-atlas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "texture atlas: maxrects bin-packing, region lookup, manifest serialization (RON/binary)"
+repository.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
+
+[dependencies]
+lunar-image = { path = "../lunar-image" }
+lunar-assets = { path = "../lunar-assets" }
+lunar-math = { path = "../lunar-math" }
+bevy_ecs = { workspace = true }
+log = { workspace = true }
+thiserror = "2"

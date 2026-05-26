@@ -73,10 +73,10 @@ game code can define additional components freely.
 ### prelude
 
 full prelude for game development
-prelude for engine-core — re-exports bevy_ecs essentials and engine-core's
+prelude for lunar-core — re-exports bevy_ecs essentials and lunar-core's
 own types (app/plugin, scenes, hierarchy, world manifest, etc.).
 
-domain crates (`engine-dialogue`, `engine-localization`, `engine-zones`)
+domain crates (`lunar-dialogue`, `lunar-localization`, `lunar-zones`)
 and subsystem crates (render, input, assets) must be imported separately.
 
 # example
@@ -411,10 +411,10 @@ convenience result type for engine operations
 ## Module engine_core::prelude
 
 full prelude for game development
-prelude for engine-core — re-exports bevy_ecs essentials and engine-core's
+prelude for lunar-core — re-exports bevy_ecs essentials and lunar-core's
 own types (app/plugin, scenes, hierarchy, world manifest, etc.).
 
-domain crates (`engine-dialogue`, `engine-localization`, `engine-zones`)
+domain crates (`lunar-dialogue`, `lunar-localization`, `lunar-zones`)
 and subsystem crates (render, input, assets) must be imported separately.
 
 # example

@@ -753,189 +753,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
-name = "engine-2d"
-version = "0.1.0"
-dependencies = [
- "bevy_ecs",
- "engine-core",
- "engine-math",
-]
-
-[[package]]
-name = "engine-3d"
-version = "0.1.0"
-dependencies = [
- "bevy_ecs",
- "engine-assets",
- "engine-core",
- "engine-math",
- "log",
-]
-
-[[package]]
-name = "engine-animation"
-version = "0.1.0"
-dependencies = [
- "bevy_ecs",
- "engine-core",
- "engine-math",
- "engine-render",
-]
-
-[[package]]
-name = "engine-assets"
-version = "0.1.0"
-dependencies = [
- "bevy_ecs",
- "crossbeam-channel",
- "engine-core",
- "engine-image",
- "image",
- "js-sys",
- "log",
- "notify",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "engine-atlas"
-version = "0.1.0"
-dependencies = [
- "bevy_ecs",
- "engine-assets",
- "engine-image",
- "engine-math",
- "log",
- "thiserror",
-]
-
-[[package]]
-name = "engine-core"
-version = "0.1.0"
-dependencies = [
- "bevy_ecs",
- "bincode",
- "engine-math",
- "log",
- "ron",
- "roxmltree",
- "serde",
- "serde_json",
- "smallvec",
- "wasm-bindgen",
- "web-sys",
-]
-
-[[package]]
-name = "engine-dialogue"
-version = "0.1.0"
-dependencies = [
- "bevy_ecs",
- "engine-core",
- "log",
- "ron",
- "serde",
-]
-
-[[package]]
-name = "engine-image"
-version = "0.1.0"
-dependencies = [
- "image",
- "thiserror",
- "zstd",
-]
-
-[[package]]
-name = "engine-input"
-version = "0.1.0"
-dependencies = [
- "bevy_ecs",
- "engine-core",
- "engine-math",
- "js-sys",
- "log",
- "raw-window-handle",
- "sdl3",
- "wasm-bindgen",
- "web-sys",
-]
-
-[[package]]
-name = "engine-localization"
-version = "0.1.0"
-dependencies = [
- "bevy_ecs",
- "engine-core",
- "log",
- "ron",
-]
-
-[[package]]
-name = "engine-math"
-version = "0.1.0"
-dependencies = [
- "bevy_ecs",
- "glam",
-]
-
-[[package]]
-name = "engine-render"
-version = "0.1.0"
-dependencies = [
- "bevy_ecs",
- "bytemuck",
- "cosmic-text",
- "engine-assets",
- "engine-atlas",
- "engine-core",
- "engine-math",
- "guillotiere",
- "log",
- "pollster",
- "raw-window-handle",
- "sdl3",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "wgpu",
-]
-
-[[package]]
-name = "engine-tilemap"
-version = "0.1.0"
-dependencies = [
- "bevy_ecs",
- "engine-assets",
- "engine-core",
- "engine-math",
- "engine-render",
-]
-
-[[package]]
-name = "engine-ui"
-version = "0.1.0"
-dependencies = [
- "bevy_ecs",
- "engine-assets",
- "engine-core",
- "engine-input",
- "engine-math",
- "engine-render",
-]
-
-[[package]]
-name = "engine-zones"
-version = "0.1.0"
-dependencies = [
- "bevy_ecs",
- "engine-math",
- "log",
-]
-
-[[package]]
 name = "env_filter"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1710,6 +1527,93 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunar-2d"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "lunar-core",
+ "lunar-math",
+]
+
+[[package]]
+name = "lunar-3d"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "log",
+ "lunar-assets",
+ "lunar-core",
+ "lunar-math",
+]
+
+[[package]]
+name = "lunar-animation"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "lunar-core",
+ "lunar-math",
+ "lunar-render",
+]
+
+[[package]]
+name = "lunar-assets"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "crossbeam-channel",
+ "image",
+ "js-sys",
+ "log",
+ "lunar-core",
+ "lunar-image",
+ "notify",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "lunar-atlas"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "log",
+ "lunar-assets",
+ "lunar-image",
+ "lunar-math",
+ "thiserror",
+]
+
+[[package]]
+name = "lunar-core"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "bincode",
+ "log",
+ "lunar-math",
+ "ron",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "lunar-dialogue"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "log",
+ "lunar-core",
+ "ron",
+ "serde",
+]
+
+[[package]]
 name = "lunar-game"
 version = "0.1.0"
 dependencies = [
@@ -1723,23 +1627,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunar-image"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "thiserror",
+ "zstd",
+]
+
+[[package]]
+name = "lunar-input"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "js-sys",
+ "log",
+ "lunar-core",
+ "lunar-math",
+ "raw-window-handle",
+ "sdl3",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "lunar-lib"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "console_log",
- "engine-2d",
- "engine-3d",
- "engine-assets",
- "engine-core",
- "engine-dialogue",
- "engine-input",
- "engine-math",
- "engine-render",
  "env_logger",
  "js-sys",
  "log",
+ "lunar-2d",
+ "lunar-3d",
+ "lunar-assets",
+ "lunar-core",
+ "lunar-dialogue",
+ "lunar-input",
  "lunar-macros",
+ "lunar-math",
+ "lunar-render",
  "pollster",
  "raw-window-handle",
  "sdl3",
@@ -1750,14 +1678,86 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunar-localization"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "log",
+ "lunar-core",
+ "ron",
+]
+
+[[package]]
 name = "lunar-macros"
 version = "0.1.0"
 dependencies = [
- "engine-image",
  "image",
+ "lunar-image",
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "lunar-math"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "glam",
+]
+
+[[package]]
+name = "lunar-render"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "bytemuck",
+ "cosmic-text",
+ "guillotiere",
+ "log",
+ "lunar-assets",
+ "lunar-atlas",
+ "lunar-core",
+ "lunar-math",
+ "pollster",
+ "raw-window-handle",
+ "sdl3",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu",
+]
+
+[[package]]
+name = "lunar-tilemap"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "lunar-assets",
+ "lunar-core",
+ "lunar-math",
+ "lunar-render",
+]
+
+[[package]]
+name = "lunar-ui"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "lunar-assets",
+ "lunar-core",
+ "lunar-input",
+ "lunar-math",
+ "lunar-render",
+]
+
+[[package]]
+name = "lunar-zones"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "log",
+ "lunar-math",
 ]
 
 [[package]]

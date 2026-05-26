@@ -22,16 +22,16 @@
 ///     lunar::bootstrap_wasm::<MyGame>(RenderConfig::default()).await;
 /// }
 /// ```
-pub async fn bootstrap_wasm<Plugin: engine_core::GamePlugin + Default + 'static>(
-    config: engine_render::RenderConfig,
+pub async fn bootstrap_wasm<Plugin: lunar_core::GamePlugin + Default + 'static>(
+    config: lunar_render::RenderConfig,
 ) {
     console_log::init_with_level(log::Level::Debug)
         .unwrap_or_else(|_| log::warn!("logger already initialized"));
 
-    use engine_assets::AssetPlugin;
-    use engine_core::{App, WindowSettings};
-    use engine_input::InputPlugin;
-    use engine_render::{RenderEngine, RenderPlugin, wasm_set_render_engine};
+    use lunar_assets::AssetPlugin;
+    use lunar_core::{App, WindowSettings};
+    use lunar_input::InputPlugin;
+    use lunar_render::{RenderEngine, RenderPlugin, wasm_set_render_engine};
     use std::{cell::RefCell, rc::Rc};
     use wasm_bindgen::JsCast;
     use wasm_bindgen::closure::Closure;

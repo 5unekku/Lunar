@@ -107,7 +107,7 @@ Godot's entire engine is built around a tree of nodes. Every object in a Godot p
 ## Decoupled Architecture Suggestion
 
 ```
-engine-ui (crate)
+lunar-ui (crate)
 ├── scene/           # YAML scene loading, instancing
 ├── container/       # VBoxContainer, HBoxContainer, etc.
 ├── widget/          # Button, Label, TextureRect, etc.
@@ -115,7 +115,7 @@ engine-ui (crate)
 ├── theme/           # Theme resource, style system
 └── focus/           # Focus management, gamepad navigation
 
-game code uses engine-ui through:
+game code uses lunar-ui through:
 - SceneHandle for loaded UI scenes
 - UI events via bevy_ecs EventReader
 - Theme resource for styling

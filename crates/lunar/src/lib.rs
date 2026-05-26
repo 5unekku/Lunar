@@ -6,8 +6,8 @@
 //! # architecture
 //!
 //! the engine follows a handle-based design:
-//! - assets (textures, sounds, fonts) are accessed through typed `Handle`s from `engine_assets`
-//! - game logic registers systems via the `App` builder from `engine_core`
+//! - assets (textures, sounds, fonts) are accessed through typed `Handle`s from `lunar_assets`
+//! - game logic registers systems via the `App` builder from `lunar_core`
 //! - all game state lives in the ECS [`World`], never in global singletons
 //!
 //! # quick start
@@ -38,16 +38,16 @@ pub use bevy_ecs as __bevy_ecs;
 pub use lunar_macros::{Component, Event, Message, Resource, texture};
 
 #[cfg(feature = "2d")]
-pub use engine_2d;
+pub use lunar_2d;
 #[cfg(feature = "3d")]
-pub use engine_3d;
-pub use engine_assets;
-pub use engine_core;
+pub use lunar_3d;
+pub use lunar_assets;
+pub use lunar_core;
 #[cfg(feature = "dialogue")]
-pub use engine_dialogue;
-pub use engine_input;
-pub use engine_math;
-pub use engine_render;
+pub use lunar_dialogue;
+pub use lunar_input;
+pub use lunar_math;
+pub use lunar_render;
 
 pub mod prelude;
 pub use prelude::*;
@@ -63,13 +63,13 @@ mod bootstrap_wasm;
 pub use bootstrap_wasm::bootstrap_wasm;
 
 // types re-exported at crate root for direct access (prelude covers glob imports)
-pub use engine_assets::{AssetServer, AudioFormat, Font, Handle, Sound, Texture};
-pub use engine_core::{App, GamePlugin, Time, WindowSettings};
-pub use engine_input::{ActionMap, InputBinding, InputState, KeyCode, MouseButton};
-pub use engine_math::{
+pub use lunar_assets::{AssetServer, AudioFormat, Font, Handle, Sound, Texture};
+pub use lunar_core::{App, GamePlugin, Time, WindowSettings};
+pub use lunar_input::{ActionMap, InputBinding, InputState, KeyCode, MouseButton};
+pub use lunar_math::{
     Color, Mat2, Mat3, Mat4, Quat, Rect, ScreenRect, Transform, Vec2, Vec3, Vec4,
 };
-pub use engine_render::{
+pub use lunar_render::{
     Camera, Layer, RenderConfig, RenderEngine, RenderInfo, RenderQueue, Sprite, Text, layers,
 };
 

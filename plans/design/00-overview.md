@@ -22,7 +22,7 @@ Lunar is a 2D game engine written in Rust. It targets Windows 7+, Windows 10/11,
 - **The ECS backend is internal.** `bevy_ecs` is an implementation detail like SDL3 or wgpu. Game code uses `lunar::prelude` exclusively and never names `bevy_ecs` in its `Cargo.toml`. The prelude re-exports a curated, stable set of types; the underlying ECS can be swapped without breaking game code.
 - **Editor lives downstream, not in this repo.** A visual editor is an *end goal* but not part of the engine. It will consume `lunar` as a dependency from a separate project (the inverse of the Moonwalker relationship). The engine never depends on editor code; direct API usage is always sufficient.
 - **High-level draw API is the contract.** Game code spawns `Sprite` / `Text` components and the engine renders them; immediate-mode helpers (`draw_sprite`, `draw_rect`, `draw_text`, `draw_line`) cover HUD/debug. The raw `RenderQueue::push(DrawCommand{…})` is internal — `#[doc(hidden)]`.
-- **Domain systems live in their own crates.** Dialogue, localization, world-zones — RPG-shaped systems — are separate crates outside `engine-core` and outside the default `lunar` re-export. Games that need them opt in by adding the crate; games that don't pay zero compile cost.
+- **Domain systems live in their own crates.** Dialogue, localization, world-zones — RPG-shaped systems — are separate crates outside `lunar-core` and outside the default `lunar` re-export. Games that need them opt in by adding the crate; games that don't pay zero compile cost.
 
 ## Current Workspace Structure
 
@@ -31,13 +31,13 @@ lunar/
 ├── Cargo.toml              # workspace root + binary
 ├── src/main.rs             # entry point (wiring prototype)
 ├── crates/
-│   ├── engine-core/        # game loop, ECS wiring, state machine, command registry
-│   ├── engine-render/      # wgpu 2D rendering
-│   ├── engine-input/       # SDL3 input handling
-│   ├── engine-assets/      # handle-based asset server, async loading, hot reload
-│   ├── engine-image/       # custom image format (zstd-compressed)
-│   ├── engine-atlas/       # texture atlas packer
-│   ├── engine-math/        # glam re-exports
+│   ├── lunar-core/        # game loop, ECS wiring, state machine, command registry
+│   ├── lunar-render/      # wgpu 2D rendering
+│   ├── lunar-input/       # SDL3 input handling
+│   ├── lunar-assets/      # handle-based asset server, async loading, hot reload
+│   ├── lunar-image/       # custom image format (zstd-compressed)
+│   ├── lunar-atlas/       # texture atlas packer
+│   ├── lunar-math/        # glam re-exports
 │   └── lunar/           # public-facing API for game logic (use lunar::prelude::*)
 ```
 

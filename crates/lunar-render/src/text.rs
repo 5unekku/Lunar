@@ -1,0 +1,397 @@
+//! text rendering via a glyph atlas texture.
+//!
+//! provides a glyph atlas for rasterizing and caching font glyphs using
+//! cosmic-text, plus layout functions for positioning text on screen.
+
+use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache, SwashContent};
+use lunar_math::Vec2;
+use std::collections::HashMap;
+
+/// position + size of a glyph in the atlas, plus placement offsets.
+#[derive(Clone)]
+struct AtlasEntry {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    left: i32,
+    top: i32,
+}
+
+/// a single positioned glyph quad for rendering.
+#[derive(Debug, Clone)]
+pub struct TextGlyphQuad {
+    /// top-left position in game-unit screen space.
+    pub position: Vec2,
+    /// size in game units.
+    pub size: Vec2,
+    /// minimum UV coordinate in the atlas (top-left of glyph).
+    pub uv_min: Vec2,
+    /// maximum UV coordinate in the atlas (bottom-right of glyph).
+    pub uv_max: Vec2,
+}
+
+/// shelf-packed RGBA glyph atlas backed by cosmic-text.
+pub struct GlyphAtlas {
+    /// atlas texture width in pixels.
+    pub width: u32,
+    /// atlas texture height in pixels.
+    pub height: u32,
+    /// packed RGBA pixel data.
+    pub pixels: Vec<u8>,
+    font_system: FontSystem,
+    swash_cache: SwashCache,
+    entries: HashMap<cosmic_text::CacheKey, Option<AtlasEntry>>,
+    font_families: HashMap<u32, String>,
+    cursor_x: u32,
+    cursor_y: u32,
+    row_height: u32,
+    /// physical pixels per game pixel.
+    pub scale: f32,
+    /// true when the cpu pixel buffer changed since last gpu upload.
+    pub dirty: bool,
+}
+
+impl GlyphAtlas {
+    /// create a new empty atlas.
+    pub fn new(width: u32, height: u32) -> Self {
+        let font_system = FontSystem::new_with_locale_and_db(
+            "en-US".to_string(),
+            cosmic_text::fontdb::Database::new(),
+        );
+        Self {
+            width,
+            height,
+            pixels: vec![0u8; (width * height * 4) as usize],
+            font_system,
+            swash_cache: SwashCache::new(),
+            entries: HashMap::new(),
+            font_families: HashMap::new(),
+            cursor_x: 0,
+            cursor_y: 0,
+            row_height: 0,
+            scale: 1.0,
+            dirty: false,
+        }
+    }
+
+    /// update the rasterization scale. returns `true` if the scale changed.
+    pub fn set_scale(&mut self, scale: f32) -> bool {
+        let clamped = scale.clamp(0.25, 8.0);
+        let rounded = (clamped * 100.0).round() / 100.0;
+        if (self.scale - rounded).abs() > 0.005 {
+            self.scale = rounded;
+            self.entries.clear();
+            self.pixels.fill(0);
+            self.swash_cache = SwashCache::new();
+            self.cursor_x = 0;
+            self.cursor_y = 0;
+            self.row_height = 0;
+            self.dirty = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// register a font from raw bytes. no-op if already registered.
+    pub fn register_font(&mut self, font_id: u32, data: &[u8]) {
+        if self.font_families.contains_key(&font_id) {
+            return;
+        }
+        // collect existing face ids before loading
+        let before: std::collections::HashSet<cosmic_text::fontdb::ID> =
+            self.font_system.db().faces().map(|f| f.id).collect();
+        self.font_system.db_mut().load_font_data(data.to_vec());
+        // find newly added face and grab its first family name
+        let family_name = self
+            .font_system
+            .db()
+            .faces()
+            .find(|f| !before.contains(&f.id))
+            .and_then(|f| f.families.first())
+            .map(|(name, _)| name.clone());
+        match family_name {
+            Some(name) => {
+                self.font_families.insert(font_id, name);
+            }
+            None => log::warn!("failed to detect family name for font {font_id}"),
+        }
+    }
+
+    /// ensure a glyph is in the atlas. stores `None` for zero-size or failed glyphs.
+    fn ensure_glyph(&mut self, cache_key: cosmic_text::CacheKey) {
+        if self.entries.contains_key(&cache_key) {
+            return;
+        }
+        // collect image data then drop borrow before writing to self.pixels
+        let image_data = self
+            .swash_cache
+            .get_image(&mut self.font_system, cache_key)
+            .as_ref()
+            .map(|img| {
+                (
+                    img.data.to_vec(),
+                    img.placement.clone(),
+                    img.content.clone(),
+                )
+            });
+        let Some((data, placement, content)) = image_data else {
+            self.entries.insert(cache_key, None);
+            return;
+        };
+        let gw = placement.width;
+        let gh = placement.height;
+        if gw == 0 || gh == 0 || data.is_empty() {
+            self.entries.insert(cache_key, None);
+            return;
+        }
+
+        // wrap to next shelf row if needed
+        if self.cursor_x + gw > self.width {
+            self.cursor_x = 0;
+            self.cursor_y += self.row_height;
+            self.row_height = 0;
+        }
+        if self.cursor_y + gh > self.height {
+            log::warn!("glyph atlas full — glyph dropped. increase atlas dimensions.");
+            self.entries.insert(cache_key, None);
+            return;
+        }
+
+        match content {
+            SwashContent::Mask => {
+                // 1 byte per pixel (alpha coverage)
+                for gy in 0..gh {
+                    for gx in 0..gw {
+                        let src = data[(gy * gw + gx) as usize];
+                        let dst =
+                            ((self.cursor_y + gy) * self.width + self.cursor_x + gx) as usize * 4;
+                        self.pixels[dst] = 0xff;
+                        self.pixels[dst + 1] = 0xff;
+                        self.pixels[dst + 2] = 0xff;
+                        self.pixels[dst + 3] = src;
+                    }
+                }
+            }
+            SwashContent::Color => {
+                // 4 bytes per pixel RGBA
+                for gy in 0..gh {
+                    for gx in 0..gw {
+                        let src = ((gy * gw + gx) * 4) as usize;
+                        let dst =
+                            ((self.cursor_y + gy) * self.width + self.cursor_x + gx) as usize * 4;
+                        self.pixels[dst..dst + 4].copy_from_slice(&data[src..src + 4]);
+                    }
+                }
+            }
+            SwashContent::SubpixelMask => {
+                // treat like Mask, use R channel as alpha
+                for gy in 0..gh {
+                    for gx in 0..gw {
+                        let src = ((gy * gw + gx) * 3) as usize;
+                        let alpha = data[src]; // R channel
+                        let dst =
+                            ((self.cursor_y + gy) * self.width + self.cursor_x + gx) as usize * 4;
+                        self.pixels[dst] = 0xff;
+                        self.pixels[dst + 1] = 0xff;
+                        self.pixels[dst + 2] = 0xff;
+                        self.pixels[dst + 3] = alpha;
+                    }
+                }
+            }
+        }
+
+        self.entries.insert(
+            cache_key,
+            Some(AtlasEntry {
+                x: self.cursor_x,
+                y: self.cursor_y,
+                width: gw,
+                height: gh,
+                left: placement.left,
+                top: placement.top,
+            }),
+        );
+
+        self.cursor_x += gw;
+        if gh > self.row_height {
+            self.row_height = gh;
+        }
+        self.dirty = true;
+    }
+
+    /// get the raw pixel data for uploading to the GPU.
+    pub fn pixels(&self) -> &[u8] {
+        &self.pixels
+    }
+}
+
+/// look up the font family name for a given font id.
+fn family_name_for(atlas: &GlyphAtlas, font_id: u32) -> Option<String> {
+    atlas.font_families.get(&font_id).cloned()
+}
+
+/// layout a string and return positioned glyph quads.
+///
+/// `position` is the top-left of the text block in game units.
+pub fn layout_text(
+    atlas: &mut GlyphAtlas,
+    font_id: u32,
+    text: &str,
+    font_size: f32,
+    position: Vec2,
+) -> Vec<TextGlyphQuad> {
+    let scale = atlas.scale;
+    let display_size = font_size * scale;
+    let family = family_name_for(atlas, font_id);
+    let mut buffer = Buffer::new(
+        &mut atlas.font_system,
+        Metrics::new(display_size, display_size * 1.2),
+    );
+    buffer.set_size(&mut atlas.font_system, None, None);
+    {
+        let attrs = family
+            .as_deref()
+            .map_or_else(Attrs::new, |n| Attrs::new().family(Family::Name(n)));
+        buffer.set_text(&mut atlas.font_system, text, attrs, Shaping::Advanced);
+    }
+    buffer.shape_until_scroll(&mut atlas.font_system, false);
+
+    let mut quads = Vec::new();
+    for run in buffer.layout_runs() {
+        for glyph in run.glyphs {
+            let physical = glyph.physical((0.0, run.line_y), 1.0);
+            atlas.ensure_glyph(physical.cache_key);
+            let Some(Some(entry)) = atlas.entries.get(&physical.cache_key) else {
+                continue;
+            };
+            let entry = entry.clone();
+            #[allow(clippy::cast_precision_loss)]
+            let bx = physical.x as f32 + entry.left as f32;
+            #[allow(clippy::cast_precision_loss)]
+            let by = physical.y as f32 - entry.top as f32;
+            let game_x = position.x + bx / scale;
+            let game_y = position.y + by / scale;
+            let game_w = entry.width as f32 / scale;
+            let game_h = entry.height as f32 / scale;
+            #[allow(clippy::cast_precision_loss)]
+            let uv_min = Vec2::new(
+                entry.x as f32 / atlas.width as f32,
+                entry.y as f32 / atlas.height as f32,
+            );
+            #[allow(clippy::cast_precision_loss)]
+            let uv_max = Vec2::new(
+                (entry.x + entry.width) as f32 / atlas.width as f32,
+                (entry.y + entry.height) as f32 / atlas.height as f32,
+            );
+            quads.push(TextGlyphQuad {
+                position: Vec2::new(game_x, game_y),
+                size: Vec2::new(game_w, game_h),
+                uv_min,
+                uv_max,
+            });
+        }
+    }
+    quads
+}
+
+/// measure the maximum line width of a string in game units.
+#[allow(dead_code)]
+pub fn measure_text(atlas: &mut GlyphAtlas, font_id: u32, text: &str, font_size: f32) -> f32 {
+    let scale = atlas.scale;
+    let display_size = font_size * scale;
+    let family = family_name_for(atlas, font_id);
+    let mut buffer = Buffer::new(
+        &mut atlas.font_system,
+        Metrics::new(display_size, display_size * 1.2),
+    );
+    buffer.set_size(&mut atlas.font_system, None, None);
+    {
+        let attrs = family
+            .as_deref()
+            .map_or_else(Attrs::new, |n| Attrs::new().family(Family::Name(n)));
+        buffer.set_text(&mut atlas.font_system, text, attrs, Shaping::Advanced);
+    }
+    buffer.shape_until_scroll(&mut atlas.font_system, false);
+    buffer
+        .layout_runs()
+        .map(|r| r.line_w)
+        .fold(0.0f32, f32::max)
+        / scale
+}
+
+/// layout text with word-wrapping at `max_width` game units.
+///
+/// `position` is the top-left of the first line. `line_height` is the vertical
+/// spacing per line; pass 0.0 for `font_size * 1.25`.
+/// returns one `Vec<TextGlyphQuad>` per layout run (line).
+pub fn layout_text_wrapped(
+    atlas: &mut GlyphAtlas,
+    font_id: u32,
+    text: &str,
+    font_size: f32,
+    position: Vec2,
+    max_width: f32,
+    line_height: f32,
+) -> Vec<Vec<TextGlyphQuad>> {
+    let effective_line_height = if line_height > 0.0 {
+        line_height
+    } else {
+        font_size * 1.25
+    };
+    let scale = atlas.scale;
+    let display_size = font_size * scale;
+    let family = family_name_for(atlas, font_id);
+    let mut buffer = Buffer::new(
+        &mut atlas.font_system,
+        Metrics::new(display_size, effective_line_height * scale),
+    );
+    buffer.set_size(&mut atlas.font_system, Some(max_width * scale), None);
+    {
+        let attrs = family
+            .as_deref()
+            .map_or_else(Attrs::new, |n| Attrs::new().family(Family::Name(n)));
+        buffer.set_text(&mut atlas.font_system, text, attrs, Shaping::Advanced);
+    }
+    buffer.shape_until_scroll(&mut atlas.font_system, false);
+
+    let mut lines: Vec<Vec<TextGlyphQuad>> = Vec::new();
+    for run in buffer.layout_runs() {
+        let mut quads = Vec::new();
+        for glyph in run.glyphs {
+            let physical = glyph.physical((0.0, run.line_y), 1.0);
+            atlas.ensure_glyph(physical.cache_key);
+            let Some(Some(entry)) = atlas.entries.get(&physical.cache_key) else {
+                continue;
+            };
+            let entry = entry.clone();
+            #[allow(clippy::cast_precision_loss)]
+            let bx = physical.x as f32 + entry.left as f32;
+            #[allow(clippy::cast_precision_loss)]
+            let by = physical.y as f32 - entry.top as f32;
+            let game_x = position.x + bx / scale;
+            let game_y = position.y + by / scale;
+            let game_w = entry.width as f32 / scale;
+            let game_h = entry.height as f32 / scale;
+            #[allow(clippy::cast_precision_loss)]
+            let uv_min = Vec2::new(
+                entry.x as f32 / atlas.width as f32,
+                entry.y as f32 / atlas.height as f32,
+            );
+            #[allow(clippy::cast_precision_loss)]
+            let uv_max = Vec2::new(
+                (entry.x + entry.width) as f32 / atlas.width as f32,
+                (entry.y + entry.height) as f32 / atlas.height as f32,
+            );
+            quads.push(TextGlyphQuad {
+                position: Vec2::new(game_x, game_y),
+                size: Vec2::new(game_w, game_h),
+                uv_min,
+                uv_max,
+            });
+        }
+        lines.push(quads);
+    }
+    lines
+}

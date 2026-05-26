@@ -2,7 +2,7 @@
 
 ## What It Looks Like to Write a Game
 
-A game project is a separate Rust crate that depends on `lunar` (and optionally `engine-core` for advanced use). The engine provides a macro that bootstraps the application and a plugin trait for game-specific initialization.
+A game project is a separate Rust crate that depends on `lunar` (and optionally `lunar-core` for advanced use). The engine provides a macro that bootstraps the application and a plugin trait for game-specific initialization.
 
 ## Minimal Example — A Simple Platformer
 

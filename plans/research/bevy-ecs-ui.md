@@ -120,7 +120,7 @@ Bevy is the closest in spirit to Lunar — Rust-based, ECS-first, data-driven.
 ## Decoupled Architecture Suggestion
 
 ```
-engine-ui (crate)
+lunar-ui (crate)
 ├── node/            # Node component, Style component
 ├── layout/          # taffy integration, layout computation
 ├── interaction/     # Interaction component, hover/press tracking
@@ -128,7 +128,7 @@ engine-ui (crate)
 ├── focus/           # Focus management, tab navigation
 └── render/          # UI → DrawCommand conversion
 
-game code uses engine-ui through:
+game code uses lunar-ui through:
 - Entity spawning with UI bundles
 - Query<&Interaction, Changed<Interaction>> for events
 - No direct coupling to render — UI entities produce DrawCommands

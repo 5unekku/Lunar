@@ -76,14 +76,14 @@ Unity's core strength is its component-based architecture where every game objec
 ## Decoupled Architecture Suggestion
 
 ```
-engine-ui (crate)
+lunar-ui (crate)
 ├── layout/          # flexbox-like layout engine
 ├── widgets/         # built-in widget types (panel, text, button, image)
 ├── events/          # UI event system (click, hover, focus)
 ├── theme/           # styling system (colors, fonts, borders)
 └── loader/          # load UI from YAML/JSON definitions
 
-game code uses engine-ui through:
+game code uses lunar-ui through:
 - UIHandle<T> for typed widget references
 - UI events through bevy_ecs events
 - No direct coupling to render crate — UI produces draw commands

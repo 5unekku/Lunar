@@ -1,0 +1,18 @@
+[package]
+name = "lunar-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "screen-space ui components for lunar 2d games"
+repository.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
+
+[dependencies]
+lunar-core = { path = "../lunar-core" }
+lunar-math = { path = "../lunar-math" }
+lunar-render = { path = "../lunar-render" }
+lunar-assets = { path = "../lunar-assets" }
+lunar-input = { path = "../lunar-input" }
+bevy_ecs = { workspace = true }

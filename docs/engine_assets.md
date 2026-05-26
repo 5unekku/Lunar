@@ -131,7 +131,7 @@ let data = loader.load(&file_bytes)?;
 
 loader for .mi (lunar image) format.
 
-decodes .mi bytes into raw pixel data via engine-image.
+decodes .mi bytes into raw pixel data via lunar-image.
 
 ### OggSoundLoader
 

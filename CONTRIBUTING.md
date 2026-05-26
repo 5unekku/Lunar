@@ -26,7 +26,7 @@ active backlog and direction amendments.
 - **3D.** Out of scope. If 3D ever exists, it will be a sister engine. Don't
   add `Vec3` translations or `Mat4` view matrices to engine-side APIs.
 - **Editor.** A downstream project that will consume `lunar`. Don't add
-  editor dependencies to this workspace. (`engine-ui`, the in-game Taffy UI, is
+  editor dependencies to this workspace. (`lunar-ui`, the in-game Taffy UI, is
   separate from the editor and *does* belong here.)
 
 ## Workspace Layout
@@ -34,13 +34,13 @@ active backlog and direction amendments.
 ```
 crates/
 ├── lunar/         # public API facade — game code's only dependency
-├── engine-core/      # game loop, scheduler, plugins, time, scene, hierarchy
-├── engine-render/    # wgpu rendering pipeline
-├── engine-input/     # input handling
-├── engine-math/      # math types (Vec2, Mat3, Transform, Color, Rect)
-├── engine-assets/    # handle-based asset server
-├── engine-image/     # zstd-compressed image format
-└── engine-atlas/     # texture atlas packer
+├── lunar-core/      # game loop, scheduler, plugins, time, scene, hierarchy
+├── lunar-render/    # wgpu rendering pipeline
+├── lunar-input/     # input handling
+├── lunar-math/      # math types (Vec2, Mat3, Transform, Color, Rect)
+├── lunar-assets/    # handle-based asset server
+├── lunar-image/     # zstd-compressed image format
+└── lunar-atlas/     # texture atlas packer
 src/
 ├── main.rs           # native smoke-test binary
 ├── web.rs            # WASM entry point
@@ -117,7 +117,7 @@ the global rules baked into the codebase.
 The `lunar` crate is the **only** thing game code is allowed to depend on.
 
 - **Don't expose backend types in the public API.** `bevy_ecs`, `sdl3`, `wgpu`,
-  `raw-window-handle`, `glam` (beyond `engine-math`'s curated re-exports) — none
+  `raw-window-handle`, `glam` (beyond `lunar-math`'s curated re-exports) — none
   of these names should appear in `lunar::prelude` or in user-facing examples.
 - **Don't require `unsafe` in game code.** Game code never needs `unsafe`. The
   engine may use `unsafe` for tightly-scoped fringe optimizations (with a
@@ -132,13 +132,13 @@ Where to put new code:
 
 | Concern | Crate |
 |---------|-------|
-| Math primitives (Vec2, Mat3, Color, Rect, Transform) | `engine-math` |
-| ECS scheduling, plugins, app lifecycle, time | `engine-core` |
-| GPU pipeline, shaders, draw commands | `engine-render` |
-| Keyboard, mouse, gamepad, action maps | `engine-input` |
-| Asset loading, handles, hot reload | `engine-assets` |
-| Image decoding/encoding | `engine-image` |
-| Atlas packing | `engine-atlas` |
+| Math primitives (Vec2, Mat3, Color, Rect, Transform) | `lunar-math` |
+| ECS scheduling, plugins, app lifecycle, time | `lunar-core` |
+| GPU pipeline, shaders, draw commands | `lunar-render` |
+| Keyboard, mouse, gamepad, action maps | `lunar-input` |
+| Asset loading, handles, hot reload | `lunar-assets` |
+| Image decoding/encoding | `lunar-image` |
+| Atlas packing | `lunar-atlas` |
 | Public re-exports, bootstrap, app macro | `lunar` |
 
 If a feature crosses crate boundaries, prefer adding a thin adapter in the

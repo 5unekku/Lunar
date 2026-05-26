@@ -262,7 +262,7 @@ pub enum EncodeError {
 ## Crate Structure
 
 ```
-crates/engine-image/
+crates/lunar-image/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs          # Public API, re-exports
@@ -371,7 +371,7 @@ impl Default for EncodeOptions {
 
 ```toml
 [package]
-name = "engine-image"
+name = "lunar-image"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -393,10 +393,10 @@ image = "0.25"  # For test roundtrip with real files
 - **No threading**: Decode is single-threaded (no `Send`/`Sync` requirements)
 - **No filesystem**: All I/O is via borrowed `&[u8]` slices
 
-## Integration with engine-assets
+## Integration with lunar-assets
 
 ```rust
-// In engine-assets, register the .mi loader
+// In lunar-assets, register the .mi loader
 let mut loaders = AssetLoaders::new();
 loaders.register("mi", EixLoader);
 

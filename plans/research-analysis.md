@@ -20,7 +20,7 @@ The research reveals **convergent patterns** across all engines studied. The rec
 **Sources:** libGDX (TextureAtlas), Bevy (glyph atlas), Lunar TODO (#110)
 
 ### Current State
-- Glyph atlas exists in `engine-render/src/text.rs`
+- Glyph atlas exists in `lunar-render/src/text.rs`
 - No general-purpose texture atlas for game sprites
 - Each texture load creates a separate GPU texture → texture switch per draw call
 
@@ -52,16 +52,16 @@ pub struct TextureAtlas {
 **Sources:** Bevy (bevy_ui + taffy), Godot (Control nodes), Unity (uGUI)
 
 ### Current State
-- Textbox component exists (`engine-render/src/textbox.rs`)
+- Textbox component exists (`lunar-render/src/textbox.rs`)
 - No general UI layout system
 - No button, panel, or container widgets
 - No focus management or input routing for UI
 
 ### Recommendation
-Create `engine-ui` crate with:
+Create `lunar-ui` crate with:
 
 ```
-engine-ui/
+lunar-ui/
 ├── node/          # Node + Style components (ECS)
 ├── layout/        # Taffy integration
 ├── widget/        # Button, Label, Panel bundles
@@ -78,7 +78,7 @@ engine-ui/
 ### What to Avoid
 - Bevy's per-frame layout recomputation for unchanged nodes
 - Complex query syntax — keep the `query!` macro simple
-- Plugin coupling — UI should be a clean crate, not entangled with engine-core
+- Plugin coupling — UI should be a clean crate, not entangled with lunar-core
 
 ---
 
@@ -388,6 +388,6 @@ events.on("player_died", |event: &PlayerDiedEvent| { ... });
 
 > These items depend on the core engine being stable. They are tracked here for planning but are NOT in the current implementation scope.
 
-1. **UI System (engine-ui)** — taffy integration, ECS-based, widget bundles
+1. **UI System (lunar-ui)** — taffy integration, ECS-based, widget bundles
 2. **Theme System** — centralized styling
 3. **Named Events** — game-dev ergonomics (optional)

@@ -9,7 +9,7 @@
 
 ### 1.1 CRITICAL: Vertex Buffer Created Every Frame
 
-**Location:** [`crates/engine-render/src/lib.rs:793-828`](crates/engine-render/src/lib.rs:793)
+**Location:** [`crates/lunar-render/src/lib.rs:793-828`](crates/lunar-render/src/lib.rs:793)
 
 **Problem:** Every frame, for every texture batch, a new vertex buffer is created via `create_buffer_init()`. This allocates GPU memory every frame and throws it away.
 
@@ -31,7 +31,7 @@ vertex_buffer: device.create_buffer(&BufferDescriptor {
 
 ### 1.2 CRITICAL: Bind Group Created Every Frame Per Texture
 
-**Location:** [`crates/engine-render/src/lib.rs:751-768`](crates/engine-render/src/lib.rs:751)
+**Location:** [`crates/lunar-render/src/lib.rs:751-768`](crates/lunar-render/src/lib.rs:751)
 
 **Problem:** `device.create_bind_group()` is called every frame for every unique texture. Bind group creation is expensive on some backends (especially Vulkan).
 
@@ -52,7 +52,7 @@ pass.set_bind_group(0, bind_group, &[]);
 
 ### 1.3 HIGH: HashMap Grouping Every Frame
 
-**Location:** [`crates/engine-render/src/lib.rs:692-712`](crates/engine-render/src/lib.rs:692)
+**Location:** [`crates/lunar-render/src/lib.rs:692-712`](crates/lunar-render/src/lib.rs:692)
 
 **Problem:** Commands are grouped into `HashMap<u32, Vec<&DrawCommand>>` every frame. HashMap has allocation overhead and non-deterministic iteration order.
 
@@ -70,15 +70,15 @@ sorted_commands.sort_by_key(|cmd| {
 
 ### 1.4 HIGH: Glyph Atlas Rasterization Uses Naive Pixel Copy
 
-**Location:** [`crates/engine-render/src/text.rs:138-151`](crates/engine-render/src/text.rs:138)
+**Location:** [`crates/lunar-render/src/text.rs:138-151`](crates/lunar-render/src/text.rs:138)
 
 **Problem:** Glyph blitting uses nested `for` loops with per-pixel indexing. No SIMD, no batched copy.
 
-**Fix:** Use `slice::copy_from_slice` for each row, or better yet, use the engine-image SIMD functions for the copy. For a 16px-high glyph, this goes from 256 individual byte writes to 16 row copies.
+**Fix:** Use `slice::copy_from_slice` for each row, or better yet, use the lunar-image SIMD functions for the copy. For a 16px-high glyph, this goes from 256 individual byte writes to 16 row copies.
 
 ### 1.5 MEDIUM: Text Layout Recomputes Every Frame
 
-**Location:** [`crates/engine-render/src/text.rs:195-261`](crates/engine-render/src/text.rs:195)
+**Location:** [`crates/lunar-render/src/text.rs:195-261`](crates/lunar-render/src/text.rs:195)
 
 **Problem:** `layout_text()` is called every frame for every text element. It iterates over characters, looks up glyphs, and computes quads each time.
 
@@ -86,7 +86,7 @@ sorted_commands.sort_by_key(|cmd| {
 
 ### 1.6 MEDIUM: RenderQueue Uses Vec<DrawCommand> Without Pre-allocation
 
-**Location:** [`crates/engine-render/src/lib.rs:1008-1013`](crates/engine-render/src/lib.rs:1008)
+**Location:** [`crates/lunar-render/src/lib.rs:1008-1013`](crates/lunar-render/src/lib.rs:1008)
 
 **Problem:** `RenderQueue::commands` starts empty and grows dynamically every frame. Causes reallocation mid-frame.
 
@@ -94,7 +94,7 @@ sorted_commands.sort_by_key(|cmd| {
 
 ### 1.7 LOW: Game Loop Uses `std::thread::sleep` for Frame Cap
 
-**Location:** [`crates/engine-core/src/game_loop.rs:149`](crates/engine-core/src/game_loop.rs:149)
+**Location:** [`crates/lunar-core/src/game_loop.rs:149`](crates/lunar-core/src/game_loop.rs:149)
 
 **Problem:** `thread::sleep` has OS-dependent precision (typically 1-15ms). Can cause frame pacing jitter.
 
@@ -117,7 +117,7 @@ while self.last_frame.elapsed() < frame_duration {
 
 ### 2.1 Stage Ordering Not Implemented
 
-**Location:** [`crates/engine-core/src/app.rs:174-185`](crates/engine-core/src/app.rs:174)
+**Location:** [`crates/lunar-core/src/app.rs:174-185`](crates/lunar-core/src/app.rs:174)
 
 **Problem:** `add_system_to_stage()` logs a warning and adds to the default schedule regardless of stage. The `UpdateStage` enum exists but does nothing.
 
@@ -127,7 +127,7 @@ while self.last_frame.elapsed() < frame_duration {
 
 ### 2.2 Startup Systems Run Immediately, Not Before Main Loop
 
-**Location:** [`crates/engine-core/src/app.rs:188-192`](crates/engine-core/src/app.rs:188)
+**Location:** [`crates/lunar-core/src/app.rs:188-192`](crates/lunar-core/src/app.rs:188)
 
 **Problem:** `add_startup_system()` calls `run_system_once()` immediately during app construction, not before the main loop.
 
@@ -137,7 +137,7 @@ while self.last_frame.elapsed() < frame_duration {
 
 ### 2.3 DrawKind::Sprite Has `texture: Option<u64>` Instead of `Handle<Texture>`
 
-**Location:** [`crates/engine-render/src/lib.rs:1000`](crates/engine-render/src/lib.rs:1000)
+**Location:** [`crates/lunar-render/src/lib.rs:1000`](crates/lunar-render/src/lib.rs:1000)
 
 **Problem:** The render queue takes raw `u64` texture IDs, not typed `Handle<Texture>`. Game code must call `.id() as u64` manually.
 
@@ -145,7 +145,7 @@ while self.last_frame.elapsed() < frame_duration {
 
 ### 2.4 No `DrawKind::Line` — Lines Drawn as Fat Rects
 
-**Location:** [`crates/engine-render/src/lib.rs:1130-1168`](crates/engine-render/src/lib.rs:1130)
+**Location:** [`crates/lunar-render/src/lib.rs:1130-1168`](crates/lunar-render/src/lib.rs:1130)
 
 **Problem:** `draw_line()` computes an AABB and draws a rect. This is inefficient and doesn't produce clean diagonal lines.
 
@@ -153,7 +153,7 @@ while self.last_frame.elapsed() < frame_duration {
 
 ### 2.5 Rect Missing Utility Methods
 
-**Location:** [`crates/engine-math/src/types.rs:153-199`](crates/engine-math/src/types.rs:153)
+**Location:** [`crates/lunar-math/src/types.rs:153-199`](crates/lunar-math/src/types.rs:153)
 
 **Problem:** Rect has `contains()` and `intersects()` but is missing `inflate()`, `clamp()`, `union()`, `collide_point()`, `collide_rect()`.
 
@@ -161,7 +161,7 @@ while self.last_frame.elapsed() < frame_duration {
 
 ### 2.6 Input System Uses Fixed-Size Arrays (Good) But KeyCode Only Has 64 Variants
 
-**Location:** [`crates/engine-input/src/lib.rs:36`](crates/engine-input/src/lib.rs:36)
+**Location:** [`crates/lunar-input/src/lib.rs:36`](crates/lunar-input/src/lib.rs:36)
 
 **Problem:** `KEY_COUNT = 64` limits the number of key codes. SDL3 has hundreds of keys.
 
@@ -171,7 +171,7 @@ while self.last_frame.elapsed() < frame_duration {
 
 ### 2.7 No `DrawKind::Sprite` Origin Parameter Actually Used
 
-**Location:** [`crates/engine-render/src/lib.rs:1111-1120`](crates/engine-render/src/lib.rs:1111)
+**Location:** [`crates/lunar-render/src/lib.rs:1111-1120`](crates/lunar-render/src/lib.rs:1111)
 
 **Problem:** `draw_sprite_transformed` takes an `origin` parameter in `SpriteParams` but the render loop ignores it. Rotation and scaling are always around the sprite's center.
 
@@ -261,20 +261,20 @@ This is a **significant optimization for mobile/Apple Silicon** GPUs.
 ## 4. Architecture Observations
 
 ### 4.1 Good: Clean Crate Separation
-- `engine-math`, `engine-image`, `engine-assets`, `engine-core`, `engine-render`, `engine-input`, `engine-audio` are well-separated
+- `lunar-math`, `lunar-image`, `lunar-assets`, `lunar-core`, `lunar-render`, `lunar-input`, `engine-audio` are well-separated
 - Dependencies flow in one direction (no circular deps)
 
 ### 4.2 Good: ECS-First Design
 - bevy_ecs integration is clean
 - Handle system prevents direct reference to engine resources
 
-### 4.3 Concern: `image` Crate Dependency in engine-assets
+### 4.3 Concern: `image` Crate Dependency in lunar-assets
 
 The `image` crate is heavy (pulls in many format decoders). For a lean engine, consider:
 - Using only the specific format sub-crates (`png`, `jpeg-decoder`)
 - Or relying solely on `.mi` format for shipped games
 
-### 4.4 Concern: `rodio` Dependency in engine-assets
+### 4.4 Concern: `rodio` Dependency in lunar-assets
 
 `rodio` pulls in ALSA, CoreAudio, etc. This is fine for native but adds significant compile time and binary size. The audio stub is already noted as deferred until Moonwalker integration.
 

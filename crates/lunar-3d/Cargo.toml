@@ -1,0 +1,17 @@
+[package]
+name = "lunar-3d"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "3d components and systems for lunar — transform hierarchy, camera, mesh, material, lighting"
+repository.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
+
+[dependencies]
+lunar-core = { path = "../lunar-core" }
+lunar-math = { path = "../lunar-math" }
+lunar-assets = { path = "../lunar-assets" }
+bevy_ecs = { workspace = true }
+log = { workspace = true }

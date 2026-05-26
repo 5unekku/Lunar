@@ -1,8 +1,8 @@
 # World and Zone Management
 
-> **Crate:** zones live in `engine-zones`, an opt-in domain crate. Add it to
+> **Crate:** zones live in `lunar-zones`, an opt-in domain crate. Add it to
 > your `Cargo.toml` only if your game uses zoned area loading. The Scene
-> system below stays in `engine-core` because it's a generic game-state
+> system below stays in `lunar-core` because it's a generic game-state
 > pattern useful to all games.
 
 ## Design Philosophy

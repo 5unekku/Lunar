@@ -27,13 +27,13 @@ a 2D game engine built in Rust.
 | crate | purpose |
 |-------|---------|
 | `lunar` | public API facade — the one crate game code depends on |
-| `engine-core` | game loop, scheduler, plugin system, time, scene, hierarchy |
-| `engine-render` | wgpu 2D rendering pipeline (internal) |
-| `engine-input` | input handling (internal) |
-| `engine-math` | math types (`Vec2`, `Mat3`, `Transform`, `Color`, `Rect`) |
-| `engine-assets` | handle-based asset server, async loading, hot-reload |
-| `engine-image` | custom image format (zstd-compressed) |
-| `engine-atlas` | texture atlas packer |
+| `lunar-core` | game loop, scheduler, plugin system, time, scene, hierarchy |
+| `lunar-render` | wgpu 2D rendering pipeline (internal) |
+| `lunar-input` | input handling (internal) |
+| `lunar-math` | math types (`Vec2`, `Mat3`, `Transform`, `Color`, `Rect`) |
+| `lunar-assets` | handle-based asset server, async loading, hot-reload |
+| `lunar-image` | custom image format (zstd-compressed) |
+| `lunar-atlas` | texture atlas packer |
 
 ## getting started
 
@@ -168,13 +168,13 @@ The engine resolves plugin dependencies via topological sort.
 lunar/
 ├── crates/
 │   ├── lunar/         # public API facade
-│   ├── engine-core/      # game loop, ECS wiring, plugins
-│   ├── engine-render/    # wgpu rendering
-│   ├── engine-input/     # input handling
-│   ├── engine-math/      # math types
-│   ├── engine-assets/    # asset server
-│   ├── engine-image/     # zstd-compressed image format
-│   └── engine-atlas/     # texture atlas packer
+│   ├── lunar-core/      # game loop, ECS wiring, plugins
+│   ├── lunar-render/    # wgpu rendering
+│   ├── lunar-input/     # input handling
+│   ├── lunar-math/      # math types
+│   ├── lunar-assets/    # asset server
+│   ├── lunar-image/     # zstd-compressed image format
+│   └── lunar-atlas/     # texture atlas packer
 ├── plans/                # design documents and implementation TODO
 └── src/
     ├── main.rs           # native smoke-test entry point
