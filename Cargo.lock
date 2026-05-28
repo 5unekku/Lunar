@@ -1761,6 +1761,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunar-physics-3d"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "lunar-3d",
+ "lunar-core",
+ "lunar-math",
+]
+
+[[package]]
 name = "lunar-render"
 version = "0.1.0"
 dependencies = [

@@ -57,7 +57,7 @@ pub use bundles::{
 };
 pub use camera::{ActiveCamera3d, AmbientLight, Camera3d, Projection, update_active_camera};
 pub use collision::{
-    Collider3d, ColliderShape3d, CollisionWorld3d, Ray3d, RayHit3d,
+    Collider3d, ColliderEntryRef, ColliderShape3d, CollisionWorld3d, Ray3d, RayHit3d,
     build_collision_world_3d, raycast_3d,
 };
 pub use fog::{Fog, FogFalloff};

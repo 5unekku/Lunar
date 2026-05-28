@@ -1,0 +1,16 @@
+[package]
+name = "lunar-physics-3d"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "kinematic character controller for lunar 3d — move/slide/slope/step, AABB collision response"
+repository.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
+
+[dependencies]
+bevy_ecs = { workspace = true }
+lunar-core = { path = "../lunar-core" }
+lunar-math = { path = "../lunar-math" }
+lunar-3d = { path = "../lunar-3d" }

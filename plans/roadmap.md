@@ -90,7 +90,7 @@ game code adds these to its `Cargo.toml` only when needed.
 | plugin crate | priority | what it provides |
 |---|---|---|
 | ~~`lunar-physics-2d`~~ | ~~critical~~ | done — gravity, velocity integration, AABB collision response, one-way platforms |
-| `lunar-physics-3d` | high | kinematic character controller (move/slide/slope/step) first; full rigidbody optional backend (rapier3d) |
+| ~~`lunar-physics-3d`~~ | ~~high~~ | done — `KinematicBody3d` component; `move_and_slide_3d` with iterative AABB depenetration; slope detection; gravity; `ColliderEntryRef` added to `CollisionWorld3d` |
 | ~~`lunar-particles`~~ | ~~high~~ | done — `ParticleEmitter` + `ParticlePool`, tick + draw systems |
 | ~~`lunar-pathfinding-rt`~~ | ~~high~~ | done — A* on `NavGrid` resource; 4-dir and 8-dir movement; per-tile cost; corner-cut prevention; max_nodes cap |
 | ~~`lunar-pathfinding-pre`~~ | ~~medium~~ | done — Dijkstra flow field baked at level load; O(1) per-agent step query; corner-cut prevention; `cost_at` for debug |

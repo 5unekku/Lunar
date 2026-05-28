@@ -28,6 +28,7 @@ members = [
     "crates/lunar-pathfinding-rt",
     "crates/lunar-pathfinding-pre",
     "crates/lunar-ai",
+    "crates/lunar-physics-3d",
     "crates/lunar-camera-3d",
     "crates/lunar-spline",
     "crates/lunar-timeline",

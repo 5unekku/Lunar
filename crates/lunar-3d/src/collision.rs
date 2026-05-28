@@ -157,6 +157,18 @@ fn shapes_overlap(
     }
 }
 
+/// read-only view of a single entry in the collision world.
+///
+/// used by external physics systems (e.g. `lunar-physics-3d`) to iterate all colliders.
+pub struct ColliderEntryRef<'a> {
+    pub entity: Entity,
+    pub position: Vec3,
+    pub shape: ColliderShape3d,
+    pub layer: u32,
+    pub mask: u32,
+    _phantom: std::marker::PhantomData<&'a ()>,
+}
+
 /// resource rebuilt every physics tick — holds the current frame's collider snapshot.
 ///
 /// entries are sorted by `min_x` so `all_overlaps` can use a sweep-and-prune
@@ -204,6 +216,20 @@ impl CollisionWorld3d {
         let query_shape = ColliderShape3d::Aabb { half_extents };
         self.entries.iter().filter_map(move |entry| {
             shapes_overlap(center, query_shape, entry.position, entry.shape).then_some(entry.entity)
+        })
+    }
+
+    /// iterator over all entries in the collision world this frame.
+    ///
+    /// used by physics systems that need to test a swept position against all colliders.
+    pub fn all_entries(&self) -> impl Iterator<Item = ColliderEntryRef<'_>> {
+        self.entries.iter().map(|entry| ColliderEntryRef {
+            entity: entry.entity,
+            position: entry.position,
+            shape: entry.shape,
+            layer: entry.layer,
+            mask: entry.mask,
+            _phantom: std::marker::PhantomData,
         })
     }
 
