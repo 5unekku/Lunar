@@ -1797,6 +1797,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunar-spline"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "lunar-assets",
+ "lunar-core",
+ "lunar-math",
+]
+
+[[package]]
 name = "lunar-tilemap"
 version = "0.1.0"
 dependencies = [

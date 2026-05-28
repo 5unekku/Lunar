@@ -29,6 +29,7 @@ members = [
     "crates/lunar-pathfinding-pre",
     "crates/lunar-ai",
     "crates/lunar-camera-3d",
+    "crates/lunar-spline",
     "tests/api_seal",
 ]
 resolver = "2"
