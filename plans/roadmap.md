@@ -92,7 +92,7 @@ game code adds these to its `Cargo.toml` only when needed.
 | ~~`lunar-physics-2d`~~ | ~~critical~~ | done — gravity, velocity integration, AABB collision response, one-way platforms |
 | `lunar-physics-3d` | high | kinematic character controller (move/slide/slope/step) first; full rigidbody optional backend (rapier3d) |
 | ~~`lunar-particles`~~ | ~~high~~ | done — `ParticleEmitter` + `ParticlePool`, tick + draw systems |
-| `lunar-pathfinding-rt` | high | realtime per-query pathfinding (A*, best-first search); good for single agents or infrequent recalculation |
+| ~~`lunar-pathfinding-rt`~~ | ~~high~~ | done — A* on `NavGrid` resource; 4-dir and 8-dir movement; per-tile cost; corner-cut prevention; max_nodes cap |
 | `lunar-pathfinding-pre` | medium | precomputed pathfinding (Dijkstra cost maps, flow fields); bakes at level load; good for many agents sharing a goal |
 | `lunar-ai` | medium | behavior tree evaluation (`Selector`, `Sequence`, `Condition`, `Action`); tree structure + tick loop only; leaf actions written by game code |
 | `lunar-camera-3d` | medium | `SpringArm3d` orbit camera; shortens arm via 3d raycast when blocked; depends on `lunar-3d` raycasting |

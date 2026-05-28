@@ -1708,6 +1708,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunar-particles"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "lunar-assets",
+ "lunar-core",
+ "lunar-math",
+ "lunar-render",
+]
+
+[[package]]
+name = "lunar-pathfinding-rt"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+]
+
+[[package]]
+name = "lunar-physics-2d"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "lunar-2d",
+ "lunar-core",
+ "lunar-math",
+]
+
+[[package]]
 name = "lunar-render"
 version = "0.1.0"
 dependencies = [
