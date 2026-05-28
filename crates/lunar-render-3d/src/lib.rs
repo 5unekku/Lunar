@@ -50,11 +50,16 @@ const SKY_RADIUS: f32 = 900.0;
 const SUN_Y: f32 = 895.0;
 const VERTEX_STRIDE: u64 = std::mem::size_of::<Vertex3d>() as u64;
 
-/// bytes of actual draw data per entity: model mat4 (64) + base_color vec4 (16).
-const DRAW_UNIFORMS_SIZE: u64 = 80;
+/// group 0 globals size: view_proj mat4 (64) + elapsed (4) + delta (4) + pad (8).
+const GLOBALS_SIZE: u64 = 80;
 
-/// stride between entity slots in the dynamic UBO.
-/// must be >= min_uniform_buffer_offset_alignment (256 in wgpu default limits).
+/// group 1 per-material data: base_color vec4 (16 bytes).
+const MATERIAL_UNIFORMS_SIZE: u64 = 16;
+
+/// group 2 per-mesh data: model mat4 (64 bytes).
+const MESH_UNIFORMS_SIZE: u64 = 64;
+
+/// stride for dynamic UBO slots — must be ≥ min_uniform_buffer_offset_alignment (256).
 const UNIFORM_STRIDE: u64 = 256;
 
 /// initial number of slots (dome + sun + entities) in the entity uniform buffer.
@@ -163,12 +168,18 @@ pub struct RenderEngine3d {
 
     depth_view: wgpu::TextureView,
 
-    // group 0: view-global (camera view-proj)
+    // group 0: view-global (camera view-proj + time)
     globals_buf: wgpu::Buffer,
     globals_bg: wgpu::BindGroup,
 
-    // group 1: per-draw (dynamic UBO — one slot per entity + 2 for sky)
-    draw_bgl: wgpu::BindGroupLayout,
+    // group 1: material (base_color — dynamic UBO, one slot per draw call)
+    material_bgl: wgpu::BindGroupLayout,
+    material_buf: wgpu::Buffer,
+    material_bg: wgpu::BindGroup,
+    material_staging: Vec<u8>,
+
+    // group 2: per-mesh (model matrix — dynamic UBO, one slot per draw call)
+    mesh_bgl: wgpu::BindGroupLayout,
     entity_buf: wgpu::Buffer,
     entity_bg: wgpu::BindGroup,
     entity_capacity: usize,
@@ -259,27 +270,41 @@ impl RenderEngine3d {
             label: Some("[globals] bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(64),
+                    min_binding_size: wgpu::BufferSize::new(GLOBALS_SIZE),
                 },
                 count: None,
             }],
         });
 
-        // dynamic offset: one bind group covers the whole entity buffer;
-        // each draw call supplies a byte offset to select its slot.
-        let draw_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("[draw] bgl"),
+        // group 1: material — dynamic offset, one slot per draw call (base_color)
+        let material_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[material] bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
-                    min_binding_size: wgpu::BufferSize::new(DRAW_UNIFORMS_SIZE),
+                    min_binding_size: wgpu::BufferSize::new(MATERIAL_UNIFORMS_SIZE),
+                },
+                count: None,
+            }],
+        });
+
+        // group 2: per-mesh — dynamic offset, one slot per draw call (model matrix)
+        let mesh_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[mesh] bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: wgpu::BufferSize::new(MESH_UNIFORMS_SIZE),
                 },
                 count: None,
             }],
@@ -288,8 +313,8 @@ impl RenderEngine3d {
         // ── globals buffer ─────────────────────────────────────────────────
 
         let globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("[globals] view-proj"),
-            size: 64,
+            label: Some("[globals] view-proj+time"),
+            size: GLOBALS_SIZE,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -303,11 +328,33 @@ impl RenderEngine3d {
             }],
         });
 
-        // ── entity uniform buffer ──────────────────────────────────────────
+        // ── material uniform buffer (group 1) ─────────────────────────────
 
         let entity_capacity = INITIAL_ENTITY_CAPACITY;
+        let material_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[material] uniform buffer"),
+            size: (entity_capacity * UNIFORM_STRIDE as usize) as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let material_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[material] bg"),
+            layout: &material_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &material_buf,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(MATERIAL_UNIFORMS_SIZE),
+                }),
+            }],
+        });
+        let material_staging = vec![0u8; entity_capacity * UNIFORM_STRIDE as usize];
+
+        // ── mesh uniform buffer (group 2) ─────────────────────────────────
+
         let entity_buf = Self::make_entity_buf(&device, entity_capacity);
-        let entity_bg = Self::make_entity_bg(&device, &draw_bgl, &entity_buf);
+        let entity_bg = Self::make_entity_bg(&device, &mesh_bgl, &entity_buf);
         let uniform_staging = vec![0u8; entity_capacity * UNIFORM_STRIDE as usize];
 
         // ── pipelines ──────────────────────────────────────────────────────
@@ -319,7 +366,7 @@ impl RenderEngine3d {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("3d pipeline layout"),
-            bind_group_layouts: &[Some(&globals_bgl), Some(&draw_bgl)],
+            bind_group_layouts: &[Some(&globals_bgl), Some(&material_bgl), Some(&mesh_bgl)],
             immediate_size: 0,
         });
 
@@ -429,7 +476,11 @@ impl RenderEngine3d {
             depth_view,
             globals_buf,
             globals_bg,
-            draw_bgl,
+            material_bgl,
+            material_buf,
+            material_bg,
+            material_staging,
+            mesh_bgl,
             entity_buf,
             entity_bg,
             entity_capacity,
@@ -473,18 +524,18 @@ impl RenderEngine3d {
 
     fn make_entity_bg(
         device: &wgpu::Device,
-        draw_bgl: &wgpu::BindGroupLayout,
+        mesh_bgl: &wgpu::BindGroupLayout,
         entity_buf: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("[draw] entity bg"),
-            layout: draw_bgl,
+            label: Some("[mesh] entity bg"),
+            layout: mesh_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: entity_buf,
                     offset: 0,
-                    size: wgpu::BufferSize::new(DRAW_UNIFORMS_SIZE),
+                    size: wgpu::BufferSize::new(MESH_UNIFORMS_SIZE),
                 }),
             }],
         })
@@ -523,13 +574,16 @@ impl RenderEngine3d {
         GpuMesh { vbuf, ibuf, index_count, index_fmt }
     }
 
-    /// write model+color into the staging slice at the given slot.
-    fn pack_uniforms(staging: &mut [u8], slot: usize, model: Mat4, color: Color) {
+    fn pack_mesh_uniforms(staging: &mut [u8], slot: usize, model: Mat4) {
         let offset = slot * UNIFORM_STRIDE as usize;
         let model_cols = model.to_cols_array();
-        let color_data = [color.r, color.g, color.b, color.a];
         staging[offset..offset + 64].copy_from_slice(unsafe { slice_as_bytes(&model_cols) });
-        staging[offset + 64..offset + 80].copy_from_slice(unsafe { slice_as_bytes(&color_data) });
+    }
+
+    fn pack_material_uniforms(staging: &mut [u8], slot: usize, color: Color) {
+        let offset = slot * UNIFORM_STRIDE as usize;
+        let color_data = [color.r, color.g, color.b, color.a];
+        staging[offset..offset + 16].copy_from_slice(unsafe { slice_as_bytes(&color_data) });
     }
 
     // ── public surface management ──────────────────────────────────────────
@@ -616,34 +670,67 @@ impl RenderEngine3d {
             }
         }
 
-        // ── grow entity buffer if needed ──────────────────────────────────
+        // ── grow buffers if needed ────────────────────────────────────────
         let needed = ENTITY_SLOT_START + self.draw_scratch.len();
         if needed > self.entity_capacity {
             self.entity_capacity = needed.next_power_of_two().max(INITIAL_ENTITY_CAPACITY);
+            let new_size = (self.entity_capacity * UNIFORM_STRIDE as usize) as u64;
             self.entity_buf = Self::make_entity_buf(&self.device, self.entity_capacity);
-            self.entity_bg = Self::make_entity_bg(&self.device, &self.draw_bgl, &self.entity_buf);
+            self.entity_bg = Self::make_entity_bg(&self.device, &self.mesh_bgl, &self.entity_buf);
             self.uniform_staging.resize(self.entity_capacity * UNIFORM_STRIDE as usize, 0);
-            log::debug!("entity uniform buffer grown to {} slots", self.entity_capacity);
+            self.material_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("[material] uniform buffer"),
+                size: new_size,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.material_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("[material] bg"),
+                layout: &self.material_bgl,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.material_buf,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(MATERIAL_UNIFORMS_SIZE),
+                    }),
+                }],
+            });
+            self.material_staging.resize(self.entity_capacity * UNIFORM_STRIDE as usize, 0);
+            log::debug!("draw buffers grown to {} slots", self.entity_capacity);
         }
 
-        // ── pack all uniforms into staging, upload in one call ────────────
+        // ── pack mesh + material staging ──────────────────────────────────
         let dome_model = Mat4::from_translation(cam_pos);
-        Self::pack_uniforms(&mut self.uniform_staging, SLOT_DOME, dome_model, sky_color);
+        Self::pack_mesh_uniforms(&mut self.uniform_staging, SLOT_DOME, dome_model);
+        Self::pack_material_uniforms(&mut self.material_staging, SLOT_DOME, sky_color);
 
         if let Some(sky) = sky {
             let sun_model = Mat4::from_translation(cam_pos + Vec3::new(0.0, SUN_Y, 0.0));
-            Self::pack_uniforms(&mut self.uniform_staging, SLOT_SUN, sun_model, sky.sun_color);
+            Self::pack_mesh_uniforms(&mut self.uniform_staging, SLOT_SUN, sun_model);
+            Self::pack_material_uniforms(&mut self.material_staging, SLOT_SUN, sky.sun_color);
         }
 
         for i in 0..self.draw_scratch.len() {
             let (_, _, color, model) = self.draw_scratch[i];
-            Self::pack_uniforms(&mut self.uniform_staging, ENTITY_SLOT_START + i, model, color);
+            Self::pack_mesh_uniforms(&mut self.uniform_staging, ENTITY_SLOT_START + i, model);
+            Self::pack_material_uniforms(&mut self.material_staging, ENTITY_SLOT_START + i, color);
         }
 
+        // ── upload all buffers ────────────────────────────────────────────
         let upload_size = (needed * UNIFORM_STRIDE as usize) as u64;
-        let vp_cols = view_proj.to_cols_array();
-        self.queue.write_buffer(&self.globals_buf, 0, unsafe { slice_as_bytes(&vp_cols) });
+        let time = world.resource::<lunar_core::Time>();
+        let globals_data: [f32; 20] = {
+            let vp = view_proj.to_cols_array();
+            let mut d = [0f32; 20];
+            d[..16].copy_from_slice(&vp);
+            d[16] = time.elapsed_seconds();
+            d[17] = time.delta_seconds();
+            d
+        };
+        self.queue.write_buffer(&self.globals_buf, 0, unsafe { slice_as_bytes(&globals_data) });
         self.queue.write_buffer(&self.entity_buf, 0, &self.uniform_staging[..upload_size as usize]);
+        self.queue.write_buffer(&self.material_buf, 0, &self.material_staging[..upload_size as usize]);
 
         // ── acquire surface ───────────────────────────────────────────────
         let (wgpu::CurrentSurfaceTexture::Success(frame)
@@ -692,14 +779,16 @@ impl RenderEngine3d {
 
             // sky pass — dome always drawn; sun only when sky resource says so
             pass.set_pipeline(&self.sky_pipeline);
-            pass.set_bind_group(1, &self.entity_bg, &[Self::slot_offset(SLOT_DOME)]);
+            pass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(SLOT_DOME)]);
+            pass.set_bind_group(2, &self.entity_bg, &[Self::slot_offset(SLOT_DOME)]);
             pass.set_vertex_buffer(0, self.dome_mesh.vbuf.slice(..));
             pass.set_index_buffer(self.dome_mesh.ibuf.slice(..), self.dome_mesh.index_fmt);
             pass.draw_indexed(0..self.dome_mesh.index_count, 0, 0..1);
             draw_calls += 1;
 
             if sky.is_some_and(|s| s.show_sun) {
-                pass.set_bind_group(1, &self.entity_bg, &[Self::slot_offset(SLOT_SUN)]);
+                pass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(SLOT_SUN)]);
+                pass.set_bind_group(2, &self.entity_bg, &[Self::slot_offset(SLOT_SUN)]);
                 pass.set_vertex_buffer(0, self.sun_mesh.vbuf.slice(..));
                 pass.set_index_buffer(self.sun_mesh.ibuf.slice(..), self.sun_mesh.index_fmt);
                 pass.draw_indexed(0..self.sun_mesh.index_count, 0, 0..1);
@@ -711,7 +800,8 @@ impl RenderEngine3d {
             for i in 0..self.draw_scratch.len() {
                 let mesh_id = self.draw_scratch[i].1;
                 let Some(gpu_mesh) = self.mesh_gpu.get(&mesh_id) else { continue; };
-                pass.set_bind_group(1, &self.entity_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
+                pass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
+                pass.set_bind_group(2, &self.entity_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
                 pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
                 pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
                 pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
