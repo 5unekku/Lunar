@@ -1547,6 +1547,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunar-ai"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+]
+
+[[package]]
 name = "lunar-animation"
 version = "0.1.0"
 dependencies = [

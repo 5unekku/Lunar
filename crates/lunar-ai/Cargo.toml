@@ -1,0 +1,13 @@
+[package]
+name = "lunar-ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "behavior tree AI for lunar — Selector, Sequence, Condition, Action nodes; leaf actions written by game code"
+repository.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
+
+[dependencies]
+bevy_ecs = { workspace = true }
