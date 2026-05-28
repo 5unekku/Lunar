@@ -1,0 +1,16 @@
+[package]
+name = "lunar-physics-2d"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "2d physics for lunar: gravity, velocity integration, AABB collision response, one-way platforms"
+repository.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
+
+[dependencies]
+lunar-core = { path = "../lunar-core" }
+lunar-math = { path = "../lunar-math" }
+lunar-2d = { path = "../lunar-2d" }
+bevy_ecs = { workspace = true }
