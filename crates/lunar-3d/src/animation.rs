@@ -202,13 +202,13 @@ impl AnimationPlayer {
 
 /// advance all animation players by delta time, then write sampled transforms to joint entities.
 ///
-/// uses a `Local` scratch map to avoid per-frame allocation — the map's capacity grows to fit
-/// the scene and is never freed, so steady-state operation is allocation-free.
+/// scratch is a sorted `Vec` (by entity) reused each frame — O(N log N) sort + O(log N) binary
+/// search per target. better cache behavior than a HashMap for typical animation counts.
 pub fn advance_animations(
     time: Res<Time>,
     mut players: Query<(Entity, &mut AnimationPlayer)>,
     mut targets: Query<(&AnimationTarget, &mut LocalTransform3d)>,
-    mut scratch: Local<HashMap<Entity, (Arc<AnimationClip>, f32)>>,
+    mut scratch: Local<Vec<(Entity, Arc<AnimationClip>, f32)>>,
 ) {
     scratch.clear();
 
@@ -226,13 +226,16 @@ pub fn advance_animations(
                 player.playing = false;
             }
         }
-        scratch.insert(entity, (player.clip.clone(), player.time));
+        scratch.push((entity, Arc::clone(&player.clip), player.time));
     }
 
+    scratch.sort_unstable_by_key(|&(entity, _, _)| entity);
+
     for (target, mut transform) in &mut targets {
-        let Some((clip, time)) = scratch.get(&target.player) else {
+        let Ok(idx) = scratch.binary_search_by_key(&target.player, |&(entity, _, _)| entity) else {
             continue;
         };
+        let (_, clip, time) = &scratch[idx];
         let Some(track) = clip.tracks.get(&target.joint_name) else {
             continue;
         };

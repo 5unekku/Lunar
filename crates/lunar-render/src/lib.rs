@@ -48,6 +48,7 @@ mod text;
 pub mod textbox;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::IntoScheduleConfigs;
@@ -1757,7 +1758,7 @@ pub enum DrawKind {
     /// draw text
     Text {
         font: Option<u64>,
-        content: String,
+        content: Arc<str>,
         position: Vec2,
         font_size: f32,
         color: Color,
@@ -1900,8 +1901,8 @@ impl Sprite {
 /// ```
 #[derive(Debug, Clone, Component)]
 pub struct Text {
-    /// text content
-    pub content: String,
+    /// text content. use `Arc::from("hello")` or `Arc::from(string)` to set.
+    pub content: Arc<str>,
     /// font to render with
     pub font: Handle<Font>,
     /// font size in pixels
@@ -1915,7 +1916,7 @@ pub struct Text {
 impl Text {
     /// create a text component with default settings (16px white, UI layer)
     #[must_use]
-    pub fn new(content: impl Into<String>, font: Handle<Font>) -> Self {
+    pub fn new(content: impl Into<Arc<str>>, font: Handle<Font>) -> Self {
         Self {
             content: content.into(),
             font,
@@ -2159,7 +2160,7 @@ impl RenderQueue {
         self.push(DrawCommand {
             kind: DrawKind::Text {
                 font: Some(u64::from(font.id())),
-                content: content.to_string(),
+                content: Arc::from(content),
                 position,
                 font_size,
                 color,
@@ -2222,7 +2223,7 @@ impl RenderQueue {
         self.push(DrawCommand {
             kind: DrawKind::Text {
                 font: Some(u64::from(font.id())),
-                content: content.to_string(),
+                content: Arc::from(content),
                 position,
                 font_size,
                 color,
@@ -2355,7 +2356,7 @@ impl DrawContext<'_> {
         self.queue.push(DrawCommand {
             kind: DrawKind::Text {
                 font: Some(0),
-                content: content.to_string(),
+                content: Arc::from(content),
                 position,
                 font_size,
                 color,
@@ -2458,6 +2459,8 @@ pub struct DebugOverlay {
     pub font_size: f32,
     /// text color
     pub color: Color,
+    // scratch buffer reused each frame to avoid per-line format! allocations
+    scratch: String,
 }
 
 impl DebugOverlay {
@@ -2469,13 +2472,14 @@ impl DebugOverlay {
             position: Vec2::new(10.0, 10.0),
             font_size: 14.0,
             color: Color::WHITE,
+            scratch: String::new(),
         }
     }
 
     /// draw debug info to the render queue.
     /// call this each frame with current stats.
     pub fn draw(
-        &self,
+        &mut self,
         queue: &mut RenderQueue,
         fps: f32,
         frame_time_ms: f32,
@@ -2485,34 +2489,46 @@ impl DebugOverlay {
         if !self.enabled {
             return;
         }
+        use std::fmt::Write;
+        let x = self.position.x;
         let y = self.position.y;
-        queue.draw_immediate(|draw| {
-            draw.text(
-                &format!("FPS: {fps:.1}"),
-                Vec2::new(self.position.x, y),
-                self.font_size,
-                self.color,
-            );
-            draw.text(
-                &format!("Frame: {frame_time_ms:.1}ms"),
-                Vec2::new(self.position.x, y + self.font_size + 2.0),
-                self.font_size,
-                self.color,
-            );
-            draw.text(
-                &format!("Sprites: {sprite_count}"),
-                Vec2::new(self.position.x, y + (self.font_size + 2.0) * 2.0),
-                self.font_size,
-                self.color,
-            );
-            draw.text(
-                &format!("Entities: {entity_count}"),
-                Vec2::new(self.position.x, y + (self.font_size + 2.0) * 3.0),
-                self.font_size,
-                self.color,
-            );
-        });
+        let fs = self.font_size;
+        let color = self.color;
+        let spacing = fs + 2.0;
+
+        // write! reuses scratch's allocation; Arc::from copies into the draw command.
+        // saves one format! String alloc per line at steady-state.
+        self.scratch.clear();
+        let _ = write!(self.scratch, "FPS: {fps:.1}");
+        push_debug_text(queue, &self.scratch, Vec2::new(x, y), fs, color);
+
+        self.scratch.clear();
+        let _ = write!(self.scratch, "Frame: {frame_time_ms:.1}ms");
+        push_debug_text(queue, &self.scratch, Vec2::new(x, y + spacing), fs, color);
+
+        self.scratch.clear();
+        let _ = write!(self.scratch, "Sprites: {sprite_count}");
+        push_debug_text(queue, &self.scratch, Vec2::new(x, y + spacing * 2.0), fs, color);
+
+        self.scratch.clear();
+        let _ = write!(self.scratch, "Entities: {entity_count}");
+        push_debug_text(queue, &self.scratch, Vec2::new(x, y + spacing * 3.0), fs, color);
     }
+}
+
+fn push_debug_text(queue: &mut RenderQueue, content: &str, position: Vec2, font_size: f32, color: Color) {
+    queue.push(DrawCommand {
+        kind: DrawKind::Text {
+            font: Some(0),
+            content: Arc::from(content),
+            position,
+            font_size,
+            color,
+            layer: layers::FOREGROUND,
+            wrap_width: None,
+            line_height: 0.0,
+        },
+    });
 }
 
 impl Default for DebugOverlay {
@@ -2727,7 +2743,7 @@ fn auto_text_system(mut queue: ResMut<RenderQueue>, query: Query<(&Transform, &T
         queue.push(DrawCommand {
             kind: DrawKind::Text {
                 font: Some(u64::from(text.font.id())),
-                content: text.content.clone(),
+                content: Arc::clone(&text.content),
                 position: transform.translation,
                 font_size: text.font_size,
                 color: text.color,
@@ -2757,7 +2773,7 @@ fn render_system(
 /// debug overlay system — draws FPS, frame time, sprite count, and entity count.
 #[allow(clippy::needless_pass_by_value)]
 fn debug_overlay_system(
-    overlay: Res<DebugOverlay>,
+    mut overlay: ResMut<DebugOverlay>,
     info: Res<RenderInfo>,
     mut queue: ResMut<RenderQueue>,
     entities: Query<Entity>,

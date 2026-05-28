@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use bevy_ecs::prelude::*;
 use lunar_core::Parent;
 use lunar_math::{Mat3, Mat4, Vec3, Vec3A, Vec4};
@@ -211,12 +209,21 @@ pub struct ShadowCaster;
 pub struct ShadowReceiver;
 
 /// scratch storage for visibility propagation — allocated once, reused every frame.
+///
+/// uses parallel Vecs keyed by snapshot index rather than HashMaps keyed by Entity.
 #[derive(Resource, Default)]
 pub struct VisibilityScratch {
     snapshot: Vec<(Entity, Visibility, Option<Entity>)>,
-    parent_of: HashMap<Entity, Entity>,
-    depths: HashMap<Entity, u32>,
-    computed: HashMap<Entity, bool>,
+    // sorted (entity, snapshot_index) pairs for binary-search lookup
+    entity_idx: Vec<(Entity, usize)>,
+    // parallel to snapshot: snapshot index of parent, or None
+    parent_idx: Vec<Option<usize>>,
+    // parallel to snapshot: computed depth (u32::MAX = not yet computed)
+    depths: Vec<u32>,
+    // snapshot indices in depth order (parents before children)
+    order: Vec<usize>,
+    // parallel to snapshot: computed visibility
+    computed: Vec<bool>,
 }
 
 /// propagate [`Visibility`] through the entity hierarchy to produce [`ComputedVisibility`].
@@ -225,17 +232,13 @@ pub struct VisibilityScratch {
 /// - it has `Visibility::Visible`, or
 /// - it has `Visibility::Inherited` and its parent is computed-visible.
 ///
-/// uses a persistent scratch resource to avoid per-frame heap allocations.
+/// O(N log N) sort + binary-search lookups. all scratch vecs are reused each frame.
 pub fn propagate_visibility(world: &mut World) {
     let mut scratch = world
         .remove_resource::<VisibilityScratch>()
         .unwrap_or_default();
 
     scratch.snapshot.clear();
-    scratch.parent_of.clear();
-    scratch.depths.clear();
-    scratch.computed.clear();
-
     world
         .query::<(Entity, &Visibility, Option<&Parent>)>()
         .iter(world)
@@ -248,31 +251,47 @@ pub fn propagate_visibility(world: &mut World) {
         return;
     }
 
-    for &(entity, _, parent) in &scratch.snapshot {
-        if let Some(parent_entity) = parent {
-            scratch.parent_of.insert(entity, parent_entity);
+    let n = scratch.snapshot.len();
+
+    scratch.entity_idx.clear();
+    for (i, &(entity, _, _)) in scratch.snapshot.iter().enumerate() {
+        scratch.entity_idx.push((entity, i));
+    }
+    scratch.entity_idx.sort_unstable_by_key(|&(entity, _)| entity);
+
+    scratch.parent_idx.clear();
+    scratch.parent_idx.resize(n, None);
+    for (i, &(_, _, parent_entity)) in scratch.snapshot.iter().enumerate() {
+        if let Some(parent_entity) = parent_entity {
+            if let Ok(j) = scratch.entity_idx.binary_search_by_key(&parent_entity, |&(e, _)| e) {
+                scratch.parent_idx[i] = Some(scratch.entity_idx[j].1);
+            }
         }
     }
 
-    for i in 0..scratch.snapshot.len() {
-        let entity = scratch.snapshot[i].0;
-        depth_of(entity, &scratch.parent_of, &mut scratch.depths);
+    scratch.depths.clear();
+    scratch.depths.resize(n, u32::MAX);
+    for i in 0..n {
+        vis_depth_of(i, &scratch.parent_idx, &mut scratch.depths);
     }
 
-    scratch
-        .snapshot
-        .sort_by_key(|(entity, _, _)| scratch.depths.get(entity).copied().unwrap_or(0));
+    scratch.order.clear();
+    scratch.order.extend(0..n);
+    scratch.order.sort_unstable_by_key(|&i| scratch.depths[i]);
 
-    for (entity, visibility, parent_entity) in scratch.snapshot.iter().copied() {
-        let parent_visible = parent_entity
-            .and_then(|parent| scratch.computed.get(&parent).copied())
+    scratch.computed.clear();
+    scratch.computed.resize(n, true);
+    for &i in &scratch.order {
+        let (entity, visibility, _) = scratch.snapshot[i];
+        let parent_visible = scratch.parent_idx[i]
+            .map(|parent_i| scratch.computed[parent_i])
             .unwrap_or(true);
         let visible = match visibility {
             Visibility::Visible => true,
             Visibility::Hidden => false,
             Visibility::Inherited => parent_visible,
         };
-        scratch.computed.insert(entity, visible);
+        scratch.computed[i] = visible;
 
         let cv = ComputedVisibility(visible);
         if let Some(mut existing) = world.get_mut::<ComputedVisibility>(entity) {
@@ -285,19 +304,14 @@ pub fn propagate_visibility(world: &mut World) {
     world.insert_resource(scratch);
 }
 
-fn depth_of(
-    entity: Entity,
-    parent_of: &HashMap<Entity, Entity>,
-    cache: &mut HashMap<Entity, u32>,
-) -> u32 {
-    if let Some(&depth) = cache.get(&entity) {
-        return depth;
+fn vis_depth_of(idx: usize, parent_idx: &[Option<usize>], depths: &mut [u32]) -> u32 {
+    if depths[idx] != u32::MAX {
+        return depths[idx];
     }
-    let depth = parent_of
-        .get(&entity)
-        .map(|&parent| depth_of(parent, parent_of, cache) + 1)
+    let depth = parent_idx[idx]
+        .map(|parent| vis_depth_of(parent, parent_idx, depths) + 1)
         .unwrap_or(0);
-    cache.insert(entity, depth);
+    depths[idx] = depth;
     depth
 }
 
