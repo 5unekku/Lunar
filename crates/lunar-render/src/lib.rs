@@ -1164,8 +1164,8 @@ impl RenderEngine {
         self.glyph_atlas.set_scale(text_scale);
 
         // pre-compute text layouts (fills atlas as a side effect).
-        // reuse the persistent HashMap — clear() retains capacity from previous frames.
-        self.text_quads.clear();
+        // entry API reuses inner Vec allocations across frames; retain removes stale keys.
+        let cmd_count = commands.len();
         for (i, cmd) in commands.iter().enumerate() {
             let DrawKind::Text {
                 font,
@@ -1180,8 +1180,9 @@ impl RenderEngine {
                 continue;
             };
             let font_id = u32::try_from(font.unwrap_or(0)).unwrap_or(u32::MAX);
-            let flat: Vec<text::TextGlyphQuad> = if let Some(max_w) = wrap_width {
-                text::layout_text_wrapped(
+            let slot = self.text_quads.entry(i).or_default();
+            if let Some(max_w) = wrap_width {
+                text::layout_text_wrapped_into(
                     &mut self.glyph_atlas,
                     font_id,
                     content,
@@ -1189,21 +1190,20 @@ impl RenderEngine {
                     *position,
                     *max_w,
                     *line_height,
-                )
-                .into_iter()
-                .flatten()
-                .collect()
+                    slot,
+                );
             } else {
-                text::layout_text(
+                text::layout_text_into(
                     &mut self.glyph_atlas,
                     font_id,
                     content,
                     *font_size,
                     *position,
-                )
-            };
-            self.text_quads.insert(i, flat);
+                    slot,
+                );
+            }
         }
+        self.text_quads.retain(|k, _| *k < cmd_count);
         if std::mem::take(&mut self.glyph_atlas.dirty) {
             self.upload_glyph_atlas();
             if let Some(atlas) = &self.glyph_atlas_texture {

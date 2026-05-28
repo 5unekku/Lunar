@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
 use lunar_core::Parent;
-use lunar_math::{Mat4, Vec3, Vec4};
+use lunar_math::{Mat3, Mat4, Vec3, Vec3A, Vec4};
 
 use crate::camera::{ActiveCamera3d, Camera3d};
 use crate::transform::WorldTransform3d;
@@ -85,27 +85,32 @@ impl Default for RenderLayers {
 /// add alongside [`Mesh3d`](crate::mesh::Mesh3d) so the render system can perform
 /// CPU-side frustum culling before issuing draw calls. compute from
 /// [`Aabb3d::from_positions`] after loading a mesh.
+///
+/// center and half_extents use [`Vec3A`] (16-byte aligned) so frustum tests fit
+/// in SIMD registers on both SSE2 and NEON targets.
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub struct Aabb3d {
     /// center in local model space.
-    pub center: Vec3,
+    pub center: Vec3A,
     /// half-extents along each axis. always positive.
-    pub half_extents: Vec3,
+    pub half_extents: Vec3A,
 }
 
 impl Aabb3d {
     /// compute a tight AABB from a slice of positions.
     #[must_use]
     pub fn from_positions(positions: &[Vec3]) -> Self {
-        let mut min = Vec3::splat(f32::MAX);
-        let mut max = Vec3::splat(f32::MIN);
+        let mut min = Vec3A::splat(f32::MAX);
+        let mut max = Vec3A::splat(f32::MIN);
         for &pos in positions {
-            min = min.min(pos);
-            max = max.max(pos);
+            let p = Vec3A::from(pos);
+            min = min.min(p);
+            max = max.max(p);
         }
-        let center = (min + max) * 0.5;
-        let half_extents = (max - min) * 0.5;
-        Self { center, half_extents }
+        Self {
+            center: (min + max) * 0.5,
+            half_extents: (max - min) * 0.5,
+        }
     }
 }
 
@@ -152,12 +157,10 @@ impl Frustum {
     /// returns false only when the AABB is provably outside the frustum. false positives
     /// are safe — they result in a redundant draw call, not a visual artifact.
     #[must_use]
-    pub fn intersects_aabb(self, center: Vec3, half_extents: Vec3) -> bool {
+    pub fn intersects_aabb(self, center: Vec3A, half_extents: Vec3A) -> bool {
         for plane in &self.planes {
-            let normal = Vec3::new(plane.x, plane.y, plane.z);
-            let signed_radius = half_extents.x * normal.x.abs()
-                + half_extents.y * normal.y.abs()
-                + half_extents.z * normal.z.abs();
+            let normal = Vec3A::new(plane.x, plane.y, plane.z);
+            let signed_radius = (half_extents * normal.abs()).dot(Vec3A::ONE);
             if normal.dot(center) + plane.w + signed_radius < 0.0 {
                 return false;
             }
@@ -315,4 +318,50 @@ pub fn update_frustum(
         return;
     };
     *frustum = Frustum::from_view_proj(camera.view_proj(*transform, aspect.0));
+}
+
+/// parallel arrays of world-space AABBs for all visible, cullable entities.
+///
+/// built each frame by [`build_cull_soa`] after transform and visibility propagation.
+/// the renderer reads this instead of issuing per-entity ECS queries, so all
+/// frustum tests run over contiguous memory in one pass.
+///
+/// indices in all three vecs correspond to the same entity.
+#[derive(Resource, Default)]
+pub struct CullSoa {
+    pub entities: Vec<Entity>,
+    pub centers: Vec<Vec3A>,
+    pub half_extents: Vec<Vec3A>,
+}
+
+/// populate [`CullSoa`] from all entities with an [`Aabb3d`] and a world transform.
+///
+/// transforms local-space AABB to world space using the entity's [`WorldTransform3d`].
+/// only includes entities whose [`ComputedVisibility`] is true.
+/// run in Render stage, after `propagate_transforms_3d` and `propagate_visibility`.
+pub fn build_cull_soa(
+    query: Query<(Entity, &Aabb3d, &WorldTransform3d, &ComputedVisibility)>,
+    mut soa: ResMut<CullSoa>,
+) {
+    soa.entities.clear();
+    soa.centers.clear();
+    soa.half_extents.clear();
+
+    for (entity, aabb, world, vis) in query.iter() {
+        if !vis.0 {
+            continue;
+        }
+        let rot = Mat3::from_quat(world.rotation);
+        let local_center = Vec3::from(aabb.center) * world.scale;
+        let world_center = Vec3A::from(world.translation + rot * local_center);
+
+        // expand AABB half_extents through rotation: world_he[i] = sum_j(|R[i][j]| * scale[j] * local_he[j])
+        let scaled_he = Vec3::from(aabb.half_extents) * world.scale;
+        let abs_rot = Mat3::from_cols(rot.x_axis.abs(), rot.y_axis.abs(), rot.z_axis.abs());
+        let world_half = Vec3A::from(abs_rot * scaled_he);
+
+        soa.entities.push(entity);
+        soa.centers.push(world_center);
+        soa.half_extents.push(world_half);
+    }
 }

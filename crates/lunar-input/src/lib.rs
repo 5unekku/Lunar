@@ -279,7 +279,7 @@ impl InputBinding {
 ///
 /// # layout
 ///
-/// keys are grouped: a-z (26), 0-9 (10), f1-f12 (12), special (9), modifiers (6) = 63 total.
+/// keys are grouped: a-z (26), 0-9 (10), f1-f12 (12), special (9), modifiers (6), punctuation (2) = 65 total.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyCode {
     /// a-z keys
@@ -350,6 +350,9 @@ pub enum KeyCode {
     RCtrl,
     LAlt,
     RAlt,
+    /// punctuation
+    Minus,
+    Equals,
 }
 
 /// mouse button codes.
@@ -982,6 +985,8 @@ const fn keycode_from_sdl(key: sdl3::keyboard::Keycode) -> Option<KeyCode> {
         Keycode::RCtrl => Some(KeyCode::RCtrl),
         Keycode::LAlt => Some(KeyCode::LAlt),
         Keycode::RAlt => Some(KeyCode::RAlt),
+        Keycode::Minus => Some(KeyCode::Minus),
+        Keycode::Equals => Some(KeyCode::Equals),
         _ => None,
     }
 }

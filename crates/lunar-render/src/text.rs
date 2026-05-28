@@ -232,16 +232,18 @@ fn family_name_for(atlas: &GlyphAtlas, font_id: u32) -> Option<String> {
     atlas.font_families.get(&font_id).cloned()
 }
 
-/// layout a string and return positioned glyph quads.
+/// layout a string into an existing vec (cleared first). reuses the vec's allocation.
 ///
 /// `position` is the top-left of the text block in game units.
-pub fn layout_text(
+pub fn layout_text_into(
     atlas: &mut GlyphAtlas,
     font_id: u32,
     text: &str,
     font_size: f32,
     position: Vec2,
-) -> Vec<TextGlyphQuad> {
+    out: &mut Vec<TextGlyphQuad>,
+) {
+    out.clear();
     let scale = atlas.scale;
     let display_size = font_size * scale;
     let family = family_name_for(atlas, font_id);
@@ -258,7 +260,6 @@ pub fn layout_text(
     }
     buffer.shape_until_scroll(&mut atlas.font_system, false);
 
-    let mut quads = Vec::new();
     for run in buffer.layout_runs() {
         for glyph in run.glyphs {
             let physical = glyph.physical((0.0, run.line_y), 1.0);
@@ -285,7 +286,7 @@ pub fn layout_text(
                 (entry.x + entry.width) as f32 / atlas.width as f32,
                 (entry.y + entry.height) as f32 / atlas.height as f32,
             );
-            quads.push(TextGlyphQuad {
+            out.push(TextGlyphQuad {
                 position: Vec2::new(game_x, game_y),
                 size: Vec2::new(game_w, game_h),
                 uv_min,
@@ -293,8 +294,8 @@ pub fn layout_text(
             });
         }
     }
-    quads
 }
+
 
 /// measure the maximum line width of a string in game units.
 #[allow(dead_code)]
@@ -321,12 +322,11 @@ pub fn measure_text(atlas: &mut GlyphAtlas, font_id: u32, text: &str, font_size:
         / scale
 }
 
-/// layout text with word-wrapping at `max_width` game units.
+/// layout wrapped text into an existing flat vec (cleared first). reuses the vec's allocation.
 ///
-/// `position` is the top-left of the first line. `line_height` is the vertical
-/// spacing per line; pass 0.0 for `font_size * 1.25`.
-/// returns one `Vec<TextGlyphQuad>` per layout run (line).
-pub fn layout_text_wrapped(
+/// unlike `layout_text_wrapped`, all runs are flattened into a single `out` vec — use this
+/// in the hot path to avoid per-frame inner-vec allocations.
+pub fn layout_text_wrapped_into(
     atlas: &mut GlyphAtlas,
     font_id: u32,
     text: &str,
@@ -334,7 +334,9 @@ pub fn layout_text_wrapped(
     position: Vec2,
     max_width: f32,
     line_height: f32,
-) -> Vec<Vec<TextGlyphQuad>> {
+    out: &mut Vec<TextGlyphQuad>,
+) {
+    out.clear();
     let effective_line_height = if line_height > 0.0 {
         line_height
     } else {
@@ -356,9 +358,7 @@ pub fn layout_text_wrapped(
     }
     buffer.shape_until_scroll(&mut atlas.font_system, false);
 
-    let mut lines: Vec<Vec<TextGlyphQuad>> = Vec::new();
     for run in buffer.layout_runs() {
-        let mut quads = Vec::new();
         for glyph in run.glyphs {
             let physical = glyph.physical((0.0, run.line_y), 1.0);
             atlas.ensure_glyph(physical.cache_key);
@@ -384,14 +384,13 @@ pub fn layout_text_wrapped(
                 (entry.x + entry.width) as f32 / atlas.width as f32,
                 (entry.y + entry.height) as f32 / atlas.height as f32,
             );
-            quads.push(TextGlyphQuad {
+            out.push(TextGlyphQuad {
                 position: Vec2::new(game_x, game_y),
                 size: Vec2::new(game_w, game_h),
                 uv_min,
                 uv_max,
             });
         }
-        lines.push(quads);
     }
-    lines
 }
+

@@ -68,6 +68,7 @@ pub use plugin::Plugin3d;
 pub use systems::{TransformScratch3d, propagate_transforms_3d};
 pub use transform::{LocalTransform3d, WorldTransform3d};
 pub use visibility::{
-    Aabb3d, ComputedVisibility, Frustum, RenderLayers, ShadowCaster, ShadowReceiver, Visibility,
-    ViewportAspect, VisibilityScratch, propagate_visibility, update_frustum,
+    Aabb3d, ComputedVisibility, CullSoa, Frustum, RenderLayers, ShadowCaster, ShadowReceiver,
+    Visibility, ViewportAspect, VisibilityScratch, build_cull_soa, propagate_visibility,
+    update_frustum,
 };

@@ -33,12 +33,12 @@ pub mod sky;
 
 pub use sky::Sky;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bevy_ecs::prelude::*;
 use lunar_3d::{
-    ActiveCamera3d, Camera3d, ComputedVisibility, IndexBuffer, Material3d, Mesh3d,
-    MeshData, MeshRegistry, Vertex3d, ViewportAspect, WorldTransform3d,
+    Aabb3d, ActiveCamera3d, Camera3d, ComputedVisibility, CullSoa, Frustum, IndexBuffer,
+    Material3d, Mesh3d, MeshData, MeshRegistry, Vertex3d, ViewportAspect, WorldTransform3d,
 };
 use lunar_3d::primitives::{quad_mesh, sphere_mesh};
 use lunar_core::{App, GamePlugin, UpdateStage};
@@ -46,17 +46,26 @@ use lunar_math::{Color, Mat4, Vec3};
 
 const SHADER_SRC: &str = include_str!("shader.wgsl");
 
-/// skydome sphere radius — must be less than the camera far plane.
 const SKY_RADIUS: f32 = 900.0;
-
-/// y-elevation of the sun quad center (just below the dome top).
 const SUN_Y: f32 = 895.0;
-
-/// vertex stride for [`Vertex3d`] in bytes.
 const VERTEX_STRIDE: u64 = std::mem::size_of::<Vertex3d>() as u64;
 
-/// size of the draw uniforms buffer: model mat4 (64) + base_color vec4 (16).
+/// bytes of actual draw data per entity: model mat4 (64) + base_color vec4 (16).
 const DRAW_UNIFORMS_SIZE: u64 = 80;
+
+/// stride between entity slots in the dynamic UBO.
+/// must be >= min_uniform_buffer_offset_alignment (256 in wgpu default limits).
+const UNIFORM_STRIDE: u64 = 256;
+
+/// initial number of slots (dome + sun + entities) in the entity uniform buffer.
+const INITIAL_ENTITY_CAPACITY: usize = 64;
+
+/// fixed slot index for the sky dome.
+const SLOT_DOME: usize = 0;
+/// fixed slot index for the sun.
+const SLOT_SUN: usize = 1;
+/// first slot index used for scene entities.
+const ENTITY_SLOT_START: usize = 2;
 
 // ── gpu types ──────────────────────────────────────────────────────────────
 
@@ -67,21 +76,44 @@ struct GpuMesh {
     index_fmt: wgpu::IndexFormat,
 }
 
-struct EntityDraw {
-    buf: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
-}
-
 // ── byte helpers ───────────────────────────────────────────────────────────
 
-/// reinterpret a `#[repr(C)]` slice as a byte slice.
 unsafe fn slice_as_bytes<T>(slice: &[T]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const u8, std::mem::size_of_val(slice)) }
 }
 
+// ── render tier ────────────────────────────────────────────────────────────
+
+/// detected rendering capability tier.
+///
+/// queried from the wgpu adapter at startup. gates features that require
+/// compute shaders or indirect drawing. inserted as a `Resource` by
+/// [`RenderPlugin3d`] so game systems can query it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
+pub enum RenderTier {
+    /// GLES / Pi 4 floor: no compute shaders, forward only.
+    LowGles,
+    /// compute available, no multi-draw-indirect (Metal, most Vulkan).
+    Mid,
+    /// full: compute + indirect execution (Vulkan/DX12 desktop).
+    High,
+}
+
+impl RenderTier {
+    fn from_adapter(adapter: &wgpu::Adapter) -> Self {
+        let flags = adapter.get_downlevel_capabilities().flags;
+        if !flags.contains(wgpu::DownlevelFlags::COMPUTE_SHADERS) {
+            Self::LowGles
+        } else if flags.contains(wgpu::DownlevelFlags::INDIRECT_EXECUTION) {
+            Self::High
+        } else {
+            Self::Mid
+        }
+    }
+}
+
 // ── render config ──────────────────────────────────────────────────────────
 
-/// window and rendering settings for a 3d game.
 #[derive(Clone)]
 pub struct RenderConfig3d {
     pub width: u32,
@@ -127,23 +159,32 @@ pub struct RenderEngine3d {
     queue: wgpu::Queue,
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
+    render_tier: RenderTier,
 
     depth_view: wgpu::TextureView,
 
+    // group 0: view-global (camera view-proj)
     globals_buf: wgpu::Buffer,
     globals_bg: wgpu::BindGroup,
+
+    // group 1: per-draw (dynamic UBO — one slot per entity + 2 for sky)
     draw_bgl: wgpu::BindGroupLayout,
+    entity_buf: wgpu::Buffer,
+    entity_bg: wgpu::BindGroup,
+    entity_capacity: usize,
 
     opaque_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
 
     mesh_gpu: HashMap<u32, GpuMesh>,
-    entity_draws: HashMap<Entity, EntityDraw>,
-
     dome_mesh: GpuMesh,
     sun_mesh: GpuMesh,
-    dome_draw: EntityDraw,
-    sun_draw: EntityDraw,
+
+    // per-frame scratch — cleared at frame start, never reallocated in steady state
+    frustum_visible: HashSet<Entity>,
+    raw_scratch: Vec<(Entity, u32, u32, Mat4)>,
+    draw_scratch: Vec<(Entity, u32, Color, Mat4)>,
+    uniform_staging: Vec<u8>,
 }
 
 impl RenderEngine3d {
@@ -184,6 +225,9 @@ impl RenderEngine3d {
         surface: wgpu::Surface<'static>,
         config: &RenderConfig3d,
     ) -> Self {
+        let render_tier = RenderTier::from_adapter(adapter);
+        log::info!("render tier: {render_tier:?}");
+
         let caps = surface.get_capabilities(adapter);
         let format = caps
             .formats
@@ -212,28 +256,30 @@ impl RenderEngine3d {
         // ── bind group layouts ─────────────────────────────────────────────
 
         let globals_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("3d globals bgl"),
+            label: Some("[globals] bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: None,
+                    min_binding_size: wgpu::BufferSize::new(64),
                 },
                 count: None,
             }],
         });
 
+        // dynamic offset: one bind group covers the whole entity buffer;
+        // each draw call supplies a byte offset to select its slot.
         let draw_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("3d draw bgl"),
+            label: Some("[draw] bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+                    has_dynamic_offset: true,
+                    min_binding_size: wgpu::BufferSize::new(DRAW_UNIFORMS_SIZE),
                 },
                 count: None,
             }],
@@ -242,20 +288,27 @@ impl RenderEngine3d {
         // ── globals buffer ─────────────────────────────────────────────────
 
         let globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("3d globals"),
-            size: 64, // mat4x4
+            label: Some("[globals] view-proj"),
+            size: 64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         let globals_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("3d globals bg"),
+            label: Some("[globals] bg"),
             layout: &globals_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: globals_buf.as_entire_binding(),
             }],
         });
+
+        // ── entity uniform buffer ──────────────────────────────────────────
+
+        let entity_capacity = INITIAL_ENTITY_CAPACITY;
+        let entity_buf = Self::make_entity_buf(&device, entity_capacity);
+        let entity_bg = Self::make_entity_bg(&device, &draw_bgl, &entity_buf);
+        let uniform_staging = vec![0u8; entity_capacity * UNIFORM_STRIDE as usize];
 
         // ── pipelines ──────────────────────────────────────────────────────
 
@@ -320,7 +373,6 @@ impl RenderEngine3d {
             multiview_mask: None,
         });
 
-        // sky pipeline — depth write off, no culling so inside of sphere is visible
         let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("3d sky pipeline"),
             layout: Some(&pipeline_layout),
@@ -360,21 +412,12 @@ impl RenderEngine3d {
 
         // ── sky meshes ─────────────────────────────────────────────────────
 
-        let dome_data = sphere_mesh(SKY_RADIUS, 32, 16);
-        let dome_mesh = Self::upload_mesh_data(&device, &queue, &dome_data);
-
-        // sun: flat XZ quad at SUN_Y, centered on camera each frame
-        let sun_data = quad_mesh(40.0, 40.0);
-        let sun_mesh = Self::upload_mesh_data(&device, &queue, &sun_data);
-
-        let dome_draw = Self::make_entity_draw(&device, &draw_bgl);
-        let sun_draw = Self::make_entity_draw(&device, &draw_bgl);
+        let dome_mesh = Self::upload_mesh_data(&device, &queue, &sphere_mesh(SKY_RADIUS, 32, 16));
+        let sun_mesh = Self::upload_mesh_data(&device, &queue, &quad_mesh(40.0, 40.0));
 
         log::info!(
-            "lunar-render-3d initialized: {}×{}, vsync={}",
-            config.width,
-            config.height,
-            config.vsync,
+            "lunar-render-3d initialized: {}×{}, vsync={}, tier={:?}",
+            config.width, config.height, config.vsync, render_tier,
         );
 
         Self {
@@ -382,59 +425,75 @@ impl RenderEngine3d {
             queue,
             surface,
             surface_config,
+            render_tier,
             depth_view,
             globals_buf,
             globals_bg,
             draw_bgl,
+            entity_buf,
+            entity_bg,
+            entity_capacity,
             opaque_pipeline,
             sky_pipeline,
             mesh_gpu: HashMap::new(),
-            entity_draws: HashMap::new(),
             dome_mesh,
             sun_mesh,
-            dome_draw,
-            sun_draw,
+            frustum_visible: HashSet::new(),
+            raw_scratch: Vec::new(),
+            draw_scratch: Vec::new(),
+            uniform_staging,
         }
     }
 
     // ── helpers ────────────────────────────────────────────────────────────
 
     fn make_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("3d depth"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        tex.create_view(&wgpu::TextureViewDescriptor::default())
+        device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("[depth] attachment"),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Depth32Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default())
     }
 
-    fn make_entity_draw(device: &wgpu::Device, draw_bgl: &wgpu::BindGroupLayout) -> EntityDraw {
-        let buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("3d draw uniforms"),
-            size: DRAW_UNIFORMS_SIZE,
+    fn make_entity_buf(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[draw] entity uniform buffer"),
+            size: (capacity * UNIFORM_STRIDE as usize) as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("3d draw bg"),
+        })
+    }
+
+    fn make_entity_bg(
+        device: &wgpu::Device,
+        draw_bgl: &wgpu::BindGroupLayout,
+        entity_buf: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[draw] entity bg"),
             layout: draw_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: buf.as_entire_binding(),
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: entity_buf,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(DRAW_UNIFORMS_SIZE),
+                }),
             }],
-        });
-        EntityDraw { buf, bind_group }
+        })
     }
 
     fn upload_mesh_data(device: &wgpu::Device, queue: &wgpu::Queue, data: &MeshData) -> GpuMesh {
         let vdata = unsafe { slice_as_bytes(&data.vertices) };
         let vbuf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("3d vbuf"),
+            label: Some("[mesh] vbuf"),
             size: vdata.len() as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -454,7 +513,7 @@ impl RenderEngine3d {
             ),
         };
         let ibuf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("3d ibuf"),
+            label: Some("[mesh] ibuf"),
             size: idata.len() as u64,
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -464,18 +523,17 @@ impl RenderEngine3d {
         GpuMesh { vbuf, ibuf, index_count, index_fmt }
     }
 
-    fn write_draw_uniforms(queue: &wgpu::Queue, draw: &EntityDraw, model: Mat4, color: Color) {
+    /// write model+color into the staging slice at the given slot.
+    fn pack_uniforms(staging: &mut [u8], slot: usize, model: Mat4, color: Color) {
+        let offset = slot * UNIFORM_STRIDE as usize;
         let model_cols = model.to_cols_array();
         let color_data = [color.r, color.g, color.b, color.a];
-        let mut bytes = [0u8; 80];
-        bytes[0..64].copy_from_slice(unsafe { slice_as_bytes(&model_cols) });
-        bytes[64..80].copy_from_slice(unsafe { slice_as_bytes(&color_data) });
-        queue.write_buffer(&draw.buf, 0, &bytes);
+        staging[offset..offset + 64].copy_from_slice(unsafe { slice_as_bytes(&model_cols) });
+        staging[offset + 64..offset + 80].copy_from_slice(unsafe { slice_as_bytes(&color_data) });
     }
 
     // ── public surface management ──────────────────────────────────────────
 
-    /// resize the render surface and depth buffer.
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
             return;
@@ -488,21 +546,16 @@ impl RenderEngine3d {
 
     pub fn surface_width(&self) -> u32 { self.surface_config.width }
     pub fn surface_height(&self) -> u32 { self.surface_config.height }
+    pub fn render_tier(&self) -> RenderTier { self.render_tier }
 
     // ── render ─────────────────────────────────────────────────────────────
 
     fn render_frame(&mut self, world: &mut World) -> u32 {
         // ── gather camera ──────────────────────────────────────────────────
         let active = world.resource::<ActiveCamera3d>();
-        let Some(cam_entity) = active.entity else {
-            return 0;
-        };
-        let Some(camera) = world.get::<Camera3d>(cam_entity) else {
-            return 0;
-        };
-        let Some(cam_wt) = world.get::<WorldTransform3d>(cam_entity) else {
-            return 0;
-        };
+        let Some(cam_entity) = active.entity else { return 0; };
+        let Some(camera) = world.get::<Camera3d>(cam_entity) else { return 0; };
+        let Some(cam_wt) = world.get::<WorldTransform3d>(cam_entity) else { return 0; };
         let aspect = world.resource::<ViewportAspect>().0;
         let view_proj = camera.view_proj(*cam_wt, aspect);
         let cam_pos = cam_wt.translation;
@@ -511,75 +564,86 @@ impl RenderEngine3d {
         let sky = world.get_resource::<Sky>().copied();
         let sky_color = sky.map_or(Color::rgb(0.1, 0.1, 0.15), |s| s.sky_color);
 
-        // ── gather entity draws ───────────────────────────────────────────
-
-        // pass 1: query components (mesh_id, mat_id, model) — no registry borrow yet
-        let raw_list: Vec<(Entity, u32, u32, Mat4)> = {
-            let mut q = world
-                .query::<(Entity, &Mesh3d, &Material3d, &WorldTransform3d, &ComputedVisibility)>();
-            q.iter(world)
-                .filter(|(_, _, _, _, vis)| vis.0)
-                .map(|(entity, mesh, mat, wt, _)| (entity, mesh.0.id(), mat.0.id(), wt.to_matrix()))
-                .collect()
-        };
-
-        // pass 2: resolve colors from registry (world.query borrow is dropped)
-        let draw_list: Vec<(Entity, u32, Color, Mat4)> = {
-            let registry = world.resource::<MeshRegistry>();
-            raw_list
-                .into_iter()
-                .map(|(entity, mesh_id, mat_id, model)| {
-                    let color = registry
-                        .get_material(lunar_assets::Handle::new(mat_id, 0))
-                        .map(|m| m.base_color)
-                        .unwrap_or(Color::WHITE);
-                    (entity, mesh_id, color, model)
-                })
-                .collect()
-        };
-
-        // ── upload missing meshes ──────────────────────────────────────────
-        for (_, mesh_id, _, _) in &draw_list {
-            if !self.mesh_gpu.contains_key(mesh_id) {
-                // re-borrow registry for this lookup
-                let registry = world.resource::<MeshRegistry>();
-                if let Some(data) = registry.get_mesh(lunar_assets::Handle::new(*mesh_id, 0)) {
-                    let gpu = Self::upload_mesh_data(&self.device, &self.queue, data);
-                    self.mesh_gpu.insert(*mesh_id, gpu);
+        // ── frustum cull via CullSoa ──────────────────────────────────────
+        self.frustum_visible.clear();
+        {
+            let frustum = *world.resource::<Frustum>();
+            let soa = world.resource::<CullSoa>();
+            for (i, &entity) in soa.entities.iter().enumerate() {
+                if frustum.intersects_aabb(soa.centers[i], soa.half_extents[i]) {
+                    self.frustum_visible.insert(entity);
                 }
             }
         }
 
-        // ── ensure per-entity draw buffers ────────────────────────────────
-        for (entity, _, _, _) in &draw_list {
-            if !self.entity_draws.contains_key(entity) {
-                let draw = Self::make_entity_draw(&self.device, &self.draw_bgl);
-                self.entity_draws.insert(*entity, draw);
+        // ── gather draw list ──────────────────────────────────────────────
+
+        self.raw_scratch.clear();
+        {
+            let mut q = world.query::<(
+                Entity, &Mesh3d, &Material3d, &WorldTransform3d, &ComputedVisibility, Option<&Aabb3d>,
+            )>();
+            q.iter(world)
+                .filter(|(entity, _, _, _, vis, aabb)| {
+                    vis.0 && (aabb.is_none() || self.frustum_visible.contains(entity))
+                })
+                .for_each(|(entity, mesh, mat, wt, _, _)| {
+                    self.raw_scratch.push((entity, mesh.0.id(), mat.0.id(), wt.to_matrix()));
+                });
+        }
+
+        self.draw_scratch.clear();
+        {
+            let registry = world.resource::<MeshRegistry>();
+            for &(entity, mesh_id, mat_id, model) in &self.raw_scratch {
+                let color = registry
+                    .get_material(lunar_assets::Handle::new(mat_id, 0))
+                    .map(|m| m.base_color)
+                    .unwrap_or(Color::WHITE);
+                self.draw_scratch.push((entity, mesh_id, color, model));
             }
         }
 
-        // ── write uniforms before the render pass begins ──────────────────
+        // ── upload missing meshes ──────────────────────────────────────────
+        for i in 0..self.draw_scratch.len() {
+            let mesh_id = self.draw_scratch[i].1;
+            if !self.mesh_gpu.contains_key(&mesh_id) {
+                let registry = world.resource::<MeshRegistry>();
+                if let Some(data) = registry.get_mesh(lunar_assets::Handle::new(mesh_id, 0)) {
+                    let gpu = Self::upload_mesh_data(&self.device, &self.queue, data);
+                    self.mesh_gpu.insert(mesh_id, gpu);
+                }
+            }
+        }
 
-        // globals: view_proj
-        let vp_cols = view_proj.to_cols_array();
-        self.queue.write_buffer(&self.globals_buf, 0, unsafe { slice_as_bytes(&vp_cols) });
+        // ── grow entity buffer if needed ──────────────────────────────────
+        let needed = ENTITY_SLOT_START + self.draw_scratch.len();
+        if needed > self.entity_capacity {
+            self.entity_capacity = needed.next_power_of_two().max(INITIAL_ENTITY_CAPACITY);
+            self.entity_buf = Self::make_entity_buf(&self.device, self.entity_capacity);
+            self.entity_bg = Self::make_entity_bg(&self.device, &self.draw_bgl, &self.entity_buf);
+            self.uniform_staging.resize(self.entity_capacity * UNIFORM_STRIDE as usize, 0);
+            log::debug!("entity uniform buffer grown to {} slots", self.entity_capacity);
+        }
 
-        // sky dome: model = translate(camera_pos) so dome follows camera
+        // ── pack all uniforms into staging, upload in one call ────────────
         let dome_model = Mat4::from_translation(cam_pos);
-        Self::write_draw_uniforms(&self.queue, &self.dome_draw, dome_model, sky_color);
+        Self::pack_uniforms(&mut self.uniform_staging, SLOT_DOME, dome_model, sky_color);
 
-        // sun: model = translate(cam_pos + (0, SUN_Y, 0))
         if let Some(sky) = sky {
             let sun_model = Mat4::from_translation(cam_pos + Vec3::new(0.0, SUN_Y, 0.0));
-            Self::write_draw_uniforms(&self.queue, &self.sun_draw, sun_model, sky.sun_color);
+            Self::pack_uniforms(&mut self.uniform_staging, SLOT_SUN, sun_model, sky.sun_color);
         }
 
-        // entities
-        for (entity, _, color, model) in &draw_list {
-            if let Some(draw) = self.entity_draws.get(entity) {
-                Self::write_draw_uniforms(&self.queue, draw, *model, *color);
-            }
+        for i in 0..self.draw_scratch.len() {
+            let (_, _, color, model) = self.draw_scratch[i];
+            Self::pack_uniforms(&mut self.uniform_staging, ENTITY_SLOT_START + i, model, color);
         }
+
+        let upload_size = (needed * UNIFORM_STRIDE as usize) as u64;
+        let vp_cols = view_proj.to_cols_array();
+        self.queue.write_buffer(&self.globals_buf, 0, unsafe { slice_as_bytes(&vp_cols) });
+        self.queue.write_buffer(&self.entity_buf, 0, &self.uniform_staging[..upload_size as usize]);
 
         // ── acquire surface ───────────────────────────────────────────────
         let (wgpu::CurrentSurfaceTexture::Success(frame)
@@ -589,14 +653,14 @@ impl RenderEngine3d {
         };
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("3d frame"),
+            label: Some("[frame] encoder"),
         });
 
         // ── render pass ───────────────────────────────────────────────────
         let mut draw_calls: u32 = 0;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("3d pass"),
+                label: Some("[frame] pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
@@ -626,16 +690,16 @@ impl RenderEngine3d {
 
             pass.set_bind_group(0, &self.globals_bg, &[]);
 
-            // sky pass
+            // sky pass — dome always drawn; sun only when sky resource says so
             pass.set_pipeline(&self.sky_pipeline);
-            pass.set_bind_group(1, &self.dome_draw.bind_group, &[]);
+            pass.set_bind_group(1, &self.entity_bg, &[Self::slot_offset(SLOT_DOME)]);
             pass.set_vertex_buffer(0, self.dome_mesh.vbuf.slice(..));
             pass.set_index_buffer(self.dome_mesh.ibuf.slice(..), self.dome_mesh.index_fmt);
             pass.draw_indexed(0..self.dome_mesh.index_count, 0, 0..1);
             draw_calls += 1;
 
             if sky.is_some_and(|s| s.show_sun) {
-                pass.set_bind_group(1, &self.sun_draw.bind_group, &[]);
+                pass.set_bind_group(1, &self.entity_bg, &[Self::slot_offset(SLOT_SUN)]);
                 pass.set_vertex_buffer(0, self.sun_mesh.vbuf.slice(..));
                 pass.set_index_buffer(self.sun_mesh.ibuf.slice(..), self.sun_mesh.index_fmt);
                 pass.draw_indexed(0..self.sun_mesh.index_count, 0, 0..1);
@@ -644,14 +708,10 @@ impl RenderEngine3d {
 
             // opaque pass
             pass.set_pipeline(&self.opaque_pipeline);
-            for (entity, mesh_id, _, _) in &draw_list {
-                let (Some(gpu_mesh), Some(entity_draw)) = (
-                    self.mesh_gpu.get(mesh_id),
-                    self.entity_draws.get(entity),
-                ) else {
-                    continue;
-                };
-                pass.set_bind_group(1, &entity_draw.bind_group, &[]);
+            for i in 0..self.draw_scratch.len() {
+                let mesh_id = self.draw_scratch[i].1;
+                let Some(gpu_mesh) = self.mesh_gpu.get(&mesh_id) else { continue; };
+                pass.set_bind_group(1, &self.entity_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
                 pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
                 pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
                 pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
@@ -663,6 +723,11 @@ impl RenderEngine3d {
         frame.present();
         draw_calls
     }
+
+    #[inline(always)]
+    fn slot_offset(slot: usize) -> u32 {
+        (slot * UNIFORM_STRIDE as usize) as u32
+    }
 }
 
 // ── ecs integration ────────────────────────────────────────────────────────
@@ -671,7 +736,6 @@ fn render_3d_system(world: &mut World) {
     let mut engine = world.remove_resource::<RenderEngine3d>().unwrap();
     let draw_calls = engine.render_frame(world);
     world.insert_resource(engine);
-
     if let Some(mut info) = world.get_resource_mut::<RenderInfo3d>() {
         info.draw_calls = draw_calls;
     }
@@ -680,9 +744,9 @@ fn render_3d_system(world: &mut World) {
 /// plugin that registers the 3d render system.
 ///
 /// add this after [`Plugin3d`](lunar_3d::Plugin3d) in your app. inserts
-/// [`RenderEngine3d`] and [`RenderInfo3d`] as resources.
+/// [`RenderEngine3d`], [`RenderInfo3d`], and [`RenderTier`] as resources.
 ///
-/// [`RenderEngine3d`] itself must be inserted before `build` is called — do this
+/// [`RenderEngine3d`] must be inserted before `build` is called — do this
 /// in `bootstrap_3d` after creating the wgpu surface.
 pub struct RenderPlugin3d;
 
@@ -693,6 +757,14 @@ impl GamePlugin for RenderPlugin3d {
 
     fn build(&mut self, app: &mut App) {
         app.insert_resource(RenderInfo3d::default());
+
+        // pull render tier out of the engine resource (already inserted by bootstrap_3d)
+        // and expose it as a standalone resource for game systems to query
+        if let Some(engine) = app.world_mut().get_resource::<RenderEngine3d>() {
+            let tier = engine.render_tier();
+            app.insert_resource(tier);
+        }
+
         app.add_system_to_stage(UpdateStage::Render, render_3d_system);
         log::info!("RenderPlugin3d: 3d render system registered");
     }

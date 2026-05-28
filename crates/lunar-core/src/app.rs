@@ -345,19 +345,17 @@ impl App {
         while game_loop.is_running() {
             let ticks = game_loop.tick();
 
-            // run ECS ticks — render stage blocks on vsync inside here.
-            // PostUpdate (last stage) resets edge-triggered input state.
+            // process native events BEFORE the ECS tick so fps_controller reads
+            // the freshest available input. PostUpdate (last stage) resets
+            // edge-triggered state so the next iteration starts clean.
+            process_events(self.engine.world_mut());
+
             for _ in 0..ticks {
                 if let Some(mut time) = self.engine.world_mut().get_resource_mut::<Time>() {
                     time.tick();
                 }
                 self.engine.run_stages();
             }
-
-            // process native events AFTER render so mouse delta covers exactly one
-            // vsync/frame period. events that arrived during the vsync wait are
-            // drained here, immediately before the next frame's update uses them.
-            process_events(self.engine.world_mut());
 
             if let Some(state) = self.engine.world().get_resource::<EngineState>()
                 && state.is_stopping()

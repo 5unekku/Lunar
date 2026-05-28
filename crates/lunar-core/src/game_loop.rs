@@ -124,6 +124,12 @@ impl GameLoop {
         let delta = now - self.last_frame;
         self.last_frame = now;
 
+        // frame_cap=0 means vsync inside the render stage acts as the natural limiter.
+        // always return exactly 1 tick — the accumulator would just add jitter.
+        if self.frame_cap == 0 {
+            return 1;
+        }
+
         self.accumulator += delta;
 
         let tick_interval = self.tick_rate.interval();

@@ -3,11 +3,14 @@
 //! a 4×4 m grass platform with hard walls, a solid blue sky, and a sun disc.
 //! demonstrates the 3d rendering pipeline end-to-end with no asset files.
 //!
+//! usage: platform_demo [fov]   fov in degrees, 70-150 (default 90)
+//!
 //! controls:
-//!   WASD      — move
-//!   mouse     — look
-//!   Escape    — quit
-//!   F11 / F   — toggle fullscreen
+//!   WASD        — move
+//!   mouse       — look
+//!   - / =       — decrease / increase FOV by 5°
+//!   Escape      — quit
+//!   F11 / F     — toggle fullscreen
 
 use lunar::prelude::*;
 
@@ -34,6 +37,19 @@ const SENSITIVITY: f32 = 0.002;
 const STICK_LOOK_SPEED: f32 = 2.5;
 // analog stick deadzone (applied before movement/look)
 const DEADZONE: f32 = 0.15;
+// fov range in degrees
+const FOV_MIN: f32 = 70.0;
+const FOV_MAX: f32 = 150.0;
+const FOV_DEFAULT: f32 = 90.0;
+const FOV_STEP: f32 = 5.0;
+// camera near/far planes
+const NEAR: f32 = 0.1;
+const FAR: f32 = 1000.0;
+
+// ── resources ────────────────────────────────────────────────────────────────
+
+#[derive(Resource)]
+struct FovDeg(f32);
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -57,6 +73,14 @@ fn setup(
     // lock cursor for mouse-look
     settings.cursor_locked = true;
 
+    // fov from first CLI arg, clamped to [FOV_MIN, FOV_MAX]
+    let fov_deg = std::env::args()
+        .nth(1)
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(FOV_DEFAULT)
+        .clamp(FOV_MIN, FOV_MAX);
+    commands.insert_resource(FovDeg(fov_deg));
+
     // sky settings
     commands.insert_resource(Sky {
         sky_color: SKY_COLOR,
@@ -79,9 +103,17 @@ fn setup(
         ..Mesh3dBundle::default()
     });
 
-    // camera at eye height, facing -Z (into the platform)
+    // camera at eye height with the configured FOV
     commands.spawn(Camera3dBundle {
         local: LocalTransform3d::from_xyz(0.0, EYE_HEIGHT, 0.0),
+        camera: Camera3d {
+            projection: Projection::Perspective {
+                fov_y: fov_deg.to_radians(),
+                near: NEAR,
+                far: FAR,
+            },
+            ..Camera3d::default()
+        },
         ..Camera3dBundle::default()
     });
 }
@@ -153,6 +185,23 @@ fn fps_controller(
         * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2 - *pitch);
 }
 
+fn fov_controller(
+    input: Res<InputState>,
+    mut fov: ResMut<FovDeg>,
+    mut camera: Query<&mut Camera3d>,
+) {
+    let mut delta = 0.0f32;
+    if input.is_key_just_pressed(KeyCode::Equals) { delta += FOV_STEP; }
+    if input.is_key_just_pressed(KeyCode::Minus)  { delta -= FOV_STEP; }
+    if delta == 0.0 { return; }
+
+    fov.0 = (fov.0 + delta).clamp(FOV_MIN, FOV_MAX);
+    let Ok(mut cam) = camera.single_mut() else { return; };
+    if let Projection::Perspective { near, far, .. } = cam.projection {
+        cam.projection = Projection::Perspective { fov_y: fov.0.to_radians(), near, far };
+    }
+}
+
 fn quit_on_escape(input: Res<InputState>) {
     let keyboard_quit = input.is_key_just_pressed(KeyCode::Escape);
     let controller_quit = input.gamepad(0)
@@ -176,6 +225,7 @@ impl GamePlugin for PlatformDemo {
     fn build(&mut self, app: &mut App) {
         app.add_startup_system(setup);
         app.add_system_to_stage(UpdateStage::Update, fps_controller);
+        app.add_system_to_stage(UpdateStage::Update, fov_controller);
         app.add_system_to_stage(UpdateStage::Update, quit_on_escape);
     }
 }

@@ -17,10 +17,15 @@ pub type Vec2 = glam::Vec2;
 
 /// 3D vector type alias.
 ///
-/// backed by [`glam::Vec3`]. the engine surface is 2D-only — `Vec3` is
-/// re-exported for game code that needs it (colors, custom math) at zero cost
-/// from glam, but no engine API consumes or returns it.
+/// backed by [`glam::Vec3`]. use for general-purpose 3D math and component storage.
 pub type Vec3 = glam::Vec3;
+
+/// 16-byte aligned 3D vector type alias.
+///
+/// backed by [`glam::Vec3A`]. use in hot-loop math (culling, physics, SoA buffers)
+/// where SIMD register fit matters — same cost as Vec3 on most paths but aligns
+/// to 16 bytes so glam's SSE2/NEON paths can load it in one instruction.
+pub type Vec3A = glam::Vec3A;
 
 /// 4D vector type alias.
 ///
