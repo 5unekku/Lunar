@@ -90,6 +90,28 @@ pub struct SpriteParams {
     pub tint: Color,
 }
 
+/// opaque identifier for an offscreen render target created by [`RenderEngine::create_render_target`].
+///
+/// store this alongside the returned [`Handle<Texture>`] — the handle is used
+/// to draw the target as a sprite; this id is used to direct a camera at the target.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Resource)]
+pub struct RenderTargetId(pub u32);
+
+/// maps [`RenderTargetId`] → [`Handle<Texture>`] so game code can retrieve the
+/// drawable texture handle for a render target without keeping it separately.
+#[derive(Resource, Default)]
+pub struct RenderTargetStore {
+    entries: std::collections::HashMap<RenderTargetId, lunar_assets::Handle<lunar_assets::Texture>>,
+}
+
+impl RenderTargetStore {
+    /// get the texture handle for a render target, for use with draw_sprite.
+    #[must_use]
+    pub fn get_texture(&self, id: RenderTargetId) -> Option<lunar_assets::Handle<lunar_assets::Texture>> {
+        self.entries.get(&id).copied()
+    }
+}
+
 /// camera resource, affects how the render queue is projected.
 ///
 /// when no camera resource exists, rendering uses world-space anchored at origin.
@@ -124,6 +146,8 @@ pub struct Camera {
     pub viewport: Option<(u32, u32)>,
     /// per-layer offset for parallax scrolling (layer id → world offset)
     pub layer_parallax: HashMap<i32, Vec2>,
+    /// render target to draw into (None = swapchain / window)
+    pub target: Option<RenderTargetId>,
 }
 
 impl Camera {
@@ -136,6 +160,7 @@ impl Camera {
             rotation: 0.0,
             viewport: None,
             layer_parallax: HashMap::default(),
+            target: None,
         }
     }
 
@@ -148,6 +173,7 @@ impl Camera {
             rotation: 0.0,
             viewport: None,
             layer_parallax: HashMap::default(),
+            target: None,
         }
     }
 
@@ -417,6 +443,11 @@ pub struct RenderEngine {
     /// LRU layout cache — avoids re-shaping text whose content hasn't changed.
     /// capped at 256 entries; evicts least-recently-used on overflow.
     text_layout_cache: text::TextLayoutCache,
+    /// texture views for render target output — keyed by RenderTargetId.0.
+    /// stored separately from `textures` to avoid borrow conflicts in render().
+    render_target_views: HashMap<u32, wgpu::TextureView>,
+    /// counter for generating unique render target IDs (high range, no collision with asset IDs).
+    render_target_counter: u32,
 }
 
 /// gpu-ready texture: texture + view + sampler
@@ -804,6 +835,8 @@ impl RenderEngine {
             sorted_indices: Vec::new(),
             text_quads: HashMap::new(),
             text_layout_cache: text::TextLayoutCache::new(256),
+            render_target_views: HashMap::new(),
+            render_target_counter: 0,
         }
     }
 
@@ -983,6 +1016,53 @@ impl RenderEngine {
     pub fn remove_texture(&mut self, tex_id: u32) {
         self.textures.remove(&tex_id);
         self.material_bgs.remove(&tex_id);
+        self.render_target_views.remove(&tex_id);
+    }
+
+    /// create an offscreen render target of the given pixel dimensions.
+    ///
+    /// returns a `(RenderTargetId, Handle<Texture>)` pair:
+    /// - use the id in `Camera.target` to direct a camera at this target.
+    /// - use the texture handle with `draw_sprite` to display the target's contents.
+    ///
+    /// also registers the entry in the supplied [`RenderTargetStore`] so it can be
+    /// looked up later via [`RenderTargetStore::get_texture`].
+    pub fn create_render_target(
+        &mut self,
+        store: &mut RenderTargetStore,
+        width: u32,
+        height: u32,
+    ) -> (RenderTargetId, Handle<Texture>) {
+        let id = self.render_target_counter;
+        self.render_target_counter += 1;
+
+        // use a high-range ID to avoid collisions with asset-server texture IDs
+        let tex_id = u32::MAX / 2 + id;
+
+        let gpu_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(&format!("[rt:{tex_id}]")),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        // create two views from the same texture:
+        // - render_view: used as the render pass color attachment (stored separately to avoid borrow conflicts)
+        // - sample_view: used for sprite sampling (stored in self.textures)
+        let render_view = gpu_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sample_view = gpu_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.render_target_views.insert(tex_id, render_view);
+        self.textures.insert(tex_id, GpuTexture { texture: gpu_texture, view: sample_view });
+
+        let rt_id = RenderTargetId(tex_id);
+        let handle = Handle::<Texture>::new(tex_id, 0);
+        store.entries.insert(rt_id, handle);
+        (rt_id, handle)
     }
 
     /// register font bytes with the glyph atlas. glyphs are rasterized on demand
@@ -1162,15 +1242,34 @@ impl RenderEngine {
         let mut sprite_count: u32 = 0;
         let mut draw_calls: u32 = 0;
 
-        let (wgpu::CurrentSurfaceTexture::Success(frame)
-        | wgpu::CurrentSurfaceTexture::Suboptimal(frame)) = self.surface.get_current_texture()
-        else {
-            return;
+        // check if camera is targeting an offscreen render target
+        let rt_tex_id = camera.and_then(|c| c.target).map(|rt| rt.0);
+
+        // acquire swapchain frame only when rendering to window (not offscreen)
+        let surface_frame = if rt_tex_id.is_none() {
+            match self.surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => Some(f),
+                _ => return,
+            }
+        } else {
+            None
         };
 
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        // get the output view — either from the swapchain frame or the render target.
+        // for render targets we stash a raw pointer to escape the borrow checker:
+        // SAFETY: render_target_views is never modified during a render() call —
+        //         create_render_target() is only callable from outside the render system.
+        //         the wgpu::TextureView inside lives at least as long as this function.
+        let swapchain_view;
+        let view: &wgpu::TextureView = if let Some(id) = rt_tex_id {
+            let Some(rt_view) = self.render_target_views.get(&id) else { return; };
+            let ptr: *const wgpu::TextureView = rt_view;
+            unsafe { &*ptr }
+        } else {
+            swapchain_view = surface_frame.as_ref().unwrap().texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            &swapchain_view
+        };
 
         // update atlas rasterization scale from the viewport so glyphs are sharp
         // even when the game viewport is letterboxed into a larger window
@@ -1472,7 +1571,9 @@ impl RenderEngine {
         }
 
         self.queue.submit(Some(encoder.finish()));
-        frame.present();
+        if let Some(frame) = surface_frame {
+            frame.present();
+        }
 
         render_info.window_width = self.config.width;
         render_info.window_height = self.config.height;
