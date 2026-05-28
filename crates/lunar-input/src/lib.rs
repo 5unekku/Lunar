@@ -350,9 +350,72 @@ pub enum KeyCode {
     RCtrl,
     LAlt,
     RAlt,
-    /// punctuation
+    /// punctuation and symbols (0..KEY_ARRAY_SIZE range)
     Minus,
     Equals,
+    Semicolon,
+    Apostrophe,
+    Comma,
+    Period,
+    Slash,
+    Backslash,
+    LeftBracket,
+    RightBracket,
+    Grave,
+    /// navigation cluster
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Insert,
+    Delete,
+    /// numpad
+    Numpad0,
+    Numpad1,
+    Numpad2,
+    Numpad3,
+    Numpad4,
+    Numpad5,
+    Numpad6,
+    Numpad7,
+    Numpad8,
+    Numpad9,
+    NumpadAdd,
+    NumpadSub,
+    NumpadMul,
+    NumpadDiv,
+    NumpadEnter,
+    NumpadDecimal,
+    NumLock,
+    /// lock and control keys
+    CapsLock,
+    ScrollLock,
+    Pause,
+    PrintScreen,
+    /// super / meta keys
+    LSuper,
+    RSuper,
+    /// media keys
+    MediaPlay,
+    MediaStop,
+    MediaNext,
+    MediaPrev,
+    VolumeUp,
+    VolumeDown,
+    Mute,
+    /// extended function keys (discriminants >= 128, use HashMap fallback)
+    F13 = 128,
+    F14,
+    F15,
+    F16,
+    F17,
+    F18,
+    F19,
+    F20,
+    F21,
+    F22,
+    F23,
+    F24,
 }
 
 /// mouse button codes.
@@ -677,24 +740,36 @@ impl InputState {
     }
 
     /// press a key
-    pub const fn press_key(&mut self, key: KeyCode) {
+    pub fn press_key(&mut self, key: KeyCode) {
         let index = key as usize;
         if index < KEY_ARRAY_SIZE {
             if !self.keys_held[index] {
                 self.keys_just_pressed[index] = true;
             }
             self.keys_held[index] = true;
+        } else {
+            let was_held = self.keys_held_extra.get(&key).copied().unwrap_or(false);
+            if !was_held {
+                self.keys_just_pressed_extra.insert(key, true);
+            }
+            self.keys_held_extra.insert(key, true);
         }
     }
 
     /// release a key
-    pub const fn release_key(&mut self, key: KeyCode) {
+    pub fn release_key(&mut self, key: KeyCode) {
         let index = key as usize;
         if index < KEY_ARRAY_SIZE {
             if self.keys_held[index] {
                 self.keys_just_released[index] = true;
             }
             self.keys_held[index] = false;
+        } else {
+            let was_held = self.keys_held_extra.get(&key).copied().unwrap_or(false);
+            if was_held {
+                self.keys_just_released_extra.insert(key, true);
+            }
+            self.keys_held_extra.insert(key, false);
         }
     }
 
