@@ -6,6 +6,8 @@
 use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache, SwashContent};
 use lunar_math::Vec2;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 
 /// position + size of a glyph in the atlas, plus placement offsets.
 #[derive(Clone)]
@@ -29,6 +31,60 @@ pub struct TextGlyphQuad {
     pub uv_min: Vec2,
     /// maximum UV coordinate in the atlas (bottom-right of glyph).
     pub uv_max: Vec2,
+}
+
+/// LRU cache for laid-out text quads, keyed by (font_id, content_hash, font_size_bits, wrap_bits).
+///
+/// quads are stored with positions relative to origin (0,0). callers add the world position
+/// when reading. the cache is capped at `cap` entries; least-recently-used entry is evicted
+/// when full. must be cleared when the glyph atlas resets (scale change) since UV coords change.
+pub struct TextLayoutCache {
+    map: HashMap<[u32; 4], (Vec<TextGlyphQuad>, u64)>,
+    lru_gen: u64,
+    cap: usize,
+}
+
+impl TextLayoutCache {
+    pub fn new(cap: usize) -> Self {
+        Self { map: HashMap::with_capacity(cap + 1), lru_gen: 0, cap }
+    }
+
+    pub fn clear(&mut self) {
+        self.map.clear();
+    }
+
+    /// retrieve cached origin-relative quads if present, updating their LRU generation.
+    pub fn get(&mut self, font_id: u32, content: &str, font_size: f32, wrap_width: Option<f32>) -> Option<&Vec<TextGlyphQuad>> {
+        let key = cache_key(font_id, content, font_size, wrap_width);
+        let generation = self.lru_gen;
+        if let Some(entry) = self.map.get_mut(&key) {
+            entry.1 = generation;
+            Some(&entry.0)
+        } else {
+            None
+        }
+    }
+
+    /// insert origin-relative quads into the cache, evicting the LRU entry if at capacity.
+    pub fn insert(&mut self, font_id: u32, content: &str, font_size: f32, wrap_width: Option<f32>, quads: Vec<TextGlyphQuad>) {
+        let key = cache_key(font_id, content, font_size, wrap_width);
+        if self.map.len() >= self.cap && !self.map.contains_key(&key) {
+            let lru = self.map.iter()
+                .min_by_key(|(_, (_, g))| g)
+                .map(|(k, _)| *k);
+            if let Some(k) = lru { self.map.remove(&k); }
+        }
+        self.lru_gen += 1;
+        self.map.insert(key, (quads, self.lru_gen));
+    }
+}
+
+fn cache_key(font_id: u32, content: &str, font_size: f32, wrap_width: Option<f32>) -> [u32; 4] {
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    let content_hash = hasher.finish();
+    let wrap_bits = wrap_width.map_or(0u32, f32::to_bits);
+    [font_id, (content_hash >> 32) as u32, content_hash as u32, wrap_bits ^ f32::to_bits(font_size)]
 }
 
 /// shelf-packed RGBA glyph atlas backed by cosmic-text.

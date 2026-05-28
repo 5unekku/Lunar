@@ -414,6 +414,9 @@ pub struct RenderEngine {
     /// persistent scratch — reused each frame for text glyph quad layout results.
     /// keyed by command index. avoids a per-frame HashMap + inner Vec allocation.
     text_quads: HashMap<usize, Vec<text::TextGlyphQuad>>,
+    /// LRU layout cache — avoids re-shaping text whose content hasn't changed.
+    /// capped at 256 entries; evicts least-recently-used on overflow.
+    text_layout_cache: text::TextLayoutCache,
 }
 
 /// gpu-ready texture: texture + view + sampler
@@ -800,6 +803,7 @@ impl RenderEngine {
             pipeline_cache: Self::load_pipeline_cache(device),
             sorted_indices: Vec::new(),
             text_quads: HashMap::new(),
+            text_layout_cache: text::TextLayoutCache::new(256),
         }
     }
 
@@ -1179,10 +1183,15 @@ impl RenderEngine {
         } else {
             1.0
         };
-        self.glyph_atlas.set_scale(text_scale);
+        if self.glyph_atlas.set_scale(text_scale) {
+            // UV coords changed — cached quads reference stale positions in the atlas
+            self.text_layout_cache.clear();
+        }
 
         // pre-compute text layouts (fills atlas as a side effect).
-        // entry API reuses inner Vec allocations across frames; retain removes stale keys.
+        // cache checks: if content+style unchanged since last shape, reuse origin-relative quads
+        // and apply position, skipping the cosmic-text shaping pipeline entirely.
+        // entry API reuses Vec allocations across frames; retain removes stale keys.
         let cmd_count = commands.len();
         for (i, cmd) in commands.iter().enumerate() {
             let DrawKind::Text {
@@ -1199,26 +1208,48 @@ impl RenderEngine {
             };
             let font_id = u32::try_from(font.unwrap_or(0)).unwrap_or(u32::MAX);
             let slot = self.text_quads.entry(i).or_default();
-            if let Some(max_w) = wrap_width {
-                text::layout_text_wrapped_into(
-                    &mut self.glyph_atlas,
-                    font_id,
-                    content,
-                    *font_size,
-                    *position,
-                    *max_w,
-                    *line_height,
-                    slot,
-                );
+
+            if let Some(cached) = self.text_layout_cache.get(font_id, content, *font_size, *wrap_width) {
+                // cache hit: apply world position to origin-relative quads
+                slot.clear();
+                slot.extend(cached.iter().map(|q| text::TextGlyphQuad {
+                    position: Vec2::new(q.position.x + position.x, q.position.y + position.y),
+                    size: q.size,
+                    uv_min: q.uv_min,
+                    uv_max: q.uv_max,
+                }));
             } else {
-                text::layout_text_into(
-                    &mut self.glyph_atlas,
-                    font_id,
-                    content,
-                    *font_size,
-                    *position,
-                    slot,
-                );
+                // cache miss: shape at origin (Vec2::ZERO), cache the result, apply position
+                let mut origin_quads: Vec<text::TextGlyphQuad> = Vec::new();
+                if let Some(max_w) = wrap_width {
+                    text::layout_text_wrapped_into(
+                        &mut self.glyph_atlas,
+                        font_id,
+                        content,
+                        *font_size,
+                        Vec2::ZERO,
+                        *max_w,
+                        *line_height,
+                        &mut origin_quads,
+                    );
+                } else {
+                    text::layout_text_into(
+                        &mut self.glyph_atlas,
+                        font_id,
+                        content,
+                        *font_size,
+                        Vec2::ZERO,
+                        &mut origin_quads,
+                    );
+                }
+                self.text_layout_cache.insert(font_id, content, *font_size, *wrap_width, origin_quads.clone());
+                slot.clear();
+                slot.extend(origin_quads.into_iter().map(|q| text::TextGlyphQuad {
+                    position: Vec2::new(q.position.x + position.x, q.position.y + position.y),
+                    size: q.size,
+                    uv_min: q.uv_min,
+                    uv_max: q.uv_max,
+                }));
             }
         }
         self.text_quads.retain(|k, _| *k < cmd_count);
