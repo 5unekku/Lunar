@@ -104,7 +104,8 @@ pub use bevy_ecs::bundle::Bundle;
 
 // lunar-render types
 pub use lunar_render::{
-    Camera, Layer, RenderConfig, RenderEngine, RenderInfo, RenderQueue, Sprite, Text, layers,
+    Camera, CameraFollow2d, Layer, RenderConfig, RenderEngine, RenderInfo, RenderQueue, Sprite,
+    Text, layers,
 };
 
 // lunar-input types

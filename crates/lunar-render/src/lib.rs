@@ -44,8 +44,11 @@
 //! ```
 
 pub mod atlas;
+mod camera_follow;
 mod text;
 pub mod textbox;
+
+pub use camera_follow::CameraFollow2d;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -2558,6 +2561,10 @@ impl GamePlugin for RenderPlugin {
         app.insert_resource(RenderQueue::new());
         app.insert_resource(RenderInfo::new());
         app.insert_resource(DebugOverlay::new());
+        app.add_system_to_stage(
+            lunar_core::UpdateStage::PostUpdate,
+            camera_follow::camera_follow_system,
+        );
         // upload_new_textures_system runs first to ensure any texture that became
         // ready this frame is on the GPU before auto_sprite_system enqueues draws.
         #[cfg(not(target_arch = "wasm32"))]
