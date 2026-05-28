@@ -10,9 +10,7 @@ pub mod animation;
 pub mod collision;
 
 pub use animation::{SpriteAnimation, advance_sprite_animations};
-pub use collision::{Collider, Collider2dBundle, ColliderShape, CollisionWorld};
-
-use std::collections::HashMap;
+pub use collision::{Collider, Collider2dBundle, ColliderShape, CollisionWorld, RayHit2d, ray_cast_2d};
 
 use bevy_ecs::prelude::*;
 use lunar_core::{App, GamePlugin, Parent};
@@ -24,8 +22,16 @@ use collision::build_collision_world;
 #[derive(Default, Resource)]
 struct TransformScratch2d {
     snapshot: Vec<(Entity, LocalTransform, Option<Entity>)>,
-    parent_of: HashMap<Entity, Entity>,
-    depths: HashMap<Entity, u32>,
+    // sorted (entity, snapshot_index) pairs for binary-search parent lookup
+    entity_idx: Vec<(Entity, usize)>,
+    // parallel to snapshot: snapshot index of parent, or None
+    parent_idx: Vec<Option<usize>>,
+    // parallel to snapshot: computed depth (u32::MAX = not yet computed)
+    depths: Vec<u32>,
+    // snapshot indices in depth order (parents before children)
+    order: Vec<usize>,
+    // parallel to snapshot: computed world transform
+    world_transforms: Vec<WorldTransform>,
 }
 
 /// plugin that registers the 2d transform propagation system.
@@ -53,85 +59,87 @@ impl GamePlugin for Plugin2d {
 
 /// exclusive system that propagates 2d transforms from parents to children.
 ///
-/// uses a persistent scratch resource to avoid per-frame heap allocations.
-/// topological sort gives O(N) propagation regardless of hierarchy depth.
+/// O(N log N) sort + binary-search parent lookups, then one transform compose per entity.
+/// all scratch vecs are reused each frame — no per-frame heap allocation in steady state.
 pub fn propagate_transforms(world: &mut World) {
     let mut scratch = world
         .remove_resource::<TransformScratch2d>()
         .unwrap_or_default();
 
     scratch.snapshot.clear();
-    scratch.parent_of.clear();
-    scratch.depths.clear();
+    world
+        .query::<(Entity, &LocalTransform, Option<&Parent>)>()
+        .iter(world)
+        .for_each(|(entity, local, parent)| {
+            scratch.snapshot.push((entity, *local, parent.map(|p| p.0)));
+        });
 
-    scratch.snapshot.extend(
-        world
-            .query::<(Entity, &LocalTransform, Option<&Parent>)>()
-            .iter(world)
-            .map(|(entity, local, parent)| (entity, *local, parent.map(|p| p.0))),
-    );
+    if scratch.snapshot.is_empty() {
+        world.insert_resource(scratch);
+        return;
+    }
 
-    for &(entity, _, parent) in &scratch.snapshot {
-        if let Some(parent_entity) = parent {
-            scratch.parent_of.insert(entity, parent_entity);
+    let n = scratch.snapshot.len();
+
+    scratch.entity_idx.clear();
+    for (i, &(entity, _, _)) in scratch.snapshot.iter().enumerate() {
+        scratch.entity_idx.push((entity, i));
+    }
+    scratch.entity_idx.sort_unstable_by_key(|&(entity, _)| entity);
+
+    scratch.parent_idx.clear();
+    scratch.parent_idx.resize(n, None);
+    for (i, &(_, _, parent_entity)) in scratch.snapshot.iter().enumerate() {
+        if let Some(parent_entity) = parent_entity {
+            if let Ok(j) = scratch.entity_idx.binary_search_by_key(&parent_entity, |&(e, _)| e) {
+                scratch.parent_idx[i] = Some(scratch.entity_idx[j].1);
+            }
         }
     }
 
-    // compute depths — iterate snapshot by index to avoid borrow conflict
-    for i in 0..scratch.snapshot.len() {
-        let entity = scratch.snapshot[i].0;
-        depth_of(entity, &scratch.parent_of, &mut scratch.depths);
+    scratch.depths.clear();
+    scratch.depths.resize(n, u32::MAX);
+    for i in 0..n {
+        depth_of_2d(i, &scratch.parent_idx, &mut scratch.depths);
     }
 
-    scratch
-        .snapshot
-        .sort_by_key(|(entity, _, _)| scratch.depths.get(entity).copied().unwrap_or(0));
+    scratch.order.clear();
+    scratch.order.extend(0..n);
+    scratch.order.sort_unstable_by_key(|&i| scratch.depths[i]);
 
-    for i in 0..scratch.snapshot.len() {
-        let (entity, local, parent_entity) = scratch.snapshot[i];
-        let world_transform = if let Some(parent) = parent_entity {
-            if let Some(parent_wt) = world.get::<WorldTransform>(parent).copied() {
-                compute_world_transform(&parent_wt, &local)
-            } else {
-                WorldTransform {
-                    translation: local.translation,
-                    rotation: local.rotation,
-                    scale: local.scale,
-                }
-            }
-        } else {
-            WorldTransform {
+    scratch.world_transforms.clear();
+    scratch.world_transforms.resize(n, WorldTransform::default());
+    for &i in &scratch.order {
+        let (entity, local, _) = scratch.snapshot[i];
+        let world_transform = match scratch.parent_idx[i] {
+            Some(parent_i) => compute_world_transform(&scratch.world_transforms[parent_i], &local),
+            None => WorldTransform {
                 translation: local.translation,
                 rotation: local.rotation,
                 scale: local.scale,
-            }
+            },
         };
+        scratch.world_transforms[i] = world_transform;
 
-        if let Some(mut wt) = world.get_mut::<WorldTransform>(entity) {
-            *wt = world_transform;
-        } else {
-            world.entity_mut(entity).insert(world_transform);
+        if let Some(mut existing) = world.get_mut::<WorldTransform>(entity) {
+            *existing = world_transform;
+        } else if let Ok(mut entity_ref) = world.get_entity_mut(entity) {
+            entity_ref.insert(world_transform);
         }
     }
 
     world.insert_resource(scratch);
 }
 
-/// memoized depth lookup — O(N) total across all entities (each computed at most once)
-fn depth_of(
-    entity: Entity,
-    parent_of: &HashMap<Entity, Entity>,
-    cache: &mut HashMap<Entity, u32>,
-) -> u32 {
-    if let Some(&d) = cache.get(&entity) {
-        return d;
+fn depth_of_2d(idx: usize, parent_idx: &[Option<usize>], depths: &mut [u32]) -> u32 {
+    if depths[idx] != u32::MAX {
+        return depths[idx];
     }
-    let d = parent_of
-        .get(&entity)
-        .map(|&parent| depth_of(parent, parent_of, cache) + 1)
+    let depth = parent_idx[idx]
+        .map(|parent| depth_of_2d(parent, parent_idx, depths) + 1)
         .unwrap_or(0);
-    cache.insert(entity, d);
-    d
+    depths[idx] = depth;
+    depth
 }
 
 fn compute_world_transform(parent: &WorldTransform, local: &LocalTransform) -> WorldTransform {

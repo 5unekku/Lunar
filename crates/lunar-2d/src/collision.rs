@@ -258,6 +258,128 @@ pub fn build_collision_world(
     collision_world.entries.sort_unstable_by(|a, b| a.min_x.total_cmp(&b.min_x));
 }
 
+/// result of a successful ray cast.
+#[derive(Debug, Clone, Copy)]
+pub struct RayHit2d {
+    /// entity that was hit
+    pub entity: Entity,
+    /// world-space point where the ray intersected the shape surface
+    pub point: Vec2,
+    /// surface normal at the hit point (normalized)
+    pub normal: Vec2,
+    /// distance from ray origin to hit point
+    pub distance: f32,
+}
+
+/// cast a ray against all colliders in `world` and return the nearest hit.
+///
+/// `direction` should be normalized. `max_dist` caps the search; use `f32::MAX`
+/// for unbounded. O(N) against all colliders in the world — suitable for
+/// interactive use (player sight, hitscan) but not for mass parallel queries.
+///
+/// only colliders whose `layer` is matched by `mask` are tested.
+pub fn ray_cast_2d(
+    origin: Vec2,
+    direction: Vec2,
+    max_dist: f32,
+    mask: u32,
+    world: &CollisionWorld,
+) -> Option<RayHit2d> {
+    let mut nearest: Option<RayHit2d> = None;
+
+    for entry in &world.entries {
+        if entry.layer & mask == 0 {
+            continue;
+        }
+        let hit = match entry.shape {
+            ColliderShape::Aabb { half_extents } => {
+                ray_vs_aabb(origin, direction, entry.position, half_extents, max_dist)
+            }
+            ColliderShape::Circle { radius } => {
+                ray_vs_circle(origin, direction, entry.position, radius, max_dist)
+            }
+        };
+        if let Some((distance, point, normal)) = hit {
+            if nearest.as_ref().map_or(true, |n| distance < n.distance) {
+                nearest = Some(RayHit2d { entity: entry.entity, point, normal, distance });
+            }
+        }
+    }
+
+    nearest
+}
+
+/// ray vs AABB slab test. returns (distance, point, normal) on hit.
+fn ray_vs_aabb(
+    origin: Vec2,
+    direction: Vec2,
+    center: Vec2,
+    half_extents: Vec2,
+    max_dist: f32,
+) -> Option<(f32, Vec2, Vec2)> {
+    let inv_direction = Vec2::new(
+        if direction.x.abs() > f32::EPSILON { 1.0 / direction.x } else { f32::MAX },
+        if direction.y.abs() > f32::EPSILON { 1.0 / direction.y } else { f32::MAX },
+    );
+
+    let min = center - half_extents;
+    let max = center + half_extents;
+
+    let t1 = (min.x - origin.x) * inv_direction.x;
+    let t2 = (max.x - origin.x) * inv_direction.x;
+    let t3 = (min.y - origin.y) * inv_direction.y;
+    let t4 = (max.y - origin.y) * inv_direction.y;
+
+    let tmin = t1.min(t2).max(t3.min(t4));
+    let tmax = t1.max(t2).min(t3.max(t4));
+
+    if tmax < 0.0 || tmin > tmax || tmin > max_dist {
+        return None;
+    }
+
+    let distance = if tmin < 0.0 { tmax } else { tmin };
+    if distance > max_dist || distance < 0.0 {
+        return None;
+    }
+
+    let point = origin + direction * distance;
+    let local = point - center;
+    let normal = if local.x.abs() / half_extents.x > local.y.abs() / half_extents.y {
+        Vec2::new(local.x.signum(), 0.0)
+    } else {
+        Vec2::new(0.0, local.y.signum())
+    };
+
+    Some((distance, point, normal))
+}
+
+/// ray vs circle test. returns (distance, point, normal) on hit.
+fn ray_vs_circle(
+    origin: Vec2,
+    direction: Vec2,
+    center: Vec2,
+    radius: f32,
+    max_dist: f32,
+) -> Option<(f32, Vec2, Vec2)> {
+    let oc = origin - center;
+    let a = direction.dot(direction);
+    let b = 2.0 * oc.dot(direction);
+    let c = oc.dot(oc) - radius * radius;
+    let discriminant = b * b - 4.0 * a * c;
+    if discriminant < 0.0 {
+        return None;
+    }
+    let sqrt_d = discriminant.sqrt();
+    let t = (-b - sqrt_d) / (2.0 * a);
+    let distance = if t > 0.0 { t } else { (-b + sqrt_d) / (2.0 * a) };
+    if distance < 0.0 || distance > max_dist {
+        return None;
+    }
+    let point = origin + direction * distance;
+    let normal = (point - center) / radius;
+    Some((distance, point, normal))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,5 +523,57 @@ mod tests {
             .id();
         assert!(world.get::<Collider>(entity).is_some());
         assert!(world.get::<Transform>(entity).is_some());
+    }
+
+    fn build_ray_world(shapes: &[(Vec2, ColliderShape)]) -> CollisionWorld {
+        let mut world = World::new();
+        let entries = shapes.iter().map(|&(position, shape)| {
+            let entity = world.spawn_empty().id();
+            ColliderEntry::new(entity, position, shape, 1, 1)
+        }).collect();
+        CollisionWorld { entries }
+    }
+
+    #[test]
+    fn ray_hits_aabb_from_left() {
+        let world = build_ray_world(&[(Vec2::new(50.0, 0.0), ColliderShape::Aabb { half_extents: Vec2::new(10.0, 10.0) })]);
+        let hit = ray_cast_2d(Vec2::ZERO, Vec2::new(1.0, 0.0), 1000.0, 1, &world);
+        let hit = hit.expect("expected a hit");
+        assert!((hit.distance - 40.0).abs() < 0.1, "expected distance ~40, got {}", hit.distance);
+        assert!((hit.normal.x - (-1.0)).abs() < 0.01, "expected left-face normal");
+    }
+
+    #[test]
+    fn ray_misses_aabb_when_offset() {
+        let world = build_ray_world(&[(Vec2::new(50.0, 100.0), ColliderShape::Aabb { half_extents: Vec2::new(10.0, 10.0) })]);
+        let hit = ray_cast_2d(Vec2::ZERO, Vec2::new(1.0, 0.0), 1000.0, 1, &world);
+        assert!(hit.is_none());
+    }
+
+    #[test]
+    fn ray_hits_nearest_of_two_aabbs() {
+        let world = build_ray_world(&[
+            (Vec2::new(100.0, 0.0), ColliderShape::Aabb { half_extents: Vec2::new(10.0, 10.0) }),
+            (Vec2::new(50.0, 0.0), ColliderShape::Aabb { half_extents: Vec2::new(10.0, 10.0) }),
+        ]);
+        let hit = ray_cast_2d(Vec2::ZERO, Vec2::new(1.0, 0.0), 1000.0, 1, &world);
+        let hit = hit.expect("expected a hit");
+        assert!((hit.distance - 40.0).abs() < 0.1, "should hit closer box first");
+    }
+
+    #[test]
+    fn ray_respects_max_dist() {
+        let world = build_ray_world(&[(Vec2::new(50.0, 0.0), ColliderShape::Aabb { half_extents: Vec2::new(10.0, 10.0) })]);
+        let hit = ray_cast_2d(Vec2::ZERO, Vec2::new(1.0, 0.0), 20.0, 1, &world);
+        assert!(hit.is_none(), "ray should stop before the box at max_dist=20");
+    }
+
+    #[test]
+    fn ray_hits_circle() {
+        let world = build_ray_world(&[(Vec2::new(50.0, 0.0), ColliderShape::Circle { radius: 10.0 })]);
+        let hit = ray_cast_2d(Vec2::ZERO, Vec2::new(1.0, 0.0), 1000.0, 1, &world);
+        let hit = hit.expect("expected a hit");
+        assert!((hit.distance - 40.0).abs() < 0.1);
+        assert!((hit.normal.x - (-1.0)).abs() < 0.01);
     }
 }
