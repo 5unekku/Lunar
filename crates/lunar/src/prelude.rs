@@ -113,7 +113,7 @@ pub use lunar_input::{ActionMap, GamepadAxis, GamepadButton, InputBinding, Input
 
 // lunar-assets types — Texture/Font/Sound are needed as type parameters for
 // Handle<T> when game code stores asset handles in its own resources.
-pub use lunar_assets::{AssetServer, AudioFormat, Font, Handle, Sound, Texture, TextureSource};
+pub use lunar_assets::{AssetServer, AudioFormat, Font, Handle, LoadingState, LoadingStats, Sound, Texture, TextureSource};
 
 // texture! macro — embeds and converts image assets at compile time
 pub use crate::texture;

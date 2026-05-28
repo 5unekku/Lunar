@@ -91,6 +91,45 @@ pub enum LoadState {
     Failed,
 }
 
+/// snapshot of loading progress — counts across all asset types.
+///
+/// obtain via [`AssetServer::loading_stats`]. use this to drive a loading
+/// screen: show a progress bar from `loaded / total` while `loaded < total`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LoadingStats {
+    /// total assets registered (loading + loaded + failed)
+    pub total: u32,
+    /// assets that finished loading successfully
+    pub loaded: u32,
+    /// assets that failed to load
+    pub failed: u32,
+}
+
+impl LoadingStats {
+    /// fraction of assets loaded successfully, in \[0, 1\]. returns 1 if total == 0.
+    #[must_use]
+    pub fn fraction(&self) -> f32 {
+        if self.total == 0 { 1.0 } else { self.loaded as f32 / self.total as f32 }
+    }
+
+    /// true when all registered assets are done (loaded or failed, none still pending)
+    #[must_use]
+    pub fn is_done(&self) -> bool {
+        self.loaded + self.failed >= self.total
+    }
+}
+
+/// ECS resource that mirrors the latest [`LoadingStats`] snapshot.
+///
+/// updated each frame by the asset system after processing load results.
+/// game code can read this to drive loading screens without calling
+/// [`AssetServer::loading_stats`] directly.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct LoadingState {
+    /// current progress snapshot
+    pub stats: LoadingStats,
+}
+
 /// a generational handle to a loaded asset.
 ///
 /// handles are cheap to copy and consist of an id and generation number.
@@ -321,6 +360,18 @@ impl<T: Asset> AssetStore<T> {
             .flatten()
             .filter(|e| e.state == LoadState::Loading)
             .count()
+    }
+
+    fn loaded_count(&self) -> usize {
+        self.entries.iter().flatten().filter(|e| e.state == LoadState::Loaded).count()
+    }
+
+    fn failed_count(&self) -> usize {
+        self.entries.iter().flatten().filter(|e| e.state == LoadState::Failed).count()
+    }
+
+    fn total_count(&self) -> usize {
+        self.entries.iter().flatten().count()
     }
 
     fn get_by_id(&self, id: u32) -> Option<&T> {
@@ -1182,6 +1233,52 @@ impl AssetServer {
         }
     }
 
+    /// block until all pending asset loads complete. alias for [`wait_for_all`](Self::wait_for_all).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn block_until_all_ready(&self) {
+        self.wait_for_all();
+    }
+
+    /// block until the given texture handle is loaded or failed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn block_until_texture_ready(&self, handle: &Handle<Texture>) {
+        while !self.texture_store.is_ready(handle)
+            && self.texture_store.entries.get(handle.id as usize)
+                .and_then(|e| e.as_ref())
+                .map_or(false, |e| e.state == LoadState::Loading)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// block until the given font handle is loaded or failed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn block_until_font_ready(&self, handle: &Handle<Font>) {
+        while !self.font_store.is_ready(handle)
+            && self.font_store.entries.get(handle.id as usize)
+                .and_then(|e| e.as_ref())
+                .map_or(false, |e| e.state == LoadState::Loading)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// snapshot of current loading progress across all asset types.
+    #[must_use]
+    pub fn loading_stats(&self) -> LoadingStats {
+        LoadingStats {
+            total: (self.texture_store.total_count()
+                + self.sound_store.total_count()
+                + self.font_store.total_count()) as u32,
+            loaded: (self.texture_store.loaded_count()
+                + self.sound_store.loaded_count()
+                + self.font_store.loaded_count()) as u32,
+            failed: (self.texture_store.failed_count()
+                + self.sound_store.failed_count()
+                + self.font_store.failed_count()) as u32,
+        }
+    }
+
     /// process completed load results from io threads.
     /// call this once per frame from the asset plugin's system.
     pub fn update(&mut self) {
@@ -1311,15 +1408,16 @@ impl GamePlugin for AssetPlugin {
 
     fn build(&mut self, app: &mut App) {
         app.insert_resource(AssetServer::new(2));
+        app.insert_resource(LoadingState::default());
         app.add_system(process_asset_loads);
         log::info!("AssetPlugin: asset server resource registered");
     }
 }
 
-/// system that processes completed asset loads from io threads.
-/// runs each frame during the update stage.
-fn process_asset_loads(mut asset_server: ResMut<AssetServer>) {
+/// system that processes completed asset loads and updates the LoadingState resource.
+fn process_asset_loads(mut asset_server: ResMut<AssetServer>, mut loading_state: ResMut<LoadingState>) {
     asset_server.update();
+    loading_state.stats = asset_server.loading_stats();
 }
 
 /// event emitted when a watched asset file changes.
