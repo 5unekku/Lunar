@@ -1258,14 +1258,13 @@ impl RenderEngine {
                 | DrawKind::Line { layer, .. }
                 | DrawKind::Text { layer, .. } => *layer,
             };
-            let tex = match &cmd.kind {
-                DrawKind::Sprite {
-                    texture: Some(id), ..
-                } => u32::try_from(*id).unwrap_or(u32::MAX),
-                DrawKind::Text { .. } => GLYPH_ATLAS_BIND_ID,
-                _ => u32::MAX,
+            let secondary: i64 = match &cmd.kind {
+                DrawKind::Sprite { sort_key: Some(k), .. } => i64::from(*k),
+                DrawKind::Sprite { texture: Some(id), .. } => i64::try_from(*id).unwrap_or(i64::MAX),
+                DrawKind::Text { .. } => i64::from(GLYPH_ATLAS_BIND_ID),
+                _ => i64::MAX,
             };
-            (layer, tex)
+            (layer, secondary)
         });
 
         let mut encoder = self
@@ -1744,6 +1743,8 @@ pub enum DrawKind {
         layer: i32,
         uv_rect: Option<(Vec2, Vec2)>,
         origin: Vec2,
+        /// when set, overrides texture-based secondary sort with this key (y-sort uses world_y * 100)
+        sort_key: Option<i32>,
     },
     /// draw a 2D rectangle
     Rect {
@@ -2018,6 +2019,7 @@ impl RenderQueue {
                 layer,
                 uv_rect: None,
                 origin: Vec2::new(size.x * 0.5, size.y * 0.5),
+                sort_key: None,
             },
         });
     }
@@ -2053,6 +2055,7 @@ impl RenderQueue {
                 layer,
                 uv_rect: Some(region),
                 origin: Vec2::new(size.x * 0.5, size.y * 0.5),
+                sort_key: None,
             },
         });
     }
@@ -2079,6 +2082,7 @@ impl RenderQueue {
                 layer,
                 uv_rect: None,
                 origin: params.origin,
+                sort_key: None,
             },
         });
     }
@@ -2711,6 +2715,14 @@ fn frame_stats_system(time: Res<Time>, mut info: ResMut<RenderInfo>) {
     };
 }
 
+/// marker component that opts a sprite into y-sort ordering.
+///
+/// sprites with `YSort` sort by world Y within their layer instead of texture id.
+/// lower Y (further up the screen) is drawn first. useful for top-down RPGs and
+/// brawlers where vertical position determines draw order.
+#[derive(Component)]
+pub struct YSort;
+
 /// auto-render system: enqueues a sprite draw for every entity with both
 /// `Transform` and `Sprite`. resolves native texture size from `AssetServer`
 /// when `Sprite::size` is `None`.
@@ -2718,9 +2730,9 @@ fn frame_stats_system(time: Res<Time>, mut info: ResMut<RenderInfo>) {
 fn auto_sprite_system(
     assets: Option<Res<AssetServer>>,
     mut queue: ResMut<RenderQueue>,
-    query: Query<(&Transform, &Sprite)>,
+    query: Query<(&Transform, &Sprite, Option<&YSort>)>,
 ) {
-    for (transform, sprite) in &query {
+    for (transform, sprite, y_sort) in &query {
         let resolved_size = sprite.size.unwrap_or_else(|| {
             assets
                 .as_deref()
@@ -2733,6 +2745,8 @@ fn auto_sprite_system(
         let origin = sprite
             .origin
             .map_or_else(|| final_size * 0.5, |o| o * transform.scale);
+        // y-sort encodes world Y * 100 as i32 — sub-pixel precision, ~21M world units range
+        let sort_key = y_sort.map(|_| (transform.translation.y * 100.0) as i32);
         queue.push(DrawCommand {
             kind: DrawKind::Sprite {
                 texture: Some(u64::from(sprite.texture.id())),
@@ -2743,6 +2757,7 @@ fn auto_sprite_system(
                 layer: sprite.layer,
                 uv_rect: sprite.source_rect,
                 origin,
+                sort_key,
             },
         });
     }
