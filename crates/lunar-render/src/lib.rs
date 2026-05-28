@@ -45,10 +45,12 @@
 
 pub mod atlas;
 mod camera_follow;
+mod screen_shake;
 mod text;
 pub mod textbox;
 
 pub use camera_follow::CameraFollow2d;
+pub use screen_shake::ScreenShake;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -2563,7 +2565,11 @@ impl GamePlugin for RenderPlugin {
         app.insert_resource(DebugOverlay::new());
         app.add_system_to_stage(
             lunar_core::UpdateStage::PostUpdate,
-            camera_follow::camera_follow_system,
+            (
+                camera_follow::camera_follow_system,
+                screen_shake::screen_shake_system,
+            )
+                .chain(),
         );
         // upload_new_textures_system runs first to ensure any texture that became
         // ready this frame is on the GPU before auto_sprite_system enqueues draws.

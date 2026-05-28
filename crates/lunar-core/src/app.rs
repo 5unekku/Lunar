@@ -94,6 +94,12 @@ impl Time {
         self.frame_count
     }
 
+    /// set delta directly — for unit tests only, do not call from game code
+    pub fn set_delta_seconds(&mut self, delta: f32) {
+        self.delta_seconds = delta;
+        self.raw_delta_seconds = delta;
+    }
+
     /// update the time resource, called once per frame
     pub fn tick(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
