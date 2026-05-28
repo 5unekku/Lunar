@@ -74,6 +74,10 @@ pub struct MaterialData {
     /// phong: specular exponent (shininess). typical range 8–128.
     /// pbr: metallic factor (0.0 = dielectric, 1.0 = full metal).
     pub specular_intensity: f32,
+    /// pbr: metallic factor. 0.0 = dielectric (plastic, stone), 1.0 = full metal.
+    pub metallic: f32,
+    /// pbr: perceptual roughness. 0.04 = mirror-smooth, 1.0 = fully diffuse.
+    pub roughness: f32,
     /// baked lightmap for this surface. sampled via uv_lightmap and multiplied
     /// into the ambient term. for dynamic objects, leave as none.
     pub lightmap: Option<Handle<Texture>>,
@@ -93,6 +97,8 @@ impl Default for MaterialData {
             normal_map: None,
             specular: None,
             specular_intensity: 32.0,
+            metallic: 0.0,
+            roughness: 0.5,
             lightmap: None,
             alpha: 1.0,
             depth_write: true,
