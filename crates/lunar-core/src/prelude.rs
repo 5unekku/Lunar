@@ -36,5 +36,6 @@ pub use crate::scene_format::{
     SceneText, SpriteDef, TextDef, TransformDef,
 };
 pub use crate::schedule::{StageLabelExt, StageOrder, UpdateStage};
+pub use crate::persist::{self, PersistError};
 pub use crate::state::EngineState;
 pub use crate::world_manifest::{AdvancedSceneLoader, LoadMode, LoadedScenes, WorldManifest};

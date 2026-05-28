@@ -38,6 +38,7 @@ mod engine;
 mod error;
 mod game_loop;
 mod hierarchy;
+pub mod persist;
 mod scene;
 mod scene_format;
 mod schedule;
