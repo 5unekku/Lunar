@@ -375,10 +375,14 @@ pub struct RenderEngine {
     render_config: RenderConfig,
     sprite_pipeline: wgpu::RenderPipeline,
     uniform_buf: wgpu::Buffer,
-    bind_group_layout: wgpu::BindGroupLayout,
+    // group 0: view-global (projection uniform) — set once per layer change
+    globals_bg: wgpu::BindGroup,
+    // group 1: material (texture + sampler) — set per texture batch
+    material_bgl: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     textures: HashMap<u32, GpuTexture>,
-    bind_groups: HashMap<u32, wgpu::BindGroup>,
+    // keyed by texture id; contains only texture + sampler bindings (no uniform)
+    material_bgs: HashMap<u32, wgpu::BindGroup>,
     /// persistent vertex buffers — double-buffered to prevent GPU read/write conflicts
     vertex_bufs: [wgpu::Buffer; VERTEX_BUFFER_COUNT],
     /// current vertex capacity (number of vertices, not bytes). doubles when
@@ -562,21 +566,27 @@ impl RenderEngine {
             ..Default::default()
         });
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("sprite bind group layout"),
+        // group 0: view-global (projection uniform only) — set once per layer
+        let globals_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[globals] bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        // group 1: material (texture + sampler) — switched per texture batch
+        let material_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[material] bgl"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -586,12 +596,21 @@ impl RenderEngine {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
-                    binding: 2,
+                    binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
             ],
+        });
+
+        let globals_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[globals] bg"),
+            layout: &globals_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buf.as_entire_binding(),
+            }],
         });
 
         // 1x1 white texture used for untextured draws (rects, lines, text)
@@ -631,20 +650,16 @@ impl RenderEngine {
         let placeholder_view =
             placeholder_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("sprite bind group"),
-            layout: &bind_group_layout,
+        let placeholder_material_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[material] placeholder bg"),
+            layout: &material_bgl,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: uniform_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
                     resource: wgpu::BindingResource::TextureView(&placeholder_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 2,
+                    binding: 1,
                     resource: wgpu::BindingResource::Sampler(&sampler),
                 },
             ],
@@ -657,7 +672,7 @@ impl RenderEngine {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("sprite pipeline layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
+            bind_group_layouts: &[Some(&globals_bgl), Some(&material_bgl)],
             immediate_size: 0,
         });
 
@@ -758,12 +773,13 @@ impl RenderEngine {
             render_config: config,
             sprite_pipeline,
             uniform_buf,
-            bind_group_layout,
+            globals_bg,
+            material_bgl,
             sampler,
             textures: HashMap::new(),
-            bind_groups: {
+            material_bgs: {
                 let mut map = HashMap::new();
-                map.insert(u32::MAX, bind_group);
+                map.insert(u32::MAX, placeholder_material_bg);
                 map
             },
             vertex_bufs,
@@ -956,7 +972,7 @@ impl RenderEngine {
     /// call this when a texture is no longer needed to free GPU memory.
     pub fn remove_texture(&mut self, tex_id: u32) {
         self.textures.remove(&tex_id);
-        self.bind_groups.remove(&tex_id);
+        self.material_bgs.remove(&tex_id);
     }
 
     /// register font bytes with the glyph atlas. glyphs are rasterized on demand
@@ -1010,26 +1026,22 @@ impl RenderEngine {
         let view = gpu_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let tex_id = handle.id();
 
-        // create and cache bind group for this texture
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("sprite bind group"),
-            layout: &self.bind_group_layout,
+        // create and cache material bind group for this texture (texture + sampler only)
+        let material_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[material] texture bg"),
+            layout: &self.material_bgl,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: self.uniform_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
                     resource: wgpu::BindingResource::TextureView(&view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 2,
+                    binding: 1,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
             ],
         });
-        self.bind_groups.insert(tex_id, bind_group);
+        self.material_bgs.insert(tex_id, material_bg);
 
         self.textures.insert(
             tex_id,
@@ -1207,25 +1219,21 @@ impl RenderEngine {
         if std::mem::take(&mut self.glyph_atlas.dirty) {
             self.upload_glyph_atlas();
             if let Some(atlas) = &self.glyph_atlas_texture {
-                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("glyph atlas bind group"),
-                    layout: &self.bind_group_layout,
+                let material_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("[material] glyph atlas bg"),
+                    layout: &self.material_bgl,
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: self.uniform_buf.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
                             resource: wgpu::BindingResource::TextureView(&atlas.view),
                         },
                         wgpu::BindGroupEntry {
-                            binding: 2,
+                            binding: 1,
                             resource: wgpu::BindingResource::Sampler(&self.sampler),
                         },
                     ],
                 });
-                self.bind_groups.insert(GLYPH_ATLAS_BIND_ID, bind_group);
+                self.material_bgs.insert(GLYPH_ATLAS_BIND_ID, material_bg);
             }
         }
 
@@ -1444,10 +1452,11 @@ impl RenderEngine {
         offset: usize,
         vertex_count: usize,
     ) {
-        let Some(bind_group) = self.bind_groups.get(&tex_id) else {
+        let Some(material_bg) = self.material_bgs.get(&tex_id) else {
             return;
         };
-        pass.set_bind_group(0, bind_group, &[]);
+        pass.set_bind_group(0, &self.globals_bg, &[]);
+        pass.set_bind_group(1, material_bg, &[]);
         let buf = &self.vertex_bufs[self.frame_index];
         pass.set_vertex_buffer(
             0,
@@ -1659,8 +1668,8 @@ struct VertexOut {
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
-@group(0) @binding(1) var sprite_texture: texture_2d<f32>;
-@group(0) @binding(2) var sprite_sampler: sampler;
+@group(1) @binding(0) var sprite_texture: texture_2d<f32>;
+@group(1) @binding(1) var sprite_sampler: sampler;
 
 @vertex
 fn vs_main(

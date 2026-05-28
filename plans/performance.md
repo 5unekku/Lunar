@@ -22,7 +22,9 @@ this file tracks what's done, what's next, and the reasoning behind decisions.
 - dynamic entity UBO in `lunar-render-3d`: single buffer, `has_dynamic_offset: true`, all entity transforms packed and uploaded in one `queue.write_buffer` call per frame — eliminates per-entity GPU buffers and the `entity_draws` HashMap leak
 - `RenderTier` enum queried from wgpu `DownlevelFlags` at adapter creation; inserted as a Resource so render features can gate on capability
 - `text_quads` in 2D renderer: replaced per-frame `Vec` construction with `layout_text_into` / `layout_text_wrapped_into` variants + entry API, inner vecs reused across frames
-- improved buffer/texture labels in 3D renderer: `[subsystem] descriptor` format throughout
+- improved buffer/texture labels in both renderers: `[subsystem] descriptor` format throughout
+- 2D renderer bind group split: single monolithic BGL (uniform+texture+sampler) replaced with group 0 (uniform only, `globals_bg`) + group 1 (texture+sampler, per-texture `material_bgs`); globals set once per layer, material switched per batch
+- `layout_text_into` / `layout_text_wrapped_into` eliminate per-frame inner-vec allocations in text layout
 
 ## principles
 
@@ -32,20 +34,7 @@ this file tracks what's done, what's next, and the reasoning behind decisions.
 
 ## next
 
-### short term
-
-**StagingBelt for per-frame uniform uploads**
-`queue.write_buffer` routes through wgpu's implicit staging internally, but an explicit `StagingBelt` with a tuned chunk size (4 MiB is a reasonable starting point per the reference doc) avoids repeated small allocations and gives predictable upload timing.
-
 ### medium term
-
-**render tiers / capability ladder**
-query `DownlevelFlags` at adapter creation and select a tier:
-- `LowGles`: no compute, forward only — Pi 4 / GLES floor
-- `Mid`: clustered forward+, compute culling (later)
-- `High`: deferred, HZB, full post stack (later)
-
-this gates future features cleanly and keeps the Pi 4 path working.
 
 **proper PBR lighting**
 current renderer is unlit (base_color only). next step is directional + point lights using the Cook-Torrance BRDF. one shadow cascade at 1024² for the directional light. reference doc has the full shadow filter progression (3×3 PCF low → 5×5 OptimizedPCF mid).
