@@ -82,6 +82,10 @@ path = "examples/rpg_example/main.rs"
 name = "platform_demo"
 path = "examples/platform_demo/main.rs"
 
+[[example]]
+name = "shooter_example"
+path = "examples/shooter_example/main.rs"
+
 [dependencies]
 # `lunar` is the only dependency a real game needs. enable optional modules
 # via feature flags.

@@ -20,8 +20,8 @@ these are gaps in what already exists — polish, wiring, and cleanup.
 - ~~`LoadingState { total, loaded, failed }` resource — done~~
 - `AssetServer` eviction → `RenderEngine::remove_texture` wiring — currently the asset server doesn't evict, so bind group cleanup is never triggered
 
-### shooter example
-ground-truth proof that the external-user experience works end-to-end. game with: player, bullets, enemies, AABB collision, score display. depends only on `lunar`. see old item 49 in git history for full scope.
+### ~~shooter example~~
+done — `examples/shooter_example`: player, bullets, enemies, AABB collision, score/lives display. depends only on `lunar::prelude`.
 
 ### crate metadata
 - ~~`[workspace.package]` fields — done~~
