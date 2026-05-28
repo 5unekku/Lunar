@@ -153,6 +153,12 @@ pub struct Handle<T: Asset> {
 
 impl<T: Asset> Copy for Handle<T> {}
 
+impl<T: Asset> Default for Handle<T> {
+    fn default() -> Self {
+        Self { id: u32::MAX, generation: u16::MAX, _marker: PhantomData }
+    }
+}
+
 impl<T: Asset> Clone for Handle<T> {
     fn clone(&self) -> Self {
         *self
