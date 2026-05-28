@@ -18,7 +18,7 @@ these are gaps in what already exists — polish, wiring, and cleanup.
 ### asset loading UX
 - ~~`AssetServer::block_until_all_ready()` — done~~
 - ~~`LoadingState { total, loaded, failed }` resource — done~~
-- `AssetServer` eviction → `RenderEngine::remove_texture` wiring — currently the asset server doesn't evict, so bind group cleanup is never triggered
+- ~~`AssetServer` eviction → `RenderEngine::remove_texture` wiring~~ — done; `release_texture` decrements ref count, drains evicted IDs each frame, GPU bind group cleanup triggered
 
 ### ~~shooter example~~
 done — `examples/shooter_example`: player, bullets, enemies, AABB collision, score/lives display. depends only on `lunar::prelude`.
@@ -26,13 +26,13 @@ done — `examples/shooter_example`: player, bullets, enemies, AABB collision, s
 ### crate metadata
 - ~~`[workspace.package]` fields — done~~
 - ~~per-crate `description` fields — done~~
-- `cargo doc --no-deps` clean pass — fix broken doc links, ensure all public types have doc comments
+- ~~`cargo doc --no-deps` clean pass~~ — done; all intra-doc link warnings resolved across workspace
 
 ### wasm: upstream wgpu patch
 the `GPUCanvasContext` `instanceof` fix is vendored locally. submit PR to gfx-rs/wgpu and track until merged. downstream users currently need a `[patch.crates-io]` entry in their workspace.
 
-### rpg example migration
-`rpg-example` still has some direct `bevy_ecs` imports. finish migrating to `lunar::prelude` only — proves the facade is livable on a non-trivial project.
+### ~~rpg example migration~~
+confirmed clean — no `bevy_ecs` imports in `examples/rpg_example/`. all files use `lunar::prelude` only.
 
 ### game data format (`lunar-gamedata`)
 baked binary format for static game content (characters, rooms, dialogue nodes, emotions). TOML source → `build.rs` compiler → flat binary blob embedded via `include_bytes!`. O(1) access, zero runtime parsing. two crates: `lunar-gamedata` (reader) + `lunar-gamedata-build` (compiler). design doc needed before implementation.
@@ -56,7 +56,7 @@ these belong in `lunar-core` or the relevant base crate.
 |---|---|---|---|
 | ~~**save/load**~~ | ~~`lunar-core/persist`~~ | ~~critical~~ | done — `persist::save/load<T>`, RON, WASM stub |
 | ~~**entity pooling**~~ | ~~`lunar-core/pool`~~ | ~~high~~ | done — `Pool` resource, acquire/release/grow |
-| **render to texture** | `lunar-render` + `lunar-render-3d` | high | `RenderTarget` handle; `Camera`/`Camera3d` gets optional `target` field; prerequisite for minimap, split-screen, compositor tricks |
+| ~~**render to texture**~~ | ~~`lunar-render` + `lunar-render-3d`~~ | ~~high~~ | done — `RenderTargetId`, `RenderTargetStore`, `Camera.target`; GPU tex with `RENDER_ATTACHMENT \| TEXTURE_BINDING`; sample view exposed as `Handle<Texture>` |
 | **post-processing framework** | `lunar-render` + `lunar-render-3d` | medium | `PostProcessStack` resource; built-in: `ScreenFlash`, `ColorTint`; custom passes via `RenderPass` trait |
 | ~~**screen shake**~~ | ~~`lunar-render`~~ | ~~medium~~ | done — `ScreenShake` resource, trauma² noise offset |
 | **multiview / split-screen** | `lunar-render` + `lunar-render-3d` | low | `Viewport { rect: ScreenRect, camera: Entity }` component; multiple cameras scissored to sub-rects; needs render-to-texture first |
@@ -79,7 +79,7 @@ these belong in `lunar-core` or the relevant base crate.
 |---|---|---|---|
 | ~~**3d raycasting**~~ | ~~`lunar-3d`~~ | ~~critical~~ | done — `Ray3d`, `RayHit3d`, `raycast_3d`: CullSoa AABB broad phase + Möller–Trumbore triangle narrow phase; AABB fallback for mesh-less entities |
 | **proper PBR lighting** | `lunar-render-3d` | high | Cook-Torrance BRDF; directional + point lights; one shadow cascade at 1024²; see `optimize.md` for shadow filter progression |
-| **bind group layout standardisation** | `lunar-render-3d` | medium | consolidate to 4-group layout: group 0 view-global, group 1 material, group 2 per-mesh, group 3 pass-specific; lets pipelines share bind groups |
+| ~~**bind group layout standardisation**~~ | ~~`lunar-render-3d`~~ | ~~medium~~ | done — 3-group layout live: group 0 globals (view\_proj + time), group 1 material (base\_color), group 2 per-mesh (model matrix) |
 
 ---
 
