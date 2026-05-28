@@ -4,7 +4,7 @@
 //! NEON uses vld4q_u8/vst4q_u8 which deinterleave 64 bytes in a single instruction.
 //! x86 falls back to scalar; LLVM auto-vectorises the inner loop well on AVX2 targets.
 
-/// deinterleave RGBA → [R...][G...][B...][A...] contiguous planes.
+/// deinterleave RGBA → `[R...][G...][B...][A...]` contiguous planes.
 ///
 /// zstd compresses each channel plane far better than interleaved data because
 /// each plane has coherent statistics. a solid-color sprite's alpha plane is
@@ -26,7 +26,7 @@ pub fn deinterleave_rgba(rgba: &[u8]) -> Vec<u8> {
     out
 }
 
-/// reinterleave [R...][G...][B...][A...] planes back to RGBA.
+/// reinterleave `[R...][G...][B...][A...]` planes back to RGBA.
 pub fn reinterleave_rgba(planar: &[u8], n_pixels: usize) -> Vec<u8> {
     assert_eq!(
         planar.len(),

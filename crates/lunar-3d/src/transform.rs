@@ -62,7 +62,7 @@ impl Default for LocalTransform3d {
 
 /// world 3D transform: absolute position, rotation, and scale in world space.
 ///
-/// computed automatically by [`propagate_transforms_3d`] from [`LocalTransform3d`]
+/// computed automatically by [`crate::propagate_transforms_3d`] from [`LocalTransform3d`]
 /// and the parent hierarchy. do not modify this component directly.
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub struct WorldTransform3d {

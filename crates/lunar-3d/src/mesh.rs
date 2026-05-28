@@ -14,7 +14,7 @@ use lunar_math::{Vec2, Vec3};
 /// - `uv`: primary texture coordinate (diffuse, normal map, specular)
 /// - `uv_lightmap`: secondary UV for baked lightmaps. mirrors `uv` if no lightmap is used.
 /// - `color`: per-vertex RGBA8 linear color. multiplied with diffuse in the shader.
-///   use [255,255,255,255] (white) for no tinting.
+///   use `[255,255,255,255]` (white) for no tinting.
 ///
 /// # normal map convention
 ///
@@ -31,7 +31,7 @@ pub struct Vertex3d {
     pub uv: Vec2,
     /// secondary UV for lightmap sampling. mirrors `uv` if no lightmap.
     pub uv_lightmap: Vec2,
-    /// per-vertex RGBA8 linear color. [255,255,255,255] = no tint.
+    /// per-vertex RGBA8 linear color. `[255,255,255,255]` = no tint.
     pub color: [u8; 4],
 }
 

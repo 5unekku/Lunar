@@ -65,7 +65,7 @@ impl SpriteAnimation {
     /// UV region `(uv_min, uv_max)` for the current frame within a horizontal strip.
     ///
     /// assumes all frames are equal width and the strip contains exactly `frame_count` frames.
-    /// pass the result directly to [`RenderQueue::draw_sprite_atlas_on_layer`].
+    /// pass the result directly to `RenderQueue::draw_sprite_atlas_on_layer`.
     #[must_use]
     pub fn uv_rect(&self) -> (Vec2, Vec2) {
         if self.frame_count == 0 {
@@ -92,7 +92,7 @@ impl SpriteAnimation {
 
 /// advance all [`SpriteAnimation`] components by `delta_seconds`.
 ///
-/// registers via [`Plugin2d`] — no manual setup needed.
+/// registers via [`crate::Plugin2d`] — no manual setup needed.
 pub fn advance_sprite_animations(
     time: bevy_ecs::system::Res<Time>,
     mut query: bevy_ecs::system::Query<&mut SpriteAnimation>,

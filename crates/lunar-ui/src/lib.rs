@@ -342,7 +342,7 @@ pub fn render_buttons(
 
 /// updates [`Interaction`] on [`UiButton`] entities and fires [`ButtonPressedEvent`].
 ///
-/// requires [`InputState`] resource. runs in the [`UpdateStage::Update`] stage so
+/// requires [`InputState`] resource. runs in the [`lunar_core::UpdateStage::Update`] stage so
 /// interaction state is set before the render stage reads it.
 pub fn ui_interaction_system(
     input: Option<Res<InputState>>,

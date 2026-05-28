@@ -137,7 +137,7 @@ impl Default for RenderConfig3d {
 
 // ── render info ────────────────────────────────────────────────────────────
 
-/// per-frame rendering statistics. updated by [`render_3d_system`].
+/// per-frame rendering statistics. updated by `render_3d_system`.
 #[derive(Resource, Default)]
 pub struct RenderInfo3d {
     pub window_width: u32,

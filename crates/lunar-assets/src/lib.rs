@@ -821,7 +821,7 @@ impl<L: AssetLoader<Asset = Font> + Send + Sync> FontLoaderTrait for FontLoaderA
 pub enum TextureSource<'a> {
     /// file path, resolved relative to `assets/`
     Path(&'a str),
-    /// raw `.mi` bytes already embedded in the binary via [`texture!`]
+    /// raw `.mi` bytes already embedded in the binary via `texture!`
     Embedded(&'static [u8]),
 }
 
@@ -992,7 +992,7 @@ impl AssetServer {
     /// load a texture, returns immediately with a handle.
     ///
     /// accepts either a path string (async disk/network load) or embedded bytes
-    /// from the [`texture!`](lunar_macros::texture) macro (synchronous, already in memory).
+    /// from the `texture!` macro (synchronous, already in memory).
     ///
     /// # path loading
     /// the texture loads asynchronously in the background.

@@ -51,7 +51,7 @@ pub type Mat4 = glam::Mat4;
 
 /// quaternion type alias.
 ///
-/// backed by [`glam::Quat`]. used for 3D rotation in [`Transform3d`].
+/// backed by [`glam::Quat`]. used for 3D rotation in `Transform3d`.
 /// quaternions avoid gimbal lock and interpolate cleanly via slerp.
 pub type Quat = glam::Quat;
 
