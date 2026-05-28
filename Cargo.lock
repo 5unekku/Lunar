@@ -1593,6 +1593,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunar-camera-3d"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "lunar-3d",
+ "lunar-core",
+ "lunar-math",
+]
+
+[[package]]
 name = "lunar-core"
 version = "0.1.0"
 dependencies = [

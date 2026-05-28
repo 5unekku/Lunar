@@ -28,6 +28,7 @@ members = [
     "crates/lunar-pathfinding-rt",
     "crates/lunar-pathfinding-pre",
     "crates/lunar-ai",
+    "crates/lunar-camera-3d",
     "tests/api_seal",
 ]
 resolver = "2"

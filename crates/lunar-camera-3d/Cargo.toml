@@ -1,0 +1,16 @@
+[package]
+name = "lunar-camera-3d"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SpringArm3d orbit camera for lunar — shortens arm on collision, lag smoothing"
+repository.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
+
+[dependencies]
+bevy_ecs = { workspace = true }
+lunar-core = { path = "../lunar-core" }
+lunar-math = { path = "../lunar-math" }
+lunar-3d = { path = "../lunar-3d" }
