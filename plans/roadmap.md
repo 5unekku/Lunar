@@ -93,7 +93,7 @@ game code adds these to its `Cargo.toml` only when needed.
 | `lunar-physics-3d` | high | kinematic character controller (move/slide/slope/step) first; full rigidbody optional backend (rapier3d) |
 | ~~`lunar-particles`~~ | ~~high~~ | done — `ParticleEmitter` + `ParticlePool`, tick + draw systems |
 | ~~`lunar-pathfinding-rt`~~ | ~~high~~ | done — A* on `NavGrid` resource; 4-dir and 8-dir movement; per-tile cost; corner-cut prevention; max_nodes cap |
-| `lunar-pathfinding-pre` | medium | precomputed pathfinding (Dijkstra cost maps, flow fields); bakes at level load; good for many agents sharing a goal |
+| ~~`lunar-pathfinding-pre`~~ | ~~medium~~ | done — Dijkstra flow field baked at level load; O(1) per-agent step query; corner-cut prevention; `cost_at` for debug |
 | `lunar-ai` | medium | behavior tree evaluation (`Selector`, `Sequence`, `Condition`, `Action`); tree structure + tick loop only; leaf actions written by game code |
 | `lunar-camera-3d` | medium | `SpringArm3d` orbit camera; shortens arm via 3d raycast when blocked; depends on `lunar-3d` raycasting |
 | `lunar-spline` | low | catmull-rom `Spline` asset; `PathFollower` component; `advance_path_followers` system |

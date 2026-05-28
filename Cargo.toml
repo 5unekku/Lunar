@@ -26,6 +26,7 @@ members = [
     "crates/lunar-physics-2d",
     "crates/lunar-particles",
     "crates/lunar-pathfinding-rt",
+    "crates/lunar-pathfinding-pre",
     "tests/api_seal",
 ]
 resolver = "2"
