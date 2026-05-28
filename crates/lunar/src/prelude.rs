@@ -82,8 +82,9 @@ pub use lunar_3d::{
     SpotLightBundle,
     // animation
     AnimationClip, AnimationPlayer, AnimationTarget, JointTrack, Keyframe, advance_animations,
-    // collision
-    Collider3d, ColliderShape3d, CollisionWorld3d, build_collision_world_3d,
+    // collision + raycasting
+    Collider3d, ColliderShape3d, CollisionWorld3d, Ray3d, RayHit3d,
+    build_collision_world_3d, raycast_3d,
     // fog
     Fog, FogFalloff,
     // visibility

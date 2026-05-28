@@ -23,9 +23,12 @@
 //! ```
 
 use bevy_ecs::prelude::*;
-use lunar_math::Vec3;
+use lunar_math::{Quat, Vec3, Vec3A};
 
+use crate::mesh::Mesh3d;
+use crate::mesh_registry::MeshRegistry;
 use crate::transform::WorldTransform3d;
+use crate::visibility::CullSoa;
 
 /// shape variant for a [`Collider3d`] component.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -236,6 +239,252 @@ fn point_in_shape(point: Vec3, position: Vec3, shape: ColliderShape3d) -> bool {
     }
 }
 
+/// a ray in 3D world space.
+#[derive(Debug, Clone, Copy)]
+pub struct Ray3d {
+    /// world-space origin.
+    pub origin: Vec3,
+    /// unit-length direction vector.
+    pub direction: Vec3,
+}
+
+impl Ray3d {
+    /// construct from origin and direction; normalizes the direction.
+    #[must_use]
+    pub fn new(origin: Vec3, direction: Vec3) -> Self {
+        Self { origin, direction: direction.normalize_or_zero() }
+    }
+
+    /// world-space point at distance `t` along the ray.
+    #[must_use]
+    pub fn at(self, t: f32) -> Vec3 {
+        self.origin + self.direction * t
+    }
+}
+
+/// result of a successful [`raycast_3d`] query.
+#[derive(Debug, Clone, Copy)]
+pub struct RayHit3d {
+    /// entity whose geometry was hit.
+    pub entity: Entity,
+    /// world-space hit point.
+    pub point: Vec3,
+    /// world-space surface normal at the hit point (unit length).
+    pub normal: Vec3,
+    /// world-space distance along the ray from origin to hit point.
+    pub distance: f32,
+}
+
+/// cast a ray against the [`CullSoa`] broad-phase AABBs, then refine with
+/// Möller–Trumbore triangle intersection on each candidate entity's mesh.
+///
+/// entities whose [`Collider3d`] layer does not match `mask` are skipped.
+/// entities without a [`Collider3d`] are treated as layer 1.
+/// entities without mesh data in `registry` return an AABB-level hit.
+///
+/// returns the nearest hit, or `None` if nothing was hit within `max_dist`.
+///
+/// # usage
+///
+/// ```ignore
+/// fn fire_hitscan(
+///     soa: Res<CullSoa>,
+///     registry: Res<MeshRegistry>,
+///     query: Query<(&Mesh3d, &WorldTransform3d, Option<&Collider3d>)>,
+/// ) {
+///     let ray = Ray3d::new(Vec3::ZERO, Vec3::Z);
+///     if let Some(hit) = raycast_3d(ray, 100.0, 1, &soa, &query, &registry) {
+///         println!("hit {:?} at {:?}", hit.entity, hit.point);
+///     }
+/// }
+/// ```
+pub fn raycast_3d(
+    ray: Ray3d,
+    max_dist: f32,
+    mask: u32,
+    soa: &CullSoa,
+    entity_query: &Query<(&Mesh3d, &WorldTransform3d, Option<&Collider3d>)>,
+    registry: &MeshRegistry,
+) -> Option<RayHit3d> {
+    let mut nearest: Option<RayHit3d> = None;
+
+    for (idx, &entity) in soa.entities.iter().enumerate() {
+        let center = soa.centers[idx];
+        let half_extents = soa.half_extents[idx];
+
+        let Some(aabb_t) = ray_vs_aabb_3d(ray, center, half_extents, max_dist) else {
+            continue;
+        };
+
+        let Ok((mesh_handle, world, collider)) = entity_query.get(entity) else {
+            continue;
+        };
+
+        let entity_layer = collider.map(|c| c.layer).unwrap_or(1);
+        if mask & entity_layer == 0 {
+            continue;
+        }
+
+        let current_max = nearest.as_ref().map(|h| h.distance).unwrap_or(max_dist);
+
+        let hit = registry
+            .get_mesh(mesh_handle.0)
+            .and_then(|mesh_data| {
+                raycast_mesh(ray, mesh_data.vertices.iter().map(|v| v.position), &mesh_data.indices, world, current_max)
+            })
+            .unwrap_or_else(|| {
+                // no mesh data — use AABB hit point
+                let point = ray.at(aabb_t);
+                let normal = aabb_normal(point, Vec3::from(center), Vec3::from(half_extents));
+                RayHit3d { entity, point, normal, distance: aabb_t }
+            });
+
+        if hit.distance < nearest.as_ref().map(|h| h.distance).unwrap_or(f32::MAX) {
+            nearest = Some(RayHit3d { entity, ..hit });
+        }
+    }
+
+    nearest
+}
+
+/// ray vs world-space axis-aligned bounding box (slab test).
+/// returns the entry distance, or `None` if no intersection within `max_dist`.
+fn ray_vs_aabb_3d(ray: Ray3d, center: Vec3A, half_extents: Vec3A, max_dist: f32) -> Option<f32> {
+    let c = Vec3::from(center);
+    let h = Vec3::from(half_extents);
+    let inv_dir = Vec3::new(
+        if ray.direction.x == 0.0 { f32::INFINITY } else { 1.0 / ray.direction.x },
+        if ray.direction.y == 0.0 { f32::INFINITY } else { 1.0 / ray.direction.y },
+        if ray.direction.z == 0.0 { f32::INFINITY } else { 1.0 / ray.direction.z },
+    );
+    let t_min_v = (c - h - ray.origin) * inv_dir;
+    let t_max_v = (c + h - ray.origin) * inv_dir;
+    let t_near = t_min_v.min(t_max_v);
+    let t_far = t_min_v.max(t_max_v);
+    let t_entry = t_near.max_element();
+    let t_exit = t_far.min_element();
+    if t_entry <= t_exit && t_exit >= 0.0 && t_entry <= max_dist {
+        Some(t_entry.max(0.0))
+    } else {
+        None
+    }
+}
+
+/// approximate outward-facing AABB normal for a surface point.
+fn aabb_normal(point: Vec3, center: Vec3, half_extents: Vec3) -> Vec3 {
+    let local = point - center;
+    let d = local.abs() - half_extents;
+    // largest component of d is the hit face
+    if d.x >= d.y && d.x >= d.z {
+        Vec3::new(local.x.signum(), 0.0, 0.0)
+    } else if d.y >= d.x && d.y >= d.z {
+        Vec3::new(0.0, local.y.signum(), 0.0)
+    } else {
+        Vec3::new(0.0, 0.0, local.z.signum())
+    }
+}
+
+/// Möller–Trumbore intersection.
+/// returns `(t, model-space normal)` or `None` if no hit.
+fn moller_trumbore(origin: Vec3, direction: Vec3, v0: Vec3, v1: Vec3, v2: Vec3) -> Option<(f32, Vec3)> {
+    const EPSILON: f32 = 1e-7;
+    let edge1 = v1 - v0;
+    let edge2 = v2 - v0;
+    let h = direction.cross(edge2);
+    let a = edge1.dot(h);
+    if a.abs() < EPSILON {
+        return None;
+    }
+    let f = 1.0 / a;
+    let s = origin - v0;
+    let u = f * s.dot(h);
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = s.cross(edge1);
+    let v = f * direction.dot(q);
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let t = f * edge2.dot(q);
+    if t < EPSILON {
+        return None;
+    }
+    let normal = edge1.cross(edge2).normalize_or_zero();
+    Some((t, normal))
+}
+
+/// iterate mesh triangles, transform ray into model space, return nearest world-space hit.
+fn raycast_mesh<'a>(
+    ray: Ray3d,
+    vertices: impl Iterator<Item = Vec3> + Clone,
+    indices: &crate::mesh::IndexBuffer,
+    world: &WorldTransform3d,
+    max_dist: f32,
+) -> Option<RayHit3d> {
+    let inv_rot = Quat::from_xyzw(-world.rotation.x, -world.rotation.y, -world.rotation.z, world.rotation.w);
+    let inv_scale = Vec3::new(
+        if world.scale.x == 0.0 { 0.0 } else { 1.0 / world.scale.x },
+        if world.scale.y == 0.0 { 0.0 } else { 1.0 / world.scale.y },
+        if world.scale.z == 0.0 { 0.0 } else { 1.0 / world.scale.z },
+    );
+
+    // transform ray into model space
+    let model_origin = inv_scale * inv_rot.mul_vec3(ray.origin - world.translation);
+    let model_dir = inv_scale * inv_rot.mul_vec3(ray.direction);
+
+    let verts: Vec<Vec3> = vertices.collect();
+
+    let index_triples: Vec<[usize; 3]> = match indices {
+        crate::mesh::IndexBuffer::U16(idx) => {
+            idx.chunks_exact(3).map(|c| [c[0] as usize, c[1] as usize, c[2] as usize]).collect()
+        }
+        crate::mesh::IndexBuffer::U32(idx) => {
+            idx.chunks_exact(3).map(|c| [c[0] as usize, c[1] as usize, c[2] as usize]).collect()
+        }
+    };
+
+    let mut nearest_t = f32::MAX;
+    let mut nearest_model_normal = Vec3::Y;
+
+    for tri in &index_triples {
+        let v0 = verts[tri[0]];
+        let v1 = verts[tri[1]];
+        let v2 = verts[tri[2]];
+        if let Some((t, model_normal)) = moller_trumbore(model_origin, model_dir, v0, v1, v2) {
+            if t < nearest_t {
+                nearest_t = t;
+                nearest_model_normal = model_normal;
+            }
+        }
+    }
+
+    if nearest_t == f32::MAX {
+        return None;
+    }
+
+    // hit point back to world space
+    let model_hit = model_origin + nearest_t * model_dir;
+    let world_hit = world.translation + world.rotation.mul_vec3(world.scale * model_hit);
+    let world_dist = (world_hit - ray.origin).length();
+
+    if world_dist > max_dist {
+        return None;
+    }
+
+    // transform normal: inverse-transpose = R * (1/S) for non-uniform scale
+    let world_normal = (world.rotation.mul_vec3(inv_scale * nearest_model_normal)).normalize_or_zero();
+    // make sure normal points away from ray origin
+    let world_normal = if world_normal.dot(ray.direction) > 0.0 { -world_normal } else { world_normal };
+
+    Some(RayHit3d {
+        entity: Entity::PLACEHOLDER,
+        point: world_hit,
+        normal: world_normal,
+        distance: world_dist,
+    })
+}
+
 /// system that rebuilds [`CollisionWorld3d`] from all entities with `Collider3d + WorldTransform3d`.
 ///
 /// entries are sorted by `min_x` after insertion to enable sweep-and-prune in `all_overlaps`.
@@ -261,7 +510,116 @@ pub fn build_collision_world_3d(
 mod tests {
     use super::*;
     use bevy_ecs::system::IntoSystem;
-    use lunar_math::Vec3;
+    use lunar_math::{Quat, Vec3, Vec3A};
+
+    // helpers for raycast tests -----------------------------------------------
+
+    fn identity_world() -> WorldTransform3d {
+        WorldTransform3d {
+            translation: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            scale: Vec3::ONE,
+        }
+    }
+
+    fn unit_quad_mesh() -> (Vec<Vec3>, crate::mesh::IndexBuffer) {
+        // two triangles forming a unit quad in the XY plane at Z = 0
+        let verts = vec![
+            Vec3::new(-0.5, -0.5, 0.0),
+            Vec3::new(0.5, -0.5, 0.0),
+            Vec3::new(0.5, 0.5, 0.0),
+            Vec3::new(-0.5, 0.5, 0.0),
+        ];
+        let indices = crate::mesh::IndexBuffer::U16(vec![0, 1, 2, 0, 2, 3]);
+        (verts, indices)
+    }
+
+    #[test]
+    fn moller_trumbore_direct_hit() {
+        let origin = Vec3::new(0.0, 0.0, 1.0);
+        let direction = Vec3::new(0.0, 0.0, -1.0);
+        let v0 = Vec3::new(-1.0, -1.0, 0.0);
+        let v1 = Vec3::new(1.0, -1.0, 0.0);
+        let v2 = Vec3::new(0.0, 1.0, 0.0);
+        let result = moller_trumbore(origin, direction, v0, v1, v2);
+        assert!(result.is_some());
+        let (t, _) = result.unwrap();
+        assert!((t - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn moller_trumbore_miss() {
+        let origin = Vec3::new(5.0, 5.0, 1.0);
+        let direction = Vec3::new(0.0, 0.0, -1.0);
+        let v0 = Vec3::new(-1.0, -1.0, 0.0);
+        let v1 = Vec3::new(1.0, -1.0, 0.0);
+        let v2 = Vec3::new(0.0, 1.0, 0.0);
+        assert!(moller_trumbore(origin, direction, v0, v1, v2).is_none());
+    }
+
+    #[test]
+    fn ray_vs_aabb_3d_hit() {
+        let ray = Ray3d::new(Vec3::new(0.0, 0.0, 5.0), Vec3::new(0.0, 0.0, -1.0));
+        let center = Vec3A::ZERO;
+        let half = Vec3A::ONE;
+        let result = ray_vs_aabb_3d(ray, center, half, 100.0);
+        assert!(result.is_some());
+        let t = result.unwrap();
+        assert!((t - 4.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn ray_vs_aabb_3d_miss() {
+        let ray = Ray3d::new(Vec3::new(5.0, 0.0, 5.0), Vec3::new(0.0, 0.0, -1.0));
+        let result = ray_vs_aabb_3d(ray, Vec3A::ZERO, Vec3A::ONE, 100.0);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn raycast_mesh_hits_quad() {
+        let (verts, indices) = unit_quad_mesh();
+        let mesh_verts: Vec<crate::mesh::Vertex3d> = verts
+            .iter()
+            .map(|&p| crate::mesh::Vertex3d::new(p, Vec3::Z, [1.0, 0.0, 0.0, 1.0], lunar_math::Vec2::ZERO))
+            .collect();
+
+        let ray = Ray3d::new(Vec3::new(0.0, 0.0, 5.0), Vec3::new(0.0, 0.0, -1.0));
+        let world = identity_world();
+
+        let result = raycast_mesh(
+            ray,
+            mesh_verts.iter().map(|v| v.position),
+            &indices,
+            &world,
+            100.0,
+        );
+        assert!(result.is_some());
+        let hit = result.unwrap();
+        assert!((hit.distance - 5.0).abs() < 1e-4);
+        assert!((hit.point.z).abs() < 1e-4);
+    }
+
+    #[test]
+    fn raycast_mesh_misses_quad() {
+        let (verts, indices) = unit_quad_mesh();
+        let mesh_verts: Vec<crate::mesh::Vertex3d> = verts
+            .iter()
+            .map(|&p| crate::mesh::Vertex3d::new(p, Vec3::Z, [1.0, 0.0, 0.0, 1.0], lunar_math::Vec2::ZERO))
+            .collect();
+
+        // ray aimed off to the side
+        let ray = Ray3d::new(Vec3::new(5.0, 5.0, 5.0), Vec3::new(0.0, 0.0, -1.0));
+        let world = identity_world();
+
+        let result = raycast_mesh(
+            ray,
+            mesh_verts.iter().map(|v| v.position),
+            &indices,
+            &world,
+            100.0,
+        );
+        assert!(result.is_none());
+    }
 
     fn spawn_aabb(world: &mut World, pos: Vec3, size: Vec3) -> Entity {
         world

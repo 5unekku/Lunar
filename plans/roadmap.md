@@ -77,7 +77,7 @@ these belong in `lunar-core` or the relevant base crate.
 
 | feature | home | priority | notes |
 |---|---|---|---|
-| **3d raycasting** | `lunar-3d` | critical | ray vs `CullSoa` AABBs → Möller–Trumbore triangle test; `raycast_3d(ray, soa, meshes) -> Option<RayHit3d>`; prerequisite for hitscan, AI sight, spring arm |
+| ~~**3d raycasting**~~ | ~~`lunar-3d`~~ | ~~critical~~ | done — `Ray3d`, `RayHit3d`, `raycast_3d`: CullSoa AABB broad phase + Möller–Trumbore triangle narrow phase; AABB fallback for mesh-less entities |
 | **proper PBR lighting** | `lunar-render-3d` | high | Cook-Torrance BRDF; directional + point lights; one shadow cascade at 1024²; see `optimize.md` for shadow filter progression |
 | **bind group layout standardisation** | `lunar-render-3d` | medium | consolidate to 4-group layout: group 0 view-global, group 1 material, group 2 per-mesh, group 3 pass-specific; lets pipelines share bind groups |
 
