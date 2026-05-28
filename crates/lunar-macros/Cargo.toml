@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "internal proc-macro crate for lunar — wraps ECS derives so game crates depend only on lunar"
 repository.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
 
 [lib]
 proc-macro = true
