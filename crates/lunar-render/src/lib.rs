@@ -1244,7 +1244,7 @@ impl RenderEngine {
         // reuse the persistent Vec — clear() retains capacity from previous frames.
         self.sorted_indices.clear();
         self.sorted_indices.extend(0..commands.len());
-        self.sorted_indices.sort_by_key(|&i| {
+        self.sorted_indices.sort_unstable_by_key(|&i| {
             let cmd = &commands[i];
             let layer = match &cmd.kind {
                 DrawKind::Sprite { layer, .. }
@@ -1417,7 +1417,7 @@ impl RenderEngine {
         // execute custom render passes
         for pass in &self.render_passes {
             let mut custom_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(&format!("custom pass: {}", pass.name())),
+                label: Some(pass.name()),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
