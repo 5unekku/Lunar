@@ -2614,6 +2614,7 @@ impl GamePlugin for RenderPlugin {
             (
                 upload_new_textures_system,
                 upload_new_fonts_system,
+                evict_textures_system,
                 frame_stats_system,
                 auto_sprite_system,
                 auto_text_system,
@@ -2628,6 +2629,7 @@ impl GamePlugin for RenderPlugin {
             (
                 wasm_upload_new_textures_system,
                 wasm_upload_new_fonts_system,
+                wasm_evict_textures_system,
                 frame_stats_system,
                 auto_sprite_system,
                 auto_text_system,
@@ -2727,6 +2729,29 @@ fn wasm_upload_new_fonts_system(mut assets: ResMut<AssetServer>) {
                 if let Some(font) = assets.get_font_by_id(*id) {
                     engine.upload_font(*id, &font.data);
                 }
+            }
+        }
+    });
+}
+
+/// free GPU resources for textures released via `AssetServer::release_texture`.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::needless_pass_by_value)]
+fn evict_textures_system(mut assets: ResMut<AssetServer>, mut render: ResMut<RenderEngine>) {
+    for id in assets.drain_evicted_texture_ids() {
+        render.remove_texture(id);
+    }
+}
+
+/// WASM version of texture eviction.
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::needless_pass_by_value)]
+fn wasm_evict_textures_system(mut assets: ResMut<AssetServer>) {
+    let ids = assets.drain_evicted_texture_ids();
+    WASM_RENDER_ENGINE.with(|cell| {
+        if let Some(engine) = cell.borrow_mut().as_mut() {
+            for id in ids {
+                engine.remove_texture(id);
             }
         }
     });

@@ -392,6 +392,14 @@ impl<T: Asset> AssetStore<T> {
                 }
             })
     }
+
+    fn remove(&mut self, id: u32) {
+        if let Some(slot) = self.entries.get_mut(id as usize) {
+            if let Some(entry) = slot.take() {
+                self.path_index.remove(&entry.path);
+            }
+        }
+    }
 }
 
 /// result of an async load operation, sent from worker threads back to the main thread
@@ -870,6 +878,8 @@ pub struct AssetServer {
     pending_texture_ids: Vec<u32>,
     /// IDs of fonts ready for glyph atlas registration, drained by the render system each frame.
     pending_font_ids: Vec<u32>,
+    /// IDs of textures released via [`Self::release_texture`], drained by the render system to free GPU memory.
+    evicted_texture_ids: Vec<u32>,
     /// counter for generating unique synthetic paths for procedural textures.
     proc_texture_counter: u32,
 }
@@ -888,6 +898,7 @@ impl AssetServer {
             custom_font_loaders: Vec::new(),
             pending_texture_ids: Vec::new(),
             pending_font_ids: Vec::new(),
+            evicted_texture_ids: Vec::new(),
             proc_texture_counter: 0,
         }
     }
@@ -1156,6 +1167,30 @@ impl AssetServer {
     /// the glyph atlas. callers other than the render system should not call this.
     pub fn drain_new_font_ids(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.pending_font_ids)
+    }
+
+    /// release a texture handle. decrements the ref count; when it reaches zero
+    /// the CPU-side asset data is freed and the texture ID is queued for GPU
+    /// cleanup. the render system will call `remove_texture` on the next frame.
+    ///
+    /// only call this when you are done with the handle and no other code holds a
+    /// copy of it. handles that are never released leak GPU memory.
+    pub fn release_texture(&mut self, handle: Handle<Texture>) {
+        let id = handle.id();
+        self.texture_store.decrement_ref(id);
+        if self.texture_store.is_unused(id) {
+            self.texture_store.remove(id);
+            self.evicted_texture_ids.push(id);
+        }
+    }
+
+    /// drain the list of texture IDs that were released since the last drain.
+    ///
+    /// the render system calls this once per frame to free GPU resources for
+    /// textures that are no longer referenced. callers other than the render
+    /// system should not call this.
+    pub fn drain_evicted_texture_ids(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.evicted_texture_ids)
     }
 
     /// get a loaded font by its raw asset ID.
