@@ -95,6 +95,7 @@ fn setup(mut commands: Commands, mut assets: ResMut<AssetServer>) {
         rotation: 0.0,
         viewport: Some((ARENA_W as u32, ARENA_H as u32)),
         layer_parallax: Default::default(),
+        target: None,
     });
 
     let font = assets.load_font("fonts/Inconsolata.ttf");

@@ -184,6 +184,7 @@ pub fn setup(
         rotation: 0.0,
         viewport: Some((VIEW_WIDTH as u32, VIEW_HEIGHT as u32)),
         layer_parallax: Default::default(),
+        target: None,
     });
 }
 

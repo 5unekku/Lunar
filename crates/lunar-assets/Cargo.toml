@@ -17,7 +17,7 @@ lunar-image = { path = "../lunar-image" }
 crossbeam-channel = "0.5"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "webp", "gif"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-notify = { version = "7.0", default-features = false }
+notify = { version = "8.0", default-features = false }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

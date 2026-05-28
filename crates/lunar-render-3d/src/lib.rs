@@ -158,7 +158,7 @@ pub struct RenderInfo3d {
 ///
 /// inserted as a resource by [`RenderPlugin3d`]. game code should not
 /// interact with this directly — use [`MeshRegistry`] and ECS components instead.
-#[derive(Resource)]
+#[cfg_attr(not(target_arch = "wasm32"), derive(Resource))]
 pub struct RenderEngine3d {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -197,6 +197,14 @@ pub struct RenderEngine3d {
     draw_scratch: Vec<(Entity, u32, Color, Mat4)>,
     uniform_staging: Vec<u8>,
 }
+
+// wasm is single-threaded; wgpu's WebGPU backend uses RefCell instead of Mutex,
+// so its types are !Send + !Sync. we never actually run 3d rendering on wasm
+// (there's no wasm bootstrap_3d), but the types still need to compile.
+#[cfg(target_arch = "wasm32")]
+unsafe impl Send for RenderEngine3d {}
+#[cfg(target_arch = "wasm32")]
+unsafe impl Sync for RenderEngine3d {}
 
 impl RenderEngine3d {
     // ── construction ───────────────────────────────────────────────────────
@@ -822,6 +830,7 @@ impl RenderEngine3d {
 
 // ── ecs integration ────────────────────────────────────────────────────────
 
+#[cfg(not(target_arch = "wasm32"))]
 fn render_3d_system(world: &mut World) {
     let mut engine = world.remove_resource::<RenderEngine3d>().unwrap();
     let draw_calls = engine.render_frame(world);
@@ -848,14 +857,18 @@ impl GamePlugin for RenderPlugin3d {
     fn build(&mut self, app: &mut App) {
         app.insert_resource(RenderInfo3d::default());
 
-        // pull render tier out of the engine resource (already inserted by bootstrap_3d)
-        // and expose it as a standalone resource for game systems to query
-        if let Some(engine) = app.world_mut().get_resource::<RenderEngine3d>() {
-            let tier = engine.render_tier();
-            app.insert_resource(tier);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // pull render tier out of the engine resource (already inserted by bootstrap_3d)
+            // and expose it as a standalone resource for game systems to query
+            if let Some(engine) = app.world_mut().get_resource::<RenderEngine3d>() {
+                let tier = engine.render_tier();
+                app.insert_resource(tier);
+            }
+
+            app.add_system_to_stage(UpdateStage::Render, render_3d_system);
         }
 
-        app.add_system_to_stage(UpdateStage::Render, render_3d_system);
         log::info!("RenderPlugin3d: 3d render system registered");
     }
 }
