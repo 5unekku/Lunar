@@ -30,6 +30,7 @@ members = [
     "crates/lunar-ai",
     "crates/lunar-camera-3d",
     "crates/lunar-spline",
+    "crates/lunar-timeline",
     "tests/api_seal",
 ]
 resolver = "2"

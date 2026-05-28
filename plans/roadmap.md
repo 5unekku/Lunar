@@ -97,7 +97,7 @@ game code adds these to its `Cargo.toml` only when needed.
 | ~~`lunar-ai`~~ | ~~medium~~ | done — `BehaviorTree` component; `Selector`, `Sequence`, `Invert`, `Condition`, `Action`; `tick_behavior_trees` exclusive system; multi-frame Running support |
 | ~~`lunar-camera-3d`~~ | ~~medium~~ | done — `SpringArm3d` component; yaw/pitch orbit; arm shortens on raycast hit, recovers smoothly; `spring_arm_system` |
 | ~~`lunar-spline`~~ | ~~low~~ | done — catmull-rom `Spline` asset; `SplineStore` resource; `PathFollower` component; `advance_path_followers` system; arc-length parameterization |
-| `lunar-timeline` | low | timed track sequencer for cutscenes; `Timeline { tracks }` + `TimelineAction` enum (MoveTo, SetVisible, FireEvent, …) |
+| ~~`lunar-timeline`~~ | ~~low~~ | done — `Timeline` component; `TimelineTrack` + `TimelineKey`; `MoveTo`, `TeleportTo`, `SetVisible`, `FireEvent` actions; `TimelineEvents` buffer resource; loop support |
 | `lunar-audio-sync` | low | beat offset + hit window utilities for rhythm games; reads audio playback timestamp (moonwalker dependency — deferred until moonwalker) |
 
 ---
