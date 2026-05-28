@@ -39,6 +39,7 @@ mod error;
 mod game_loop;
 mod hierarchy;
 pub mod persist;
+pub mod pool;
 mod scene;
 mod scene_format;
 mod schedule;
