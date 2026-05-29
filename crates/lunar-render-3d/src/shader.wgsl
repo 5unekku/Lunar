@@ -191,18 +191,6 @@ fn shadow_factor_5x5(world_pos: vec3<f32>, n: vec3<f32>, view_depth: f32) -> f32
     return shadow / 25.0;
 }
 
-// ── ACES filmic tonemap ────────────────────────────────────────────────────
-
-// ACES filmic curve approximation (Narkowicz 2015)
-fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
-    let a = 2.51;
-    let b = 0.03;
-    let c = 2.43;
-    let d = 0.59;
-    let e = 0.14;
-    return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
-}
-
 // ── fragment shader ────────────────────────────────────────────────────────
 
 @fragment
@@ -253,9 +241,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     // ambient (Lambert-weighted to avoid flat look)
     let ambient = lights.ambient_color * lights.ambient_intensity * albedo * (1.0 - metallic * 0.9);
 
-    // ACES filmic tonemap before output
+    // output raw HDR — composite pass applies ACES tonemap + post effects
     let hdr = ambient + lo;
-    let ldr = aces_tonemap(hdr);
-
-    return vec4<f32>(ldr, alpha);
+    return vec4<f32>(hdr, alpha);
 }
