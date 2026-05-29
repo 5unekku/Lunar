@@ -121,14 +121,44 @@ impl BehaviorTree {
     }
 }
 
+/// cached list of entities with [`BehaviorTree`] components.
+///
+/// maintained by [`sync_behavior_tree_entities`]; eliminates the per-frame collect in
+/// [`tick_behavior_trees`]. insert as a resource alongside `BehaviorTree` entities.
+#[derive(Resource, Default)]
+pub struct BehaviorTreeEntities(pub Vec<Entity>);
+
+/// system that keeps [`BehaviorTreeEntities`] in sync.
+///
+/// run this in PreUpdate (before `tick_behavior_trees`) so the cache is always current.
+pub fn sync_behavior_tree_entities(
+    mut cache: ResMut<BehaviorTreeEntities>,
+    added: Query<Entity, Added<BehaviorTree>>,
+    all: Query<Entity, With<BehaviorTree>>,
+) {
+    if !added.is_empty() {
+        // rebuild on any addition; removal is handled by retaining only live entities
+        cache.0.clear();
+        cache.0.extend(all.iter());
+    } else {
+        // prune entities that no longer have the component (despawned or removed)
+        cache.0.retain(|e| all.contains(*e));
+    }
+}
+
 /// tick all [`BehaviorTree`] components in the world.
 ///
 /// runs in Update stage. takes exclusive world access so actions can mutate freely.
+/// if [`BehaviorTreeEntities`] is present, uses the cached list to avoid a per-frame collect.
 pub fn tick_behavior_trees(world: &mut World) {
-    let entities: Vec<Entity> = world
-        .query_filtered::<Entity, With<BehaviorTree>>()
-        .iter(world)
-        .collect();
+    let entities: Vec<Entity> = if let Some(cache) = world.get_resource::<BehaviorTreeEntities>() {
+        cache.0.clone()
+    } else {
+        world
+            .query_filtered::<Entity, With<BehaviorTree>>()
+            .iter(world)
+            .collect()
+    };
 
     for entity in entities {
         let Some(mut tree_component) = world.get_mut::<BehaviorTree>(entity) else {

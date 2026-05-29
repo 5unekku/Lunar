@@ -552,28 +552,43 @@ impl IoTaskPool {
     /// drain all completed texture results
     fn drain_texture_results(&self) -> Vec<LoadResult<Texture>> {
         let mut results = Vec::new();
-        while let Ok(result) = self.texture_receiver.try_recv() {
-            results.push(result);
-        }
+        self.drain_texture_results_into(&mut results);
         results
+    }
+
+    /// drain all completed texture results into a caller-supplied Vec (no allocation).
+    fn drain_texture_results_into(&self, out: &mut Vec<LoadResult<Texture>>) {
+        while let Ok(result) = self.texture_receiver.try_recv() {
+            out.push(result);
+        }
     }
 
     /// drain all completed sound results
     fn drain_sound_results(&self) -> Vec<LoadResult<Sound>> {
         let mut results = Vec::new();
-        while let Ok(result) = self.sound_receiver.try_recv() {
-            results.push(result);
-        }
+        self.drain_sound_results_into(&mut results);
         results
+    }
+
+    /// drain all completed sound results into a caller-supplied Vec (no allocation).
+    fn drain_sound_results_into(&self, out: &mut Vec<LoadResult<Sound>>) {
+        while let Ok(result) = self.sound_receiver.try_recv() {
+            out.push(result);
+        }
     }
 
     /// drain all completed font results
     fn drain_font_results(&self) -> Vec<LoadResult<Font>> {
         let mut results = Vec::new();
-        while let Ok(result) = self.font_receiver.try_recv() {
-            results.push(result);
-        }
+        self.drain_font_results_into(&mut results);
         results
+    }
+
+    /// drain all completed font results into a caller-supplied Vec (no allocation).
+    fn drain_font_results_into(&self, out: &mut Vec<LoadResult<Font>>) {
+        while let Ok(result) = self.font_receiver.try_recv() {
+            out.push(result);
+        }
     }
 }
 

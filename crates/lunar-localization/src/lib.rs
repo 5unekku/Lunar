@@ -13,6 +13,7 @@
 //! loc.set_language("fr");
 //! ```
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
@@ -122,24 +123,28 @@ impl Localization {
     }
 
     /// get a localized string by key.
-    /// falls back to the key itself if the string is not found.
+    ///
+    /// returns `Cow::Borrowed` pointing into the string table when found — no allocation.
+    /// falls back to `Cow::Borrowed(key)` on miss, also allocation-free.
     #[must_use]
-    pub fn get(&self, key: &str) -> String {
+    pub fn get<'a>(&'a self, key: &'a str) -> Cow<'a, str> {
         self.string_tables
             .get(&self.current_language)
             .and_then(|table| table.get(key))
-            .cloned()
-            .unwrap_or_else(|| key.to_string())
+            .map(|s| Cow::Borrowed(s.as_str()))
+            .unwrap_or(Cow::Borrowed(key))
     }
 
     /// get a localized string by key with a fallback.
+    ///
+    /// returns `Cow::Borrowed` in all cases — no allocation.
     #[must_use]
-    pub fn get_or(&self, key: &str, fallback: &str) -> String {
+    pub fn get_or<'a>(&'a self, key: &'a str, fallback: &'a str) -> Cow<'a, str> {
         self.string_tables
             .get(&self.current_language)
             .and_then(|table| table.get(key))
-            .cloned()
-            .unwrap_or_else(|| fallback.to_string())
+            .map(|s| Cow::Borrowed(s.as_str()))
+            .unwrap_or(Cow::Borrowed(fallback))
     }
 }
 
@@ -218,13 +223,13 @@ mod tests {
         let mut loc = Localization::new("en");
         loc.load_strings("en", r#"{ "greeting": "hello", "farewell": "goodbye" }"#)
             .unwrap();
-        assert_eq!(loc.get("greeting"), "hello".to_string());
-        assert_eq!(loc.get("unknown"), "unknown".to_string());
+        assert_eq!(loc.get("greeting"), "hello");
+        assert_eq!(loc.get("unknown"), "unknown");
     }
 
     #[test]
     fn localization_fallback() {
         let loc = Localization::new("en");
-        assert_eq!(loc.get_or("missing", "fallback"), "fallback".to_string());
+        assert_eq!(loc.get_or("missing", "fallback"), "fallback");
     }
 }

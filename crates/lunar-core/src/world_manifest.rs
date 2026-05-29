@@ -100,6 +100,9 @@ pub struct WorldManifest {
     pub scenes: Vec<SceneEntry>,
     /// list of chunk entries
     pub chunks: Vec<ChunkEntry>,
+    /// name → index into `scenes` for O(1) lookup.
+    #[serde(skip)]
+    scene_index: HashMap<String, usize>,
 }
 
 /// a scene entry in the world manifest.
@@ -212,11 +215,13 @@ impl WorldManifest {
             }
         }
 
+        let scene_index = scenes.iter().enumerate().map(|(i, s)| (s.name.clone(), i)).collect();
         Ok(WorldManifest {
             name,
             start_scene,
             scenes,
             chunks,
+            scene_index,
         })
     }
 
@@ -235,16 +240,29 @@ impl WorldManifest {
         }
     }
 
-    /// find a scene entry by name.
+    /// find a scene entry by name — O(1) via index.
     #[must_use]
     pub fn find_scene(&self, name: &str) -> Option<&SceneEntry> {
-        self.scenes.iter().find(|s| s.name == name)
+        self.scene_index.get(name).map(|&i| &self.scenes[i])
     }
 
     /// find the start scene entry.
     #[must_use]
     pub fn start_scene_entry(&self) -> Option<&SceneEntry> {
-        self.scenes.iter().find(|s| s.name == self.start_scene)
+        self.find_scene(&self.start_scene)
+    }
+
+    /// iterate chunks that overlap a given bounding box — no allocation.
+    pub fn chunks_in_bounds_iter(
+        &self,
+        x_min: f32,
+        x_max: f32,
+        y_min: f32,
+        y_max: f32,
+    ) -> impl Iterator<Item = &ChunkEntry> {
+        self.chunks
+            .iter()
+            .filter(move |c| c.x_max > x_min && c.x_min < x_max && c.y_max > y_min && c.y_min < y_max)
     }
 
     /// find chunks that overlap a given bounding box.
@@ -255,26 +273,24 @@ impl WorldManifest {
         y_min: f32,
         y_max: f32,
     ) -> Vec<&ChunkEntry> {
-        self.chunks
-            .iter()
-            .filter(|c| c.x_max > x_min && c.x_min < x_max && c.y_max > y_min && c.y_min < y_max)
-            .collect()
+        self.chunks_in_bounds_iter(x_min, x_max, y_min, y_max).collect()
+    }
+
+    /// iterate chunks within a radius of a center point — no allocation.
+    pub fn chunks_in_radius_iter(&self, cx: f32, cy: f32, radius: f32) -> impl Iterator<Item = &ChunkEntry> {
+        let r2 = radius * radius;
+        self.chunks.iter().filter(move |c| {
+            let closest_x = cx.clamp(c.x_min, c.x_max);
+            let closest_y = cy.clamp(c.y_min, c.y_max);
+            let dx = closest_x - cx;
+            let dy = closest_y - cy;
+            dx * dx + dy * dy <= r2
+        })
     }
 
     /// find chunks within a radius of a center point.
     pub fn chunks_in_radius(&self, cx: f32, cy: f32, radius: f32) -> Vec<&ChunkEntry> {
-        let r2 = radius * radius;
-        self.chunks
-            .iter()
-            .filter(|c| {
-                // check if chunk bounding box is within radius of center
-                let closest_x = cx.clamp(c.x_min, c.x_max);
-                let closest_y = cy.clamp(c.y_min, c.y_max);
-                let dx = closest_x - cx;
-                let dy = closest_y - cy;
-                dx * dx + dy * dy <= r2
-            })
-            .collect()
+        self.chunks_in_radius_iter(cx, cy, radius).collect()
     }
 }
 

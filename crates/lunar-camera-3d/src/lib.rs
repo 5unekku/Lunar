@@ -51,6 +51,10 @@ pub struct SpringArm3d {
     pub collision_mask: u32,
     /// current actual arm length (updated by the system).
     current_length: f32,
+    /// cached pivot from last raycast — skip raycast when pivot hasn't moved.
+    last_cast_pivot: Vec3,
+    /// cached desired_length from last raycast — skip raycast when it hasn't changed.
+    last_cast_desired: f32,
 }
 
 impl SpringArm3d {
@@ -66,6 +70,8 @@ impl SpringArm3d {
             recover_speed: 5.0,
             collision_mask: 1,
             current_length: desired_length,
+            last_cast_pivot: Vec3::splat(f32::NAN),
+            last_cast_desired: f32::NAN,
         }
     }
 
@@ -107,18 +113,26 @@ pub fn spring_arm_system(
         let pivot = target_world.translation + arm.pivot_offset;
         let arm_dir = arm.arm_direction();
 
-        // shorten arm length via raycast
-        let ray = Ray3d::new(pivot, arm_dir);
-        let blocked_length = raycast_3d(
-            ray,
-            arm.desired_length,
-            arm.collision_mask,
-            &soa,
-            &mesh_query,
-            &registry,
-        )
-        .map(|hit: RayHit3d| (hit.distance - 0.2).max(0.1))
-        .unwrap_or(arm.desired_length);
+        // only re-cast when pivot or desired_length changed meaningfully
+        let pivot_moved = (pivot - arm.last_cast_pivot).length_squared() > 1e-4;
+        let length_changed = (arm.desired_length - arm.last_cast_desired).abs() > 1e-4;
+        let blocked_length = if pivot_moved || length_changed {
+            arm.last_cast_pivot = pivot;
+            arm.last_cast_desired = arm.desired_length;
+            let ray = Ray3d::new(pivot, arm_dir);
+            raycast_3d(
+                ray,
+                arm.desired_length,
+                arm.collision_mask,
+                &soa,
+                &mesh_query,
+                &registry,
+            )
+            .map(|hit: RayHit3d| (hit.distance - 0.2).max(0.1))
+            .unwrap_or(arm.desired_length)
+        } else {
+            arm.current_length.min(arm.desired_length)
+        };
 
         // snap to shorter, recover smoothly toward desired
         if blocked_length < arm.current_length {

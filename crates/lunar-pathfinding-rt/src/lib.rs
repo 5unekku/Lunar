@@ -20,7 +20,7 @@
 //! ```
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::BinaryHeap;
 
 use bevy_ecs::prelude::Resource;
 
@@ -112,12 +112,45 @@ impl Default for PathOptions {
     }
 }
 
+/// reusable scratch buffers for `find_path` — avoids per-query heap allocation.
+///
+/// create once and pass to repeated `find_path` calls. the buffers grow to
+/// fit the largest grid queried and are reused without reallocating afterward.
+pub struct PathScratch {
+    g_score: Vec<f32>,
+    parent: Vec<u32>,
+}
+
+impl PathScratch {
+    /// create scratch buffers sized for a grid with `node_count` tiles.
+    #[must_use]
+    pub fn new(node_count: usize) -> Self {
+        Self {
+            g_score: vec![f32::MAX; node_count],
+            parent: vec![u32::MAX; node_count],
+        }
+    }
+
+    fn prepare(&mut self, node_count: usize) {
+        if self.g_score.len() < node_count {
+            self.g_score.resize(node_count, f32::MAX);
+            self.parent.resize(node_count, u32::MAX);
+        } else {
+            self.g_score.fill(f32::MAX);
+            self.parent.fill(u32::MAX);
+        }
+    }
+}
+
 /// find a path from `start` to `goal` using A* on the given grid.
 ///
 /// returns the path as a sequence of `[x, y]` tile coordinates from `start` to `goal`
 /// (inclusive of both endpoints), or `None` if no path exists within `options.max_nodes`.
 ///
 /// uses Manhattan heuristic for 4-directional movement, Chebyshev for 8-directional.
+///
+/// pass a `PathScratch` to avoid per-call heap allocation. the scratch buffers
+/// are re-initialised each call so sharing across agents is safe (not concurrent).
 #[must_use]
 pub fn find_path(
     grid: &NavGrid,
@@ -125,9 +158,25 @@ pub fn find_path(
     goal: [u32; 2],
     options: PathOptions,
 ) -> Option<Vec<[u32; 2]>> {
+    let mut scratch = PathScratch::new((grid.width * grid.height) as usize);
+    find_path_with_scratch(grid, start, goal, options, &mut scratch)
+}
+
+/// like [`find_path`] but reuses caller-supplied scratch buffers.
+#[must_use]
+pub fn find_path_with_scratch(
+    grid: &NavGrid,
+    start: [u32; 2],
+    goal: [u32; 2],
+    options: PathOptions,
+    scratch: &mut PathScratch,
+) -> Option<Vec<[u32; 2]>> {
     if !grid.is_walkable(start[0], start[1]) || !grid.is_walkable(goal[0], goal[1]) {
         return None;
     }
+
+    let node_count = (grid.width * grid.height) as usize;
+    scratch.prepare(node_count);
 
     let start_node = grid.pack(start[0], start[1]);
     let goal_node = grid.pack(goal[0], goal[1]);
@@ -136,21 +185,16 @@ pub fn find_path(
         return Some(vec![start]);
     }
 
-    // open set: Reverse so smallest f-score is popped first
-    // (f_score_bits, node_id)
     let mut open: BinaryHeap<Reverse<(u32, u32)>> = BinaryHeap::new();
-    // g_score and parent per node
-    let mut g_score: HashMap<u32, f32> = HashMap::new();
-    let mut parent: HashMap<u32, u32> = HashMap::new();
     let mut expanded = 0usize;
 
-    g_score.insert(start_node, 0.0);
+    scratch.g_score[start_node as usize] = 0.0;
     let h = heuristic(start, goal, options.diagonal);
     open.push(Reverse((f32::to_bits(h), start_node)));
 
     while let Some(Reverse((_, current))) = open.pop() {
         if current == goal_node {
-            return Some(reconstruct_path(grid, &parent, goal_node));
+            return Some(reconstruct_path(grid, &scratch.parent, goal_node));
         }
 
         expanded += 1;
@@ -158,16 +202,15 @@ pub fn find_path(
             return None;
         }
 
-        let current_g = *g_score.get(&current).unwrap_or(&f32::MAX);
+        let current_g = scratch.g_score[current as usize];
         let [cx, cy] = grid.unpack(current);
 
         for (nx, ny, step_cost) in neighbors(grid, cx, cy, options.diagonal) {
             let neighbor = grid.pack(nx, ny);
             let tentative_g = current_g + step_cost * grid.tile_cost(nx, ny);
-            let prev_g = *g_score.get(&neighbor).unwrap_or(&f32::MAX);
-            if tentative_g < prev_g {
-                g_score.insert(neighbor, tentative_g);
-                parent.insert(neighbor, current);
+            if tentative_g < scratch.g_score[neighbor as usize] {
+                scratch.g_score[neighbor as usize] = tentative_g;
+                scratch.parent[neighbor as usize] = current;
                 let f = tentative_g + heuristic([nx, ny], goal, options.diagonal);
                 open.push(Reverse((f32::to_bits(f), neighbor)));
             }
@@ -226,10 +269,10 @@ fn neighbors(grid: &NavGrid, x: u32, y: u32, diagonal: bool) -> impl Iterator<It
     buf.into_iter().take(len)
 }
 
-fn reconstruct_path(grid: &NavGrid, parent: &HashMap<u32, u32>, mut current: u32) -> Vec<[u32; 2]> {
+fn reconstruct_path(grid: &NavGrid, parent: &[u32], mut current: u32) -> Vec<[u32; 2]> {
     let mut path = vec![grid.unpack(current)];
-    while let Some(&prev) = parent.get(&current) {
-        current = prev;
+    while parent[current as usize] != u32::MAX {
+        current = parent[current as usize];
         path.push(grid.unpack(current));
     }
     path.reverse();

@@ -139,19 +139,12 @@ unsafe fn reinterleave_neon(planar: &[u8], out: &mut [u8], n: usize) {
 /// # Panics
 /// panics if the rgba buffer length is not a multiple of 4.
 pub fn premultiply_alpha(rgba: &mut [u8]) {
-    assert_eq!(
-        rgba.len() % 4,
-        0,
-        "rgba buffer must be a multiple of 4 bytes"
-    );
+    assert_eq!(rgba.len() % 4, 0, "rgba buffer must be a multiple of 4 bytes");
     for chunk in rgba.chunks_exact_mut(4) {
-        let a = f32::from(chunk[3]) / 255.0;
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        {
-            chunk[0] = (f32::from(chunk[0]) * a).clamp(0.0, 255.0) as u8;
-            chunk[1] = (f32::from(chunk[1]) * a).clamp(0.0, 255.0) as u8;
-            chunk[2] = (f32::from(chunk[2]) * a).clamp(0.0, 255.0) as u8;
-        }
+        let a = chunk[3] as u32;
+        chunk[0] = ((chunk[0] as u32 * a + 127) / 255) as u8;
+        chunk[1] = ((chunk[1] as u32 * a + 127) / 255) as u8;
+        chunk[2] = ((chunk[2] as u32 * a + 127) / 255) as u8;
     }
 }
 
@@ -168,20 +161,25 @@ pub fn rgba_to_bgra(buf: &mut [u8]) {
 
 /// convert sRGB byte values to linear f32. output must be the same length as input.
 ///
+/// uses a 256-entry precomputed LUT; first call initialises it, subsequent calls are free.
+///
 /// # Panics
 /// panics if output length does not equal input length.
 pub fn srgb_to_linear(input: &[u8], output: &mut [f32]) {
-    assert_eq!(
-        input.len(),
-        output.len(),
-        "output must be same length as input"
-    );
-    for (i, &byte) in input.iter().enumerate() {
-        let s = f32::from(byte) / 255.0;
-        output[i] = if s <= 0.04045 {
-            s / 12.92
-        } else {
-            ((s + 0.055) / 1.055).powf(2.4)
-        };
+    assert_eq!(input.len(), output.len(), "output must be same length as input");
+    let lut = srgb_lut();
+    for (out, &byte) in output.iter_mut().zip(input.iter()) {
+        *out = lut[byte as usize];
     }
+}
+
+fn srgb_lut() -> &'static [f32; 256] {
+    use std::sync::OnceLock;
+    static LUT: OnceLock<[f32; 256]> = OnceLock::new();
+    LUT.get_or_init(|| {
+        std::array::from_fn(|i| {
+            let s = i as f32 / 255.0;
+            if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        })
+    })
 }

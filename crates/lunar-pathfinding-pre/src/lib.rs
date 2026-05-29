@@ -25,6 +25,27 @@ use std::cmp::Reverse;
 
 use bevy_ecs::prelude::Resource;
 
+/// heap entry that orders by cost using total_cmp so NaN sorts last.
+#[derive(Clone, Copy, PartialEq)]
+struct HeapEntry {
+    cost: f32,
+    node: u32,
+}
+
+impl Eq for HeapEntry {}
+
+impl PartialOrd for HeapEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HeapEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.cost.total_cmp(&other.cost).then(self.node.cmp(&other.node))
+    }
+}
+
 // re-export NavGrid so users only depend on this crate
 pub use lunar_pathfinding_rt::NavGrid;
 
@@ -78,11 +99,10 @@ impl FlowField {
         cost_map[goal_idx as usize] = 0.0;
 
         // Dijkstra from goal outward
-        // (cost_bits, node_idx)
-        let mut heap: BinaryHeap<Reverse<(u32, u32)>> = BinaryHeap::new();
-        heap.push(Reverse((0, goal_idx)));
+        let mut heap: BinaryHeap<Reverse<HeapEntry>> = BinaryHeap::new();
+        heap.push(Reverse(HeapEntry { cost: 0.0, node: goal_idx }));
 
-        while let Some(Reverse((_, node))) = heap.pop() {
+        while let Some(Reverse(HeapEntry { node, .. })) = heap.pop() {
             let [nx, ny] = unpack(grid.width, node);
             let current_cost = cost_map[node as usize];
 
@@ -93,7 +113,7 @@ impl FlowField {
                 );
                 if new_cost < cost_map[neighbor as usize] {
                     cost_map[neighbor as usize] = new_cost;
-                    heap.push(Reverse((f32::to_bits(new_cost), neighbor)));
+                    heap.push(Reverse(HeapEntry { cost: new_cost, node: neighbor }));
                 }
             }
         }

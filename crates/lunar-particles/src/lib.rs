@@ -203,26 +203,27 @@ pub fn tick_particles(
         particle.position += particle.velocity * delta;
     }
 
-    // cull dead particles (swap-remove for O(1))
-    let mut i = 0;
-    while i < pool.particles.len() {
-        if pool.particles[i].is_dead() {
-            pool.particles.swap_remove(i);
-        } else {
-            i += 1;
+    // cull dead particles — scan-compact preserves order and is cache-friendly
+    let mut w = 0;
+    for r in 0..pool.particles.len() {
+        if !pool.particles[r].is_dead() {
+            pool.particles[w] = pool.particles[r];
+            w += 1;
         }
     }
+    pool.particles.truncate(w);
 
     // spawn from active emitters
     for (transform, mut emitter) in &mut emitters {
         if !emitter.active { continue; }
         emitter.spawn_accumulator += emitter.rate * delta;
+        // precompute base_angle once per emitter, not per particle
+        let base_angle = emitter.direction.y.atan2(emitter.direction.x);
         while emitter.spawn_accumulator >= 1.0 && pool.particles.len() < pool.capacity {
             emitter.spawn_accumulator -= 1.0;
             pool.noise_offset += 0.618_034; // golden angle increment
 
             let angle_offset = pool.noise_offset.sin() * emitter.spread;
-            let base_angle = emitter.direction.y.atan2(emitter.direction.x);
             let angle = base_angle + angle_offset;
             let velocity = Vec2::new(angle.cos(), angle.sin()) * emitter.speed;
 

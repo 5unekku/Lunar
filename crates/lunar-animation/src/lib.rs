@@ -63,15 +63,17 @@ impl AnimationFrame {
 pub struct AnimationClip {
     pub frames: Vec<AnimationFrame>,
     pub looping: bool,
+    /// total duration cached at construction — avoids summing every frame.
+    cached_duration: f32,
+    /// cumulative durations[i] = sum of frame durations 0..i. enables O(log n) frame lookup.
+    cumulative: Vec<f32>,
 }
 
 impl AnimationClip {
     #[must_use]
     pub fn new(frames: Vec<AnimationFrame>) -> Self {
-        Self {
-            frames,
-            looping: false,
-        }
+        let (cached_duration, cumulative) = build_duration_cache(&frames);
+        Self { frames, looping: false, cached_duration, cumulative }
     }
 
     /// mark this clip as looping (builder pattern).
@@ -82,8 +84,18 @@ impl AnimationClip {
     }
 
     fn total_duration(&self) -> f32 {
-        self.frames.iter().map(|f| f.duration_secs).sum()
+        self.cached_duration
     }
+}
+
+fn build_duration_cache(frames: &[AnimationFrame]) -> (f32, Vec<f32>) {
+    let mut cumulative = Vec::with_capacity(frames.len());
+    let mut acc = 0.0f32;
+    for frame in frames {
+        cumulative.push(acc);
+        acc += frame.duration_secs;
+    }
+    (acc, cumulative)
 }
 
 /// fired when a non-looping animation clip plays through to its last frame.
@@ -103,7 +115,11 @@ impl bevy_ecs::message::Message for AnimationFinished {}
 #[derive(Debug, Clone, Component)]
 pub struct Animator {
     clips: HashMap<String, AnimationClip>,
+    /// ordered list of clip names — index into this to avoid rehashing every frame.
+    clip_names: Vec<String>,
     current_clip: Option<String>,
+    /// index into `clip_names` / `clips` for the active clip; avoids HashMap lookup each frame.
+    current_clip_idx: Option<usize>,
     elapsed: f32,
     frame_index: usize,
     pub playing: bool,
@@ -116,7 +132,9 @@ impl Animator {
     pub fn new() -> Self {
         Self {
             clips: HashMap::new(),
+            clip_names: Vec::new(),
             current_clip: None,
+            current_clip_idx: None,
             elapsed: 0.0,
             frame_index: 0,
             playing: false,
@@ -126,15 +144,20 @@ impl Animator {
 
     /// register a named clip.
     pub fn add_clip(&mut self, name: impl Into<String>, clip: AnimationClip) {
-        self.clips.insert(name.into(), clip);
+        let name = name.into();
+        if !self.clips.contains_key(&name) {
+            self.clip_names.push(name.clone());
+        }
+        self.clips.insert(name, clip);
     }
 
     /// switch to a named clip and reset playback to the first frame.
     /// does nothing if the clip name is unknown.
     pub fn play(&mut self, name: impl Into<String>) {
         let name = name.into();
-        if self.clips.contains_key(&name) {
+        if let Some(idx) = self.clip_names.iter().position(|n| n == &name) {
             self.current_clip = Some(name);
+            self.current_clip_idx = Some(idx);
             self.elapsed = 0.0;
             self.frame_index = 0;
             self.playing = true;
@@ -185,41 +208,31 @@ pub fn advance_animations(
             continue;
         }
 
-        // extract what we need as copies so no String/Vec is cloned.
-        // the borrow ends at the `;` — after that we can mutate `animator` freely.
-        let Some((frame_count, looping, total_duration)) = animator
-            .current_clip
-            .as_deref()
-            .and_then(|name| animator.clips.get(name))
-            .map(|clip| (clip.frames.len(), clip.looping, clip.total_duration()))
-        else {
-            continue;
-        };
+        // use cached index to skip HashMap lookup entirely
+        let Some(clip_idx) = animator.current_clip_idx else { continue; };
+        let clip_name_str = &animator.clip_names[clip_idx];
+        let Some(clip) = animator.clips.get(clip_name_str.as_str()) else { continue; };
 
-        if frame_count == 0 {
-            continue;
-        }
+        let frame_count = clip.frames.len();
+        if frame_count == 0 { continue; }
+
+        let looping = clip.looping;
+        let total_duration = clip.cached_duration;
 
         animator.elapsed += delta;
 
-        // re-borrow clip after mutation — no conflict because the earlier borrow ended
-        let clip_name = animator.current_clip.as_deref().unwrap();
-        let clip = animator.clips.get(clip_name).unwrap();
+        // re-borrow clip after elapsed mutation
+        let clip = animator.clips.get(animator.clip_names[clip_idx].as_str()).unwrap();
 
         let check_elapsed = if looping && total_duration > 0.0 {
             animator.elapsed % total_duration
         } else {
             animator.elapsed
         };
-        let (new_index, past_end) = frame_index_at(&clip.frames, check_elapsed);
-        let mut finished = false;
-        if past_end && !looping && !animator.finished {
-            finished = true;
-        }
+        let (new_index, past_end) = frame_index_at(clip, check_elapsed);
+        let finished = past_end && !looping && !animator.finished;
 
-        // copy frame rect before borrow ends, then write back
         let frame_rect = (clip.frames[new_index].source_pos, clip.frames[new_index].source_size);
-        // clip borrow ends here — animator mutation is now safe
 
         animator.frame_index = new_index;
         if finished {
@@ -229,7 +242,6 @@ pub fn advance_animations(
         sprite.source_rect = Some(frame_rect);
 
         if finished {
-            // to_string only on clip completion (at most once per playthrough, not per frame)
             let name = animator.current_clip.as_deref().unwrap_or("").to_string();
             finished_writer.write(AnimationFinished { entity, clip_name: name });
         }
@@ -242,18 +254,19 @@ pub fn advance_animations(
 /// system runs in Update so `Sprite::source_rect` is set before the render stage.
 pub struct AnimationPlugin;
 
-/// find which frame is active at `elapsed` seconds.
+/// find which frame is active at `elapsed` seconds using binary search on precomputed cumulative times.
 ///
 /// returns `(index, past_end)`. `past_end` is true when elapsed exceeds all frame durations.
-fn frame_index_at(frames: &[AnimationFrame], elapsed: f32) -> (usize, bool) {
-    let mut accumulated = 0.0f32;
-    for (i, frame) in frames.iter().enumerate() {
-        accumulated += frame.duration_secs;
-        if elapsed < accumulated {
-            return (i, false);
-        }
+fn frame_index_at(clip: &AnimationClip, elapsed: f32) -> (usize, bool) {
+    if clip.frames.is_empty() {
+        return (0, true);
     }
-    (frames.len().saturating_sub(1), true)
+    if elapsed >= clip.cached_duration {
+        return (clip.frames.len() - 1, true);
+    }
+    // cumulative[i] = start time of frame i; find last frame whose start <= elapsed
+    let idx = clip.cumulative.partition_point(|&t| t <= elapsed).saturating_sub(1);
+    (idx, false)
 }
 
 impl GamePlugin for AnimationPlugin {
