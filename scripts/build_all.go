@@ -136,6 +136,17 @@ func main() {
 			// merge stderr into stdout so everything appears in a redirected log
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stdout
+			if t.sdk != "" {
+				// cross-compiling for macos: clear pkg-config host library dirs and
+				// disable SDL HIDAPI so cmake does not try to validate libusb as a
+				// .dylib (find_library still returns the linux .so despite root path
+				// restrictions when CMAKE_FIND_ROOT_PATH is empty)
+				cmd.Env = append(os.Environ(),
+					"PKG_CONFIG_LIBDIR=",
+					"PKG_CONFIG_PATH=",
+					"CARGO_FEATURE_NO_SDL_HIDAPI=1",
+				)
+			}
 
 			err := cmd.Run()
 			if err != nil {
@@ -301,21 +312,28 @@ func patchSdl3Compat() {
 	}
 }
 
-// patchMacosToolchains disables SDL_HIDAPI_LIBUSB in zigbuild's macOS cmake toolchain files.
-// When cross-compiling from Linux, pkg-config finds the Linux libusb (.so) and SDL3 cmake
-// rejects it for not being a .dylib. Disabling the libusb path avoids the check entirely.
+// patchMacosToolchains adds CMAKE_SYSROOT and CMAKE_FIND_ROOT_PATH to zigbuild's macOS
+// cmake toolchain files, sourced from $SDKROOT at cmake configure time.
+// Without a sysroot, CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY has no effect and cmake's
+// find_library falls back to host paths, picking up Linux .so files for the macOS target.
 func patchMacosToolchains() {
 	home, _ := os.UserHomeDir()
 	pattern := filepath.Join(home, ".cache", "cargo-zigbuild", "*", "wrappers", "*", "cmake", "*apple*toolchain.cmake")
 	matches, _ := filepath.Glob(pattern)
 	for _, path := range matches {
 		data, err := os.ReadFile(path)
-		if err != nil || strings.Contains(string(data), "SDL_HIDAPI_LIBUSB") {
+		if err != nil || strings.Contains(string(data), "CMAKE_SYSROOT") {
 			continue
 		}
-		patched := strings.TrimRight(string(data), "\n") + "\nset(SDL_HIDAPI_LIBUSB OFF CACHE BOOL \"\" FORCE)\n"
+		addition := `
+if(DEFINED ENV{SDKROOT})
+  set(CMAKE_SYSROOT "$ENV{SDKROOT}")
+  set(CMAKE_FIND_ROOT_PATH "$ENV{SDKROOT}")
+endif()
+`
+		patched := strings.TrimRight(string(data), "\n") + addition
 		if err := os.WriteFile(path, []byte(patched), 0644); err == nil {
-			fmt.Printf("patched SDL_HIDAPI_LIBUSB: %s\n", filepath.Base(path))
+			fmt.Printf("patched cmake sysroot: %s\n", filepath.Base(path))
 		}
 	}
 }
