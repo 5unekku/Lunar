@@ -10,7 +10,7 @@
 //! to flush commands from the previous stage.
 
 use bevy_ecs::prelude::*;
-use bevy_ecs::schedule::ScheduleLabel;
+use bevy_ecs::schedule::{ExecutorKind, ScheduleLabel};
 
 /// schedule for startup systems that run once before the main loop
 #[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
@@ -43,18 +43,35 @@ pub struct Engine {
 
 impl Engine {
     /// create a new empty engine
+    ///
+    /// stage schedules use `ExecutorKind::MultiThreaded` on native targets:
+    /// systems that do not share mutable component/resource access run in parallel
+    /// on a thread pool. on WASM the executor falls back to single-threaded.
     #[must_use]
     pub fn new() -> Self {
         use crate::schedule::UpdateStage;
+        let parallel = {
+            #[cfg(target_arch = "wasm32")]
+            { ExecutorKind::SingleThreaded }
+            #[cfg(not(target_arch = "wasm32"))]
+            { ExecutorKind::MultiThreaded }
+        };
+        let mut startup = Schedule::new(Startup);
+        startup.set_executor_kind(ExecutorKind::SingleThreaded);
+        let make_stage = |label: UpdateStage| {
+            let mut s = Schedule::new(label);
+            s.set_executor_kind(parallel);
+            s
+        };
         Self {
             world: World::new(),
-            startup_schedule: Schedule::new(Startup),
+            startup_schedule: startup,
             stage_schedules: [
-                Schedule::new(UpdateStage::Input),
-                Schedule::new(UpdateStage::Physics),
-                Schedule::new(UpdateStage::Update),
-                Schedule::new(UpdateStage::Render),
-                Schedule::new(UpdateStage::PostUpdate),
+                make_stage(UpdateStage::Input),
+                make_stage(UpdateStage::Physics),
+                make_stage(UpdateStage::Update),
+                make_stage(UpdateStage::Render),
+                make_stage(UpdateStage::PostUpdate),
             ],
         }
     }

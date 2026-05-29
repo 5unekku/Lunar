@@ -45,7 +45,7 @@ keywords = ["game-engine", "gamedev", "ecs", "wgpu", "2d"]
 categories = ["game-engines", "graphics", "wasm"]
 
 [workspace.dependencies]
-bevy_ecs = "0.18"
+bevy_ecs = { version = "0.18", features = ["multi_threaded"] }
 glam = "0.33"
 wgpu = { version = "29.0.3", default-features = false }
 raw-window-handle = "0.6"

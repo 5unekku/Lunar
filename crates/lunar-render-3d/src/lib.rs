@@ -278,8 +278,12 @@ impl RenderTier {
 
 /// coarse quality tier. individual toggles in `QualitySettings` can be
 /// overridden independently of the preset.
+///
+/// `Minimum` is the accessibility-first preset: every post-processing pass is off,
+/// shadow cost is minimal, no MSAA. targets 60fps on any modern CPU regardless of GPU.
+/// this is the floor every game should support before adding quality options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QualityPreset { Low, Medium, High, Ultra }
+pub enum QualityPreset { Minimum, Low, Medium, High, Ultra }
 
 /// per-feature quality knobs. inserted as a resource by [`RenderPlugin3d`]
 /// using defaults derived from the detected [`RenderTier`].
@@ -318,6 +322,28 @@ pub struct QualitySettings {
 }
 
 impl QualitySettings {
+    /// accessibility-first preset: all post-processing off, single shadow cascade,
+    /// no MSAA. every game should support this tier. corresponds to `QualityPreset::Minimum`.
+    #[must_use]
+    pub fn minimum() -> Self {
+        Self {
+            preset: QualityPreset::Minimum,
+            shadow_res: 512,
+            shadow_cascades: 1,
+            msaa_samples: 1,
+            bloom: false,
+            bloom_mips: 3,
+            ssao: false,
+            vignette: false,
+            chromatic_aberration: false,
+            film_grain: false,
+            particle_cap: 512,
+            fxaa: false,
+            ssr: false,
+            volumetric_fog: false,
+        }
+    }
+
     pub fn from_tier(tier: RenderTier) -> Self {
         match tier {
             RenderTier::LowGles => Self {
@@ -477,6 +503,15 @@ pub struct RenderEngine3d {
     shadow_pipeline: wgpu::RenderPipeline,
     shadow_cascade_views: [wgpu::TextureView; 3], // per-cascade render attachment views
 
+    // dirty-flag shadow cascade re-rendering.
+    // cascade N is only re-rendered when shadow_cascade_dirty[N] is true.
+    // set dirty when: light direction changes, shadow-casting geometry moves,
+    // or the draw list changes (entity added/removed/moved in cascade frustum).
+    shadow_cascade_dirty: [bool; 3],
+    // last-seen values for dirty detection
+    shadow_last_dir: Vec3,
+    shadow_last_draw_count: usize,
+
     mesh_gpu: HashMap<u32, GpuMesh>,
     dome_mesh: GpuMesh,
     sun_mesh: GpuMesh,
@@ -633,6 +668,8 @@ pub struct RenderEngine3d {
 
     // GPU-driven frustum culling (high tier only).
     // a compute pass replaces the CPU CullSoa frustum test.
+    // 1-frame pipelined: this frame writes to cull_flags_buf, previous frame's
+    // staging result is read. first frame falls back to CPU cull (no prior result).
     gpu_cull_enabled: bool,
     cull_aabb_buf: Option<wgpu::Buffer>,
     cull_frustum_buf: Option<wgpu::Buffer>,
@@ -641,9 +678,12 @@ pub struct RenderEngine3d {
     cull_count_buf: Option<wgpu::Buffer>,
     cull_bgl: Option<wgpu::BindGroupLayout>,
     cull_pipeline: Option<wgpu::ComputePipeline>,
-    // cpu-side visible flag result (read back from GPU)
+    // cpu-side visible flag result (read back from previous frame's GPU result)
     gpu_cull_flags: Vec<u32>,
     cull_entity_capacity: usize,
+    // whether the staging buffer has been written and is ready to map next frame
+    cull_staging_pending: bool,
+    cull_pending_entity_count: usize,
 
     // hierarchical Z-buffer occlusion culling (high tier only).
     // built after the z-prepass; used next frame to cull occluded entities.
@@ -670,6 +710,9 @@ pub struct RenderEngine3d {
     // hzb cull aabb / camera param buffers
     hzb_cull_aabb_buf: Option<wgpu::Buffer>,
     hzb_cull_params_buf: Option<wgpu::Buffer>,
+    // 1-frame pipeline state for hzb occlusion readback
+    hzb_staging_pending: bool,
+    hzb_pending_entity_count: usize,
 }
 
 // wasm is single-threaded; wgpu's WebGPU backend uses RefCell instead of Mutex,
@@ -1216,7 +1259,7 @@ impl RenderEngine3d {
 
         let bloom_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("[bloom] params buffer"),
-            size: MAX_BLOOM_MIPS as u64 * UNIFORM_STRIDE,
+            size: 2 * MAX_BLOOM_MIPS as u64 * UNIFORM_STRIDE,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1602,11 +1645,10 @@ impl RenderEngine3d {
                         multisampled: false,
                     }, count: None,
                 },
-                // depth texture read via textureLoad — TextureSampleType::Depth works with texture_2d<f32>
                 wgpu::BindGroupLayoutEntry {
                     binding: 2, visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     }, count: None,
@@ -1716,11 +1758,10 @@ impl RenderEngine3d {
                         min_binding_size: wgpu::BufferSize::new(GLOBALS_SIZE),
                     }, count: None,
                 },
-                // depth texture read via textureLoad — TextureSampleType::Depth with texture_2d<f32>
                 wgpu::BindGroupLayoutEntry {
                     binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     }, count: None,
@@ -1801,7 +1842,7 @@ impl RenderEngine3d {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     }, count: None,
@@ -1990,7 +2031,7 @@ impl RenderEngine3d {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     }, count: None,
@@ -2188,7 +2229,7 @@ impl RenderEngine3d {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rg32Float,
+            format: wgpu::TextureFormat::Rg16Float,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -2198,7 +2239,7 @@ impl RenderEngine3d {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rg32Float,
+            format: wgpu::TextureFormat::Rg16Float,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -2259,7 +2300,7 @@ impl RenderEngine3d {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -2310,7 +2351,7 @@ impl RenderEngine3d {
             source: wgpu::ShaderSource::Wgsl(GTAO_SHADER_SRC.into()),
         });
 
-        let gtao_ao_format = wgpu::TextureFormat::Rg32Float;
+        let gtao_ao_format = wgpu::TextureFormat::Rg16Float;
 
         let make_gtao_pipeline = |entry: &'static str, blend: Option<wgpu::BlendState>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -2344,14 +2385,14 @@ impl RenderEngine3d {
         let gtao_blur_h_pipeline = make_gtao_pipeline("fs_blur_h", None);
         let gtao_blur_v_pipeline = make_gtao_pipeline("fs_blur_v", None);
 
-        // dummy ao_src (ao_a) for initial main bg — blur passes bind ao_a or ao_b
+        // main pass writes to ao_a, so bind ao_b as the dummy src to avoid read/write conflict
         let gtao_main_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("[gtao] main bg"),
             layout: &gtao_bgl,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: gtao_params_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&gtao_depth_tex) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&gtao_ao_view_a) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&gtao_ao_view_b) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&post_sampler) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&gtao_point_sampler) },
             ],
@@ -2620,6 +2661,9 @@ impl RenderEngine3d {
             shadow_globals_bg,
             shadow_pipeline,
             shadow_cascade_views,
+            shadow_cascade_dirty: [true; 3],
+            shadow_last_dir: Vec3::ZERO,
+            shadow_last_draw_count: 0,
             mesh_gpu: HashMap::new(),
             dome_mesh,
             sun_mesh,
@@ -2741,6 +2785,8 @@ impl RenderEngine3d {
             cull_pipeline: None,
             gpu_cull_flags: Vec::new(),
             cull_entity_capacity: 0,
+            cull_staging_pending: false,
+            cull_pending_entity_count: 0,
 
             hzb_enabled: render_tier == RenderTier::High,
             hzb_texture: None,
@@ -2762,6 +2808,8 @@ impl RenderEngine3d {
             hzb_occ_staging: None,
             hzb_cull_aabb_buf: None,
             hzb_cull_params_buf: None,
+            hzb_staging_pending: false,
+            hzb_pending_entity_count: 0,
         }
     }
 
@@ -3745,7 +3793,10 @@ impl RenderEngine3d {
         };
 
         // ── frustum cull ─────────────────────────────────────────────────
-        // high tier: GPU compute replaces CPU CullSoa test + optional HZB occlusion cull.
+        // high tier: 1-frame pipelined GPU compute cull.
+        //   frame N: read previous frame's staging result (no stall), dispatch this frame's compute.
+        //   frame N+1: read frame N's result.
+        //   first frame: no prior result — fall through to CPU cull as bootstrap.
         // mid/low tier: CPU test over contiguous CullSoa arrays.
         self.frustum_visible.clear();
         if self.gpu_cull_enabled {
@@ -3754,10 +3805,47 @@ impl RenderEngine3d {
                 let soa = world.resource::<CullSoa>();
                 (soa.entities.len(), frustum.planes)
             };
+
+            // read previous frame's staging result (non-blocking — GPU already finished)
+            if self.cull_staging_pending && entity_count > 0 {
+                let prev_count = self.cull_pending_entity_count;
+                if let Some(staging_buf) = self.cull_flags_staging.as_ref() {
+                    let _ = self.device.poll(wgpu::PollType::Poll);
+                    let staging_slice = staging_buf.slice(0..(prev_count * 4) as u64);
+                    staging_slice.map_async(wgpu::MapMode::Read, |_| {});
+                    let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+                    {
+                        let data = staging_slice.get_mapped_range();
+                        let flags: &[u32] = bytemuck::cast_slice(&data);
+                        let soa = world.resource::<CullSoa>();
+                        for (i, &entity) in soa.entities.iter().take(prev_count).enumerate() {
+                            if i < flags.len() && flags[i] != 0 {
+                                self.frustum_visible.insert(entity);
+                            }
+                        }
+                        self.gpu_cull_flags.clear();
+                        self.gpu_cull_flags.extend_from_slice(&flags[..prev_count.min(flags.len())]);
+                    }
+                    staging_buf.unmap();
+                }
+                self.cull_staging_pending = false;
+            }
+
+            // if no prior result yet (first frame), fall back to CPU cull
+            if self.frustum_visible.is_empty() && entity_count > 0 {
+                let frustum = *world.resource::<Frustum>();
+                let soa = world.resource::<CullSoa>();
+                for (i, &entity) in soa.entities.iter().enumerate() {
+                    if frustum.intersects_aabb(soa.centers[i], soa.half_extents[i]) {
+                        self.frustum_visible.insert(entity);
+                    }
+                }
+            }
+
+            // dispatch this frame's GPU cull (result used next frame)
             if entity_count > 0 {
                 self.ensure_gpu_cull_resources(entity_count);
 
-                // pack aabb data: [center.x, center.y, center.z, pad, he.x, he.y, he.z, pad] × N
                 let mut aabb_data: Vec<f32> = Vec::with_capacity(entity_count * 8);
                 {
                     let soa = world.resource::<CullSoa>();
@@ -3767,7 +3855,6 @@ impl RenderEngine3d {
                         aabb_data.extend_from_slice(&[c.x, c.y, c.z, 0.0, e.x, e.y, e.z, 0.0]);
                     }
                 }
-                // pack frustum params: 6×vec4 planes + count + 3 pad
                 let mut frustum_data = [0f32; 32];
                 for (p, plane) in frustum_planes.iter().enumerate() {
                     frustum_data[p * 4]     = plane.x;
@@ -3782,13 +3869,9 @@ impl RenderEngine3d {
                 let flags_buf = self.cull_flags_buf.as_ref().unwrap();
                 let staging_buf = self.cull_flags_staging.as_ref().unwrap();
 
-                // upload AABB + frustum data
-                let aabb_bytes: &[u8] = bytemuck::cast_slice(&aabb_data);
-                self.queue.write_buffer(aabb_buf, 0, aabb_bytes);
-                let frustum_bytes: &[u8] = bytemuck::cast_slice(&frustum_data);
-                self.queue.write_buffer(frustum_buf, 0, frustum_bytes);
+                self.queue.write_buffer(aabb_buf, 0, bytemuck::cast_slice(&aabb_data));
+                self.queue.write_buffer(frustum_buf, 0, bytemuck::cast_slice(&frustum_data));
 
-                // build bind group and dispatch compute
                 let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("[cull] bg"),
                     layout: self.cull_bgl.as_ref().unwrap(),
@@ -3808,31 +3891,12 @@ impl RenderEngine3d {
                     });
                     cpass.set_pipeline(self.cull_pipeline.as_ref().unwrap());
                     cpass.set_bind_group(0, &bg, &[]);
-                    let wg = (entity_count as u32 + 63) / 64;
-                    cpass.dispatch_workgroups(wg, 1, 1);
+                    cpass.dispatch_workgroups((entity_count as u32 + 63) / 64, 1, 1);
                 }
                 cull_enc.copy_buffer_to_buffer(flags_buf, 0, staging_buf, 0, (entity_count * 4) as u64);
                 self.queue.submit([cull_enc.finish()]);
-                // wait for GPU compute (synchronous readback — acceptable on high-tier desktop)
-                let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-
-                // map staging and read visible flags
-                let staging_slice = staging_buf.slice(0..(entity_count * 4) as u64);
-                staging_slice.map_async(wgpu::MapMode::Read, |_| {});
-                let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-                {
-                    let data = staging_slice.get_mapped_range();
-                    let flags: &[u32] = bytemuck::cast_slice(&data);
-                    let soa = world.resource::<CullSoa>();
-                    for (i, &entity) in soa.entities.iter().enumerate() {
-                        if i < flags.len() && flags[i] != 0 {
-                            self.frustum_visible.insert(entity);
-                        }
-                    }
-                    self.gpu_cull_flags.clear();
-                    self.gpu_cull_flags.extend_from_slice(&flags[..entity_count]);
-                }
-                staging_buf.unmap();
+                self.cull_staging_pending = true;
+                self.cull_pending_entity_count = entity_count;
             }
         } else {
             let frustum = *world.resource::<Frustum>();
@@ -3844,85 +3908,107 @@ impl RenderEngine3d {
             }
         }
 
-        // ── HZB occlusion cull (high tier, last-frame HZB) ───────────────
-        // tests frustum-visible entities against the previous frame's HZB.
-        // entities whose nearest projected depth exceeds the HZB nearest-depth
-        // are behind known opaque geometry and removed from frustum_visible.
-        if self.hzb_enabled && self.hzb_texture.is_some() && !self.gpu_cull_flags.is_empty() {
-            let entity_count = self.gpu_cull_flags.len();
-            self.ensure_hzb_cull_buffers(entity_count);
-
-            let soa = world.resource::<CullSoa>();
-            let mut aabb_data: Vec<f32> = Vec::with_capacity(entity_count * 8);
-            for i in 0..entity_count {
-                let c = soa.centers[i];
-                let e = soa.half_extents[i];
-                aabb_data.extend_from_slice(&[c.x, c.y, c.z, 0.0, e.x, e.y, e.z, 0.0]);
-            }
-            // hzb params: view_proj (16 f32) + viewport (2 f32) + mip_count (u32) + entity_count (u32)
-            let vp_array = view_proj.to_cols_array();
-            let mut params_data = [0f32; 24];
-            params_data[..16].copy_from_slice(&vp_array);
-            params_data[16] = self.surface_config.width as f32;
-            params_data[17] = self.surface_config.height as f32;
-            params_data[18] = f32::from_bits(self.hzb_mip_count);
-            params_data[19] = f32::from_bits(entity_count as u32);
-
-            // copy current gpu_cull_flags → occ_flags buf (starts with frustum cull result)
-            let flags_bytes: &[u8] = bytemuck::cast_slice(&self.gpu_cull_flags[..entity_count]);
-            self.queue.write_buffer(self.hzb_occ_buf.as_ref().unwrap(), 0, flags_bytes);
-            let aabb_bytes: &[u8] = bytemuck::cast_slice(&aabb_data);
-            self.queue.write_buffer(self.hzb_cull_aabb_buf.as_ref().unwrap(), 0, aabb_bytes);
-            let params_bytes: &[u8] = bytemuck::cast_slice(&params_data);
-            self.queue.write_buffer(self.hzb_cull_params_buf.as_ref().unwrap(), 0, params_bytes);
-
-            let hzb_src_view = self.hzb_src_view.as_ref().unwrap();
-            let occ_buf = self.hzb_occ_buf.as_ref().unwrap();
-            let occ_staging = self.hzb_occ_staging.as_ref().unwrap();
-            let aabb_buf = self.hzb_cull_aabb_buf.as_ref().unwrap();
-            let params_buf = self.hzb_cull_params_buf.as_ref().unwrap();
-
-            let hzb_cull_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("[hzb] cull bg"),
-                layout: self.hzb_cull_bgl.as_ref().unwrap(),
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: aabb_buf.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: params_buf.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 2, resource: occ_buf.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(hzb_src_view) },
-                ],
-            });
-            let mut hzb_enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("[hzb] cull encoder"),
-            });
-            {
-                let mut cpass = hzb_enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("[hzb] cull pass"),
-                    timestamp_writes: None,
-                });
-                cpass.set_pipeline(self.hzb_cull_pipeline.as_ref().unwrap());
-                cpass.set_bind_group(0, &hzb_cull_bg, &[]);
-                cpass.dispatch_workgroups((entity_count as u32 + 63) / 64, 1, 1);
-            }
-            hzb_enc.copy_buffer_to_buffer(occ_buf, 0, occ_staging, 0, (entity_count * 4) as u64);
-            self.queue.submit([hzb_enc.finish()]);
-            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-
-            // apply occlusion results to frustum_visible
-            let slice = occ_staging.slice(0..(entity_count * 4) as u64);
-            slice.map_async(wgpu::MapMode::Read, |_| {});
-            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-            {
-                let data = slice.get_mapped_range();
-                let flags: &[u32] = bytemuck::cast_slice(&data);
+        // ── HZB occlusion cull (high tier, 1-frame pipelined) ────────────
+        // applies previous frame's occlusion result to frustum_visible, then
+        // dispatches this frame's occlusion compute for next frame's use.
+        // no CPU stall — the previous frame's compute completed while we were
+        // building the draw list.
+        if self.hzb_enabled && self.hzb_texture.is_some() {
+            let entity_count = {
                 let soa = world.resource::<CullSoa>();
-                for (i, &entity) in soa.entities.iter().enumerate() {
-                    if i < flags.len() && flags[i] == 0 {
-                        self.frustum_visible.remove(&entity);
+                soa.entities.len()
+            };
+            if entity_count > 0 {
+                self.ensure_hzb_cull_buffers(entity_count);
+
+                // read previous frame's occlusion result
+                if self.hzb_staging_pending {
+                    let prev = self.hzb_pending_entity_count;
+                    if let Some(occ_staging) = self.hzb_occ_staging.as_ref() {
+                        let _ = self.device.poll(wgpu::PollType::Poll);
+                        let slice = occ_staging.slice(0..(prev * 4) as u64);
+                        slice.map_async(wgpu::MapMode::Read, |_| {});
+                        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+                        {
+                            let data = slice.get_mapped_range();
+                            let flags: &[u32] = bytemuck::cast_slice(&data);
+                            let soa = world.resource::<CullSoa>();
+                            for (i, &entity) in soa.entities.iter().take(prev).enumerate() {
+                                if i < flags.len() && flags[i] == 0 {
+                                    self.frustum_visible.remove(&entity);
+                                }
+                            }
+                        }
+                        occ_staging.unmap();
                     }
+                    self.hzb_staging_pending = false;
+                }
+
+                // dispatch this frame's HZB occlusion compute
+                if !self.gpu_cull_flags.is_empty() {
+                    let soa = world.resource::<CullSoa>();
+                    let mut aabb_data: Vec<f32> = Vec::with_capacity(entity_count * 8);
+                    for i in 0..entity_count {
+                        let c = soa.centers[i];
+                        let e = soa.half_extents[i];
+                        aabb_data.extend_from_slice(&[c.x, c.y, c.z, 0.0, e.x, e.y, e.z, 0.0]);
+                    }
+                    let vp_array = view_proj.to_cols_array();
+                    let mut params_data = [0f32; 24];
+                    params_data[..16].copy_from_slice(&vp_array);
+                    params_data[16] = self.surface_config.width as f32;
+                    params_data[17] = self.surface_config.height as f32;
+                    params_data[18] = f32::from_bits(self.hzb_mip_count);
+                    params_data[19] = f32::from_bits(entity_count as u32);
+
+                    let n = entity_count.min(self.gpu_cull_flags.len());
+                    self.queue.write_buffer(
+                        self.hzb_occ_buf.as_ref().unwrap(), 0,
+                        bytemuck::cast_slice(&self.gpu_cull_flags[..n]),
+                    );
+                    self.queue.write_buffer(
+                        self.hzb_cull_aabb_buf.as_ref().unwrap(), 0,
+                        bytemuck::cast_slice(&aabb_data),
+                    );
+                    self.queue.write_buffer(
+                        self.hzb_cull_params_buf.as_ref().unwrap(), 0,
+                        bytemuck::cast_slice(&params_data),
+                    );
+
+                    let hzb_src_view = self.hzb_src_view.as_ref().unwrap();
+                    let occ_buf = self.hzb_occ_buf.as_ref().unwrap();
+                    let occ_staging = self.hzb_occ_staging.as_ref().unwrap();
+                    let aabb_buf = self.hzb_cull_aabb_buf.as_ref().unwrap();
+                    let params_buf = self.hzb_cull_params_buf.as_ref().unwrap();
+
+                    let hzb_cull_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("[hzb] cull bg"),
+                        layout: self.hzb_cull_bgl.as_ref().unwrap(),
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: aabb_buf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 1, resource: params_buf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 2, resource: occ_buf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(hzb_src_view) },
+                        ],
+                    });
+                    let mut hzb_enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("[hzb] cull encoder"),
+                    });
+                    {
+                        let mut cpass = hzb_enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("[hzb] cull pass"),
+                            timestamp_writes: None,
+                        });
+                        cpass.set_pipeline(self.hzb_cull_pipeline.as_ref().unwrap());
+                        cpass.set_bind_group(0, &hzb_cull_bg, &[]);
+                        cpass.dispatch_workgroups((entity_count as u32 + 63) / 64, 1, 1);
+                    }
+                    hzb_enc.copy_buffer_to_buffer(occ_buf, 0, occ_staging, 0, (entity_count * 4) as u64);
+                    self.queue.submit([hzb_enc.finish()]);
+                    self.hzb_staging_pending = true;
+                    self.hzb_pending_entity_count = entity_count;
                 }
             }
-            occ_staging.unmap();
         }
 
         // ── gather draw list ──────────────────────────────────────────────
@@ -4220,10 +4306,25 @@ impl RenderEngine3d {
             list
         };
 
+        // ── dirty-flag shadow cascade invalidation ────────────────────────
+        // cascades are re-rendered only when something relevant changed.
+        // triggers: light direction changed, draw list size changed (entity added/removed),
+        // or any shadow-casting entity's mesh_id changed (proxy for transform change).
+        {
+            let dir_changed = (dir_direction - self.shadow_last_dir).length_squared() > 1e-6;
+            let draw_changed = shadow_list.len() != self.shadow_last_draw_count;
+            if dir_changed || draw_changed {
+                self.shadow_cascade_dirty = [true; 3];
+                self.shadow_last_dir = dir_direction;
+                self.shadow_last_draw_count = shadow_list.len();
+            }
+        }
+
         // ── shadow pass — 3 cascades ─────────────────────────────────────
         for cascade in 0..NUM_CASCADES as usize {
             let label = format!("[shadow] cascade-{cascade}");
-            if dir_enabled != 0 && dir_casts_shadows {
+            if dir_enabled != 0 && dir_casts_shadows && self.shadow_cascade_dirty[cascade] {
+                self.shadow_cascade_dirty[cascade] = false;
                 let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some(label.as_str()),
                     color_attachments: &[],

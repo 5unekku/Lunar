@@ -90,7 +90,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
 
     // UV from local XZ (decal projected onto Y-down surface)
     let uv_decal = local.xz + vec2<f32>(0.5);
-    let _ = uv_decal; // future: sample a decal texture atlas here
+    _ = uv_decal; // future: sample a decal texture atlas here
 
     // tint with decal color, fade at edges
     let edge_fade = 1.0 - smoothstep(0.4, 0.5, max(abs(local.x), abs(local.z)));

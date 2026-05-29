@@ -86,7 +86,7 @@ fn vs_main(
     @location(2) _color:   vec4<f32>,
     @location(3) _uv0:     vec2<f32>,
     @location(4) _uv1:     vec2<f32>,
-    @location(5) _tint:    u32,
+    @location(5) _tint:    vec4<f32>,
 ) -> VertOut {
     var world_pos = (water.model * vec4<f32>(position, 1.0)).xyz;
     let xz = world_pos.xz;
