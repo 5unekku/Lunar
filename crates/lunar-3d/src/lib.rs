@@ -71,7 +71,7 @@ pub use water::Water;
 pub use particles::ParticleEmitter;
 pub use light::{DirectionalLight, IrradianceSH, PointLight, SpotLight};
 pub use material::{CullMode, Material3d, MaterialData, ShadingModel};
-pub use mesh::{IndexBuffer, Mesh3d, MeshData, MeshUsage, SkinWeights, Vertex3d};
+pub use mesh::{IndexBuffer, Mesh3d, MeshData, MeshLod, MeshUsage, SkinWeights, Vertex3d};
 pub use mesh_registry::MeshRegistry;
 pub use plugin::Plugin3d;
 pub use systems::{TransformScratch3d, propagate_transforms_3d};

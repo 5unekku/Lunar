@@ -1790,6 +1790,7 @@ name = "lunar-render-3d"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+ "bytemuck",
  "log",
  "lunar-3d",
  "lunar-assets",
@@ -1804,6 +1805,7 @@ name = "lunar-spline"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+ "lunar-3d",
  "lunar-assets",
  "lunar-core",
  "lunar-math",

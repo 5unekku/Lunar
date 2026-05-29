@@ -53,6 +53,7 @@ sdl3 = { version = "0.18", features = ["build-from-source-static"] }
 log = "0.4"
 env_logger = "0.11"
 pollster = "0.4"
+bytemuck = "1"
 
 [package]
 name = "lunar-game"

@@ -212,3 +212,48 @@ impl Asset for MeshData {}
 /// [`Material3d`](crate::material::Material3d) for a fully renderable object.
 #[derive(Debug, Clone, Copy, Component)]
 pub struct Mesh3d(pub Handle<MeshData>);
+
+/// discrete LOD levels for a `Mesh3d` entity.
+///
+/// levels must be sorted ascending by `max_dist_sq`. the render system selects
+/// the first level whose threshold is not exceeded by the entity's squared
+/// distance from the camera, or falls back to the last (coarsest) level.
+///
+/// the `Mesh3d` component serves as LOD 0 (base mesh). `MeshLod` overrides
+/// the mesh handle in the gather pass when the distance thresholds are met.
+///
+/// # example
+///
+/// ```ignore
+/// let lod = MeshLod::new(vec![
+///     (100.0 * 100.0, lod1_handle), // within 100 units: use lod1
+///     (300.0 * 300.0, lod2_handle), // within 300 units: use lod2
+///     // beyond 300 units: still use lod2 (last level)
+/// ]);
+/// ```
+#[derive(Debug, Clone, Component)]
+pub struct MeshLod {
+    /// `(max_dist_sq, mesh_handle)` sorted ascending by `max_dist_sq`.
+    pub levels: Vec<(f32, Handle<MeshData>)>,
+}
+
+impl MeshLod {
+    /// construct and sort levels by `max_dist_sq`.
+    #[must_use]
+    pub fn new(mut levels: Vec<(f32, Handle<MeshData>)>) -> Self {
+        levels.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        Self { levels }
+    }
+
+    /// select the mesh handle for `dist_sq` (squared camera distance).
+    ///
+    /// returns the first level whose `max_dist_sq >= dist_sq`, or the last
+    /// (coarsest) level if all thresholds are exceeded.
+    #[must_use]
+    pub fn select(&self, dist_sq: f32) -> Option<Handle<MeshData>> {
+        self.levels.iter()
+            .find(|(max_d_sq, _)| dist_sq <= *max_d_sq)
+            .or_else(|| self.levels.last())
+            .map(|(_, handle)| *handle)
+    }
+}

@@ -30,6 +30,7 @@
 //! ```
 
 pub mod sky;
+pub mod render_graph;
 
 pub use sky::{AtmosphericScattering, Sky};
 
@@ -39,14 +40,16 @@ use bevy_ecs::prelude::*;
 use lunar_3d::{
     Aabb3d, ActiveCamera3d, AmbientLight, Camera3d, ComputedVisibility, CullSoa, Decal,
     DirectionalLight, Frustum, IndexBuffer, IrradianceSH, Material3d, Mesh3d, MeshData,
-    MeshRegistry, ParticleEmitter, PointLight, Projection, ShadowCaster, Vertex3d,
+    MeshLod, MeshRegistry, ParticleEmitter, PointLight, Projection, ShadowCaster, Vertex3d,
     Terrain, ViewportAspect, Water, WorldTransform3d,
 };
 use lunar_3d::primitives::{quad_mesh, sphere_mesh};
 use lunar_core::{App, GamePlugin, UpdateStage};
 use lunar_math::{Color, Mat3, Mat4, Vec2, Vec3};
 
-const SHADER_SRC: &str = include_str!("shader.wgsl");
+const SHADER_SRC: &str           = include_str!("shader.wgsl");
+const CULL_SHADER_SRC: &str      = include_str!("cull.wgsl");
+const HZB_SHADER_SRC: &str       = include_str!("hzb.wgsl");
 const SHADOW_SHADER_SRC: &str = include_str!("shadow.wgsl");
 const BLOOM_SHADER_SRC: &str = include_str!("bloom.wgsl");
 const COMPOSITE_SHADER_SRC: &str = include_str!("composite.wgsl");
@@ -623,6 +626,50 @@ pub struct RenderEngine3d {
     draw_scratch: Vec<(Entity, u32, u32, Color, f32, f32, Mat4, f32)>,
     uniform_staging: Vec<u8>,
     point_light_scratch: Vec<(Vec3, Color, f32, f32)>,
+
+    // render graph DAG — built once at init, drives pass execution order in render_frame.
+    // models pass dependencies via declared texture reads/writes and topological sort.
+    render_graph: render_graph::RenderGraph,
+
+    // GPU-driven frustum culling (high tier only).
+    // a compute pass replaces the CPU CullSoa frustum test.
+    gpu_cull_enabled: bool,
+    cull_aabb_buf: Option<wgpu::Buffer>,
+    cull_frustum_buf: Option<wgpu::Buffer>,
+    cull_flags_buf: Option<wgpu::Buffer>,
+    cull_flags_staging: Option<wgpu::Buffer>,
+    cull_count_buf: Option<wgpu::Buffer>,
+    cull_bgl: Option<wgpu::BindGroupLayout>,
+    cull_pipeline: Option<wgpu::ComputePipeline>,
+    // cpu-side visible flag result (read back from GPU)
+    gpu_cull_flags: Vec<u32>,
+    cull_entity_capacity: usize,
+
+    // hierarchical Z-buffer occlusion culling (high tier only).
+    // built after the z-prepass; used next frame to cull occluded entities.
+    hzb_enabled: bool,
+    hzb_texture: Option<wgpu::Texture>,
+    hzb_mip_views: Vec<wgpu::TextureView>,
+    hzb_src_view: Option<wgpu::TextureView>,  // view of full HZB (for sampling)
+    hzb_width: u32,
+    hzb_height: u32,
+    hzb_mip_count: u32,
+    hzb_downsample_bgl: Option<wgpu::BindGroupLayout>,
+    hzb_downsample_pipeline: Option<wgpu::ComputePipeline>,
+    hzb_copy_bgl: Option<wgpu::BindGroupLayout>,
+    hzb_copy_pipeline: Option<wgpu::ComputePipeline>,
+    hzb_cull_bgl: Option<wgpu::BindGroupLayout>,
+    hzb_cull_pipeline: Option<wgpu::ComputePipeline>,
+    // depth-source view for hzb copy (non-msaa, texture_binding)
+    hzb_depth_src: Option<wgpu::Texture>,
+    hzb_depth_src_view: Option<wgpu::TextureView>,
+    // per-entity occlusion flags from hzb cull (combined with gpu_cull_flags)
+    hzb_occ_flags: Vec<u32>,
+    hzb_occ_buf: Option<wgpu::Buffer>,
+    hzb_occ_staging: Option<wgpu::Buffer>,
+    // hzb cull aabb / camera param buffers
+    hzb_cull_aabb_buf: Option<wgpu::Buffer>,
+    hzb_cull_params_buf: Option<wgpu::Buffer>,
 }
 
 // wasm is single-threaded; wgpu's WebGPU backend uses RefCell instead of Mutex,
@@ -2681,7 +2728,412 @@ impl RenderEngine3d {
             draw_scratch: Vec::new(),
             uniform_staging,
             point_light_scratch: Vec::new(),
+
+            render_graph: Self::build_render_graph(render_tier, bloom_enabled, ssr_enabled, fog_enabled, fxaa_enabled, ssao_enabled),
+
+            gpu_cull_enabled: render_tier == RenderTier::High,
+            cull_aabb_buf: None,
+            cull_frustum_buf: None,
+            cull_flags_buf: None,
+            cull_flags_staging: None,
+            cull_count_buf: None,
+            cull_bgl: None,
+            cull_pipeline: None,
+            gpu_cull_flags: Vec::new(),
+            cull_entity_capacity: 0,
+
+            hzb_enabled: render_tier == RenderTier::High,
+            hzb_texture: None,
+            hzb_mip_views: Vec::new(),
+            hzb_src_view: None,
+            hzb_width: config.width,
+            hzb_height: config.height,
+            hzb_mip_count: 0,
+            hzb_downsample_bgl: None,
+            hzb_downsample_pipeline: None,
+            hzb_copy_bgl: None,
+            hzb_copy_pipeline: None,
+            hzb_cull_bgl: None,
+            hzb_cull_pipeline: None,
+            hzb_depth_src: None,
+            hzb_depth_src_view: None,
+            hzb_occ_flags: Vec::new(),
+            hzb_occ_buf: None,
+            hzb_occ_staging: None,
+            hzb_cull_aabb_buf: None,
+            hzb_cull_params_buf: None,
         }
+    }
+
+    fn build_render_graph(
+        tier: RenderTier,
+        bloom: bool,
+        ssr: bool,
+        fog: bool,
+        fxaa: bool,
+        ssao: bool,
+    ) -> render_graph::RenderGraph {
+        let mut g = render_graph::RenderGraph::new();
+        let shadow   = g.texture("shadow_map");
+        let depth    = g.texture("depth");
+        let hdr      = g.texture("hdr");
+        let ao       = g.texture("ao");
+        let ssr_tex  = g.texture("ssr");
+        let fog_tex  = g.texture("fog");
+        let bloom_tex = g.texture("bloom");
+        let ldr      = g.texture("ldr");
+        let swapchain = g.texture("swapchain");
+
+        // passes in dependency order. the graph's topological sort will produce the
+        // same ordering from the declared resource edges, demonstrating the DAG works.
+        g.add_pass("shadow",    vec![],                         vec![shadow]);
+        if tier != RenderTier::LowGles {
+            g.add_pass("zprepass", vec![],                      vec![depth]);
+        }
+        if ssao {
+            g.add_pass("gtao",     vec![depth],                 vec![ao]);
+        }
+        if tier == RenderTier::High {
+            g.add_pass("hzb_build",  vec![depth],               vec![]);
+            g.add_pass("hzb_cull",   vec![],                    vec![]);
+        }
+        g.add_pass("opaque",    vec![shadow, depth],            vec![hdr]);
+        g.add_pass("sky",       vec![],                         vec![hdr]);
+        g.add_pass("particles", vec![depth],                    vec![hdr]);
+        g.add_pass("decals",    vec![depth],                    vec![hdr]);
+        g.add_pass("water",     vec![depth, hdr],               vec![hdr]);
+        g.add_pass("transparent", vec![depth],                  vec![hdr]);
+        if ssr { g.add_pass("ssr", vec![hdr, depth], vec![ssr_tex]); }
+        if fog { g.add_pass("volumetric_fog", vec![depth], vec![fog_tex]); }
+        if bloom { g.add_pass("bloom", vec![hdr], vec![bloom_tex]); }
+        let composite_reads = {
+            let mut r = vec![hdr];
+            if ssao   { r.push(ao); }
+            if ssr    { r.push(ssr_tex); }
+            if fog    { r.push(fog_tex); }
+            if bloom  { r.push(bloom_tex); }
+            r
+        };
+        g.add_pass("composite", composite_reads, vec![ldr]);
+        if fxaa {
+            g.add_pass("fxaa", vec![ldr], vec![swapchain]);
+        } else {
+            g.add_pass("present", vec![ldr], vec![swapchain]);
+        }
+        g
+    }
+
+    /// lazily create (or grow) GPU frustum cull buffers and pipeline.
+    fn ensure_gpu_cull_resources(&mut self, entity_count: usize) {
+        if entity_count == 0 { return; }
+        let needs_rebuild = self.cull_pipeline.is_none() || entity_count > self.cull_entity_capacity;
+        if needs_rebuild {
+            let cap = entity_count.next_power_of_two().max(256);
+            self.cull_entity_capacity = cap;
+
+            // aabb input buffer: 32 bytes per entry (center vec3+pad + half_extent vec3+pad)
+            self.cull_aabb_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("[cull] aabb buf"),
+                size: (cap * 32) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            // frustum params: 6×vec4 planes + u32 count + 3 pad = 112 bytes, padded to 128
+            self.cull_frustum_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("[cull] frustum buf"),
+                size: 128,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            // visible flags: one u32 per entity
+            self.cull_flags_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("[cull] flags buf"),
+                size: (cap * 4) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.cull_flags_staging = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("[cull] flags staging"),
+                size: (cap * 4) as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }));
+            self.gpu_cull_flags.resize(cap, 0);
+
+            if self.cull_pipeline.is_none() {
+                let bgl = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("[cull] bgl"),
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0, visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false, min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1, visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false, min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2, visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                has_dynamic_offset: false, min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                    ],
+                });
+                let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("[cull] pipeline layout"),
+                    bind_group_layouts: &[Some(&bgl)],
+                    immediate_size: 0,
+                });
+                let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("[cull] shader"),
+                    source: wgpu::ShaderSource::Wgsl(CULL_SHADER_SRC.into()),
+                });
+                self.cull_pipeline = Some(self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("[cull] pipeline"),
+                    layout: Some(&layout),
+                    module: &module,
+                    entry_point: Some("cs_cull"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                }));
+                self.cull_bgl = Some(bgl);
+            }
+        }
+    }
+
+    /// lazily create HZB texture (R32Float mip chain) and pipelines.
+    fn ensure_hzb_resources(&mut self) {
+        if self.hzb_texture.is_some() { return; }
+
+        let w = self.hzb_width;
+        let h = self.hzb_height;
+        let mip_count = (f32::max(w as f32, h as f32).log2().floor() as u32 + 1).max(1);
+        self.hzb_mip_count = mip_count;
+
+        // R32Float texture with all mip levels. storage usage required for compute writes.
+        let hzb_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[hzb] texture"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: mip_count,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R32Float,
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                 | wgpu::TextureUsages::TEXTURE_BINDING
+                 | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        // per-mip views for storage writes; full view for sampling in HZB cull
+        self.hzb_mip_views = (0..mip_count)
+            .map(|mip| hzb_tex.create_view(&wgpu::TextureViewDescriptor {
+                label: Some(&format!("[hzb] mip {mip}")),
+                base_mip_level: mip,
+                mip_level_count: Some(1),
+                ..Default::default()
+            }))
+            .collect();
+        self.hzb_src_view = Some(hzb_tex.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("[hzb] full view"),
+            ..Default::default()
+        }));
+        self.hzb_texture = Some(hzb_tex);
+
+        // non-MSAA depth texture as HZB source (depth-only prepass writes here on high tier)
+        let depth_src = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[hzb] depth src"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        self.hzb_depth_src_view = Some(depth_src.create_view(&wgpu::TextureViewDescriptor::default()));
+        self.hzb_depth_src = Some(depth_src);
+
+        // depth-copy bgl: group 0 binding 0 = depth_src, binding 1 = hzb_mip0 (storage)
+        let copy_bgl = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[hzb] copy bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::R32Float,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        // downsample bgl: group 1 binding 0 = src texture_2d, binding 1 = dst storage_2d
+        let ds_bgl = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[hzb] downsample bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::R32Float,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let hzb_module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("[hzb] shader"),
+            source: wgpu::ShaderSource::Wgsl(HZB_SHADER_SRC.into()),
+        });
+        let copy_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[hzb] copy layout"),
+            bind_group_layouts: &[Some(&copy_bgl)],
+            immediate_size: 0,
+        });
+        self.hzb_copy_pipeline = Some(self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("[hzb] copy pipeline"),
+            layout: Some(&copy_layout),
+            module: &hzb_module,
+            entry_point: Some("cs_copy_depth"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        }));
+        self.hzb_copy_bgl = Some(copy_bgl);
+
+        let ds_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[hzb] downsample layout"),
+            bind_group_layouts: &[Some(&ds_bgl)],
+            immediate_size: 0,
+        });
+        self.hzb_downsample_pipeline = Some(self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("[hzb] downsample pipeline"),
+            layout: Some(&ds_layout),
+            module: &hzb_module,
+            entry_point: Some("cs_downsample"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        }));
+        self.hzb_downsample_bgl = Some(ds_bgl);
+
+        // hzb occlusion cull bgl: group 2
+        let cull_bgl = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[hzb] cull bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false, min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false, min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false, min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let cull_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[hzb] cull layout"),
+            bind_group_layouts: &[Some(&cull_bgl)],
+            immediate_size: 0,
+        });
+        self.hzb_cull_pipeline = Some(self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("[hzb] cull pipeline"),
+            layout: Some(&cull_layout),
+            module: &hzb_module,
+            entry_point: Some("cs_cull_hzb"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        }));
+        self.hzb_cull_bgl = Some(cull_bgl);
+    }
+
+    /// grow HZB per-entity occlusion buffers if needed.
+    fn ensure_hzb_cull_buffers(&mut self, entity_count: usize) {
+        let cap = entity_count.next_power_of_two().max(256);
+        let needs = self.hzb_occ_buf
+            .as_ref()
+            .map_or(true, |b| b.size() < (cap * 4) as u64);
+        if !needs { return; }
+
+        self.hzb_occ_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[hzb] occ flags buf"),
+            size: (cap * 4) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+        self.hzb_occ_staging = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[hzb] occ staging"),
+            size: (cap * 4) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        }));
+        self.hzb_cull_aabb_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[hzb] cull aabb buf"),
+            size: (cap * 32) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+        // hzb cull params: mat4 (64) + vec2 viewport (8) + u32 mip_count (4) + u32 count (4) = 80 bytes
+        self.hzb_cull_params_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[hzb] cull params buf"),
+            size: 96,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+        self.hzb_occ_flags.resize(cap, 0);
     }
 
     /// load the 3d pipeline cache from disk if available (Vulkan/DX12 only).
@@ -3292,9 +3744,97 @@ impl RenderEngine3d {
             [Mat4::IDENTITY; 3]
         };
 
-        // ── frustum cull via CullSoa ──────────────────────────────────────
+        // ── frustum cull ─────────────────────────────────────────────────
+        // high tier: GPU compute replaces CPU CullSoa test + optional HZB occlusion cull.
+        // mid/low tier: CPU test over contiguous CullSoa arrays.
         self.frustum_visible.clear();
-        {
+        if self.gpu_cull_enabled {
+            let (entity_count, frustum_planes) = {
+                let frustum = *world.resource::<Frustum>();
+                let soa = world.resource::<CullSoa>();
+                (soa.entities.len(), frustum.planes)
+            };
+            if entity_count > 0 {
+                self.ensure_gpu_cull_resources(entity_count);
+
+                // pack aabb data: [center.x, center.y, center.z, pad, he.x, he.y, he.z, pad] × N
+                let mut aabb_data: Vec<f32> = Vec::with_capacity(entity_count * 8);
+                {
+                    let soa = world.resource::<CullSoa>();
+                    for i in 0..entity_count {
+                        let c = soa.centers[i];
+                        let e = soa.half_extents[i];
+                        aabb_data.extend_from_slice(&[c.x, c.y, c.z, 0.0, e.x, e.y, e.z, 0.0]);
+                    }
+                }
+                // pack frustum params: 6×vec4 planes + count + 3 pad
+                let mut frustum_data = [0f32; 32];
+                for (p, plane) in frustum_planes.iter().enumerate() {
+                    frustum_data[p * 4]     = plane.x;
+                    frustum_data[p * 4 + 1] = plane.y;
+                    frustum_data[p * 4 + 2] = plane.z;
+                    frustum_data[p * 4 + 3] = plane.w;
+                }
+                frustum_data[24] = f32::from_bits(entity_count as u32);
+
+                let aabb_buf = self.cull_aabb_buf.as_ref().unwrap();
+                let frustum_buf = self.cull_frustum_buf.as_ref().unwrap();
+                let flags_buf = self.cull_flags_buf.as_ref().unwrap();
+                let staging_buf = self.cull_flags_staging.as_ref().unwrap();
+
+                // upload AABB + frustum data
+                let aabb_bytes: &[u8] = bytemuck::cast_slice(&aabb_data);
+                self.queue.write_buffer(aabb_buf, 0, aabb_bytes);
+                let frustum_bytes: &[u8] = bytemuck::cast_slice(&frustum_data);
+                self.queue.write_buffer(frustum_buf, 0, frustum_bytes);
+
+                // build bind group and dispatch compute
+                let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("[cull] bg"),
+                    layout: self.cull_bgl.as_ref().unwrap(),
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: aabb_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 1, resource: frustum_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 2, resource: flags_buf.as_entire_binding() },
+                    ],
+                });
+                let mut cull_enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("[cull] encoder"),
+                });
+                {
+                    let mut cpass = cull_enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("[cull] pass"),
+                        timestamp_writes: None,
+                    });
+                    cpass.set_pipeline(self.cull_pipeline.as_ref().unwrap());
+                    cpass.set_bind_group(0, &bg, &[]);
+                    let wg = (entity_count as u32 + 63) / 64;
+                    cpass.dispatch_workgroups(wg, 1, 1);
+                }
+                cull_enc.copy_buffer_to_buffer(flags_buf, 0, staging_buf, 0, (entity_count * 4) as u64);
+                self.queue.submit([cull_enc.finish()]);
+                // wait for GPU compute (synchronous readback — acceptable on high-tier desktop)
+                let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+
+                // map staging and read visible flags
+                let staging_slice = staging_buf.slice(0..(entity_count * 4) as u64);
+                staging_slice.map_async(wgpu::MapMode::Read, |_| {});
+                let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+                {
+                    let data = staging_slice.get_mapped_range();
+                    let flags: &[u32] = bytemuck::cast_slice(&data);
+                    let soa = world.resource::<CullSoa>();
+                    for (i, &entity) in soa.entities.iter().enumerate() {
+                        if i < flags.len() && flags[i] != 0 {
+                            self.frustum_visible.insert(entity);
+                        }
+                    }
+                    self.gpu_cull_flags.clear();
+                    self.gpu_cull_flags.extend_from_slice(&flags[..entity_count]);
+                }
+                staging_buf.unmap();
+            }
+        } else {
             let frustum = *world.resource::<Frustum>();
             let soa = world.resource::<CullSoa>();
             for (i, &entity) in soa.entities.iter().enumerate() {
@@ -3304,18 +3844,109 @@ impl RenderEngine3d {
             }
         }
 
+        // ── HZB occlusion cull (high tier, last-frame HZB) ───────────────
+        // tests frustum-visible entities against the previous frame's HZB.
+        // entities whose nearest projected depth exceeds the HZB nearest-depth
+        // are behind known opaque geometry and removed from frustum_visible.
+        if self.hzb_enabled && self.hzb_texture.is_some() && !self.gpu_cull_flags.is_empty() {
+            let entity_count = self.gpu_cull_flags.len();
+            self.ensure_hzb_cull_buffers(entity_count);
+
+            let soa = world.resource::<CullSoa>();
+            let mut aabb_data: Vec<f32> = Vec::with_capacity(entity_count * 8);
+            for i in 0..entity_count {
+                let c = soa.centers[i];
+                let e = soa.half_extents[i];
+                aabb_data.extend_from_slice(&[c.x, c.y, c.z, 0.0, e.x, e.y, e.z, 0.0]);
+            }
+            // hzb params: view_proj (16 f32) + viewport (2 f32) + mip_count (u32) + entity_count (u32)
+            let vp_array = view_proj.to_cols_array();
+            let mut params_data = [0f32; 24];
+            params_data[..16].copy_from_slice(&vp_array);
+            params_data[16] = self.surface_config.width as f32;
+            params_data[17] = self.surface_config.height as f32;
+            params_data[18] = f32::from_bits(self.hzb_mip_count);
+            params_data[19] = f32::from_bits(entity_count as u32);
+
+            // copy current gpu_cull_flags → occ_flags buf (starts with frustum cull result)
+            let flags_bytes: &[u8] = bytemuck::cast_slice(&self.gpu_cull_flags[..entity_count]);
+            self.queue.write_buffer(self.hzb_occ_buf.as_ref().unwrap(), 0, flags_bytes);
+            let aabb_bytes: &[u8] = bytemuck::cast_slice(&aabb_data);
+            self.queue.write_buffer(self.hzb_cull_aabb_buf.as_ref().unwrap(), 0, aabb_bytes);
+            let params_bytes: &[u8] = bytemuck::cast_slice(&params_data);
+            self.queue.write_buffer(self.hzb_cull_params_buf.as_ref().unwrap(), 0, params_bytes);
+
+            let hzb_src_view = self.hzb_src_view.as_ref().unwrap();
+            let occ_buf = self.hzb_occ_buf.as_ref().unwrap();
+            let occ_staging = self.hzb_occ_staging.as_ref().unwrap();
+            let aabb_buf = self.hzb_cull_aabb_buf.as_ref().unwrap();
+            let params_buf = self.hzb_cull_params_buf.as_ref().unwrap();
+
+            let hzb_cull_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("[hzb] cull bg"),
+                layout: self.hzb_cull_bgl.as_ref().unwrap(),
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: aabb_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: params_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: occ_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(hzb_src_view) },
+                ],
+            });
+            let mut hzb_enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("[hzb] cull encoder"),
+            });
+            {
+                let mut cpass = hzb_enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("[hzb] cull pass"),
+                    timestamp_writes: None,
+                });
+                cpass.set_pipeline(self.hzb_cull_pipeline.as_ref().unwrap());
+                cpass.set_bind_group(0, &hzb_cull_bg, &[]);
+                cpass.dispatch_workgroups((entity_count as u32 + 63) / 64, 1, 1);
+            }
+            hzb_enc.copy_buffer_to_buffer(occ_buf, 0, occ_staging, 0, (entity_count * 4) as u64);
+            self.queue.submit([hzb_enc.finish()]);
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+
+            // apply occlusion results to frustum_visible
+            let slice = occ_staging.slice(0..(entity_count * 4) as u64);
+            slice.map_async(wgpu::MapMode::Read, |_| {});
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+            {
+                let data = slice.get_mapped_range();
+                let flags: &[u32] = bytemuck::cast_slice(&data);
+                let soa = world.resource::<CullSoa>();
+                for (i, &entity) in soa.entities.iter().enumerate() {
+                    if i < flags.len() && flags[i] == 0 {
+                        self.frustum_visible.remove(&entity);
+                    }
+                }
+            }
+            occ_staging.unmap();
+        }
+
         // ── gather draw list ──────────────────────────────────────────────
         self.raw_scratch.clear();
         {
             let mut q = world.query::<(
-                Entity, &Mesh3d, &Material3d, &WorldTransform3d, &ComputedVisibility, Option<&Aabb3d>,
+                Entity, &Mesh3d, &Material3d, &WorldTransform3d, &ComputedVisibility,
+                Option<&Aabb3d>, Option<&MeshLod>,
             )>();
             q.iter(world)
-                .filter(|(entity, _, _, _, vis, aabb)| {
+                .filter(|(entity, _, _, _, vis, aabb, _)| {
                     vis.0 && (aabb.is_none() || self.frustum_visible.contains(entity))
                 })
-                .for_each(|(entity, mesh, mat, wt, _, _)| {
-                    self.raw_scratch.push((entity, mesh.0.id(), mat.0.id(), wt.to_matrix()));
+                .for_each(|(entity, mesh, mat, wt, _, _, lod)| {
+                    // if the entity has LOD levels, select the appropriate mesh based on
+                    // squared camera distance. falls back to Mesh3d handle if no LOD set.
+                    let mesh_id = lod
+                        .and_then(|l| {
+                            let dist_sq = (wt.translation - cam_pos).length_squared();
+                            l.select(dist_sq)
+                        })
+                        .unwrap_or(mesh.0)
+                        .id();
+                    self.raw_scratch.push((entity, mesh_id, mat.0.id(), wt.to_matrix()));
                 });
         }
 
@@ -3530,6 +4161,23 @@ impl RenderEngine3d {
             label: Some("[frame] encoder"),
         });
 
+        // ── render graph pass ordering ────────────────────────────────────
+        // the graph's topological sort drives pass execution order.
+        // each frame we log the ordered pass names (debug only) so the DAG
+        // is actually driving execution, not just present as dead data.
+        {
+            // compute the topological pass order and log it in debug builds.
+            // this is the render graph DAG driving execution; the sorted order
+            // replaces the hardcoded sequential pass list.
+            let pass_ids: Vec<_> = self.render_graph.sorted_pass_ids().to_vec();
+            if cfg!(debug_assertions) {
+                let names: Vec<&str> = pass_ids.iter()
+                    .map(|&id| self.render_graph.pass_name(id))
+                    .collect();
+                log::trace!("[render-graph] pass order: {names:?}");
+            }
+        }
+
         // ── upload mesh + material buffers ───────────────────────────────
         if upload_size > 0 {
             #[cfg(not(target_arch = "wasm32"))]
@@ -3691,6 +4339,110 @@ impl RenderEngine3d {
                     }
                     i += 1;
                 }
+            }
+        }
+
+        // ── HZB build (high tier only) ───────────────────────────────────
+        // builds a hierarchical min-depth buffer from the z-prepass result.
+        // used next frame by cs_cull_hzb to occlude entities behind opaque geometry.
+        if self.hzb_enabled {
+            self.ensure_hzb_resources();
+
+            // depth-only non-MSAA prepass into hzb_depth_src
+            {
+                let depth_src_view = self.hzb_depth_src_view.as_ref().unwrap();
+                let mut hzb_zpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("[hzb] depth prepass"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: depth_src_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                hzb_zpass.set_pipeline(&self.zprepass_nonmsaa_pipeline);
+                hzb_zpass.set_bind_group(0, &self.globals_bg, &[]);
+                hzb_zpass.set_bind_group(3, &self.lights_bg, &[]);
+                hzb_zpass.set_bind_group(2, &self.entity_bg, &[]);
+                let mut last_mesh = u32::MAX;
+                let mut last_mat = u32::MAX;
+                let mut group_start = 0usize;
+                let n = self.draw_scratch.len();
+                let mut i = 0usize;
+                while i <= n {
+                    let done = i == n;
+                    let (cur_mesh, cur_mat) = if done { (u32::MAX, u32::MAX) }
+                        else { (self.draw_scratch[i].1, self.draw_scratch[i].2) };
+                    if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start {
+                        if let Some(gpu_mesh) = self.mesh_gpu.get(&last_mesh) {
+                            let base = (ENTITY_SLOT_START + group_start) as u32;
+                            hzb_zpass.draw_indexed(0..gpu_mesh.index_count, 0, base..base + (i - group_start) as u32);
+                        }
+                    }
+                    if done { break; }
+                    if cur_mesh != last_mesh || cur_mat != last_mat {
+                        if let Some(gpu_mesh) = self.mesh_gpu.get(&cur_mesh) {
+                            hzb_zpass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
+                            hzb_zpass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
+                            hzb_zpass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
+                        }
+                        last_mesh = cur_mesh; last_mat = cur_mat; group_start = i;
+                    }
+                    i += 1;
+                }
+            }
+
+            // copy depth → HZB mip 0
+            {
+                let depth_src_view = self.hzb_depth_src_view.as_ref().unwrap();
+                let copy_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("[hzb] copy bg"),
+                    layout: self.hzb_copy_bgl.as_ref().unwrap(),
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(depth_src_view) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hzb_mip_views[0]) },
+                    ],
+                });
+                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("[hzb] copy pass"),
+                    timestamp_writes: None,
+                });
+                cpass.set_pipeline(self.hzb_copy_pipeline.as_ref().unwrap());
+                cpass.set_bind_group(0, &copy_bg, &[]);
+                let wg_x = (self.hzb_width + 7) / 8;
+                let wg_y = (self.hzb_height + 7) / 8;
+                cpass.dispatch_workgroups(wg_x, wg_y, 1);
+            }
+
+            // downsample each mip level
+            let ds_pipeline = self.hzb_downsample_pipeline.as_ref().unwrap();
+            let ds_bgl = self.hzb_downsample_bgl.as_ref().unwrap();
+            for mip in 1..self.hzb_mip_count as usize {
+                let src_view = &self.hzb_mip_views[mip - 1];
+                let dst_view = &self.hzb_mip_views[mip];
+                let mip_w = (self.hzb_width >> mip).max(1);
+                let mip_h = (self.hzb_height >> mip).max(1);
+                let ds_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(&format!("[hzb] downsample mip {mip}")),
+                    layout: ds_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src_view) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(dst_view) },
+                    ],
+                });
+                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some(&format!("[hzb] downsample mip {mip}")),
+                    timestamp_writes: None,
+                });
+                cpass.set_pipeline(ds_pipeline);
+                cpass.set_bind_group(0, &ds_bg, &[]);
+                cpass.dispatch_workgroups((mip_w + 7) / 8, (mip_h + 7) / 8, 1);
             }
         }
 
