@@ -100,10 +100,11 @@ pub use lunar_3d::{
 #[cfg(feature = "3d")]
 pub use lunar_render_3d::{QualityPreset, QualitySettings, RenderConfig3d, RenderEngine3d, RenderInfo3d, RenderPlugin3d, Sky};
 
-// lunar-bsp types — BVH spatial acceleration and portal culling (3d feature)
+// lunar-bsp types — BVH spatial acceleration, portal culling, and BSP runtime (3d feature)
 #[cfg(feature = "3d")]
 pub use lunar_bsp::{
     Area, BspPlugin, Bvh, BvhPlugin, BvhVisible, BvhNode,
+    BspLevel,
     Portal, PortalCulling, PortalPlugin, VisibleAreas,
     portal::{CameraArea, PortalOpen},
 };

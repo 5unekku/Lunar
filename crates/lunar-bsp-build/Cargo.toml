@@ -1,14 +1,14 @@
 [package]
-name = "lunar-bsp"
+name = "lunar-bsp-build"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "BVH spatial acceleration and portal culling for the Lunar engine"
+description = "offline BSP tree and PVS compiler for Lunar levels"
 
 [dependencies]
-bevy_ecs   = { workspace = true }
+lunar-bsp  = { path = "../lunar-bsp" }
 lunar-math = { path = "../lunar-math" }
-lunar-3d   = { path = "../lunar-3d" }
-lunar-core = { path = "../lunar-core" }
 serde      = { version = "1", features = ["derive"] }
 bincode    = "1"
+rayon      = { workspace = true }
+gltf       = "1"

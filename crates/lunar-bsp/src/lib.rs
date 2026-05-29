@@ -31,9 +31,11 @@
 //! system only prunes entities that are tagged, leaving untagged entities unaffected).
 
 pub mod bvh;
+pub mod level;
 pub mod portal;
 pub mod plugin;
 
 pub use bvh::{Bvh, BvhNode, BvhPlugin, BvhVisible};
+pub use level::{BspBlob, BspLevel, BspNode, PortalData};
 pub use portal::{Area, Portal, PortalCulling, PortalPlugin, VisibleAreas};
 pub use plugin::BspPlugin;
