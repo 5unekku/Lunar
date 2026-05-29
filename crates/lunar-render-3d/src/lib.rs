@@ -604,9 +604,11 @@ pub struct RenderEngine3d {
     transparent_scratch: Vec<usize>,
 
     // pipeline cache — persists compiled shader binaries across runs (Vulkan/DX12 only)
+    #[cfg(not(target_arch = "wasm32"))]
     pipeline_cache: Option<wgpu::PipelineCache>,
 
-    // staging belt — explicit frame-temporary upload staging for large buffers
+    // staging belt — explicit frame-temporary upload staging for large buffers (native only)
+    #[cfg(not(target_arch = "wasm32"))]
     staging_belt: wgpu::util::StagingBelt,
 
     // per-frame scratch — cleared at frame start, never reallocated in steady state
@@ -916,7 +918,13 @@ impl RenderEngine3d {
 
         // ── pipeline cache (Vulkan/DX12 only) ─────────────────────────────
         // load compiled shader binaries from previous run to skip recompilation.
+        #[cfg(not(target_arch = "wasm32"))]
         let pipeline_cache = Self::load_pipeline_cache(&device);
+        // PipelineCache is Vulkan/DX12 only — WebGPU has no equivalent
+        #[cfg(not(target_arch = "wasm32"))]
+        let pipeline_cache_ref: Option<&wgpu::PipelineCache> = pipeline_cache.as_ref();
+        #[cfg(target_arch = "wasm32")]
+        let pipeline_cache_ref: Option<&wgpu::PipelineCache> = None;
 
         // ── pipelines ──────────────────────────────────────────────────────
 
@@ -993,7 +1001,7 @@ impl RenderEngine3d {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState { count: msaa_samples, ..Default::default() },
-            cache: pipeline_cache.as_ref(),
+            cache: pipeline_cache_ref,
             multiview_mask: None,
         });
 
@@ -1030,7 +1038,7 @@ impl RenderEngine3d {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState { count: msaa_samples, ..Default::default() },
-            cache: pipeline_cache.as_ref(),
+            cache: pipeline_cache_ref,
             multiview_mask: None,
         });
 
@@ -1060,7 +1068,7 @@ impl RenderEngine3d {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState { count: msaa_samples, ..Default::default() },
-            cache: pipeline_cache.as_ref(),
+            cache: pipeline_cache_ref,
             multiview_mask: None,
         });
 
@@ -1089,7 +1097,7 @@ impl RenderEngine3d {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            cache: pipeline_cache.as_ref(),
+            cache: pipeline_cache_ref,
             multiview_mask: None,
         });
 
@@ -1127,7 +1135,7 @@ impl RenderEngine3d {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState { count: msaa_samples, ..Default::default() },
-            cache: pipeline_cache.as_ref(),
+            cache: pipeline_cache_ref,
             multiview_mask: None,
         });
 
@@ -1226,7 +1234,7 @@ impl RenderEngine3d {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            cache: pipeline_cache.as_ref(),
+            cache: pipeline_cache_ref,
             multiview_mask: None,
         });
 
@@ -1260,7 +1268,7 @@ impl RenderEngine3d {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            cache: pipeline_cache.as_ref(),
+            cache: pipeline_cache_ref,
             multiview_mask: None,
         });
 
@@ -1393,7 +1401,7 @@ impl RenderEngine3d {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            cache: pipeline_cache.as_ref(),
+            cache: pipeline_cache_ref,
             multiview_mask: None,
         });
 
@@ -1493,7 +1501,7 @@ impl RenderEngine3d {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            cache: pipeline_cache.as_ref(),
+            cache: pipeline_cache_ref,
             multiview_mask: None,
         });
 
@@ -1617,7 +1625,7 @@ impl RenderEngine3d {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            cache: pipeline_cache.as_ref(),
+            cache: pipeline_cache_ref,
             multiview_mask: None,
         });
 
@@ -1713,7 +1721,7 @@ impl RenderEngine3d {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            cache: pipeline_cache.as_ref(),
+            cache: pipeline_cache_ref,
             multiview_mask: None,
         });
 
@@ -1796,7 +1804,7 @@ impl RenderEngine3d {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            cache: pipeline_cache.as_ref(),
+            cache: pipeline_cache_ref,
             multiview_mask: None,
         });
         // atmos_bg0 needs gtao_depth_tex (created in GTAO section); assigned after that section.
@@ -1903,7 +1911,7 @@ impl RenderEngine3d {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState { count: msaa_samples, ..Default::default() },
-            cache: pipeline_cache.as_ref(),
+            cache: pipeline_cache_ref,
             multiview_mask: None,
         });
 
@@ -1988,7 +1996,7 @@ impl RenderEngine3d {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            cache: pipeline_cache.as_ref(),
+            cache: pipeline_cache_ref,
             multiview_mask: None,
         });
         // decal_bg0 needs gtao_depth_tex; assigned after GTAO section.
@@ -2109,7 +2117,7 @@ impl RenderEngine3d {
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
-            cache: pipeline_cache.as_ref(),
+            cache: pipeline_cache_ref,
             multiview_mask: None,
         });
 
@@ -2178,7 +2186,7 @@ impl RenderEngine3d {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(), // always sample_count=1
-            cache: pipeline_cache.as_ref(),
+            cache: pipeline_cache_ref,
             multiview_mask: None,
         });
 
@@ -2275,7 +2283,7 @@ impl RenderEngine3d {
                 primitive: wgpu::PrimitiveState::default(),
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
-                cache: pipeline_cache.as_ref(),
+                cache: pipeline_cache_ref,
                 multiview_mask: None,
             })
         };
@@ -2467,7 +2475,7 @@ impl RenderEngine3d {
             module: &particle_sim_shader,
             entry_point: Some("cs_simulate"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: pipeline_cache.as_ref(),
+            cache: pipeline_cache_ref,
         });
 
         let particle_render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -2508,7 +2516,7 @@ impl RenderEngine3d {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState { count: msaa_samples, ..Default::default() },
-            cache: pipeline_cache.as_ref(),
+            cache: pipeline_cache_ref,
             multiview_mask: None,
         });
 
@@ -2525,6 +2533,7 @@ impl RenderEngine3d {
         );
 
         // clone before move into struct — wgpu::Device is Arc-backed, clone is cheap
+        #[cfg(not(target_arch = "wasm32"))]
         let device_for_belt = device.clone();
 
         Self {
@@ -2654,8 +2663,10 @@ impl RenderEngine3d {
             terrain_globals_bg,
             terrain_params_bgl,
             terrain_gpu: HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             pipeline_cache,
             // 4 MiB chunk — larger than any single write, handles most scene sizes
+            #[cfg(not(target_arch = "wasm32"))]
             staging_belt: wgpu::util::StagingBelt::new(device_for_belt, 4 * 1024 * 1024),
             frame_time_ema_ms: 16.67,
             resolution_scale: 1.0,
@@ -3507,23 +3518,27 @@ impl RenderEngine3d {
             label: Some("[frame] encoder"),
         });
 
-        // ── upload mesh + material buffers via StagingBelt ────────────────
-        // StagingBelt batches these large per-frame uploads into GPU-side staging memory,
-        // issuing a single copy command per buffer instead of multiple queue.write_buffer calls.
+        // ── upload mesh + material buffers ───────────────────────────────
         if upload_size > 0 {
-            let entity_size = wgpu::BufferSize::new(upload_size).unwrap();
-            let material_size = wgpu::BufferSize::new(upload_size).unwrap();
+            #[cfg(not(target_arch = "wasm32"))]
             {
+                // StagingBelt batches large per-frame uploads into GPU-side staging memory
+                let entity_size = wgpu::BufferSize::new(upload_size).unwrap();
+                let material_size = wgpu::BufferSize::new(upload_size).unwrap();
                 let mut view = self.staging_belt.write_buffer(
                     &mut encoder, &self.entity_buf, 0, entity_size,
                 );
                 view.copy_from_slice(&self.uniform_staging[..upload_size as usize]);
-            }
-            {
+                drop(view);
                 let mut view = self.staging_belt.write_buffer(
                     &mut encoder, &self.material_buf, 0, material_size,
                 );
                 view.copy_from_slice(&self.material_staging[..upload_size as usize]);
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                self.queue.write_buffer(&self.entity_buf, 0, &self.uniform_staging[..upload_size as usize]);
+                self.queue.write_buffer(&self.material_buf, 0, &self.material_staging[..upload_size as usize]);
             }
         }
 
@@ -4468,10 +4483,11 @@ impl RenderEngine3d {
             pass.draw(0..3, 0..1);
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
         self.staging_belt.finish();
         self.queue.submit(Some(encoder.finish()));
         frame.present();
-        // recycle staging belt memory for the next frame
+        #[cfg(not(target_arch = "wasm32"))]
         self.staging_belt.recall();
         draw_calls
     }
