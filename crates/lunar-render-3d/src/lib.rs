@@ -38,8 +38,8 @@ use std::collections::{HashMap, HashSet};
 use bevy_ecs::prelude::*;
 use lunar_3d::{
     Aabb3d, ActiveCamera3d, AmbientLight, Camera3d, ComputedVisibility, CullSoa, DirectionalLight,
-    Frustum, IndexBuffer, IrradianceSH, Material3d, Mesh3d, MeshData, MeshRegistry, PointLight,
-    Projection, ShadowCaster, Vertex3d, ViewportAspect, WorldTransform3d,
+    Frustum, IndexBuffer, IrradianceSH, Material3d, Mesh3d, MeshData, MeshRegistry, ParticleEmitter,
+    PointLight, Projection, ShadowCaster, Vertex3d, ViewportAspect, WorldTransform3d,
 };
 use lunar_3d::primitives::{quad_mesh, sphere_mesh};
 use lunar_core::{App, GamePlugin, UpdateStage};
@@ -51,10 +51,12 @@ const BLOOM_SHADER_SRC: &str = include_str!("bloom.wgsl");
 const COMPOSITE_SHADER_SRC: &str = include_str!("composite.wgsl");
 const GTAO_SHADER_SRC: &str = include_str!("gtao.wgsl");
 
-const FXAA_SHADER_SRC: &str = include_str!("fxaa.wgsl");
-const SSR_SHADER_SRC:    &str = include_str!("ssr.wgsl");
-const FOG_SHADER_SRC:    &str = include_str!("volumetric_fog.wgsl");
-const ATMOS_SHADER_SRC:  &str = include_str!("atmos.wgsl");
+const FXAA_SHADER_SRC:          &str = include_str!("fxaa.wgsl");
+const SSR_SHADER_SRC:           &str = include_str!("ssr.wgsl");
+const FOG_SHADER_SRC:           &str = include_str!("volumetric_fog.wgsl");
+const ATMOS_SHADER_SRC:         &str = include_str!("atmos.wgsl");
+const PARTICLE_SIM_SHADER_SRC:  &str = include_str!("particle_sim.wgsl");
+const PARTICLE_RENDER_SHADER_SRC: &str = include_str!("particle_render.wgsl");
 
 const SKY_RADIUS: f32 = 900.0;
 const SUN_Y: f32 = 895.0;
@@ -119,6 +121,12 @@ const FOG_PARAMS_SIZE: u64 = 128;
 /// atmospheric scattering params UBO: sun_dir(12)+sun_intensity(4)+rayleigh(12)+mie(4)+scales(16)+radii+exposure+pads = 64 bytes.
 const ATMOS_PARAMS_SIZE: u64 = 64;
 
+/// particle sim params UBO: delta_time(4)+gravity(4)+alive_count(4)+pad(4) = 16 bytes.
+const PARTICLE_SIM_PARAMS_SIZE: u64 = 16;
+
+/// one particle in the GPU storage buffer: position(12)+life(4)+vel(12)+maxlife(4)+col_s(16)+col_e(16)+size_s(4)+size_e(4)+pad×2 = 80 bytes.
+const PARTICLE_STRIDE: u64 = 80;
+
 /// stride for dynamic UBO slots — must be ≥ min_uniform_buffer_offset_alignment (256).
 const UNIFORM_STRIDE: u64 = 256;
 
@@ -139,6 +147,65 @@ struct GpuMesh {
     ibuf: wgpu::Buffer,
     index_count: u32,
     index_fmt: wgpu::IndexFormat,
+}
+
+/// per-particle GPU layout — must match the WGSL Particle struct exactly.
+#[repr(C)]
+struct GpuParticle {
+    position:     [f32; 3],
+    lifetime:     f32,
+    velocity:     [f32; 3],
+    max_lifetime: f32,
+    color_start:  [f32; 4],
+    color_end:    [f32; 4],
+    size_start:   f32,
+    size_end:     f32,
+    _pad0:        f32,
+    _pad1:        f32,
+}
+
+/// CPU-side particle tracking for spawn management.
+struct CpuParticle {
+    position:     Vec3,
+    velocity:     Vec3,
+    lifetime:     f32,
+    max_lifetime: f32,
+    color_start:  [f32; 4],
+    color_end:    [f32; 4],
+    size_start:   f32,
+    size_end:     f32,
+    alive:        bool,
+}
+
+impl CpuParticle {
+    fn dead() -> Self {
+        Self {
+            position: Vec3::ZERO,
+            velocity: Vec3::ZERO,
+            lifetime: 0.0,
+            max_lifetime: 1.0,
+            color_start: [0.0; 4],
+            color_end: [0.0; 4],
+            size_start: 0.0,
+            size_end: 0.0,
+            alive: false,
+        }
+    }
+
+    fn as_gpu(&self) -> GpuParticle {
+        GpuParticle {
+            position: [self.position.x, self.position.y, self.position.z],
+            lifetime: self.lifetime,
+            velocity: [self.velocity.x, self.velocity.y, self.velocity.z],
+            max_lifetime: self.max_lifetime,
+            color_start: self.color_start,
+            color_end: self.color_end,
+            size_start: self.size_start,
+            size_end: self.size_end,
+            _pad0: 0.0,
+            _pad1: 0.0,
+        }
+    }
 }
 
 // ── byte helpers ───────────────────────────────────────────────────────────
@@ -469,6 +536,19 @@ pub struct RenderEngine3d {
     fog_bg1: wgpu::BindGroup,
     fog_params_buf: wgpu::Buffer,
     fog_pipeline: wgpu::RenderPipeline,
+
+    // particle system — GPU compute simulation (mid+ tier); CPU fallback on low tier
+    particles_enabled: bool,
+    particle_cap: u32,
+    particle_buf: wgpu::Buffer,
+    particle_sim_params_buf: wgpu::Buffer,
+    particle_sim_bgl: wgpu::BindGroupLayout,
+    particle_sim_bg: wgpu::BindGroup,
+    particle_sim_pipeline: wgpu::ComputePipeline,
+    particle_render_bgl: wgpu::BindGroupLayout,
+    particle_render_bg: wgpu::BindGroup,
+    particle_render_pipeline: wgpu::RenderPipeline,
+    particle_cpu: Vec<CpuParticle>,
 
     // transparent pass — alpha < 1.0 entities drawn back-to-front after opaques
     transparent_pipeline: wgpu::RenderPipeline,
@@ -1923,6 +2003,149 @@ impl RenderEngine3d {
             ],
         });
 
+        // ── particle system (compute simulation, mid+ tier) ───────────────
+
+        let particles_enabled = render_tier != RenderTier::LowGles;
+        let particle_cap = quality.particle_cap.max(1);
+
+        let particle_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[particles] storage buffer"),
+            size: particle_cap as u64 * PARTICLE_STRIDE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let particle_sim_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[particles] sim params buffer"),
+            size: PARTICLE_SIM_PARAMS_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let particle_sim_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[particles] sim bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(PARTICLE_STRIDE),
+                    }, count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(PARTICLE_SIM_PARAMS_SIZE),
+                    }, count: None,
+                },
+            ],
+        });
+
+        let particle_sim_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[particles] sim bg"),
+            layout: &particle_sim_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: particle_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: particle_sim_params_buf.as_entire_binding() },
+            ],
+        });
+
+        let particle_render_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[particles] render bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(GLOBALS_SIZE),
+                    }, count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(PARTICLE_STRIDE),
+                    }, count: None,
+                },
+            ],
+        });
+
+        let particle_render_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[particles] render bg"),
+            layout: &particle_render_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: globals_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: particle_buf.as_entire_binding() },
+            ],
+        });
+
+        let particle_sim_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("[particles] sim shader"),
+            source: wgpu::ShaderSource::Wgsl(PARTICLE_SIM_SHADER_SRC.into()),
+        });
+        let particle_sim_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[particles] sim pipeline layout"),
+            bind_group_layouts: &[Some(&particle_sim_bgl)],
+            immediate_size: 0,
+        });
+        let particle_sim_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("[particles] sim compute pipeline"),
+            layout: Some(&particle_sim_pipeline_layout),
+            module: &particle_sim_shader,
+            entry_point: Some("cs_simulate"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: pipeline_cache.as_ref(),
+        });
+
+        let particle_render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("[particles] render shader"),
+            source: wgpu::ShaderSource::Wgsl(PARTICLE_RENDER_SHADER_SRC.into()),
+        });
+        let particle_render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[particles] render pipeline layout"),
+            bind_group_layouts: &[Some(&particle_render_bgl)],
+            immediate_size: 0,
+        });
+        let particle_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("[particles] render pipeline"),
+            layout: Some(&particle_render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &particle_render_shader, entry_point: Some("vs_main"),
+                buffers: &[], compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &particle_render_shader, entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: HDR_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState { count: msaa_samples, ..Default::default() },
+            cache: pipeline_cache.as_ref(),
+            multiview_mask: None,
+        });
+
+        let particle_cpu: Vec<CpuParticle> = (0..particle_cap).map(|_| CpuParticle::dead()).collect();
+
         // ── sky meshes ─────────────────────────────────────────────────────
 
         let dome_mesh = Self::upload_mesh_data(&device, &queue, &sphere_mesh(SKY_RADIUS, 32, 16));
@@ -2035,6 +2258,17 @@ impl RenderEngine3d {
             atmos_bg1,
             atmos_params_buf,
             atmos_pipeline,
+            particles_enabled,
+            particle_cap,
+            particle_buf,
+            particle_sim_params_buf,
+            particle_sim_bgl,
+            particle_sim_bg,
+            particle_sim_pipeline,
+            particle_render_bgl,
+            particle_render_bg,
+            particle_render_pipeline,
+            particle_cpu,
             pipeline_cache,
             // 4 MiB chunk — larger than any single write, handles most scene sizes
             staging_belt: wgpu::util::StagingBelt::new(device_for_belt, 4 * 1024 * 1024),
@@ -3053,6 +3287,120 @@ impl RenderEngine3d {
                     pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
                     pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
                     draw_calls += 1;
+                }
+            }
+        }
+
+        // ── particle pass (mid+ tier: compute sim → billboard render) ────
+        if self.particles_enabled {
+            let delta = world.resource::<lunar_core::Time>().delta_seconds();
+
+            // gather emitters from ECS and manage CPU-side spawn
+            let mut emitter_query = world.query::<(&ParticleEmitter, &WorldTransform3d)>();
+            let mut to_spawn: Vec<CpuParticle> = Vec::new();
+            for (emitter, wt) in emitter_query.iter(world) {
+                if !emitter.active { continue; }
+                let new_count = ((emitter.emission_rate * delta) as u32).min(emitter.max_particles);
+                let pos = wt.translation;
+                let fwd = wt.forward();
+                for n in 0..new_count {
+                    let angle = emitter.spread_angle;
+                    let t = n as f32 / new_count.max(1) as f32;
+                    let theta = t * std::f32::consts::TAU;
+                    let spread = Vec3::new(theta.cos() * angle, 0.0, theta.sin() * angle);
+                    let direction = (fwd + spread).normalize();
+                    to_spawn.push(CpuParticle {
+                        position: pos,
+                        velocity: direction * emitter.initial_speed,
+                        lifetime: emitter.particle_lifetime,
+                        max_lifetime: emitter.particle_lifetime,
+                        color_start: [emitter.color_start.r, emitter.color_start.g, emitter.color_start.b, emitter.color_start.a],
+                        color_end: [emitter.color_end.r, emitter.color_end.g, emitter.color_end.b, emitter.color_end.a],
+                        size_start: emitter.size_start,
+                        size_end: emitter.size_end,
+                        alive: true,
+                    });
+                }
+            }
+
+            // fill dead slots with newly spawned particles
+            let mut new_gpu_writes: Vec<(u32, GpuParticle)> = Vec::new();
+            let mut spawn_iter = to_spawn.into_iter();
+            for (slot, cpu) in self.particle_cpu.iter_mut().enumerate() {
+                if cpu.alive { continue; }
+                let Some(spawned) = spawn_iter.next() else { break; };
+                new_gpu_writes.push((slot as u32, spawned.as_gpu()));
+                *cpu = spawned;
+            }
+
+            // upload newly spawned particles to their slots in the storage buffer
+            for (slot, gpu_particle) in &new_gpu_writes {
+                let offset = *slot as u64 * PARTICLE_STRIDE;
+                let bytes = unsafe {
+                    std::slice::from_raw_parts(
+                        gpu_particle as *const GpuParticle as *const u8,
+                        PARTICLE_STRIDE as usize,
+                    )
+                };
+                self.queue.write_buffer(&self.particle_buf, offset, bytes);
+            }
+
+            // count alive particles (after CPU lifetime update that happens via compute)
+            let alive_count = self.particle_cpu.iter().filter(|p| p.alive).count() as u32;
+            if alive_count > 0 {
+                let gravity = 9.8_f32;
+                let sim_params: [f32; 4] = [delta, gravity, f32::from_bits(alive_count), 0.0];
+                self.queue.write_buffer(&self.particle_sim_params_buf, 0, unsafe { slice_as_bytes(&sim_params) });
+
+                // compute pass: simulate alive particles
+                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("[particles] sim pass"),
+                    timestamp_writes: None,
+                });
+                cpass.set_pipeline(&self.particle_sim_pipeline);
+                cpass.set_bind_group(0, &self.particle_sim_bg, &[]);
+                let wg = (alive_count + 63) / 64;
+                cpass.dispatch_workgroups(wg, 1, 1);
+                drop(cpass);
+
+                // particle render pass: billboard quads into HDR (alpha-blended, MSAA)
+                let (color_target, resolve_target) = match &self.msaa_color_view {
+                    Some(msaa) => (msaa as &wgpu::TextureView, Some(&self.hdr_view as &wgpu::TextureView)),
+                    None => (&self.hdr_view as &wgpu::TextureView, None),
+                };
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("[particles] render pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: color_target,
+                        resolve_target,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.depth_view,
+                        depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Discard }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.particle_render_pipeline);
+                pass.set_bind_group(0, &self.particle_render_bg, &[]);
+                pass.draw(0..6, 0..alive_count);
+                draw_calls += 1;
+            }
+
+            // update CPU lifetime state (particles were simulated on GPU; mirror the aging here)
+            for cpu in &mut self.particle_cpu {
+                if cpu.alive {
+                    cpu.lifetime -= delta;
+                    if cpu.lifetime <= 0.0 {
+                        cpu.alive = false;
+                    }
                 }
             }
         }

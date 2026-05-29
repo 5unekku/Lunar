@@ -37,6 +37,7 @@ pub mod bundles;
 pub mod collision;
 pub mod fog;
 pub mod mesh_registry;
+pub mod particles;
 pub mod primitives;
 pub mod visibility;
 
@@ -61,6 +62,7 @@ pub use collision::{
     build_collision_world_3d, raycast_3d,
 };
 pub use fog::{Fog, FogFalloff};
+pub use particles::ParticleEmitter;
 pub use light::{DirectionalLight, IrradianceSH, PointLight, SpotLight};
 pub use material::{CullMode, Material3d, MaterialData, ShadingModel};
 pub use mesh::{IndexBuffer, Mesh3d, MeshData, MeshUsage, SkinWeights, Vertex3d};
