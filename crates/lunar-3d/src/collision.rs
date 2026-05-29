@@ -182,7 +182,7 @@ pub struct CollisionWorld3d {
 
 impl CollisionWorld3d {
     /// sweep-and-prune range for X span `[qmin_x, qmax_x]`.
-    fn x_candidates(&self, qmin_x: f32, qmax_x: f32) -> &[ColliderEntry] {
+    fn x_candidates(&self, _qmin_x: f32, qmax_x: f32) -> &[ColliderEntry] {
         let end = self.entries.partition_point(|e| e.min_x <= qmax_x);
         &self.entries[..end]
     }

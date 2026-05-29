@@ -178,7 +178,7 @@ pub struct CollisionWorld {
 impl CollisionWorld {
     /// sweep-and-prune range for a query span `[qmin_x, qmax_x]`.
     /// returns a slice of entries that could overlap along X — use as a pre-filter.
-    fn x_candidates(&self, qmin_x: f32, qmax_x: f32) -> &[ColliderEntry] {
+    fn x_candidates(&self, _qmin_x: f32, qmax_x: f32) -> &[ColliderEntry] {
         // entries sorted by min_x; stop at the first entry entirely to the right
         let end = self.entries.partition_point(|e| e.min_x <= qmax_x);
         &self.entries[..end]
