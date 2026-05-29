@@ -49,6 +49,7 @@ const SHADER_SRC: &str = include_str!("shader.wgsl");
 const SHADOW_SHADER_SRC: &str = include_str!("shadow.wgsl");
 const BLOOM_SHADER_SRC: &str = include_str!("bloom.wgsl");
 const COMPOSITE_SHADER_SRC: &str = include_str!("composite.wgsl");
+const GTAO_SHADER_SRC: &str = include_str!("gtao.wgsl");
 
 const SKY_RADIUS: f32 = 900.0;
 const SUN_Y: f32 = 895.0;
@@ -96,6 +97,9 @@ const BLOOM_PARAMS_SIZE: u64 = 16;
 
 /// composite params UBO size: 8 × f32 = 32 bytes.
 const COMPOSITE_PARAMS_SIZE: u64 = 32;
+
+/// GTAO params UBO size: inv_proj(64) + proj(64) + 8×f32(32) = 160 bytes.
+const GTAO_PARAMS_SIZE: u64 = 160;
 
 /// stride for dynamic UBO slots — must be ≥ min_uniform_buffer_offset_alignment (256).
 const UNIFORM_STRIDE: u64 = 256;
@@ -367,6 +371,25 @@ pub struct RenderEngine3d {
     composite_bg: wgpu::BindGroup,
     composite_pipeline: wgpu::RenderPipeline,
     post_sampler: wgpu::Sampler,
+
+    // GTAO: half-res ambient occlusion
+    ssao_enabled: bool,
+    // non-MSAA z-prepass depth used as GTAO input (can't sample MSAA depth)
+    gtao_depth_view: wgpu::TextureView,
+    gtao_ao_a: wgpu::Texture,        // ping-pong target A (AO result)
+    gtao_ao_b: wgpu::Texture,        // ping-pong target B (blur intermediate)
+    gtao_ao_view_a: wgpu::TextureView,
+    gtao_ao_view_b: wgpu::TextureView,
+    gtao_params_buf: wgpu::Buffer,
+    gtao_bgl: wgpu::BindGroupLayout,
+    gtao_main_bg: wgpu::BindGroup,   // depth → ao_a
+    gtao_blur_h_bg: wgpu::BindGroup, // ao_a → ao_b
+    gtao_blur_v_bg: wgpu::BindGroup, // ao_b → ao_a (final result in ao_a)
+    gtao_pipeline: wgpu::RenderPipeline,
+    gtao_blur_h_pipeline: wgpu::RenderPipeline,
+    gtao_blur_v_pipeline: wgpu::RenderPipeline,
+    // second depth-only pass at sample_count=1 for GTAO depth input
+    zprepass_nonmsaa_pipeline: wgpu::RenderPipeline,
 
     // dynamic resolution scaling — EMA of frame time drives scale adjustments
     frame_time_ema_ms: f32,
@@ -1043,22 +1066,19 @@ impl RenderEngine3d {
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-            ],
-        });
-
-        // bloom_tex binding uses mip0 of the bloom chain (or hdr_view as fallback)
-        let bloom_fallback_view = bloom_mip_views.first().unwrap_or(&hdr_view);
-        let composite_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("[composite] bg"),
-            layout: &composite_bgl,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: composite_params_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&hdr_view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(bloom_fallback_view) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&post_sampler) },
             ],
         });
 
@@ -1097,6 +1117,225 @@ impl RenderEngine3d {
             multisample: wgpu::MultisampleState::default(),
             cache: None,
             multiview_mask: None,
+        });
+
+        // ── GTAO ───────────────────────────────────────────────────────────
+
+        let ssao_enabled = quality.ssao;
+        let ao_w = (config.width / 2).max(1);
+        let ao_h = (config.height / 2).max(1);
+
+        // non-MSAA depth texture dedicated to GTAO input
+        let gtao_depth_tex = Self::make_depth_view(&device, config.width, config.height, 1);
+
+        let gtao_ao_a = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[gtao] ao ping"),
+            size: wgpu::Extent3d { width: ao_w, height: ao_h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rg32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let gtao_ao_b = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[gtao] ao pong"),
+            size: wgpu::Extent3d { width: ao_w, height: ao_h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rg32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let gtao_ao_view_a = gtao_ao_a.create_view(&wgpu::TextureViewDescriptor::default());
+        let gtao_ao_view_b = gtao_ao_b.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let gtao_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[gtao] params buffer"),
+            size: GTAO_PARAMS_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // GTAO non-MSAA z-prepass (sample_count=1, writes to gtao_depth_tex)
+        // reuses same vertex format as z-prepass but with no multisample
+        let zprepass_nonmsaa_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("3d z-prepass (gtao depth, non-MSAA) pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: vertex_buffers,
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: None,
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(), // always sample_count=1
+            cache: None,
+            multiview_mask: None,
+        });
+
+        let gtao_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[gtao] bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(GTAO_PARAMS_SIZE),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                    count: None,
+                },
+            ],
+        });
+
+        let gtao_point_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("[gtao] point sampler"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
+
+        let gtao_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[gtao] pipeline layout"),
+            bind_group_layouts: &[Some(&gtao_bgl)],
+            immediate_size: 0,
+        });
+
+        let gtao_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("[gtao] shader"),
+            source: wgpu::ShaderSource::Wgsl(GTAO_SHADER_SRC.into()),
+        });
+
+        let gtao_ao_format = wgpu::TextureFormat::Rg32Float;
+
+        let make_gtao_pipeline = |entry: &'static str, blend: Option<wgpu::BlendState>| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("[gtao] pipeline"),
+                layout: Some(&gtao_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &gtao_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &gtao_shader,
+                    entry_point: Some(entry),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: gtao_ao_format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                cache: None,
+                multiview_mask: None,
+            })
+        };
+
+        let gtao_pipeline = make_gtao_pipeline("fs_gtao", None);
+        let gtao_blur_h_pipeline = make_gtao_pipeline("fs_blur_h", None);
+        let gtao_blur_v_pipeline = make_gtao_pipeline("fs_blur_v", None);
+
+        // dummy ao_src (ao_a) for initial main bg — blur passes bind ao_a or ao_b
+        let gtao_main_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[gtao] main bg"),
+            layout: &gtao_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: gtao_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&gtao_depth_tex) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&gtao_ao_view_a) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&post_sampler) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&gtao_point_sampler) },
+            ],
+        });
+        let gtao_blur_h_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[gtao] blur-h bg"),
+            layout: &gtao_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: gtao_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&gtao_depth_tex) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&gtao_ao_view_a) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&post_sampler) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&gtao_point_sampler) },
+            ],
+        });
+        let gtao_blur_v_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[gtao] blur-v bg"),
+            layout: &gtao_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: gtao_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&gtao_depth_tex) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&gtao_ao_view_b) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&post_sampler) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&gtao_point_sampler) },
+            ],
+        });
+
+        // rebuild composite_bg now that ao_view_a is available
+        let composite_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[composite] bg"),
+            layout: &composite_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: composite_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&hdr_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(bloom_mip_views.first().unwrap_or(&hdr_view)) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&gtao_ao_view_a) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&post_sampler) },
+            ],
         });
 
         // ── sky meshes ─────────────────────────────────────────────────────
@@ -1160,6 +1399,21 @@ impl RenderEngine3d {
             composite_bg,
             composite_pipeline,
             post_sampler,
+            ssao_enabled,
+            gtao_depth_view: gtao_depth_tex,
+            gtao_ao_a,
+            gtao_ao_b,
+            gtao_ao_view_a,
+            gtao_ao_view_b,
+            gtao_params_buf,
+            gtao_bgl,
+            gtao_main_bg,
+            gtao_blur_h_bg,
+            gtao_blur_v_bg,
+            gtao_pipeline,
+            gtao_blur_h_pipeline,
+            gtao_blur_v_pipeline,
+            zprepass_nonmsaa_pipeline,
             frame_time_ema_ms: 16.67,
             resolution_scale: 1.0,
             frame_time_budget_ms: 14.0,
@@ -1174,6 +1428,9 @@ impl RenderEngine3d {
     // ── helpers ────────────────────────────────────────────────────────────
 
     fn make_depth_view(device: &wgpu::Device, width: u32, height: u32, sample_count: u32) -> wgpu::TextureView {
+        // non-MSAA depth also gets TEXTURE_BINDING so GTAO can sample it
+        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
+            | if sample_count == 1 { wgpu::TextureUsages::TEXTURE_BINDING } else { wgpu::TextureUsages::empty() };
         device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("[depth] attachment"),
@@ -1182,7 +1439,7 @@ impl RenderEngine3d {
                 sample_count,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Depth32Float,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage,
                 view_formats: &[],
             })
             .create_view(&wgpu::TextureViewDescriptor::default())
@@ -1807,6 +2064,97 @@ impl RenderEngine3d {
             }
         }
 
+        // ── GTAO passes (mid/high tier, ssao enabled) ────────────────────
+        if self.ssao_enabled {
+            // non-MSAA depth prepass so GTAO can sample depth without MSAA complication
+            {
+                let mut zpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("[gtao] depth prepass"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.gtao_depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                zpass.set_pipeline(&self.zprepass_nonmsaa_pipeline);
+                zpass.set_bind_group(0, &self.globals_bg, &[]);
+                zpass.set_bind_group(3, &self.lights_bg, &[]);
+                for i in 0..self.draw_scratch.len() {
+                    let mesh_id = self.draw_scratch[i].1;
+                    let Some(gpu_mesh) = self.mesh_gpu.get(&mesh_id) else { continue; };
+                    zpass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
+                    zpass.set_bind_group(2, &self.entity_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
+                    zpass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
+                    zpass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
+                    zpass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+                }
+            }
+
+            // upload GTAO params
+            let (ao_w, ao_h) = (
+                (self.surface_config.width / 2).max(1),
+                (self.surface_config.height / 2).max(1),
+            );
+            let (fov_y, near, far) = match camera.projection {
+                Projection::Perspective { fov_y, near, far } => (fov_y, near, far),
+                Projection::Orthographic { .. } => (std::f32::consts::FRAC_PI_3, 0.1, 1000.0),
+            };
+            let proj = camera.view_proj(cam_wt, aspect);
+            let inv_proj = proj.inverse();
+            let gtao_params: [f32; 40] = {
+                let mut d = [0f32; 40];
+                d[..16].copy_from_slice(&inv_proj.to_cols_array());
+                d[16..32].copy_from_slice(&proj.to_cols_array());
+                d[32] = world.resource::<lunar_core::Time>().elapsed_seconds();
+                d[33] = 1.5; // radius metres
+                d[34] = far;
+                d[35] = if self.render_tier == RenderTier::High { 5.0 } else { 3.0 }; // slice_count
+                d[36] = if self.render_tier == RenderTier::High { 6.0 } else { 4.0 }; // step_count
+                d[37] = ao_w as f32;
+                d[38] = ao_h as f32;
+                d[39] = 0.0;
+                let _ = (fov_y, near);
+                d
+            };
+            self.queue.write_buffer(&self.gtao_params_buf, 0, unsafe { slice_as_bytes(&gtao_params) });
+
+            let run_fullscreen_pass = |encoder: &mut wgpu::CommandEncoder,
+                                       label: &str,
+                                       pipeline: &wgpu::RenderPipeline,
+                                       bg: &wgpu::BindGroup,
+                                       target: &wgpu::TextureView,
+                                       w: u32, h: u32| {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some(label),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::WHITE), store: wgpu::StoreOp::Store },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_viewport(0.0, 0.0, w as f32, h as f32, 0.0, 1.0);
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, bg, &[]);
+                pass.draw(0..3, 0..1);
+            };
+
+            run_fullscreen_pass(&mut encoder, "[gtao] main", &self.gtao_pipeline, &self.gtao_main_bg, &self.gtao_ao_view_a, ao_w, ao_h);
+            run_fullscreen_pass(&mut encoder, "[gtao] blur-h", &self.gtao_blur_h_pipeline, &self.gtao_blur_h_bg, &self.gtao_ao_view_b, ao_w, ao_h);
+            run_fullscreen_pass(&mut encoder, "[gtao] blur-v", &self.gtao_blur_v_pipeline, &self.gtao_blur_v_bg, &self.gtao_ao_view_a, ao_w, ao_h);
+        }
+
         // ── main color pass → HDR texture ───��─────────────────────────────
         // MSAA resolves into the non-MSAA HDR texture; no MSAA renders direct to HDR.
         // composite pass reads the HDR texture and writes to swapchain.
@@ -1989,6 +2337,7 @@ impl RenderEngine3d {
                     if q.vignette { f |= 2; }
                     if q.chromatic_aberration { f |= 4; }
                     if q.film_grain { f |= 8; }
+                    if self.ssao_enabled && q.ssao { f |= 16; }
                     bloom_s = 0.04_f32;
                     vig_s   = if q.vignette { 0.3 } else { 0.0 };
                     vig_r   = 0.3_f32;

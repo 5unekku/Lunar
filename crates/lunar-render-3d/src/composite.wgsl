@@ -20,13 +20,15 @@ struct CompositeParams {
     //   bit 1 = vignette enabled
     //   bit 2 = chromatic aberration enabled
     //   bit 3 = film grain enabled
+    //   bit 4 = GTAO AO enabled
     flags: u32,
     _pad: f32,
 }
 @group(0) @binding(0) var<uniform> params: CompositeParams;
 @group(0) @binding(1) var hdr_tex:   texture_2d<f32>;
 @group(0) @binding(2) var bloom_tex: texture_2d<f32>;
-@group(0) @binding(3) var smp:       sampler;
+@group(0) @binding(3) var ao_tex:    texture_2d<f32>;   // GTAO result (R = occlusion 0..1)
+@group(0) @binding(4) var smp:       sampler;
 
 struct VertOut {
     @builtin(position) clip_pos: vec4<f32>,
@@ -87,6 +89,12 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
         hdr_color = vec3<f32>(r, g, b);
     } else {
         hdr_color = textureSample(hdr_tex, smp, uv).rgb;
+    }
+
+    // apply GTAO ambient occlusion (before tonemap, in HDR space)
+    if (params.flags & 16u) != 0u {
+        let ao = textureSample(ao_tex, smp, uv).r;
+        hdr_color *= ao;
     }
 
     // add bloom
