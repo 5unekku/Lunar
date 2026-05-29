@@ -76,7 +76,7 @@ pub use light::{DirectionalLight, IrradianceSH, PointLight, SpotLight};
 pub use material::{CullMode, Material3d, MaterialData, ShadingModel};
 pub use mesh::{
     ImpostorAtlas, IndexBuffer, Mesh3d, MeshData, MeshImpostor, MeshLod,
-    MeshUsage, SkinWeights, Vertex3d,
+    MeshUsage, SkinWeights, StaticMesh, Vertex3d,
 };
 pub use mesh_registry::MeshRegistry;
 pub use plugin::Plugin3d;

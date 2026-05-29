@@ -708,6 +708,7 @@ impl TextureLoaderTrait for ImageTextureLoader {
             height: rgba.height(),
             pixels: rgba.into_raw(),
             mips: Vec::new(),
+            compression: TextureCompression::None,
         })
     }
 }
@@ -726,6 +727,7 @@ impl TextureLoaderTrait for MiTextureLoader {
             height: image.height,
             pixels: image.pixels,
             mips: Vec::new(),
+            compression: TextureCompression::None,
         })
     }
 }
@@ -1258,7 +1260,7 @@ impl AssetServer {
         let id = handle.id();
         self.texture_store.insert(
             id,
-            Texture { width, height, pixels, mips: Vec::new() },
+            Texture { width, height, pixels, mips: Vec::new(), compression: TextureCompression::None },
         );
         self.pending_texture_ids.push(id);
         handle
@@ -1414,22 +1416,42 @@ impl Default for AssetServer {
 /// when non-empty, the renderer creates the GPU texture with a full mip chain and uploads
 /// all levels — enabling the GPU sampler to pick the appropriate mip based on screen
 /// coverage (trilinear filtering). call `generate_mipmaps()` to populate this field.
+/// pixel compression format for a [`Texture`].
+///
+/// `None` means raw RGBA8 data. Compressed formats store pre-compressed block
+/// data in `pixels`/`mips` — the renderer uploads it directly without CPU decode.
+/// produce compressed textures offline with a build tool; the runtime only reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextureCompression {
+    /// raw RGBA8 (or sRGB) data — the default.
+    #[default]
+    None,
+    /// BC3 / DXT5: 4 bytes/block-texel, RGBA, good for diffuse + alpha maps.
+    Bc3,
+    /// BC5 / RGTC2: 2 bytes/block-texel, two-channel (RG), for normal maps.
+    Bc5,
+}
+
 pub struct Texture {
     pub width: u32,
     pub height: u32,
-    /// RGBA8 linear pixel data for the base mip level (full resolution).
+    /// pixel data for the base mip level.
+    /// for `TextureCompression::None`: RGBA8 linear bytes, `width * height * 4` bytes.
+    /// for compressed formats: raw block data, `ceil(w/4) * ceil(h/4) * block_bytes`.
     pub pixels: Vec<u8>,
     /// pre-generated mip levels, each half the previous resolution.
     /// index 0 = mip 1 (half-res), index 1 = mip 2 (quarter-res), etc.
     /// empty = no mip chain; GPU texture created as single mip.
     pub mips: Vec<Vec<u8>>,
+    /// compression format; defaults to `None` (uncompressed RGBA8).
+    pub compression: TextureCompression,
 }
 
 impl Texture {
     /// create a texture with no mip chain (single mip level, base image only).
     #[must_use]
     pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Self {
-        Self { width, height, pixels, mips: Vec::new() }
+        Self { width, height, pixels, mips: Vec::new(), compression: TextureCompression::None }
     }
 
     /// total number of mip levels including the base: `mips.len() + 1`.

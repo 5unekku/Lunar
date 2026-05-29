@@ -321,9 +321,15 @@ impl App {
         self.run_with_events(frame_cap, |_| {});
     }
 
-    /// start the game loop with per-frame event processing
-    /// the callback runs each frame before the ECS tick, giving you a chance to
-    /// poll native events and update resources like `InputState`.
+    /// start the game loop with per-frame event processing.
+    ///
+    /// the callback runs each frame AFTER the ECS tick and frame cap sleep, so
+    /// input polled here is consumed by the NEXT frame's Input stage. this is
+    /// the late-input pattern: events captured immediately after vsync/sleep
+    /// reflect the most recent device state before the next simulation step.
+    ///
+    /// the first frame runs with empty input (the callback has not yet fired).
+    ///
     /// # example
     /// ```ignore
     /// use lunar_input::{InputPlugin, process_events, init_sdl};
@@ -351,11 +357,6 @@ impl App {
         while game_loop.is_running() {
             let ticks = game_loop.tick();
 
-            // process native events BEFORE the ECS tick so fps_controller reads
-            // the freshest available input. PostUpdate (last stage) resets
-            // edge-triggered state so the next iteration starts clean.
-            process_events(self.engine.world_mut());
-
             for _ in 0..ticks {
                 if let Some(mut time) = self.engine.world_mut().get_resource_mut::<Time>() {
                     time.tick();
@@ -369,8 +370,14 @@ impl App {
                 break;
             }
 
-            // apply frame cap for sleep
+            // apply frame cap / vsync wait BEFORE polling input so we capture
+            // the most recent device state right after the GPU finishes the frame.
             game_loop.apply_frame_cap();
+
+            // poll native events after the frame completes — input captured here
+            // is consumed by the next frame's Input stage (PostUpdate already
+            // cleared edge-triggered state, so the fresh events land cleanly).
+            process_events(self.engine.world_mut());
         }
     }
 

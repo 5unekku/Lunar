@@ -41,7 +41,7 @@ use lunar_3d::{
     Aabb3d, ActiveCamera3d, ActiveViewports, AmbientLight, Camera3d, ComputedVisibility,
     CullSoa, Decal, DirectionalLight, Frustum, IndexBuffer, IrradianceSH, Material3d,
     Mesh3d, MeshData, MeshImpostor, MeshLod, MeshRegistry, ParticleEmitter, PointLight,
-    Projection, ShadowCaster, Vertex3d, Terrain, ViewportAspect, ViewportRect,
+    Projection, ShadowCaster, StaticMesh, Vertex3d, Terrain, ViewportAspect, ViewportRect,
     Water, WorldTransform3d,
 };
 use lunar_3d::primitives::{quad_mesh, sphere_mesh};
@@ -522,6 +522,7 @@ pub struct RenderEngine3d {
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
     render_tier: RenderTier,
+    hdr_format: wgpu::TextureFormat,
 
     msaa_samples: u32,
     depth_view: wgpu::TextureView,
@@ -718,6 +719,19 @@ pub struct RenderEngine3d {
     #[cfg(not(target_arch = "wasm32"))]
     staging_belt: wgpu::util::StagingBelt,
 
+    // RenderBundle for static geometry (entities with StaticMesh component).
+    // re-recorded when the static entity set changes or when hdr_format/msaa_samples changes.
+    // None until the first frame with any static entity.
+    static_bundle: Option<wgpu::RenderBundle>,
+    // sorted (mesh_id, mat_id, lm_id, entity_slot) list used to detect set changes
+    static_draw_list: Vec<(u32, u32, u32, usize)>,
+    // (hdr_format, msaa_samples) the bundle was recorded with
+    static_bundle_params: (wgpu::TextureFormat, u32),
+    // number of entity slots reserved for static entities (slots 2..2+N)
+    static_entity_count: usize,
+    // stable entity→slot assignments for static entities
+    static_entity_slots: HashMap<Entity, usize>,
+
     // lightmap bind group (group 4): texture + sampler per baked entity
     lightmap_bgl: wgpu::BindGroupLayout,
     lightmap_sampler: wgpu::Sampler,
@@ -816,10 +830,12 @@ impl RenderEngine3d {
         }))
         .expect("no wgpu adapter found");
 
+        // request R11G11B10 renderable if the adapter supports it — 2× HDR bandwidth savings
+        let has_r11 = adapter.features().contains(wgpu::Features::RG11B10UFLOAT_RENDERABLE);
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("lunar-render-3d device"),
-                required_features: wgpu::Features::empty(),
+                required_features: if has_r11 { wgpu::Features::RG11B10UFLOAT_RENDERABLE } else { wgpu::Features::empty() },
                 required_limits: wgpu::Limits::default(),
                 memory_hints: wgpu::MemoryHints::Performance,
                 trace: wgpu::Trace::default(),
@@ -828,7 +844,13 @@ impl RenderEngine3d {
         ))
         .expect("failed to create wgpu device");
 
-        Self::init_with_adapter(&adapter, device, queue, surface, config)
+        let hdr_format = if has_r11 {
+            wgpu::TextureFormat::Rg11b10Ufloat
+        } else {
+            wgpu::TextureFormat::Rgba16Float
+        };
+        log::info!("HDR format: {hdr_format:?}");
+        Self::init_with_adapter(&adapter, device, queue, surface, config, hdr_format)
     }
 
     fn init_with_adapter(
@@ -837,6 +859,7 @@ impl RenderEngine3d {
         queue: wgpu::Queue,
         surface: wgpu::Surface<'static>,
         config: &RenderConfig3d,
+        hdr_format: wgpu::TextureFormat,
     ) -> Self {
         let render_tier = RenderTier::from_adapter(adapter);
         log::info!("render tier: {render_tier:?}");
@@ -869,7 +892,7 @@ impl RenderEngine3d {
         let msaa_samples = quality_early.msaa_samples;
         let depth_view = Self::make_depth_view(&device, config.width, config.height, msaa_samples);
         let msaa_color_view = Self::make_msaa_color_view(
-            &device, config.width, config.height, HDR_FORMAT, msaa_samples,
+            &device, config.width, config.height, hdr_format, msaa_samples,
         );
 
         // ── bind group layouts ─────────────────────────────────────────────
@@ -1205,7 +1228,7 @@ impl RenderEngine3d {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: HDR_FORMAT,
+                    format: hdr_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -1247,7 +1270,7 @@ impl RenderEngine3d {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: HDR_FORMAT,
+                    format: hdr_format,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -1344,7 +1367,7 @@ impl RenderEngine3d {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: HDR_FORMAT,
+                    format: hdr_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -1376,7 +1399,7 @@ impl RenderEngine3d {
         let bloom_mip_count = quality.bloom_mips as usize;
         let fxaa_enabled = quality.fxaa;
 
-        let (hdr_texture, hdr_view) = Self::make_hdr_texture(&device, config.width, config.height);
+        let (hdr_texture, hdr_view) = Self::make_hdr_texture(&device, config.width, config.height, hdr_format);
 
         // ── post sampler (linear clamp) ────────────────────────────────────
         let post_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -1454,7 +1477,7 @@ impl RenderEngine3d {
                 module: &bloom_shader,
                 entry_point: Some("fs_downsample"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: HDR_FORMAT,
+                    format: hdr_format,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -1480,7 +1503,7 @@ impl RenderEngine3d {
                 module: &bloom_shader,
                 entry_point: Some("fs_upsample"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: HDR_FORMAT,
+                    format: hdr_format,
                     // additive blend: dst = dst + src
                     blend: Some(wgpu::BlendState {
                         color: wgpu::BlendComponent {
@@ -1512,6 +1535,7 @@ impl RenderEngine3d {
                 config.width,
                 config.height,
                 bloom_mip_count,
+                hdr_format,
             );
 
         // ── composite ──────────────────────────────────────────────────────
@@ -1745,7 +1769,7 @@ impl RenderEngine3d {
             size: wgpu::Extent3d { width: ssr_w, height: ssr_h, depth_or_array_layers: 1 },
             mip_level_count: 1, sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
+            format: hdr_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -1868,7 +1892,7 @@ impl RenderEngine3d {
             size: wgpu::Extent3d { width: fog_w, height: fog_h, depth_or_array_layers: 1 },
             mip_level_count: 1, sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
+            format: hdr_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -2021,7 +2045,7 @@ impl RenderEngine3d {
             fragment: Some(wgpu::FragmentState {
                 module: &atmos_shader, entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: HDR_FORMAT,
+                    format: hdr_format,
                     // alpha blend: sky only writes to pixels with depth=1.0 (output alpha 0 for geometry)
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
@@ -2119,7 +2143,7 @@ impl RenderEngine3d {
             fragment: Some(wgpu::FragmentState {
                 module: &water_shader, entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: HDR_FORMAT,
+                    format: hdr_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -2210,7 +2234,7 @@ impl RenderEngine3d {
             fragment: Some(wgpu::FragmentState {
                 module: &decal_shader, entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: HDR_FORMAT,
+                    format: hdr_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -2321,7 +2345,7 @@ impl RenderEngine3d {
                 module: &terrain_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: HDR_FORMAT,
+                    format: hdr_format,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -2724,7 +2748,7 @@ impl RenderEngine3d {
             fragment: Some(wgpu::FragmentState {
                 module: &particle_render_shader, entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: HDR_FORMAT,
+                    format: hdr_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -2771,6 +2795,7 @@ impl RenderEngine3d {
             msaa_color_view,
             surface_config,
             render_tier,
+            hdr_format,
             depth_view,
             globals_buf,
             globals_bg,
@@ -2905,6 +2930,11 @@ impl RenderEngine3d {
             frame_time_budget_ms: 14.0,
             auto_quality_over_frames: 0,
             auto_quality_under_frames: 0,
+            static_bundle: None,
+            static_draw_list: Vec::new(),
+            static_bundle_params: (wgpu::TextureFormat::Rgba16Float, 0),
+            static_entity_count: 0,
+            static_entity_slots: HashMap::new(),
             lightmap_bgl,
             lightmap_sampler,
             lightmap_fallback_tex,
@@ -3414,14 +3444,14 @@ impl RenderEngine3d {
         )
     }
 
-    fn make_hdr_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+    fn make_hdr_texture(device: &wgpu::Device, width: u32, height: u32, hdr_format: wgpu::TextureFormat) -> (wgpu::Texture, wgpu::TextureView) {
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("[hdr] color attachment"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: HDR_FORMAT,
+            format: hdr_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -3440,6 +3470,7 @@ impl RenderEngine3d {
         width: u32,
         height: u32,
         mip_count: usize,
+        hdr_format: wgpu::TextureFormat,
     ) -> (
         Vec<wgpu::TextureView>,
         Vec<(u32, u32)>,
@@ -3455,7 +3486,7 @@ impl RenderEngine3d {
             mip_level_count: actual_mips as u32,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: HDR_FORMAT,
+            format: hdr_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -3840,13 +3871,13 @@ impl RenderEngine3d {
         self.surface.configure(&self.device, &self.surface_config);
         self.depth_view = Self::make_depth_view(&self.device, width, height, self.msaa_samples);
         self.msaa_color_view = Self::make_msaa_color_view(
-            &self.device, width, height, HDR_FORMAT, self.msaa_samples,
+            &self.device, width, height, self.hdr_format, self.msaa_samples,
         );
-        let (hdr_texture, hdr_view) = Self::make_hdr_texture(&self.device, width, height);
+        let (hdr_texture, hdr_view) = Self::make_hdr_texture(&self.device, width, height, self.hdr_format);
         let n = self.bloom_mip_views.len();
         let (mip_views, mip_sizes, ds_bgs, us_bgs) = Self::build_bloom_resources(
             &self.device, &hdr_texture, &self.bloom_params_buf,
-            &self.bloom_downsample_bgl, &self.post_sampler, width, height, n,
+            &self.bloom_downsample_bgl, &self.post_sampler, width, height, n, self.hdr_format,
         );
         // store new resources before rebuilding composite bind group
         self.hdr_texture = hdr_texture;
@@ -3864,7 +3895,7 @@ impl RenderEngine3d {
             size: wgpu::Extent3d { width: ssr_hw, height: ssr_hh, depth_or_array_layers: 1 },
             mip_level_count: 1, sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
+            format: self.hdr_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -3874,7 +3905,7 @@ impl RenderEngine3d {
             size: wgpu::Extent3d { width: ssr_hw, height: ssr_hh, depth_or_array_layers: 1 },
             mip_level_count: 1, sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
+            format: self.hdr_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -4388,6 +4419,23 @@ impl RenderEngine3d {
                 });
         }
 
+        // collect static entities and assign stable slot ids
+        {
+            let mut q = world.query::<(Entity, &StaticMesh)>();
+            let static_entities: HashSet<Entity> = q.iter(world).map(|(e, _)| e).collect();
+            // remove slots for entities that are no longer in the world
+            self.static_entity_slots.retain(|e, _| static_entities.contains(e));
+            // assign slots to new static entities (append after existing)
+            let mut next_slot = self.static_entity_slots.values().copied().max().map(|m| m + 1).unwrap_or(0);
+            for entity in &static_entities {
+                if !self.static_entity_slots.contains_key(entity) {
+                    self.static_entity_slots.insert(*entity, next_slot);
+                    next_slot += 1;
+                }
+            }
+            self.static_entity_count = next_slot;
+        }
+
         self.draw_scratch.clear();
         {
             let registry = world.resource::<MeshRegistry>();
@@ -4472,13 +4520,22 @@ impl RenderEngine3d {
             for &(_, _, _, _, _, _, _, _, _, lm_id) in &self.draw_scratch {
                 if lm_id != u32::MAX && !self.lightmap_bg_cache.contains_key(&lm_id) {
                     if let Some(tex) = asset_server.get_texture_by_id(lm_id) {
+                        let (gpu_fmt, bpr_fn): (wgpu::TextureFormat, Box<dyn Fn(u32) -> u32>) =
+                            match tex.compression {
+                                lunar_assets::TextureCompression::None =>
+                                    (wgpu::TextureFormat::Rgba8UnormSrgb, Box::new(|w| w * 4)),
+                                lunar_assets::TextureCompression::Bc3 =>
+                                    (wgpu::TextureFormat::Bc3RgbaUnorm, Box::new(|w| ((w + 3) / 4) * 16)),
+                                lunar_assets::TextureCompression::Bc5 =>
+                                    (wgpu::TextureFormat::Bc5RgUnorm, Box::new(|w| ((w + 3) / 4) * 16)),
+                            };
                         let gpu_tex = self.device.create_texture(&wgpu::TextureDescriptor {
                             label: Some("[lightmap] tex"),
                             size: wgpu::Extent3d { width: tex.width, height: tex.height, depth_or_array_layers: 1 },
                             mip_level_count: tex.mip_level_count(),
                             sample_count: 1,
                             dimension: wgpu::TextureDimension::D2,
-                            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                            format: gpu_fmt,
                             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                             view_formats: &[],
                         });
@@ -4487,8 +4544,8 @@ impl RenderEngine3d {
                             &tex.pixels,
                             wgpu::TexelCopyBufferLayout {
                                 offset: 0,
-                                bytes_per_row: Some(tex.width * 4),
-                                rows_per_image: Some(tex.height),
+                                bytes_per_row: Some(bpr_fn(tex.width)),
+                                rows_per_image: Some((tex.height + 3) / 4),
                             },
                             wgpu::Extent3d { width: tex.width, height: tex.height, depth_or_array_layers: 1 },
                         );
@@ -4505,8 +4562,8 @@ impl RenderEngine3d {
                                 mip_data,
                                 wgpu::TexelCopyBufferLayout {
                                     offset: 0,
-                                    bytes_per_row: Some(mip_w * 4),
-                                    rows_per_image: Some(mip_h),
+                                    bytes_per_row: Some(bpr_fn(mip_w)),
+                                    rows_per_image: Some((mip_h + 3) / 4),
                                 },
                                 wgpu::Extent3d { width: mip_w, height: mip_h, depth_or_array_layers: 1 },
                             );
@@ -5207,6 +5264,83 @@ impl RenderEngine3d {
         // ── main color pass → HDR texture ───��─────────────────────────────
         // MSAA resolves into the non-MSAA HDR texture; no MSAA renders direct to HDR.
         // composite pass reads the HDR texture and writes to swapchain.
+
+        // ── static RenderBundle recording ─────────────────────────────────
+        // rebuild when the static entity set changes or hdr_format/msaa_samples change.
+        {
+            let mut new_static_list: Vec<(u32, u32, u32, usize)> = Vec::new();
+            for (i, entry) in self.draw_scratch.iter().enumerate() {
+                if self.static_entity_slots.contains_key(&entry.0) {
+                    new_static_list.push((entry.1, entry.2, entry.9, i));
+                }
+            }
+            new_static_list.sort_unstable();
+            let format_changed = self.static_bundle_params != (self.hdr_format, self.msaa_samples);
+            let list_changed = new_static_list != self.static_draw_list;
+            if (list_changed || format_changed) && !new_static_list.is_empty() {
+                self.static_bundle_params = (self.hdr_format, self.msaa_samples);
+                self.static_draw_list = new_static_list.clone();
+                let mut benc = self.device.create_render_bundle_encoder(
+                    &wgpu::RenderBundleEncoderDescriptor {
+                        label: Some("[static] bundle encoder"),
+                        color_formats: &[Some(self.hdr_format.into())],
+                        depth_stencil: Some(wgpu::RenderBundleDepthStencil {
+                            format: wgpu::TextureFormat::Depth32Float,
+                            depth_read_only: false,
+                            stencil_read_only: false,
+                        }),
+                        sample_count: self.msaa_samples,
+                        multiview: None,
+                    }
+                );
+                benc.set_bind_group(0, &self.globals_bg, &[]);
+                benc.set_bind_group(2, &self.entity_bg, &[]);
+                benc.set_bind_group(3, &self.lights_bg, &[]);
+                let mut last_mesh = u32::MAX;
+                let mut last_mat = u32::MAX;
+                let mut last_lm = u32::MAX;
+                let mut group_start_j = 0usize;
+                let sn = new_static_list.len();
+                let mut j = 0;
+                while j <= sn {
+                    let (cur_mesh, cur_mat, cur_lm) = if j == sn { (u32::MAX, u32::MAX, u32::MAX) }
+                        else { let (m, mt, lm, _) = new_static_list[j]; (m, mt, lm) };
+                    let grp_changed = cur_mesh != last_mesh || cur_mat != last_mat || cur_lm != last_lm;
+                    if grp_changed && j > group_start_j {
+                        let slot_i = new_static_list[group_start_j].3;
+                        if let Some(gpu) = self.mesh_gpu.get(&last_mesh) {
+                            let base = (ENTITY_SLOT_START + slot_i) as u32;
+                            benc.draw_indexed(0..gpu.index_count, 0, base..base + (j - group_start_j) as u32);
+                        }
+                    }
+                    if j == sn { break; }
+                    if grp_changed {
+                        let slot_i = new_static_list[j].3;
+                        if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
+                            let lm_bg = if cur_lm != u32::MAX {
+                                self.lightmap_bg_cache.get(&cur_lm).unwrap_or(&self.lightmap_fallback_bg)
+                            } else {
+                                &self.lightmap_fallback_bg
+                            };
+                            benc.set_bind_group(4, lm_bg, &[]);
+                            benc.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + slot_i)]);
+                            benc.set_vertex_buffer(0, gpu.vbuf.slice(..));
+                            benc.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+                            last_mesh = cur_mesh; last_mat = cur_mat; last_lm = cur_lm;
+                            group_start_j = j;
+                        }
+                    }
+                    j += 1;
+                }
+                self.static_bundle = Some(benc.finish(&wgpu::RenderBundleDescriptor {
+                    label: Some("[static] bundle"),
+                }));
+            } else if new_static_list.is_empty() {
+                self.static_bundle = None;
+                self.static_draw_list.clear();
+            }
+        }
+
         {
             let (color_target, resolve_target) = match &self.msaa_color_view {
                 Some(msaa) => (msaa as &wgpu::TextureView, Some(&self.hdr_view as &wgpu::TextureView)),
@@ -5276,6 +5410,11 @@ impl RenderEngine3d {
                 pass.set_index_buffer(self.sun_mesh.ibuf.slice(..), self.sun_mesh.index_fmt);
                 pass.draw_indexed(0..self.sun_mesh.index_count, 0, SLOT_SUN as u32..SLOT_SUN as u32 + 1);
                 draw_calls += 1;
+            }
+
+            // static geometry via RenderBundle — near-zero CPU cost per frame
+            if let Some(ref bundle) = self.static_bundle {
+                pass.execute_bundles(std::iter::once(bundle));
             }
 
             // opaque PBR pass — batched by (mesh_id, mat_id, lm_id); draw_scratch is pre-sorted.

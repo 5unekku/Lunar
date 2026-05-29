@@ -271,6 +271,14 @@ pub struct MeshImpostor {
 #[derive(Debug, Clone, Copy, Component)]
 pub struct Mesh3d(pub Handle<MeshData>);
 
+/// marker: this entity's mesh, material, and transform are immutable across frames.
+///
+/// the renderer records a `wgpu::RenderBundle` once for all `StaticMesh` entities
+/// and replays it each frame at near-zero CPU cost. add to level geometry (walls,
+/// floors, ceilings) that never moves. do NOT add to animated objects or physics bodies.
+#[derive(Debug, Clone, Copy, Default, Component)]
+pub struct StaticMesh;
+
 /// discrete LOD levels for a `Mesh3d` entity.
 ///
 /// levels must be sorted ascending by `max_dist_sq`. the render system selects
