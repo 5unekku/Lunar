@@ -31,7 +31,7 @@
 
 pub mod sky;
 
-pub use sky::Sky;
+pub use sky::{AtmosphericScattering, Sky};
 
 use std::collections::{HashMap, HashSet};
 
@@ -52,8 +52,9 @@ const COMPOSITE_SHADER_SRC: &str = include_str!("composite.wgsl");
 const GTAO_SHADER_SRC: &str = include_str!("gtao.wgsl");
 
 const FXAA_SHADER_SRC: &str = include_str!("fxaa.wgsl");
-const SSR_SHADER_SRC:  &str = include_str!("ssr.wgsl");
-const FOG_SHADER_SRC:  &str = include_str!("volumetric_fog.wgsl");
+const SSR_SHADER_SRC:    &str = include_str!("ssr.wgsl");
+const FOG_SHADER_SRC:    &str = include_str!("volumetric_fog.wgsl");
+const ATMOS_SHADER_SRC:  &str = include_str!("atmos.wgsl");
 
 const SKY_RADIUS: f32 = 900.0;
 const SUN_Y: f32 = 895.0;
@@ -114,6 +115,9 @@ const SSR_PARAMS_SIZE: u64 = 224;
 
 /// volumetric fog params UBO: inv_view_proj(64) + misc(64) = 128 bytes (std140 aligned).
 const FOG_PARAMS_SIZE: u64 = 128;
+
+/// atmospheric scattering params UBO: sun_dir(12)+sun_intensity(4)+rayleigh(12)+mie(4)+scales(16)+radii+exposure+pads = 64 bytes.
+const ATMOS_PARAMS_SIZE: u64 = 64;
 
 /// stride for dynamic UBO slots — must be ≥ min_uniform_buffer_offset_alignment (256).
 const UNIFORM_STRIDE: u64 = 256;
@@ -446,6 +450,14 @@ pub struct RenderEngine3d {
     ssr_bg1: wgpu::BindGroup,
     ssr_params_buf: wgpu::Buffer,
     ssr_pipeline: wgpu::RenderPipeline,
+
+    // atmospheric scattering sky (mid+ tier) — replaces flat dome when AtmosphericScattering is present
+    atmos_bgl0: wgpu::BindGroupLayout,
+    atmos_bgl1: wgpu::BindGroupLayout,
+    atmos_bg0: wgpu::BindGroup,
+    atmos_bg1: wgpu::BindGroup,
+    atmos_params_buf: wgpu::Buffer,
+    atmos_pipeline: wgpu::RenderPipeline,
 
     // volumetric fog — quarter-res ray-marched sun scattering (mid+ tier)
     fog_enabled: bool,
@@ -1577,6 +1589,90 @@ impl RenderEngine3d {
             multiview_mask: None,
         });
 
+        // ── atmospheric scattering sky (mid+ tier) ────────────────────────
+
+        let atmos_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[atmos] params buffer"),
+            size: ATMOS_PARAMS_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // group 0: globals + depth texture (read via textureLoad to check geometry coverage)
+        let atmos_bgl0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[atmos] bgl0"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(GLOBALS_SIZE),
+                    }, count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    }, count: None,
+                },
+            ],
+        });
+
+        let atmos_bgl1 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[atmos] bgl1"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(ATMOS_PARAMS_SIZE),
+                }, count: None,
+            }],
+        });
+
+        let atmos_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[atmos] bg1"),
+            layout: &atmos_bgl1,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: atmos_params_buf.as_entire_binding() }],
+        });
+
+        let atmos_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("[atmos] shader"),
+            source: wgpu::ShaderSource::Wgsl(ATMOS_SHADER_SRC.into()),
+        });
+        let atmos_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[atmos] pipeline layout"),
+            bind_group_layouts: &[Some(&atmos_bgl0), Some(&atmos_bgl1)],
+            immediate_size: 0,
+        });
+        let atmos_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("[atmos] pipeline"),
+            layout: Some(&atmos_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &atmos_shader, entry_point: Some("vs_main"),
+                buffers: &[], compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &atmos_shader, entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: HDR_FORMAT,
+                    // alpha blend: sky only writes to pixels with depth=1.0 (output alpha 0 for geometry)
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            cache: pipeline_cache.as_ref(),
+            multiview_mask: None,
+        });
+        // atmos_bg0 needs gtao_depth_tex (created in GTAO section); assigned after that section.
+
         // ── GTAO ───────────────────────────────────────────────────────────
 
         let ssao_enabled = quality.ssao;
@@ -1799,7 +1895,15 @@ impl RenderEngine3d {
             ],
         });
 
-        // rebuild ssr and fog bg0 now that the non-MSAA depth texture is available
+        // rebuild ssr, fog, and atmos bg0 now that the non-MSAA depth texture is available
+        let atmos_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[atmos] bg0"),
+            layout: &atmos_bgl0,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: globals_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&gtao_depth_tex) },
+            ],
+        });
         let ssr_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("[ssr] bg0"),
             layout: &ssr_bgl0,
@@ -1925,6 +2029,12 @@ impl RenderEngine3d {
             fog_bg1,
             fog_params_buf,
             fog_pipeline,
+            atmos_bgl0,
+            atmos_bgl1,
+            atmos_bg0,
+            atmos_bg1,
+            atmos_params_buf,
+            atmos_pipeline,
             pipeline_cache,
             // 4 MiB chunk — larger than any single write, handles most scene sizes
             staging_belt: wgpu::util::StagingBelt::new(device_for_belt, 4 * 1024 * 1024),
@@ -2274,6 +2384,14 @@ impl RenderEngine3d {
         self.fog_bg0 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("[fog] bg0"),
             layout: &self.fog_bgl0,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.globals_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.gtao_depth_view) },
+            ],
+        });
+        self.atmos_bg0 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[atmos] bg0"),
+            layout: &self.atmos_bgl0,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: self.globals_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.gtao_depth_view) },
@@ -3021,6 +3139,47 @@ impl RenderEngine3d {
                 pass.set_bind_group(0, &self.bloom_upsample_bgs[i], &[]);
                 pass.draw(0..3, 0..1);
             }
+        }
+
+        // ── atmospheric scattering sky pass ──────────────────────────────
+        // runs after the main color pass; alpha-blends sky only onto depth==1.0 pixels
+        if let Some(atmos) = world.get_resource::<AtmosphericScattering>().copied() {
+            // sun direction: dir_direction points from scene toward the light source
+            let sun_dir = (-dir_direction).normalize();
+            let mut atmos_data = [0u8; ATMOS_PARAMS_SIZE as usize];
+            let sun_dir_arr: [f32; 3] = [sun_dir.x, sun_dir.y, sun_dir.z];
+            atmos_data[0..12].copy_from_slice(unsafe { slice_as_bytes(&sun_dir_arr) });
+            atmos_data[12..16].copy_from_slice(&atmos.sun_intensity.to_le_bytes());
+            atmos_data[16..28].copy_from_slice(unsafe { slice_as_bytes(&atmos.rayleigh_scatter) });
+            atmos_data[28..32].copy_from_slice(&atmos.mie_scatter.to_le_bytes());
+            atmos_data[32..36].copy_from_slice(&atmos.rayleigh_scale.to_le_bytes());
+            atmos_data[36..40].copy_from_slice(&atmos.mie_scale.to_le_bytes());
+            atmos_data[40..44].copy_from_slice(&atmos.mie_anisotropy.to_le_bytes());
+            atmos_data[44..48].copy_from_slice(&6_371_000.0_f32.to_le_bytes());
+            atmos_data[48..52].copy_from_slice(&6_471_000.0_f32.to_le_bytes());
+            atmos_data[52..56].copy_from_slice(&atmos.exposure.to_le_bytes());
+            self.queue.write_buffer(&self.atmos_params_buf, 0, &atmos_data);
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("[atmos] sky pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.hdr_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.atmos_pipeline);
+            pass.set_bind_group(0, &self.atmos_bg0, &[]);
+            pass.set_bind_group(1, &self.atmos_bg1, &[]);
+            pass.draw(0..3, 0..1);
         }
 
         // ── SSR pass (mid+ tier) ─────────────────────────────────────────
