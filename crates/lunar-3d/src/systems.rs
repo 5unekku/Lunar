@@ -3,15 +3,17 @@ use lunar_core::Parent;
 use lunar_math::Mat4;
 
 use crate::transform::{LocalTransform3d, WorldTransform3d};
+use crate::visibility::{ComputedVisibility, Visibility};
 
-/// scratch storage for transform propagation — allocated once, reused every frame.
+/// scratch storage for the combined transform + visibility propagation pass.
 ///
-/// uses parallel Vecs keyed by snapshot index rather than HashMaps keyed by Entity.
-/// entity → index lookup is a binary search on the sorted `entity_idx` vec.
+/// allocated once as a resource, cleared and refilled every frame.
+/// uses parallel Vecs keyed by snapshot index; entity→index lookup is a binary search.
 #[derive(Resource, Default)]
 pub struct TransformScratch3d {
-    snapshot: Vec<(Entity, LocalTransform3d, Option<Entity>)>,
-    // sorted (entity, snapshot_index) pairs — built after snapshot collection
+    // (entity, local_transform_if_any, visibility_if_any, parent_entity)
+    snapshot: Vec<(Entity, Option<LocalTransform3d>, Option<Visibility>, Option<Entity>)>,
+    // sorted (entity, snapshot_index) pairs for O(log n) lookup
     entity_idx: Vec<(Entity, usize)>,
     // parallel to snapshot: snapshot index of this entity's parent, or None
     parent_idx: Vec<Option<usize>>,
@@ -19,25 +21,33 @@ pub struct TransformScratch3d {
     depths: Vec<u32>,
     // visit order: snapshot indices sorted by depth (parents before children)
     order: Vec<usize>,
-    // parallel to snapshot: computed world matrix
+    // parallel to snapshot: computed world matrix (Mat4::IDENTITY for entities without LocalTransform3d)
     world_mats: Vec<Mat4>,
+    // parallel to snapshot: computed visibility (true for entities without Visibility)
+    computed_vis: Vec<bool>,
 }
 
-/// propagate [`LocalTransform3d`] through the entity hierarchy to produce [`WorldTransform3d`].
+/// propagate [`LocalTransform3d`] and [`Visibility`] through the entity hierarchy in one pass.
 ///
-/// O(N log N) sort + O(N log N) binary-search parent lookups, then one matrix multiply per entity.
-/// all scratch vecs are reused each frame — no per-frame heap allocation in steady state.
+/// replaces the separate `propagate_transforms_3d` + `propagate_visibility` systems.
+/// both share the same hierarchy sort (O(N log N)) — doing them together halves that cost.
+///
+/// produces [`WorldTransform3d`] and [`ComputedVisibility`] for all relevant entities.
 pub fn propagate_transforms_3d(world: &mut World) {
     let mut scratch = world
         .remove_resource::<TransformScratch3d>()
         .unwrap_or_default();
 
     scratch.snapshot.clear();
+    // collect all entities that have a transform or a visibility component (or both)
     world
-        .query::<(Entity, &LocalTransform3d, Option<&Parent>)>()
+        .query_filtered::<
+            (Entity, Option<&LocalTransform3d>, Option<&Visibility>, Option<&Parent>),
+            Or<(With<LocalTransform3d>, With<Visibility>)>,
+        >()
         .iter(world)
-        .for_each(|(entity, local, parent)| {
-            scratch.snapshot.push((entity, *local, parent.map(|p| p.0)));
+        .for_each(|(entity, local, vis, parent)| {
+            scratch.snapshot.push((entity, local.copied(), vis.copied(), parent.map(|p| p.0)));
         });
 
     if scratch.snapshot.is_empty() {
@@ -47,54 +57,78 @@ pub fn propagate_transforms_3d(world: &mut World) {
 
     let n = scratch.snapshot.len();
 
-    // build sorted entity → index map
     scratch.entity_idx.clear();
-    for (i, &(entity, _, _)) in scratch.snapshot.iter().enumerate() {
+    for (i, &(entity, _, _, _)) in scratch.snapshot.iter().enumerate() {
         scratch.entity_idx.push((entity, i));
     }
     scratch.entity_idx.sort_unstable_by_key(|&(entity, _)| entity);
 
-    // build parent_idx parallel to snapshot
     scratch.parent_idx.clear();
     scratch.parent_idx.resize(n, None);
-    for (i, &(_, _, parent_entity)) in scratch.snapshot.iter().enumerate() {
+    for (i, &(_, _, _, parent_entity)) in scratch.snapshot.iter().enumerate() {
         if let Some(parent_entity) = parent_entity
             && let Ok(j) = scratch.entity_idx.binary_search_by_key(&parent_entity, |&(e, _)| e) {
                 scratch.parent_idx[i] = Some(scratch.entity_idx[j].1);
             }
     }
 
-    // compute depths via memoized recursion (u32::MAX = not yet computed)
     scratch.depths.clear();
     scratch.depths.resize(n, u32::MAX);
     for i in 0..n {
         depth_of(i, &scratch.parent_idx, &mut scratch.depths);
     }
 
-    // build visit order: sort snapshot indices by depth
     scratch.order.clear();
     scratch.order.extend(0..n);
     scratch.order.sort_unstable_by_key(|&i| scratch.depths[i]);
 
-    // compute world matrices in depth order (parents guaranteed before children)
     scratch.world_mats.clear();
     scratch.world_mats.resize(n, Mat4::IDENTITY);
+    scratch.computed_vis.clear();
+    scratch.computed_vis.resize(n, true);
+
     for &i in &scratch.order {
-        let (entity, local, _) = scratch.snapshot[i];
-        let local_mat = local.to_matrix();
-        let world_mat = match scratch.parent_idx[i] {
-            Some(parent_i) => scratch.world_mats[parent_i] * local_mat,
-            None => local_mat,
-        };
-        scratch.world_mats[i] = world_mat;
+        let (entity, local, vis, _) = scratch.snapshot[i];
 
-        let (scale, rotation, translation) = world_mat.to_scale_rotation_translation();
-        let computed = WorldTransform3d { translation, rotation, scale };
+        // transform propagation
+        if let Some(local) = local {
+            let local_mat = local.to_matrix();
+            let world_mat = match scratch.parent_idx[i] {
+                Some(parent_i) => scratch.world_mats[parent_i] * local_mat,
+                None => local_mat,
+            };
+            scratch.world_mats[i] = world_mat;
 
-        if let Some(mut existing) = world.get_mut::<WorldTransform3d>(entity) {
-            *existing = computed;
-        } else if let Ok(mut entity_ref) = world.get_entity_mut(entity) {
-            entity_ref.insert(computed);
+            let (scale, rotation, translation) = world_mat.to_scale_rotation_translation();
+            let computed = WorldTransform3d { translation, rotation, scale };
+            if let Some(mut existing) = world.get_mut::<WorldTransform3d>(entity) {
+                *existing = computed;
+            } else if let Ok(mut entity_ref) = world.get_entity_mut(entity) {
+                entity_ref.insert(computed);
+            }
+        } else if let Some(parent_i) = scratch.parent_idx[i] {
+            // entity has no local transform — inherit parent matrix for child chains
+            scratch.world_mats[i] = scratch.world_mats[parent_i];
+        }
+
+        // visibility propagation
+        if let Some(vis) = vis {
+            let parent_visible = scratch.parent_idx[i]
+                .map(|pi| scratch.computed_vis[pi])
+                .unwrap_or(true);
+            let visible = match vis {
+                Visibility::Visible => true,
+                Visibility::Hidden => false,
+                Visibility::Inherited => parent_visible,
+            };
+            scratch.computed_vis[i] = visible;
+
+            let cv = ComputedVisibility(visible);
+            if let Some(mut existing) = world.get_mut::<ComputedVisibility>(entity) {
+                *existing = cv;
+            } else if let Ok(mut entity_ref) = world.get_entity_mut(entity) {
+                entity_ref.insert(cv);
+            }
         }
     }
 

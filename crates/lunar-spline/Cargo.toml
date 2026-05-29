@@ -14,3 +14,4 @@ bevy_ecs = { workspace = true }
 lunar-core = { path = "../lunar-core" }
 lunar-math = { path = "../lunar-math" }
 lunar-assets = { path = "../lunar-assets" }
+lunar-3d = { path = "../lunar-3d" }

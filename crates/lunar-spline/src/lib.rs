@@ -104,11 +104,22 @@ impl Spline {
 
     /// arc-length-parameterized sample using `steps` uniform subdivisions.
     ///
-    /// more accurate than `sample` for non-uniform point spacing, at the cost of
-    /// iterating `steps` segments to build a lookup table each call. cache the
-    /// result if sampling many times at the same parameterization.
+    /// allocates a length table on every call. for repeated sampling on the same spline,
+    /// prefer [`Spline::build_arc_table`] + [`ArcLengthTable::sample`] to pay the table
+    /// cost once.
     #[must_use]
-    pub fn sample_arc(self: &Spline, t: f32, steps: usize) -> Vec3 {
+    pub fn sample_arc(&self, t: f32, steps: usize) -> Vec3 {
+        let table = self.build_arc_table(steps);
+        table.sample(self, t)
+    }
+
+    /// precompute an arc-length lookup table for this spline.
+    ///
+    /// call once (e.g. at asset load time or when the spline changes) and store in
+    /// [`PathFollower::arc_table`]. subsequent calls to [`ArcLengthTable::sample`] are
+    /// allocation-free and O(log n).
+    #[must_use]
+    pub fn build_arc_table(&self, steps: usize) -> ArcLengthTable {
         let steps = steps.max(2);
         let mut lengths = Vec::with_capacity(steps + 1);
         let mut prev = self.sample(0.0);
@@ -116,22 +127,42 @@ impl Spline {
         for i in 1..=steps {
             let s = i as f32 / steps as f32;
             let next = self.sample(s);
-            lengths.push(lengths.last().copied().unwrap_or(0.0) + (next - prev).length());
+            lengths.push(*lengths.last().unwrap_or(&0.0) + (next - prev).length());
             prev = next;
         }
         let total = *lengths.last().unwrap_or(&1.0);
-        if total < 1e-7 {
-            return self.sample(0.0);
+        ArcLengthTable { lengths, total, steps }
+    }
+}
+
+/// precomputed arc-length parameterization table for a [`Spline`].
+///
+/// build once via [`Spline::build_arc_table`], store in a component or resource.
+/// call [`ArcLengthTable::sample`] each frame — no allocation, O(log n) lookup.
+pub struct ArcLengthTable {
+    /// cumulative arc lengths at each subdivision step.
+    lengths: Vec<f32>,
+    /// total arc length of the spline.
+    pub total: f32,
+    steps: usize,
+}
+
+impl ArcLengthTable {
+    /// sample the spline at arc-length parameter `t` in `[0.0, 1.0]`.
+    #[must_use]
+    pub fn sample(&self, spline: &Spline, t: f32) -> Vec3 {
+        if self.total < 1e-7 {
+            return spline.sample(0.0);
         }
-        let target = t.clamp(0.0, 1.0) * total;
-        let idx = lengths.partition_point(|&l| l < target).saturating_sub(1).min(steps - 1);
-        let seg_start = lengths[idx];
-        let seg_end = lengths[idx + 1];
+        let target = t.clamp(0.0, 1.0) * self.total;
+        let idx = self.lengths.partition_point(|&l| l < target).saturating_sub(1).min(self.steps - 1);
+        let seg_start = self.lengths[idx];
+        let seg_end = self.lengths[idx + 1];
         let seg_len = seg_end - seg_start;
         let local_t = if seg_len < 1e-7 { 0.0 } else { (target - seg_start) / seg_len };
-        let t0 = idx as f32 / steps as f32;
-        let t1 = (idx + 1) as f32 / steps as f32;
-        self.sample(t0 + local_t * (t1 - t0))
+        let t0 = idx as f32 / self.steps as f32;
+        let t1 = (idx + 1) as f32 / self.steps as f32;
+        spline.sample(t0 + local_t * (t1 - t0))
     }
 }
 
@@ -148,7 +179,7 @@ pub struct PathFollower {
     /// current normalized position on the spline `[0.0, 1.0]`.
     pub t: f32,
     /// movement speed in normalized spline units per second.
-    /// to express in world units use `speed / spline.arc_length(steps)`.
+    /// to express in world units use `speed / arc_table.total` after building the table.
     pub speed: f32,
     /// if true, reverse direction at endpoints instead of looping.
     pub ping_pong: bool,
@@ -158,6 +189,10 @@ pub struct PathFollower {
     pub paused: bool,
     /// current direction: 1.0 forward, -1.0 backward (ping-pong only).
     direction: f32,
+    /// optional precomputed arc-length table — set via `PathFollower::with_arc_table`.
+    /// if present, `advance_path_followers` uses arc-length parameterization at zero
+    /// allocation cost. build with `spline.build_arc_table(steps)`.
+    pub arc_table: Option<ArcLengthTable>,
 }
 
 impl PathFollower {
@@ -172,7 +207,15 @@ impl PathFollower {
             looping: true,
             paused: false,
             direction: 1.0,
+            arc_table: None,
         }
+    }
+
+    /// attach a precomputed arc-length table so the follower moves at constant world-space speed.
+    #[must_use]
+    pub fn with_arc_table(mut self, table: ArcLengthTable) -> Self {
+        self.arc_table = Some(table);
+        self
     }
 }
 
@@ -186,15 +229,15 @@ pub fn advance_path_followers(
 ) {
     let delta = time.delta_seconds();
     for (mut follower, mut transform) in query.iter_mut() {
-        if follower.paused {
-            continue;
-        }
-        let Some(spline) = splines.get(follower.spline) else {
-            continue;
-        };
+        if follower.paused { continue; }
+        let Some(spline) = splines.get(follower.spline) else { continue; };
 
         advance_follower_t(&mut follower, delta);
-        let pos = spline.sample(follower.t);
+        let pos = if let Some(ref table) = follower.arc_table {
+            table.sample(spline, follower.t)
+        } else {
+            spline.sample(follower.t)
+        };
         transform.translation = lunar_math::Vec2::new(pos.x, pos.y);
     }
 }
@@ -205,19 +248,19 @@ pub fn advance_path_followers(
 pub fn advance_path_followers_3d(
     time: Res<lunar_core::Time>,
     splines: Res<SplineStore>,
-    mut query: Query<(&mut PathFollower, &mut lunar_math::LocalTransform3d)>,
+    mut query: Query<(&mut PathFollower, &mut lunar_3d::LocalTransform3d)>,
 ) {
     let delta = time.delta_seconds();
     for (mut follower, mut transform) in query.iter_mut() {
-        if follower.paused {
-            continue;
-        }
-        let Some(spline) = splines.get(follower.spline) else {
-            continue;
-        };
+        if follower.paused { continue; }
+        let Some(spline) = splines.get(follower.spline) else { continue; };
 
         advance_follower_t(&mut follower, delta);
-        transform.translation = spline.sample(follower.t);
+        transform.translation = if let Some(ref table) = follower.arc_table {
+            table.sample(spline, follower.t)
+        } else {
+            spline.sample(follower.t)
+        };
     }
 }
 

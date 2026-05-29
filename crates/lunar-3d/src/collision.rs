@@ -618,6 +618,7 @@ mod tests {
             &indices,
             &world,
             100.0,
+            Entity::PLACEHOLDER,
         );
         assert!(result.is_some());
         let hit = result.unwrap();
@@ -643,6 +644,7 @@ mod tests {
             &indices,
             &world,
             100.0,
+            Entity::PLACEHOLDER,
         );
         assert!(result.is_none());
     }
