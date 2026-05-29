@@ -35,6 +35,18 @@ this file tracks what's done, what's next, and the reasoning behind decisions.
 - improved buffer/texture labels in both renderers: `[subsystem] descriptor` format throughout
 - 2D renderer bind group split: single monolithic BGL (uniform+texture+sampler) replaced with group 0 (uniform only, `globals_bg`) + group 1 (texture+sampler, per-texture `material_bgs`); globals set once per layer, material switched per batch
 - `layout_text_into` / `layout_text_wrapped_into` eliminate per-frame inner-vec allocations in text layout
+- pipeline cache disk serialization: `load_pipeline_cache` (reads `.pipeline_cache.bin`) + `save_pipeline_cache` (writes on drop) in both 2D and 3D renderers
+- `wgpu::util::StagingBelt` (4 MiB chunk) wired in `lunar-render-3d` for large buffer uploads; `finish()` before submit, `recall()` after
+- transparent pass back-to-front sort by view-space depth (camera-forward dot) using `sort_unstable_by`
+- SSR at quarter resolution: depth-reconstruct world pos, jitter ray in WGSL, single linear trace
+- GTAO half-res ambient occlusion: horizon-based (XeGTAO formulation), depth reconstruction, interleaved gradient noise, 5-tap bilateral blur, integrated into composite before tonemap
+- volumetric fog: froxel-based quarter-res, Henyey-Greenstein phase, depth-masked, alpha-blended over HDR
+- atmospheric scattering: Nishita-style single-scattering Rayleigh+Mie fullscreen pass after opaques, depth-masked (sky pixels only)
+- IrradianceSH ambient: 9 L2 SH coefficients evaluated at surface normal in shader.wgsl; `IrradianceSH` resource, falls back to flat ambient when absent
+- decals: box-projected, depth-reconstructed world pos, decal-local discard, edge-faded alpha blend
+- water rendering: 4-component Gerstner wave vertex displacement + Schlick fresnel + HDR refraction
+- particle GPU simulation: compute shader SoA buffer, instanced billboard render, CPU lifecycle management
+- terrain: geometry clipmap (Losasso/Hoppe 2004), per-ring LOD, heightmap R16Float, vertex shader displacement
 
 ## principles
 
@@ -47,34 +59,17 @@ this file tracks what's done, what's next, and the reasoning behind decisions.
 these are known gaps not yet addressed:
 
 - **asset eviction → bind group cleanup** (`lunar-render`): `remove_texture` correctly drops from both `textures` and `material_bgs`, but `AssetServer` never currently evicts assets. wiring is needed once eviction is implemented so gpu resources are freed alongside cpu handles.
-- **pipeline cache disk serialization** (`lunar-render`): `PipelineCache` is wired into the 2d renderer at runtime but not serialized to disk. persist on shutdown, reload on startup. reduces pipeline compilation time on subsequent launches on Vulkan/DX12.
 
 ## next
-
-### medium term
-
-**proper PBR lighting**
-current renderer is unlit (base_color only). next step is directional + point lights using the Cook-Torrance BRDF. one shadow cascade at 1024² for the directional light. reference doc has the full shadow filter progression (3×3 PCF low → 5×5 OptimizedPCF mid).
-
-**bind group layout standardisation**
-consolidate to the 4-group layout from the reference doc:
-- group 0: view-global (camera, time)
-- group 1: material
-- group 2: per-mesh / per-instance
-- group 3: pass-specific
-
-currently both render crates have ad-hoc layouts. making these explicit singletons allows pipelines to share bind groups and reduces redundant state changes.
 
 ### far term (post-v1)
 
 - render graph DAG (extract → prepare → queue → render → cleanup, modelled on Bevy's design)
 - GPU-driven culling via compute + indirect drawing (Vulkan/DX12 only, `DownlevelFlags::INDIRECT_EXECUTION`)
 - HZB two-pass occlusion culling
-- anti-aliasing: SMAA 1T as a composite-stage post-process (better than FXAA, avoids TAA ghosting); TAA deprioritized due to whole-frame blur even on non-aliased content
+- SMAA 1T as a composite-stage post-process (better than FXAA, avoids TAA ghosting); TAA deprioritized due to whole-frame blur even on non-aliased content
 - GTAO quality upgrades: bent normals output for specular AO, TAA-blended AO history accumulation
 - meshlet/virtualized geometry (v2, blocked on wgpu mesh shader support)
-- `StagingBelt` for batched buffer uploads (replaces `queue.write_buffer` on hot path)
-- pipeline cache disk serialization for `lunar-render-3d`
 
 ## rules carried forward from the reference doc
 
