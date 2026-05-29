@@ -10,7 +10,7 @@ struct Globals {
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 
-// group 1: material — dynamic offset
+// group 1: material storage — indexed by instance_id, set once per pass
 struct MaterialUniforms {
     base_color:   vec4<f32>,  // 16 bytes
     metallic:     f32,         //  4 bytes
@@ -18,7 +18,7 @@ struct MaterialUniforms {
     flags:        u32,         //  4 bytes  (bit 0 = unlit)
     has_lightmap: u32,         //  4 bytes — total: 32 bytes
 }
-@group(1) @binding(0) var<uniform> material: MaterialUniforms;
+@group(1) @binding(0) var<storage, read> materials: array<MaterialUniforms>;
 
 // group 2: per-instance transforms — storage array, indexed by @builtin(instance_index).
 // padded to 256 bytes to match the UNIFORM_STRIDE staging layout on the CPU.
@@ -103,6 +103,7 @@ struct VertOut {
     @location(3)       color:        vec4<f32>,
     @location(4)       view_depth:   f32,   // linear view-space depth for cascade selection
     @location(5)       uv_lightmap:  vec2<f32>,
+    @location(6)       instance_id:  u32,
 }
 
 @vertex
@@ -124,6 +125,7 @@ fn vs_main(in: VertIn, @builtin(instance_index) instance_id: u32) -> VertOut {
     // view_depth is positive distance from the camera (clip_w ≈ view_z in RH perspective)
     out.view_depth   = view_pos4.w;
     out.uv_lightmap  = in.uv_lightmap;
+    out.instance_id  = instance_id;
     return out;
 }
 
@@ -213,6 +215,7 @@ fn shadow_factor_5x5(world_pos: vec3<f32>, n: vec3<f32>, view_depth: f32) -> f32
 
 @fragment
 fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
+    let material = materials[in.instance_id];
     let albedo   = material.base_color.rgb * in.color.rgb;
     let alpha    = material.base_color.a * in.color.a;
     let metallic = material.metallic;

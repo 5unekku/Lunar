@@ -35,6 +35,7 @@ pub mod render_graph;
 pub use sky::{AtmosphericScattering, Sky};
 
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 use bevy_ecs::prelude::*;
 use lunar_3d::{
@@ -105,9 +106,6 @@ const CASCADE_LAMBDA: f32 = 0.5;
 /// near and far planes used for cascade split computation.
 const SHADOW_NEAR: f32 = 0.1;
 const SHADOW_FAR:  f32 = 200.0;
-
-/// HDR render target format — RGBA16Float for linear HDR output.
-const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// maximum number of bloom mip levels.
 const MAX_BLOOM_MIPS: usize = 7;
@@ -797,6 +795,9 @@ pub struct RenderEngine3d {
     // per-entity occlusion flags from hzb cull (combined with gpu_cull_flags)
     hzb_occ_flags: Vec<u32>,
     hzb_occ_buf: Option<wgpu::Buffer>,
+    // async staging readback signals — set by map_async callback, checked next frame
+    cull_staging_ready: Arc<AtomicBool>,
+    hzb_staging_ready: Arc<AtomicBool>,
     hzb_occ_staging: Option<wgpu::Buffer>,
     // hzb cull aabb / camera param buffers
     hzb_cull_aabb_buf: Option<wgpu::Buffer>,
@@ -911,16 +912,16 @@ impl RenderEngine3d {
             }],
         });
 
-        // group 1: material — dynamic offset, one slot per draw call (base_color)
+        // group 1: material — storage array indexed by instance_id, set once per pass
         let material_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("[material] bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: true,
-                    min_binding_size: wgpu::BufferSize::new(MATERIAL_UNIFORMS_SIZE),
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
                 count: None,
             }],
@@ -959,13 +960,13 @@ impl RenderEngine3d {
             }],
         });
 
-        // ── material uniform buffer (group 1) ─────────────────────────────
+        // ── material storage buffer (group 1) ─────────────────────────────
 
         let entity_capacity = INITIAL_ENTITY_CAPACITY;
         let material_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("[material] uniform buffer"),
-            size: (entity_capacity * UNIFORM_STRIDE as usize) as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            label: Some("[material] storage buffer"),
+            size: (entity_capacity * MATERIAL_UNIFORMS_SIZE as usize) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let material_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -973,14 +974,10 @@ impl RenderEngine3d {
             layout: &material_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &material_buf,
-                    offset: 0,
-                    size: wgpu::BufferSize::new(MATERIAL_UNIFORMS_SIZE),
-                }),
+                resource: material_buf.as_entire_binding(),
             }],
         });
-        let material_staging = vec![0u8; entity_capacity * UNIFORM_STRIDE as usize];
+        let material_staging = vec![0u8; entity_capacity * MATERIAL_UNIFORMS_SIZE as usize];
 
         // ── mesh uniform buffer (group 2) ─────────────────────────────────
 
@@ -2984,6 +2981,8 @@ impl RenderEngine3d {
             hzb_cull_params_buf: None,
             hzb_staging_pending: false,
             hzb_pending_entity_count: 0,
+            cull_staging_ready: Arc::new(AtomicBool::new(false)),
+            hzb_staging_ready: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -3848,7 +3847,7 @@ impl RenderEngine3d {
     }
 
     fn pack_material_uniforms(staging: &mut [u8], slot: usize, color: Color, metallic: f32, roughness: f32, flags: u32, has_lightmap: u32) {
-        let offset = slot * UNIFORM_STRIDE as usize;
+        let offset = slot * MATERIAL_UNIFORMS_SIZE as usize;
         // base_color(16) + metallic(4) + roughness(4) + flags(4) + has_lightmap(4) = 32 bytes
         let data: [f32; 7] = [color.r, color.g, color.b, color.a, metallic, roughness, f32::from_bits(flags)];
         staging[offset..offset + 28].copy_from_slice(unsafe { slice_as_bytes(&data) });
@@ -4120,29 +4119,39 @@ impl RenderEngine3d {
                 (soa.entities.len(), frustum.planes)
             };
 
-            // read previous frame's staging result (non-blocking — GPU already finished)
+            // read previous frame's staging result — non-blocking, uses AtomicBool set by map_async callback
             if self.cull_staging_pending && entity_count > 0 {
-                let prev_count = self.cull_pending_entity_count;
-                if let Some(staging_buf) = self.cull_flags_staging.as_ref() {
-                    let _ = self.device.poll(wgpu::PollType::Poll);
-                    let staging_slice = staging_buf.slice(0..(prev_count * 4) as u64);
-                    staging_slice.map_async(wgpu::MapMode::Read, |_| {});
-                    let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-                    {
-                        let data = staging_slice.get_mapped_range();
-                        let flags: &[u32] = bytemuck::cast_slice(&data);
-                        let soa = world.resource::<CullSoa>();
-                        for (i, &entity) in soa.entities.iter().take(prev_count).enumerate() {
-                            if i < flags.len() && flags[i] != 0 {
-                                self.frustum_visible.insert(entity);
+                let _ = self.device.poll(wgpu::PollType::Poll); // fire any completed callbacks
+                if self.cull_staging_ready.load(Ordering::Acquire) {
+                    let prev_count = self.cull_pending_entity_count;
+                    if let Some(staging_buf) = self.cull_flags_staging.as_ref() {
+                        {
+                            let staging_slice = staging_buf.slice(0..(prev_count * 4) as u64);
+                            let data = staging_slice.get_mapped_range();
+                            let flags: &[u32] = bytemuck::cast_slice(&data);
+                            let soa = world.resource::<CullSoa>();
+                            for (i, &entity) in soa.entities.iter().take(prev_count).enumerate() {
+                                if i < flags.len() && flags[i] != 0 {
+                                    self.frustum_visible.insert(entity);
+                                }
                             }
+                            self.gpu_cull_flags.clear();
+                            self.gpu_cull_flags.extend_from_slice(&flags[..prev_count.min(flags.len())]);
                         }
-                        self.gpu_cull_flags.clear();
-                        self.gpu_cull_flags.extend_from_slice(&flags[..prev_count.min(flags.len())]);
+                        staging_buf.unmap();
                     }
-                    staging_buf.unmap();
+                    self.cull_staging_ready.store(false, Ordering::Release);
+                    self.cull_staging_pending = false;
+                } else {
+                    // gpu not done yet — use stale gpu_cull_flags from last frame, no stall
+                    let soa = world.resource::<CullSoa>();
+                    for (i, &entity) in soa.entities.iter().enumerate() {
+                        if i < self.gpu_cull_flags.len() && self.gpu_cull_flags[i] != 0 {
+                            self.frustum_visible.insert(entity);
+                        }
+                    }
+                    self.cull_staging_pending = false;
                 }
-                self.cull_staging_pending = false;
             }
 
             // if no prior result yet (first frame), fall back to CPU cull
@@ -4209,6 +4218,12 @@ impl RenderEngine3d {
                 }
                 cull_enc.copy_buffer_to_buffer(flags_buf, 0, staging_buf, 0, (entity_count * 4) as u64);
                 self.queue.submit([cull_enc.finish()]);
+                // register map_async for next frame — callback fires when GPU finishes, no CPU stall
+                let ready = self.cull_staging_ready.clone();
+                ready.store(false, Ordering::Release);
+                staging_buf.slice(0..(entity_count * 4) as u64).map_async(wgpu::MapMode::Read, move |result| {
+                    if result.is_ok() { ready.store(true, Ordering::Release); }
+                });
                 self.cull_staging_pending = true;
                 self.cull_pending_entity_count = entity_count;
             }
@@ -4235,27 +4250,29 @@ impl RenderEngine3d {
             if entity_count > 0 {
                 self.ensure_hzb_cull_buffers(entity_count);
 
-                // read previous frame's occlusion result
+                // read previous frame's occlusion result — non-blocking
                 if self.hzb_staging_pending {
-                    let prev = self.hzb_pending_entity_count;
-                    if let Some(occ_staging) = self.hzb_occ_staging.as_ref() {
-                        let _ = self.device.poll(wgpu::PollType::Poll);
-                        let slice = occ_staging.slice(0..(prev * 4) as u64);
-                        slice.map_async(wgpu::MapMode::Read, |_| {});
-                        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-                        {
-                            let data = slice.get_mapped_range();
-                            let flags: &[u32] = bytemuck::cast_slice(&data);
-                            let soa = world.resource::<CullSoa>();
-                            for (i, &entity) in soa.entities.iter().take(prev).enumerate() {
-                                if i < flags.len() && flags[i] == 0 {
-                                    self.frustum_visible.remove(&entity);
+                    let _ = self.device.poll(wgpu::PollType::Poll);
+                    if self.hzb_staging_ready.load(Ordering::Acquire) {
+                        let prev = self.hzb_pending_entity_count;
+                        if let Some(occ_staging) = self.hzb_occ_staging.as_ref() {
+                            {
+                                let slice = occ_staging.slice(0..(prev * 4) as u64);
+                                let data = slice.get_mapped_range();
+                                let flags: &[u32] = bytemuck::cast_slice(&data);
+                                let soa = world.resource::<CullSoa>();
+                                for (i, &entity) in soa.entities.iter().take(prev).enumerate() {
+                                    if i < flags.len() && flags[i] == 0 {
+                                        self.frustum_visible.remove(&entity);
+                                    }
                                 }
                             }
+                            occ_staging.unmap();
                         }
-                        occ_staging.unmap();
+                        self.hzb_staging_ready.store(false, Ordering::Release);
+                        self.hzb_staging_pending = false;
                     }
-                    self.hzb_staging_pending = false;
+                    // if not ready: skip hzb cull for this frame (frustum_visible unchanged)
                 }
 
                 // dispatch this frame's HZB occlusion compute
@@ -4319,6 +4336,11 @@ impl RenderEngine3d {
                     }
                     hzb_enc.copy_buffer_to_buffer(occ_buf, 0, occ_staging, 0, (entity_count * 4) as u64);
                     self.queue.submit([hzb_enc.finish()]);
+                    let hzb_ready = self.hzb_staging_ready.clone();
+                    hzb_ready.store(false, Ordering::Release);
+                    occ_staging.slice(0..(entity_count * 4) as u64).map_async(wgpu::MapMode::Read, move |result| {
+                        if result.is_ok() { hzb_ready.store(true, Ordering::Release); }
+                    });
                     self.hzb_staging_pending = true;
                     self.hzb_pending_entity_count = entity_count;
                 }
@@ -4476,14 +4498,13 @@ impl RenderEngine3d {
         let needed = ENTITY_SLOT_START + self.draw_scratch.len();
         if needed > self.entity_capacity {
             self.entity_capacity = needed.next_power_of_two().max(INITIAL_ENTITY_CAPACITY);
-            let new_size = (self.entity_capacity * UNIFORM_STRIDE as usize) as u64;
             self.entity_buf = Self::make_entity_buf(&self.device, self.entity_capacity);
             self.entity_bg = Self::make_entity_bg(&self.device, &self.mesh_bgl, &self.entity_buf);
             self.uniform_staging.resize(self.entity_capacity * UNIFORM_STRIDE as usize, 0);
             self.material_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("[material] uniform buffer"),
-                size: new_size,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                label: Some("[material] storage buffer"),
+                size: (self.entity_capacity * MATERIAL_UNIFORMS_SIZE as usize) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
             self.material_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -4491,14 +4512,10 @@ impl RenderEngine3d {
                 layout: &self.material_bgl,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &self.material_buf,
-                        offset: 0,
-                        size: wgpu::BufferSize::new(MATERIAL_UNIFORMS_SIZE),
-                    }),
+                    resource: self.material_buf.as_entire_binding(),
                 }],
             });
-            self.material_staging.resize(self.entity_capacity * UNIFORM_STRIDE as usize, 0);
+            self.material_staging.resize(self.entity_capacity * MATERIAL_UNIFORMS_SIZE as usize, 0);
             log::debug!("draw buffers grown to {} slots", self.entity_capacity);
         }
 
@@ -4745,26 +4762,27 @@ impl RenderEngine3d {
         }
 
         // ── upload mesh + material buffers ───────────────────────────────
+        let material_upload_size = (needed * MATERIAL_UNIFORMS_SIZE as usize) as u64;
         if upload_size > 0 {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 // StagingBelt batches large per-frame uploads into GPU-side staging memory
                 let entity_size = wgpu::BufferSize::new(upload_size).unwrap();
-                let material_size = wgpu::BufferSize::new(upload_size).unwrap();
+                let mat_size = wgpu::BufferSize::new(material_upload_size).unwrap();
                 let mut view = self.staging_belt.write_buffer(
                     &mut encoder, &self.entity_buf, 0, entity_size,
                 );
                 view.copy_from_slice(&self.uniform_staging[..upload_size as usize]);
                 drop(view);
                 let mut view = self.staging_belt.write_buffer(
-                    &mut encoder, &self.material_buf, 0, material_size,
+                    &mut encoder, &self.material_buf, 0, mat_size,
                 );
-                view.copy_from_slice(&self.material_staging[..upload_size as usize]);
+                view.copy_from_slice(&self.material_staging[..material_upload_size as usize]);
             }
             #[cfg(target_arch = "wasm32")]
             {
                 self.queue.write_buffer(&self.entity_buf, 0, &self.uniform_staging[..upload_size as usize]);
-                self.queue.write_buffer(&self.material_buf, 0, &self.material_staging[..upload_size as usize]);
+                self.queue.write_buffer(&self.material_buf, 0, &self.material_staging[..material_upload_size as usize]);
             }
         }
 
@@ -4894,8 +4912,9 @@ impl RenderEngine3d {
                         });
                         zpass.set_pipeline(s_zpr_pl);
                         zpass.set_bind_group(0, s_glob_bg, &[]);
-                        zpass.set_bind_group(3, s_lights, &[]);
+                        zpass.set_bind_group(1, s_mat_bg, &[]);
                         zpass.set_bind_group(2, s_ent_bg, &[]);
+                        zpass.set_bind_group(3, s_lights, &[]);
                         let n = s_draw.len();
                         let mut last_mesh = u32::MAX; let mut last_mat = u32::MAX; let mut group_start = 0usize;
                         let mut i = 0usize;
@@ -4911,7 +4930,6 @@ impl RenderEngine3d {
                             if done { break; }
                             if cur_mesh != last_mesh || cur_mat != last_mat {
                                 if let Some(gpu) = s_mesh_gpu.get(&cur_mesh) {
-                                    zpass.set_bind_group(1, s_mat_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
                                     zpass.set_vertex_buffer(0, gpu.vbuf.slice(..));
                                     zpass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
                                 }
@@ -5017,8 +5035,9 @@ impl RenderEngine3d {
                     });
                     zpass.set_pipeline(&self.zprepass_pipeline);
                     zpass.set_bind_group(0, &self.globals_bg, &[]);
-                    zpass.set_bind_group(3, &self.lights_bg, &[]);
+                    zpass.set_bind_group(1, &self.material_bg, &[]);
                     zpass.set_bind_group(2, &self.entity_bg, &[]);
+                    zpass.set_bind_group(3, &self.lights_bg, &[]);
                     let n = self.draw_scratch.len();
                     let mut last_mesh = u32::MAX; let mut last_mat = u32::MAX; let mut group_start = 0usize;
                     let mut i = 0usize;
@@ -5034,7 +5053,6 @@ impl RenderEngine3d {
                         if done { break; }
                         if cur_mesh != last_mesh || cur_mat != last_mat {
                             if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
-                                zpass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
                                 zpass.set_vertex_buffer(0, gpu.vbuf.slice(..));
                                 zpass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
                             }
@@ -5072,8 +5090,9 @@ impl RenderEngine3d {
                 });
                 hzb_zpass.set_pipeline(&self.zprepass_nonmsaa_pipeline);
                 hzb_zpass.set_bind_group(0, &self.globals_bg, &[]);
-                hzb_zpass.set_bind_group(3, &self.lights_bg, &[]);
+                hzb_zpass.set_bind_group(1, &self.material_bg, &[]);
                 hzb_zpass.set_bind_group(2, &self.entity_bg, &[]);
+                hzb_zpass.set_bind_group(3, &self.lights_bg, &[]);
                 let mut last_mesh = u32::MAX;
                 let mut last_mat = u32::MAX;
                 let mut group_start = 0usize;
@@ -5092,7 +5111,6 @@ impl RenderEngine3d {
                     if done { break; }
                     if cur_mesh != last_mesh || cur_mat != last_mat {
                         if let Some(gpu_mesh) = self.mesh_gpu.get(&cur_mesh) {
-                            hzb_zpass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
                             hzb_zpass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
                             hzb_zpass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
                         }
@@ -5171,8 +5189,9 @@ impl RenderEngine3d {
                 });
                 zpass.set_pipeline(&self.zprepass_nonmsaa_pipeline);
                 zpass.set_bind_group(0, &self.globals_bg, &[]);
-                zpass.set_bind_group(3, &self.lights_bg, &[]);
+                zpass.set_bind_group(1, &self.material_bg, &[]);
                 zpass.set_bind_group(2, &self.entity_bg, &[]);
+                zpass.set_bind_group(3, &self.lights_bg, &[]);
                 {
                     let mut last_mesh = u32::MAX;
                     let mut last_mat = u32::MAX;
@@ -5192,7 +5211,6 @@ impl RenderEngine3d {
                         if done { break; }
                         if cur_mesh != last_mesh || cur_mat != last_mat {
                             if let Some(gpu_mesh) = self.mesh_gpu.get(&cur_mesh) {
-                                zpass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
                                 zpass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
                                 zpass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
                             }
@@ -5294,6 +5312,7 @@ impl RenderEngine3d {
                     }
                 );
                 benc.set_bind_group(0, &self.globals_bg, &[]);
+                benc.set_bind_group(1, &self.material_bg, &[]);
                 benc.set_bind_group(2, &self.entity_bg, &[]);
                 benc.set_bind_group(3, &self.lights_bg, &[]);
                 let mut last_mesh = u32::MAX;
@@ -5315,7 +5334,6 @@ impl RenderEngine3d {
                     }
                     if j == sn { break; }
                     if grp_changed {
-                        let slot_i = new_static_list[j].3;
                         if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
                             let lm_bg = if cur_lm != u32::MAX {
                                 self.lightmap_bg_cache.get(&cur_lm).unwrap_or(&self.lightmap_fallback_bg)
@@ -5323,7 +5341,6 @@ impl RenderEngine3d {
                                 &self.lightmap_fallback_bg
                             };
                             benc.set_bind_group(4, lm_bg, &[]);
-                            benc.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + slot_i)]);
                             benc.set_vertex_buffer(0, gpu.vbuf.slice(..));
                             benc.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
                             last_mesh = cur_mesh; last_mat = cur_mat; last_lm = cur_lm;
@@ -5390,6 +5407,7 @@ impl RenderEngine3d {
             pass.set_scissor_rect(vp_x, vp_y, vp_w, vp_h);
 
             pass.set_bind_group(0, &self.globals_bg, &[]);
+            pass.set_bind_group(1, &self.material_bg, &[]);
             pass.set_bind_group(3, &self.lights_bg, &[]);
             // group 4 fallback — sky/sun are unlit and never sample the lightmap, but pipeline requires it bound
             pass.set_bind_group(4, &self.lightmap_fallback_bg, &[]);
@@ -5398,14 +5416,12 @@ impl RenderEngine3d {
             // entity_bg is set once for the whole pass (covers all slots in storage buffer).
             pass.set_pipeline(&self.sky_pipeline);
             pass.set_bind_group(2, &self.entity_bg, &[]);
-            pass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(SLOT_DOME)]);
             pass.set_vertex_buffer(0, self.dome_mesh.vbuf.slice(..));
             pass.set_index_buffer(self.dome_mesh.ibuf.slice(..), self.dome_mesh.index_fmt);
             pass.draw_indexed(0..self.dome_mesh.index_count, 0, SLOT_DOME as u32..SLOT_DOME as u32 + 1);
             draw_calls += 1;
 
             if sky.is_some_and(|s| s.show_sun) {
-                pass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(SLOT_SUN)]);
                 pass.set_vertex_buffer(0, self.sun_mesh.vbuf.slice(..));
                 pass.set_index_buffer(self.sun_mesh.ibuf.slice(..), self.sun_mesh.index_fmt);
                 pass.draw_indexed(0..self.sun_mesh.index_count, 0, SLOT_SUN as u32..SLOT_SUN as u32 + 1);
@@ -5449,7 +5465,6 @@ impl RenderEngine3d {
                             &self.lightmap_fallback_bg
                         };
                         pass.set_bind_group(4, lm_bg, &[]);
-                        pass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
                         pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
                         pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
                         last_mesh = cur_mesh;
@@ -5475,7 +5490,6 @@ impl RenderEngine3d {
                         &self.lightmap_fallback_bg
                     };
                     pass.set_bind_group(4, lm_bg, &[]);
-                    pass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
                     pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
                     pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
                     let base = (ENTITY_SLOT_START + i) as u32;
