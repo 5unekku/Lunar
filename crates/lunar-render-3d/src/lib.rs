@@ -40,7 +40,7 @@ use lunar_3d::{
     Aabb3d, ActiveCamera3d, AmbientLight, Camera3d, ComputedVisibility, CullSoa, Decal,
     DirectionalLight, Frustum, IndexBuffer, IrradianceSH, Material3d, Mesh3d, MeshData,
     MeshRegistry, ParticleEmitter, PointLight, Projection, ShadowCaster, Vertex3d,
-    ViewportAspect, WorldTransform3d,
+    ViewportAspect, Water, WorldTransform3d,
 };
 use lunar_3d::primitives::{quad_mesh, sphere_mesh};
 use lunar_core::{App, GamePlugin, UpdateStage};
@@ -59,6 +59,7 @@ const ATMOS_SHADER_SRC:         &str = include_str!("atmos.wgsl");
 const PARTICLE_SIM_SHADER_SRC:    &str = include_str!("particle_sim.wgsl");
 const PARTICLE_RENDER_SHADER_SRC: &str = include_str!("particle_render.wgsl");
 const DECAL_SHADER_SRC:           &str = include_str!("decal.wgsl");
+const WATER_SHADER_SRC:           &str = include_str!("water.wgsl");
 
 const SKY_RADIUS: f32 = 900.0;
 const SUN_Y: f32 = 895.0;
@@ -131,6 +132,9 @@ const PARTICLE_STRIDE: u64 = 80;
 
 /// decal params UBO: decal_inv_world(64)+inv_view_proj(64)+color(16)+decal_world(64)+misc(16) = 224 bytes.
 const DECAL_PARAMS_SIZE: u64 = 224;
+
+/// water params UBO: 4×wave(64)+model(64)+water_color(16)+deep_color(16)+misc(32) = 192 bytes.
+const WATER_PARAMS_SIZE: u64 = 192;
 
 /// stride for dynamic UBO slots — must be ≥ min_uniform_buffer_offset_alignment (256).
 const UNIFORM_STRIDE: u64 = 256;
@@ -554,6 +558,14 @@ pub struct RenderEngine3d {
     particle_render_bg: wgpu::BindGroup,
     particle_render_pipeline: wgpu::RenderPipeline,
     particle_cpu: Vec<CpuParticle>,
+
+    // water rendering — Gerstner wave displacement + refraction (mid+ tier)
+    water_params_buf: wgpu::Buffer,
+    water_bgl0: wgpu::BindGroupLayout,
+    water_bgl1: wgpu::BindGroupLayout,
+    water_bg0: wgpu::BindGroup,
+    water_bg1: wgpu::BindGroup,
+    water_pipeline: wgpu::RenderPipeline,
 
     // decal system — box-projected decals rendered after opaques (uses scene depth)
     decal_params_buf: wgpu::Buffer,
@@ -1766,6 +1778,112 @@ impl RenderEngine3d {
         });
         // atmos_bg0 needs gtao_depth_tex (created in GTAO section); assigned after that section.
 
+        // ── water rendering — Gerstner waves + refraction ─────────────────
+
+        let water_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[water] params buffer"),
+            size: WATER_PARAMS_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let water_bgl0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[water] bgl0"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(GLOBALS_SIZE),
+                    }, count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    }, count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let water_bgl1 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[water] bgl1"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0, visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(WATER_PARAMS_SIZE),
+                }, count: None,
+            }],
+        });
+
+        let water_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[water] bg0"),
+            layout: &water_bgl0,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: globals_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&hdr_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&post_sampler) },
+            ],
+        });
+
+        let water_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[water] bg1"),
+            layout: &water_bgl1,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: water_params_buf.as_entire_binding() }],
+        });
+
+        let water_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("[water] shader"),
+            source: wgpu::ShaderSource::Wgsl(WATER_SHADER_SRC.into()),
+        });
+        let water_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[water] pipeline layout"),
+            bind_group_layouts: &[Some(&water_bgl0), Some(&water_bgl1)],
+            immediate_size: 0,
+        });
+        let water_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("[water] pipeline"),
+            layout: Some(&water_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &water_shader, entry_point: Some("vs_main"),
+                buffers: vertex_buffers, compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &water_shader, entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: HDR_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState { count: msaa_samples, ..Default::default() },
+            cache: pipeline_cache.as_ref(),
+            multiview_mask: None,
+        });
+
         // ── decal system — box-projected, depth-sampled ───────────────────
 
         let decal_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -2365,6 +2483,12 @@ impl RenderEngine3d {
             atmos_bg1,
             atmos_params_buf,
             atmos_pipeline,
+            water_params_buf,
+            water_bgl0,
+            water_bgl1,
+            water_bg0,
+            water_bg1,
+            water_pipeline,
             decal_params_buf,
             decal_bgl0,
             decal_bgl1,
@@ -2757,6 +2881,17 @@ impl RenderEngine3d {
         self.ssr_texture = ssr_texture;
         self.fog_view = fog_view;
         self.fog_texture = fog_texture;
+
+        // rebuild water bg0 with the new hdr_view (for refraction sampling)
+        self.water_bg0 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[water] bg0"),
+            layout: &self.water_bgl0,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.globals_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+            ],
+        });
 
         // rebuild composite bind group (binding 4=ssr, 5=fog, 6=sampler)
         let bloom_view = self.bloom_mip_views.first().unwrap_or(&self.hdr_view);
@@ -3409,6 +3544,78 @@ impl RenderEngine3d {
                     pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
                     draw_calls += 1;
                 }
+            }
+        }
+
+        // ── water pass — Gerstner wave displacement + refraction (mid+) ──
+        if self.render_tier != RenderTier::LowGles {
+            let width  = self.surface_config.width as f32;
+            let height = self.surface_config.height as f32;
+            let mut water_query = world.query::<(&Water, &Mesh3d, &WorldTransform3d)>();
+            let water_entities: Vec<(Water, u32, WorldTransform3d)> = water_query
+                .iter(world)
+                .map(|(w, m, t)| (*w, m.0.id(), *t))
+                .collect();
+
+            for (water_comp, mesh_id, wt) in &water_entities {
+                let Some(gpu_mesh) = self.mesh_gpu.get(mesh_id) else { continue; };
+
+                let model_cols = wt.to_matrix().to_cols_array();
+                // default 4-wave setup: two crossing ocean swells + two small chop waves
+                let waves: [[f32; 4]; 4] = [
+                    [1.0, 0.0, 12.0, 0.3],   // direction.x, direction.z, wavelength, amplitude
+                    [0.7, 0.7, 8.0,  0.2],
+                    [0.0, 1.0, 5.0,  0.1],
+                    [-0.5, 0.8, 3.0, 0.05],
+                ];
+                let water_color = [water_comp.water_color.r, water_comp.water_color.g, water_comp.water_color.b, water_comp.water_color.a];
+                let deep_color  = [water_comp.deep_color.r, water_comp.deep_color.g, water_comp.deep_color.b, water_comp.deep_color.a];
+
+                let mut data = [0u8; WATER_PARAMS_SIZE as usize];
+                for (i, w) in waves.iter().enumerate() {
+                    data[i*16..i*16+16].copy_from_slice(unsafe { slice_as_bytes(w) });
+                }
+                data[64..128].copy_from_slice(unsafe { slice_as_bytes(&model_cols) });
+                data[128..144].copy_from_slice(unsafe { slice_as_bytes(&water_color) });
+                data[144..160].copy_from_slice(unsafe { slice_as_bytes(&deep_color) });
+                let misc: [f32; 8] = [
+                    water_comp.refract_strength,
+                    water_comp.wave_speed,
+                    water_comp.fresnel_power,
+                    width, height,
+                    0.0, 0.0, 0.0,
+                ];
+                data[160..192].copy_from_slice(unsafe { slice_as_bytes(&misc) });
+                self.queue.write_buffer(&self.water_params_buf, 0, &data);
+
+                let (color_target, resolve_target) = match &self.msaa_color_view {
+                    Some(msaa) => (msaa as &wgpu::TextureView, Some(&self.hdr_view as &wgpu::TextureView)),
+                    None => (&self.hdr_view as &wgpu::TextureView, None),
+                };
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("[water] pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: color_target,
+                        resolve_target,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.depth_view,
+                        depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Discard }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.water_pipeline);
+                pass.set_bind_group(0, &self.water_bg0, &[]);
+                pass.set_bind_group(1, &self.water_bg1, &[]);
+                pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
+                pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
+                pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+                draw_calls += 1;
             }
         }
 

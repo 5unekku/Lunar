@@ -41,6 +41,7 @@ pub mod mesh_registry;
 pub mod particles;
 pub mod primitives;
 pub mod visibility;
+pub mod water;
 
 mod camera;
 mod light;
@@ -64,6 +65,7 @@ pub use collision::{
 };
 pub use decals::Decal;
 pub use fog::{Fog, FogFalloff};
+pub use water::Water;
 pub use particles::ParticleEmitter;
 pub use light::{DirectionalLight, IrradianceSH, PointLight, SpotLight};
 pub use material::{CullMode, Material3d, MaterialData, ShadingModel};
