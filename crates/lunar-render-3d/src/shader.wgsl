@@ -12,11 +12,11 @@ struct Globals {
 
 // group 1: material — dynamic offset
 struct MaterialUniforms {
-    base_color: vec4<f32>,  // 16 bytes
-    metallic:   f32,         //  4 bytes
-    roughness:  f32,         //  4 bytes
-    flags:      u32,         //  4 bytes  (bit 0 = unlit)
-    _pad:       f32,         //  4 bytes — total: 32 bytes
+    base_color:   vec4<f32>,  // 16 bytes
+    metallic:     f32,         //  4 bytes
+    roughness:    f32,         //  4 bytes
+    flags:        u32,         //  4 bytes  (bit 0 = unlit)
+    has_lightmap: u32,         //  4 bytes — total: 32 bytes
 }
 @group(1) @binding(0) var<uniform> material: MaterialUniforms;
 
@@ -80,6 +80,10 @@ struct Lights {
 @group(3) @binding(1) var           shadow_map:     texture_depth_2d_array;
 @group(3) @binding(2) var           shadow_sampler: sampler_comparison;
 
+// group 4: lightmap — bound per draw group; fallback is a 1×1 white texture
+@group(4) @binding(0) var lightmap_tex:     texture_2d<f32>;
+@group(4) @binding(1) var lightmap_sampler: sampler;
+
 // ── vertex I/O ─────────────────────────────────────────────────────────────
 
 struct VertIn {
@@ -98,6 +102,7 @@ struct VertOut {
     @location(2)       uv:           vec2<f32>,
     @location(3)       color:        vec4<f32>,
     @location(4)       view_depth:   f32,   // linear view-space depth for cascade selection
+    @location(5)       uv_lightmap:  vec2<f32>,
 }
 
 @vertex
@@ -118,6 +123,7 @@ fn vs_main(in: VertIn, @builtin(instance_index) instance_id: u32) -> VertOut {
     out.color        = in.color;
     // view_depth is positive distance from the camera (clip_w ≈ view_z in RH perspective)
     out.view_depth   = view_pos4.w;
+    out.uv_lightmap  = in.uv_lightmap;
     return out;
 }
 
@@ -220,20 +226,20 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     let n = normalize(in.world_normal);
     let v = normalize(globals.cam_pos - in.world_pos);
 
-    var lo = vec3<f32>(0.0);
-
-    // directional light with cascaded shadow
+    // directional light with cascaded shadow — separate from point lights for lightmap path
+    var dir_lo = vec3<f32>(0.0);
     if lights.dir_enabled != 0u {
         let l = normalize(-lights.dir_direction);
         let ndotl = max(dot(n, l), 0.0);
         if ndotl > 0.0 {
             let irradiance = lights.dir_color * (lights.dir_illuminance / 80000.0);
             let shadow = shadow_factor_5x5(in.world_pos, n, in.view_depth);
-            lo += pbr_light(n, v, l, albedo, metallic, roughness, irradiance, ndotl) * shadow;
+            dir_lo += pbr_light(n, v, l, albedo, metallic, roughness, irradiance, ndotl) * shadow;
         }
     }
 
     // point lights (up to 8)
+    var point_lo = vec3<f32>(0.0);
     for (var i = 0u; i < min(lights.point_count, 8u); i++) {
         let light   = lights.point_lights[i];
         let to_light = light.position - in.world_pos;
@@ -247,7 +253,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
         let window = clamp(1.0 - r * r * r * r, 0.0, 1.0);
         let att   = window * window / (dist * dist + 1.0);
         let irradiance = light.color * light.intensity * att;
-        lo += pbr_light(n, v, l, albedo, metallic, roughness, irradiance, ndotl);
+        point_lo += pbr_light(n, v, l, albedo, metallic, roughness, irradiance, ndotl);
     }
 
     // ambient — either SH irradiance probe (directional) or flat fallback
@@ -269,7 +275,14 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
         ambient = lights.ambient_color * lights.ambient_intensity * albedo * (1.0 - metallic * 0.9);
     }
 
-    // output raw HDR — composite pass applies ACES tonemap + post effects
-    let hdr = ambient + lo;
+    // output raw HDR — composite pass applies ACES tonemap + post effects.
+    // lightmap replaces directional + ambient for static baked geometry.
+    var hdr: vec3<f32>;
+    if (material.has_lightmap != 0u) {
+        let lm = textureSample(lightmap_tex, lightmap_sampler, in.uv_lightmap).rgb;
+        hdr = lm * albedo + point_lo;
+    } else {
+        hdr = ambient + dir_lo + point_lo;
+    }
     return vec4<f32>(hdr, alpha);
 }

@@ -10,10 +10,12 @@ categories.workspace = true
 keywords.workspace = true
 
 [dependencies]
-lunar-3d     = { path = "../lunar-3d" }
-lunar-assets = { path = "../lunar-assets" }
-lunar-core   = { path = "../lunar-core" }
-lunar-math   = { path = "../lunar-math" }
+lunar-3d       = { path = "../lunar-3d" }
+lunar-assets   = { path = "../lunar-assets" }
+lunar-bsp      = { path = "../lunar-bsp" }
+lunar-core     = { path = "../lunar-core" }
+lunar-lightmap = { path = "../lunar-lightmap" }
+lunar-math     = { path = "../lunar-math" }
 bevy_ecs    = { workspace = true }
 wgpu        = { workspace = true, features = ["wgsl"] }
 log         = { workspace = true }

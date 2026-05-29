@@ -45,7 +45,9 @@ use lunar_3d::{
     Water, WorldTransform3d,
 };
 use lunar_3d::primitives::{quad_mesh, sphere_mesh};
+use lunar_bsp::{Area, BspLevel, VisibleAreas};
 use lunar_core::{App, GamePlugin, UpdateStage};
+use lunar_lightmap::Lightmap;
 use lunar_math::{Color, Mat3, Mat4, Vec2, Vec3};
 
 const SHADER_SRC: &str           = include_str!("shader.wgsl");
@@ -654,15 +656,24 @@ pub struct RenderEngine3d {
     #[cfg(not(target_arch = "wasm32"))]
     staging_belt: wgpu::util::StagingBelt,
 
+    // lightmap bind group (group 4): texture + sampler per baked entity
+    lightmap_bgl: wgpu::BindGroupLayout,
+    lightmap_sampler: wgpu::Sampler,
+    lightmap_fallback_tex: wgpu::Texture,
+    lightmap_fallback_bg: wgpu::BindGroup,
+    // per-texture-id lightmap bind group cache; populated lazily from AssetServer
+    lightmap_bg_cache: HashMap<u32, wgpu::BindGroup>,
+
     // per-frame scratch — cleared at frame start, never reallocated in steady state
     frustum_visible: HashSet<Entity>,
-    raw_scratch: Vec<(Entity, u32, u32, Mat4)>,
+    // (entity, mesh_id, mat_id, model, lightmap_tex_id); u32::MAX lightmap = none
+    raw_scratch: Vec<(Entity, u32, u32, Mat4, u32)>,
     // impostor billboard draw list — entities replaced by impostors this frame.
     // (world_pos, half_w, half_h, texture_id, u_min, u_max)
     impostor_scratch: Vec<(Vec3, f32, f32, u32, f32, f32)>,
-    // (entity, mesh_id, mat_id, base_color, metallic, roughness, model, alpha)
-    // sorted by (mesh_id, mat_id) before drawing for state-change batching and GPU instancing
-    draw_scratch: Vec<(Entity, u32, u32, Color, f32, f32, Mat4, f32, u32)>,
+    // (entity, mesh_id, mat_id, base_color, metallic, roughness, model, alpha, mat_flags, lightmap_tex_id)
+    // sorted by (alpha_bit, mesh_id, mat_id, lightmap_tex_id) for batching
+    draw_scratch: Vec<(Entity, u32, u32, Color, f32, f32, Mat4, f32, u32, u32)>,
     uniform_staging: Vec<u8>,
     point_light_scratch: Vec<(Vec3, Color, f32, f32)>,
 
@@ -1037,9 +1048,67 @@ impl RenderEngine3d {
             source: wgpu::ShaderSource::Wgsl(SHADOW_SHADER_SRC.into()),
         });
 
+        // group 4: lightmap — texture_2d + sampler, bound per draw group
+        let lightmap_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[lightmap] bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let lightmap_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("[lightmap] sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
+        // 1×1 white fallback — used for entities without a Lightmap component
+        let lightmap_fallback_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[lightmap] fallback 1x1 white"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            lightmap_fallback_tex.as_image_copy(),
+            &[255u8, 255, 255, 255],
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+        let lightmap_fallback_view = lightmap_fallback_tex.create_view(&Default::default());
+        let lightmap_fallback_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[lightmap] fallback bg"),
+            layout: &lightmap_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&lightmap_fallback_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&lightmap_sampler) },
+            ],
+        });
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("3d pipeline layout"),
-            bind_group_layouts: &[Some(&globals_bgl), Some(&material_bgl), Some(&mesh_bgl), Some(&lights_bgl)],
+            bind_group_layouts: &[Some(&globals_bgl), Some(&material_bgl), Some(&mesh_bgl), Some(&lights_bgl), Some(&lightmap_bgl)],
             immediate_size: 0,
         });
 
@@ -2771,6 +2840,11 @@ impl RenderEngine3d {
             frame_time_ema_ms: 16.67,
             resolution_scale: 1.0,
             frame_time_budget_ms: 14.0,
+            lightmap_bgl,
+            lightmap_sampler,
+            lightmap_fallback_tex,
+            lightmap_fallback_bg,
+            lightmap_bg_cache: HashMap::new(),
             frustum_visible: HashSet::new(),
             raw_scratch: Vec::new(),
             draw_scratch: Vec::new(),
@@ -3562,12 +3636,12 @@ impl RenderEngine3d {
         staging[offset + 64..offset + 112].copy_from_slice(unsafe { slice_as_bytes(&normal_packed) });
     }
 
-    fn pack_material_uniforms(staging: &mut [u8], slot: usize, color: Color, metallic: f32, roughness: f32, flags: u32) {
+    fn pack_material_uniforms(staging: &mut [u8], slot: usize, color: Color, metallic: f32, roughness: f32, flags: u32, has_lightmap: u32) {
         let offset = slot * UNIFORM_STRIDE as usize;
+        // base_color(16) + metallic(4) + roughness(4) + flags(4) + has_lightmap(4) = 32 bytes
         let data: [f32; 7] = [color.r, color.g, color.b, color.a, metallic, roughness, f32::from_bits(flags)];
-        // 7 × 4 = 28 bytes + 4 pad = 32 bytes
         staging[offset..offset + 28].copy_from_slice(unsafe { slice_as_bytes(&data) });
-        staging[offset + 28..offset + 32].fill(0);
+        staging[offset + 28..offset + 32].copy_from_slice(&has_lightmap.to_le_bytes());
     }
 
     // ── public surface management ──────────────────────────────────────────
@@ -4039,18 +4113,63 @@ impl RenderEngine3d {
         }
 
         // ── gather draw list ──────────────────────────────────────────────
+
+        // build area visibility from BspLevel PVS if loaded; fall through to VisibleAreas otherwise
+        let bsp_visible: Option<HashSet<u32>> = world
+            .get_resource::<BspLevel>()
+            .filter(|level| level.is_loaded())
+            .map(|level| {
+                let leaf = level.camera_leaf(cam_pos);
+                let visible_leaves = level.visible_leaves(leaf);
+                let area_map = level.area_map();
+                let mut areas = HashSet::new();
+                for leaf_idx in &visible_leaves {
+                    if let Ok(pos) = area_map.binary_search_by_key(&(*leaf_idx as u32), |&(li, _)| li) {
+                        areas.insert(area_map[pos].1);
+                    }
+                }
+                areas
+            });
+
+        // write visible areas back so game code (AI LOS queries etc.) reads a correct set
+        if let Some(ref areas) = bsp_visible {
+            if let Some(mut vis_areas) = world.get_resource_mut::<VisibleAreas>() {
+                vis_areas.area_ids.clear();
+                vis_areas.area_ids.extend(areas.iter().copied());
+                vis_areas.active = true;
+            }
+        }
+
+        // snapshot portal visible areas before the mutable query borrow
+        let portal_visible_snap: Option<HashSet<u32>> = world
+            .get_resource::<VisibleAreas>()
+            .filter(|pv| pv.active)
+            .map(|pv| pv.area_ids.clone());
+
         self.raw_scratch.clear();
         self.impostor_scratch.clear();
         {
             let mut q = world.query::<(
                 Entity, &Mesh3d, &Material3d, &WorldTransform3d, &ComputedVisibility,
                 Option<&Aabb3d>, Option<&MeshLod>, Option<&MeshImpostor>,
+                Option<&Area>, Option<&Lightmap>,
             )>();
             q.iter(world)
-                .filter(|(entity, _, _, _, vis, aabb, _, _)| {
-                    vis.0 && (aabb.is_none() || self.frustum_visible.contains(entity))
+                .filter(|(entity, _, _, _, vis, aabb, _, _, area, _)| {
+                    if !vis.0 { return false; }
+                    // BSP PVS area culling (takes priority over portal traversal)
+                    if let Some(ref visible_areas) = bsp_visible {
+                        if let Some(a) = area {
+                            if !visible_areas.contains(&a.0) { return false; }
+                        }
+                    } else if let Some(ref pv) = portal_visible_snap {
+                        if let Some(a) = area {
+                            if !pv.contains(&a.0) { return false; }
+                        }
+                    }
+                    aabb.is_none() || self.frustum_visible.contains(entity)
                 })
-                .for_each(|(entity, mesh, mat, wt, _, _, lod, impostor)| {
+                .for_each(|(entity, mesh, mat, wt, _, _, lod, impostor, _, lightmap)| {
                     let dist_sq = (wt.translation - cam_pos).length_squared();
 
                     // check if entity should use impostor billboard
@@ -4077,14 +4196,15 @@ impl RenderEngine3d {
                         .and_then(|l| l.select(dist_sq))
                         .unwrap_or(mesh.0)
                         .id();
-                    self.raw_scratch.push((entity, mesh_id, mat.0.id(), wt.to_matrix()));
+                    let lm_id = lightmap.map(|lm| lm.texture.id()).unwrap_or(u32::MAX);
+                    self.raw_scratch.push((entity, mesh_id, mat.0.id(), wt.to_matrix(), lm_id));
                 });
         }
 
         self.draw_scratch.clear();
         {
             let registry = world.resource::<MeshRegistry>();
-            for &(entity, mesh_id, mat_id, model) in &self.raw_scratch {
+            for &(entity, mesh_id, mat_id, model, lm_id) in &self.raw_scratch {
                 let (color, metallic, roughness, alpha, mat_flags) = registry
                     .get_material(lunar_assets::Handle::new(mat_id, 0))
                     .map(|m| {
@@ -4094,16 +4214,15 @@ impl RenderEngine3d {
                         (color, m.metallic, m.roughness, m.alpha, flags)
                     })
                     .unwrap_or((Color::WHITE, 0.0, 0.5, 1.0, 0u32));
-                self.draw_scratch.push((entity, mesh_id, mat_id, color, metallic, roughness, model, alpha, mat_flags));
+                self.draw_scratch.push((entity, mesh_id, mat_id, color, metallic, roughness, model, alpha, mat_flags, lm_id));
             }
         }
-        // sort opaque entities by (mesh_id, mat_id) so consecutive entities can share
-        // VBO/IBO and material bind group, and be batched into a single draw_indexed call.
+        // sort opaque entities by (mesh_id, mat_id, lightmap_tex_id) so consecutive entities
+        // can share VBO/IBO and bind groups, batched into a single draw_indexed call.
         // transparents are sorted separately by depth after this.
-        self.draw_scratch.sort_unstable_by_key(|&(_, mesh_id, mat_id, _, _, _, _, alpha, _)| {
-            // put transparents last, then sort by (mesh_id, mat_id)
+        self.draw_scratch.sort_unstable_by_key(|&(_, mesh_id, mat_id, _, _, _, _, alpha, _, lm_id)| {
             let transparent = if alpha < 1.0 { 1u8 } else { 0u8 };
-            (transparent, mesh_id, mat_id)
+            (transparent, mesh_id, mat_id, lm_id)
         });
 
         // ── upload missing meshes ─────────────────────────────────────────
@@ -4152,18 +4271,79 @@ impl RenderEngine3d {
         // sky dome and sun are unlit (flags = 1)
         let dome_model = Mat4::from_translation(cam_pos);
         Self::pack_mesh_uniforms(&mut self.uniform_staging, SLOT_DOME, dome_model);
-        Self::pack_material_uniforms(&mut self.material_staging, SLOT_DOME, sky_color, 0.0, 1.0, 1);
+        Self::pack_material_uniforms(&mut self.material_staging, SLOT_DOME, sky_color, 0.0, 1.0, 1, 0);
 
         if let Some(sky) = sky {
             let sun_model = Mat4::from_translation(cam_pos + Vec3::new(0.0, SUN_Y, 0.0));
             Self::pack_mesh_uniforms(&mut self.uniform_staging, SLOT_SUN, sun_model);
-            Self::pack_material_uniforms(&mut self.material_staging, SLOT_SUN, sky.sun_color, 0.0, 1.0, 1);
+            Self::pack_material_uniforms(&mut self.material_staging, SLOT_SUN, sky.sun_color, 0.0, 1.0, 1, 0);
+        }
+
+        // upload lightmap textures for any new lightmap texture ids
+        {
+            let asset_server = world.resource::<lunar_assets::AssetServer>();
+            for &(_, _, _, _, _, _, _, _, _, lm_id) in &self.draw_scratch {
+                if lm_id != u32::MAX && !self.lightmap_bg_cache.contains_key(&lm_id) {
+                    if let Some(tex) = asset_server.get_texture_by_id(lm_id) {
+                        let gpu_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                            label: Some("[lightmap] tex"),
+                            size: wgpu::Extent3d { width: tex.width, height: tex.height, depth_or_array_layers: 1 },
+                            mip_level_count: tex.mip_level_count(),
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                            view_formats: &[],
+                        });
+                        self.queue.write_texture(
+                            gpu_tex.as_image_copy(),
+                            &tex.pixels,
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(tex.width * 4),
+                                rows_per_image: Some(tex.height),
+                            },
+                            wgpu::Extent3d { width: tex.width, height: tex.height, depth_or_array_layers: 1 },
+                        );
+                        for (mip_idx, mip_data) in tex.mips.iter().enumerate() {
+                            let mip_w = (tex.width >> (mip_idx + 1)).max(1);
+                            let mip_h = (tex.height >> (mip_idx + 1)).max(1);
+                            self.queue.write_texture(
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: &gpu_tex,
+                                    mip_level: (mip_idx + 1) as u32,
+                                    origin: wgpu::Origin3d::ZERO,
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                mip_data,
+                                wgpu::TexelCopyBufferLayout {
+                                    offset: 0,
+                                    bytes_per_row: Some(mip_w * 4),
+                                    rows_per_image: Some(mip_h),
+                                },
+                                wgpu::Extent3d { width: mip_w, height: mip_h, depth_or_array_layers: 1 },
+                            );
+                        }
+                        let view = gpu_tex.create_view(&Default::default());
+                        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("[lightmap] bg"),
+                            layout: &self.lightmap_bgl,
+                            entries: &[
+                                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.lightmap_sampler) },
+                            ],
+                        });
+                        self.lightmap_bg_cache.insert(lm_id, bg);
+                    }
+                }
+            }
         }
 
         for i in 0..self.draw_scratch.len() {
-            let (_, _, _, color, metallic, roughness, model, _, flags) = self.draw_scratch[i];
+            let (_, _, _, color, metallic, roughness, model, _, flags, lm_id) = self.draw_scratch[i];
             Self::pack_mesh_uniforms(&mut self.uniform_staging, ENTITY_SLOT_START + i, model);
-            Self::pack_material_uniforms(&mut self.material_staging, ENTITY_SLOT_START + i, color, metallic, roughness, flags);
+            let has_lightmap: u32 = if lm_id != u32::MAX { 1 } else { 0 };
+            Self::pack_material_uniforms(&mut self.material_staging, ENTITY_SLOT_START + i, color, metallic, roughness, flags, has_lightmap);
         }
 
         // ── pack lights buffer ────────────────────────────────────────────
@@ -4877,6 +5057,8 @@ impl RenderEngine3d {
 
             pass.set_bind_group(0, &self.globals_bg, &[]);
             pass.set_bind_group(3, &self.lights_bg, &[]);
+            // group 4 fallback — sky/sun are unlit and never sample the lightmap, but pipeline requires it bound
+            pass.set_bind_group(4, &self.lightmap_fallback_bg, &[]);
 
             // sky pass — unlit, dome always drawn; sun only when sky resource present.
             // entity_bg is set once for the whole pass (covers all slots in storage buffer).
@@ -4896,23 +5078,23 @@ impl RenderEngine3d {
                 draw_calls += 1;
             }
 
-            // opaque PBR pass — batched by (mesh_id, mat_id); draw_scratch is pre-sorted.
+            // opaque PBR pass — batched by (mesh_id, mat_id, lm_id); draw_scratch is pre-sorted.
             // entity_bg covers the full storage buffer — set once, instance_index selects transform.
             pass.set_pipeline(&self.opaque_pipeline);
             pass.set_bind_group(2, &self.entity_bg, &[]);
             {
                 let mut last_mesh: u32 = u32::MAX;
                 let mut last_mat: u32 = u32::MAX;
+                let mut last_lm: u32 = u32::MAX;
                 let mut group_start: usize = 0;
                 let n = self.draw_scratch.len();
                 let mut i = 0;
                 while i <= n {
                     let flush = i == n || self.draw_scratch[i].7 < 1.0; // end or transparent
-                    let (cur_mesh, cur_mat) = if flush || i == n { (u32::MAX, u32::MAX) }
-                        else { (self.draw_scratch[i].1, self.draw_scratch[i].2) };
-                    let group_changed = cur_mesh != last_mesh || cur_mat != last_mat;
+                    let (cur_mesh, cur_mat, cur_lm) = if flush || i == n { (u32::MAX, u32::MAX, u32::MAX) }
+                        else { (self.draw_scratch[i].1, self.draw_scratch[i].2, self.draw_scratch[i].9) };
+                    let group_changed = cur_mesh != last_mesh || cur_mat != last_mat || cur_lm != last_lm;
                     if group_changed && i > group_start {
-                        // flush the completed group
                         let Some(gpu_mesh) = self.mesh_gpu.get(&last_mesh) else { group_start = i; i += 1; continue; };
                         let base = (ENTITY_SLOT_START + group_start) as u32;
                         let count = (i - group_start) as u32;
@@ -4920,13 +5102,20 @@ impl RenderEngine3d {
                         draw_calls += 1;
                     }
                     if flush { break; }
-                    if cur_mesh != last_mesh || cur_mat != last_mat {
+                    if cur_mesh != last_mesh || cur_mat != last_mat || cur_lm != last_lm {
                         let Some(gpu_mesh) = self.mesh_gpu.get(&cur_mesh) else { i += 1; continue; };
+                        let lm_bg = if cur_lm != u32::MAX {
+                            self.lightmap_bg_cache.get(&cur_lm).unwrap_or(&self.lightmap_fallback_bg)
+                        } else {
+                            &self.lightmap_fallback_bg
+                        };
+                        pass.set_bind_group(4, lm_bg, &[]);
                         pass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
                         pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
                         pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
                         last_mesh = cur_mesh;
                         last_mat = cur_mat;
+                        last_lm = cur_lm;
                         group_start = i;
                     }
                     i += 1;
@@ -4939,7 +5128,14 @@ impl RenderEngine3d {
                 pass.set_pipeline(&self.transparent_pipeline);
                 for &i in &self.transparent_scratch {
                     let mesh_id = self.draw_scratch[i].1;
+                    let lm_id = self.draw_scratch[i].9;
                     let Some(gpu_mesh) = self.mesh_gpu.get(&mesh_id) else { continue; };
+                    let lm_bg = if lm_id != u32::MAX {
+                        self.lightmap_bg_cache.get(&lm_id).unwrap_or(&self.lightmap_fallback_bg)
+                    } else {
+                        &self.lightmap_fallback_bg
+                    };
+                    pass.set_bind_group(4, lm_bg, &[]);
                     pass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
                     pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
                     pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);

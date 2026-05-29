@@ -141,10 +141,11 @@ pub fn compile_bsp(
         hints,
     );
 
-    // build area map: (leaf_index, area_id) for tagged leaves
-    let area_map: Vec<(u32, u32)> = partition.leaf_areas.iter().enumerate()
+    // build area map: (leaf_index, area_id) for tagged leaves, sorted for binary search at runtime
+    let mut area_map: Vec<(u32, u32)> = partition.leaf_areas.iter().enumerate()
         .filter_map(|(leaf, area)| area.map(|a| (leaf as u32, a)))
         .collect();
+    area_map.sort_unstable_by_key(|&(li, _)| li);
 
     let blob = BspBlob {
         nodes: partition.nodes,
