@@ -74,7 +74,7 @@ pub use lunar_2d::{
 #[cfg(feature = "3d")]
 pub use lunar_3d::{
     // core transforms / camera / mesh / material / lights
-    ActiveCamera3d, AmbientLight, Camera3d, CullMode, DirectionalLight, IndexBuffer,
+    ActiveCamera3d, AmbientLight, Camera3d, CullMode, DirectionalLight, IndexBuffer, IrradianceSH,
     LocalTransform3d, Material3d, MaterialData, Mesh3d, MeshData, MeshUsage, Plugin3d,
     PointLight, Projection, ShadingModel, SkinWeights, SpotLight, Vertex3d, WorldTransform3d,
     propagate_transforms_3d,

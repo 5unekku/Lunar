@@ -38,8 +38,8 @@ use std::collections::{HashMap, HashSet};
 use bevy_ecs::prelude::*;
 use lunar_3d::{
     Aabb3d, ActiveCamera3d, AmbientLight, Camera3d, ComputedVisibility, CullSoa, DirectionalLight,
-    Frustum, IndexBuffer, Material3d, Mesh3d, MeshData, MeshRegistry, PointLight, Projection,
-    ShadowCaster, Vertex3d, ViewportAspect, WorldTransform3d,
+    Frustum, IndexBuffer, IrradianceSH, Material3d, Mesh3d, MeshData, MeshRegistry, PointLight,
+    Projection, ShadowCaster, Vertex3d, ViewportAspect, WorldTransform3d,
 };
 use lunar_3d::primitives::{quad_mesh, sphere_mesh};
 use lunar_core::{App, GamePlugin, UpdateStage};
@@ -70,8 +70,9 @@ const MATERIAL_UNIFORMS_SIZE: u64 = 32;
 /// group 2: model mat4 (64) + normal matrix as 3×vec4 (48) = 112 bytes.
 const MESH_UNIFORMS_SIZE: u64 = 112;
 
-/// group 3: ambient(16) + dir(32) + 3×light_space(192) + cascade_splits(16) + point_header(16) + 8×point_light(256) = 528 bytes.
-const LIGHTS_SIZE: u64 = 528;
+/// group 3: ambient(16) + dir(32) + 3×light_space(192) + cascade_splits(16) + point_header(16)
+///   + 8×point_light(256) = 528 bytes, + sh_header(16) + 9×sh_coeff×vec4(144) = 688 bytes.
+const LIGHTS_SIZE: u64 = 688;
 
 /// shadow globals: light view-projection mat4 per cascade slot (dynamic offset).
 const SHADOW_GLOBALS_SIZE: u64 = 64;
@@ -1996,7 +1997,22 @@ impl RenderEngine3d {
             point_count:       u32,
             _pad:              [u32; 3],
             point_lights:      [[f32; 8]; 8],
+            // SH ambient: 1 when IrradianceSH resource present, 0 = flat ambient fallback
+            sh_enabled:        u32,
+            _sh_pad:           [u32; 3],
+            // 9 L2 SH coefficients as vec4(R, G, B, 0) — pre-scaled by ZH×basis constants
+            sh_coeffs:         [[f32; 4]; 9],
         }
+
+        let sh = world.get_resource::<IrradianceSH>();
+        let sh_enabled: u32 = if sh.is_some() { 1 } else { 0 };
+        let mut sh_coeffs = [[0.0f32; 4]; 9];
+        if let Some(sh) = sh {
+            for (i, c) in sh.coefficients.iter().enumerate() {
+                sh_coeffs[i] = [c[0], c[1], c[2], 0.0];
+            }
+        }
+
         let mut lights_gpu = LightsGpu {
             ambient_color: [ambient.color.r, ambient.color.g, ambient.color.b],
             ambient_intensity: ambient.intensity,
@@ -2011,6 +2027,9 @@ impl RenderEngine3d {
             point_count: self.point_light_scratch.len() as u32,
             _pad: [0; 3],
             point_lights: [[0.0; 8]; 8],
+            sh_enabled,
+            _sh_pad: [0; 3],
+            sh_coeffs,
         };
         for (i, &(pos, color, intensity, radius)) in self.point_light_scratch.iter().enumerate() {
             lights_gpu.point_lights[i] = [pos.x, pos.y, pos.z, intensity, color.r, color.g, color.b, radius];

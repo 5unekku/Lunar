@@ -1,5 +1,36 @@
-use bevy_ecs::prelude::Component;
+use bevy_ecs::prelude::{Component, Resource};
 use lunar_math::Color;
+
+/// L2 spherical harmonic ambient irradiance probe.
+///
+/// when present as a resource, the renderer replaces the flat [`AmbientLight`](crate::AmbientLight)
+/// ambient term with a directional SH evaluation. the 9 coefficients span the L0 and L1/L2
+/// SH bands and encode low-frequency ambient light from all directions.
+///
+/// # coefficient order
+///
+/// `[L0, L1_x, L1_y, L1_z, L2_xy, L2_yz, L2_0, L2_xz, L2_x2y2]` — each as `[R, G, B]`.
+/// coefficients must be pre-scaled by the Lambertian ZH × SH basis constants:
+/// - L0:  × (π × 0.282095)
+/// - L1:  × (2π/3 × 0.488603)
+/// - L2_0: × (π/4 × 0.315392)
+/// - L2 others: × (π/4 × 1.092548) or (π/4 × 0.546274) as appropriate
+#[derive(Resource, Debug, Clone)]
+pub struct IrradianceSH {
+    /// 9 pre-scaled SH irradiance coefficients as linear-space RGB.
+    pub coefficients: [[f32; 3]; 9],
+}
+
+impl Default for IrradianceSH {
+    fn default() -> Self {
+        // L0 set to (0.5, 0.5, 0.5) × pre-scale ≈ modest uniform ambient
+        // all higher bands zero → uniform hemisphere like flat ambient
+        let mut c = [[0.0f32; 3]; 9];
+        let l0_scale = std::f32::consts::PI * 0.282095;
+        c[0] = [0.3 * l0_scale, 0.3 * l0_scale, 0.3 * l0_scale];
+        Self { coefficients: c }
+    }
+}
 
 /// directional light — infinite distance, uniform direction across the scene.
 ///

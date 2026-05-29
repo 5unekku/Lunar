@@ -64,6 +64,15 @@ struct Lights {
     _pad1:             u32,
     _pad2:             u32,
     point_lights:      array<PointLightGpu, 8>,
+    // SH ambient: when sh_enabled=1 these 9 pre-scaled L2 coefficients replace flat ambient.
+    // each coefficient is vec4(R, G, B, 0). order: L0, L1x, L1y, L1z, L2xy, L2yz, L2_0, L2xz, L2_x2y2
+    sh_enabled:        u32,
+    _sh_pad0:          u32,
+    _sh_pad1:          u32,
+    _sh_pad2:          u32,
+    sh0:  vec4<f32>,   sh1:  vec4<f32>,   sh2:  vec4<f32>,
+    sh3:  vec4<f32>,   sh4:  vec4<f32>,   sh5:  vec4<f32>,
+    sh6:  vec4<f32>,   sh7:  vec4<f32>,   sh8:  vec4<f32>,
 }
 @group(3) @binding(0) var<uniform>  lights:         Lights;
 @group(3) @binding(1) var           shadow_map:     texture_depth_2d_array;
@@ -238,8 +247,24 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
         lo += pbr_light(n, v, l, albedo, metallic, roughness, irradiance, ndotl);
     }
 
-    // ambient (Lambert-weighted to avoid flat look)
-    let ambient = lights.ambient_color * lights.ambient_intensity * albedo * (1.0 - metallic * 0.9);
+    // ambient — either SH irradiance probe (directional) or flat fallback
+    var ambient: vec3<f32>;
+    if lights.sh_enabled != 0u {
+        // evaluate L2 SH irradiance at the surface normal
+        let nx = n.x; let ny = n.y; let nz = n.z;
+        var sh_irr = lights.sh0.xyz;                                 // L0
+        sh_irr += lights.sh1.xyz * nx;                               // L1_x
+        sh_irr += lights.sh2.xyz * ny;                               // L1_y
+        sh_irr += lights.sh3.xyz * nz;                               // L1_z
+        sh_irr += lights.sh4.xyz * (nx * ny);                        // L2_xy
+        sh_irr += lights.sh5.xyz * (ny * nz);                        // L2_yz
+        sh_irr += lights.sh6.xyz * (3.0 * nz * nz - 1.0);           // L2_0
+        sh_irr += lights.sh7.xyz * (nx * nz);                        // L2_xz
+        sh_irr += lights.sh8.xyz * (nx * nx - ny * ny);              // L2_x2y2
+        ambient = max(sh_irr, vec3<f32>(0.0)) * albedo * (1.0 - metallic * 0.9);
+    } else {
+        ambient = lights.ambient_color * lights.ambient_intensity * albedo * (1.0 - metallic * 0.9);
+    }
 
     // output raw HDR — composite pass applies ACES tonemap + post effects
     let hdr = ambient + lo;
