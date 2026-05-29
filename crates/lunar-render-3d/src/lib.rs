@@ -40,11 +40,11 @@ use lunar_3d::{
     Aabb3d, ActiveCamera3d, AmbientLight, Camera3d, ComputedVisibility, CullSoa, Decal,
     DirectionalLight, Frustum, IndexBuffer, IrradianceSH, Material3d, Mesh3d, MeshData,
     MeshRegistry, ParticleEmitter, PointLight, Projection, ShadowCaster, Vertex3d,
-    ViewportAspect, Water, WorldTransform3d,
+    Terrain, ViewportAspect, Water, WorldTransform3d,
 };
 use lunar_3d::primitives::{quad_mesh, sphere_mesh};
 use lunar_core::{App, GamePlugin, UpdateStage};
-use lunar_math::{Color, Mat3, Mat4, Vec3};
+use lunar_math::{Color, Mat3, Mat4, Vec2, Vec3};
 
 const SHADER_SRC: &str = include_str!("shader.wgsl");
 const SHADOW_SHADER_SRC: &str = include_str!("shadow.wgsl");
@@ -60,6 +60,7 @@ const PARTICLE_SIM_SHADER_SRC:    &str = include_str!("particle_sim.wgsl");
 const PARTICLE_RENDER_SHADER_SRC: &str = include_str!("particle_render.wgsl");
 const DECAL_SHADER_SRC:           &str = include_str!("decal.wgsl");
 const WATER_SHADER_SRC:           &str = include_str!("water.wgsl");
+const TERRAIN_SHADER_SRC:         &str = include_str!("terrain.wgsl");
 
 const SKY_RADIUS: f32 = 900.0;
 const SUN_Y: f32 = 895.0;
@@ -135,6 +136,9 @@ const DECAL_PARAMS_SIZE: u64 = 224;
 
 /// water params UBO: 4×wave(64)+model(64)+water_color(16)+deep_color(16)+misc(32) = 192 bytes.
 const WATER_PARAMS_SIZE: u64 = 192;
+
+/// terrain params UBO per ring: ring_origin(16)+terrain_origin(16)+misc(16)+tint(16)+sun_dir(16)+ambient_pad(16) = 96 bytes.
+const TERRAIN_PARAMS_SIZE: u64 = 96;
 
 /// stride for dynamic UBO slots — must be ≥ min_uniform_buffer_offset_alignment (256).
 const UNIFORM_STRIDE: u64 = 256;
@@ -215,6 +219,18 @@ impl CpuParticle {
             _pad1: 0.0,
         }
     }
+}
+
+/// GPU-side terrain resources per terrain entity.
+#[allow(dead_code)]
+struct TerrainGpu {
+    heightmap_tex:  wgpu::Texture,
+    heightmap_view: wgpu::TextureView,
+    // clipmap ring meshes: index 0 = center patch, 1..N = rings (coarsest last)
+    ring_meshes: Vec<GpuMesh>,
+    params_buf: wgpu::Buffer,
+    params_bg: wgpu::BindGroup,
+    hmap_sampler: wgpu::Sampler,
 }
 
 // ── byte helpers ───────────────────────────────────────────────────────────
@@ -574,6 +590,13 @@ pub struct RenderEngine3d {
     decal_bg0: wgpu::BindGroup,
     decal_bg1: wgpu::BindGroup,
     decal_pipeline: wgpu::RenderPipeline,
+
+    // terrain rendering — geometry clipmap heightmap (all tiers, LOD level varies)
+    terrain_pipeline: wgpu::RenderPipeline,
+    terrain_globals_bgl: wgpu::BindGroupLayout,
+    terrain_globals_bg: wgpu::BindGroup,
+    terrain_params_bgl: wgpu::BindGroupLayout,
+    terrain_gpu: HashMap<Entity, TerrainGpu>,
 
     // transparent pass — alpha < 1.0 entities drawn back-to-front after opaques
     transparent_pipeline: wgpu::RenderPipeline,
@@ -1970,6 +1993,126 @@ impl RenderEngine3d {
         });
         // decal_bg0 needs gtao_depth_tex; assigned after GTAO section.
 
+        // ── terrain rendering — geometry clipmap ───────────────────────────
+
+        // bg group 0: globals only (shared view-global bind group)
+        let terrain_globals_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[terrain] globals bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(GLOBALS_SIZE),
+                },
+                count: None,
+            }],
+        });
+
+        let terrain_globals_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[terrain] globals bg"),
+            layout: &terrain_globals_bgl,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: globals_buf.as_entire_binding() }],
+        });
+
+        let terrain_params_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[terrain] params bgl"),
+            entries: &[
+                // binding 0: TerrainParams uniform
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(TERRAIN_PARAMS_SIZE),
+                    },
+                    count: None,
+                },
+                // binding 1: heightmap texture
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 2: heightmap sampler
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let terrain_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[terrain] pipeline layout"),
+            bind_group_layouts: &[Some(&terrain_globals_bgl), Some(&terrain_params_bgl)],
+            immediate_size: 0,
+        });
+
+        let terrain_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("[terrain] shader"),
+            source: wgpu::ShaderSource::Wgsl(TERRAIN_SHADER_SRC.into()),
+        });
+
+        let terrain_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("[terrain] pipeline"),
+            layout: Some(&terrain_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &terrain_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: VERTEX_STRIDE,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x3, // position
+                        1 => Float32x3, // normal
+                        2 => Float32x4, // color
+                        3 => Float32x2, // uv0
+                        4 => Float32x2, // uv1
+                        5 => Uint32,    // tint
+                    ],
+                }],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &terrain_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: HDR_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: msaa_samples,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            cache: pipeline_cache.as_ref(),
+            multiview_mask: None,
+        });
+
         // ── GTAO ───────────────────────────────────────────────────────────
 
         let ssao_enabled = quality.ssao;
@@ -2506,6 +2649,11 @@ impl RenderEngine3d {
             particle_render_bg,
             particle_render_pipeline,
             particle_cpu,
+            terrain_pipeline,
+            terrain_globals_bgl,
+            terrain_globals_bg,
+            terrain_params_bgl,
+            terrain_gpu: HashMap::new(),
             pipeline_cache,
             // 4 MiB chunk — larger than any single write, handles most scene sizes
             staging_belt: wgpu::util::StagingBelt::new(device_for_belt, 4 * 1024 * 1024),
@@ -2764,6 +2912,121 @@ impl RenderEngine3d {
         queue.write_buffer(&ibuf, 0, idata);
 
         GpuMesh { vbuf, ibuf, index_count, index_fmt }
+    }
+
+    /// build a flat NxN quad grid for one clipmap ring.
+    /// vertices carry grid coords in position.xz (0..=resolution), position.y = 0.
+    /// the vertex shader reads the heightmap to displace Y.
+    fn build_clipmap_patch(resolution: u32) -> MeshData {
+        let n = (resolution + 1) as usize;
+        let mut vertices = Vec::with_capacity(n * n);
+        for row in 0..=resolution {
+            for col in 0..=resolution {
+                let x = col as f32;
+                let z = row as f32;
+                let uv = Vec2::new(x / resolution as f32, z / resolution as f32);
+                vertices.push(Vertex3d::new(
+                    Vec3::new(x, 0.0, z),
+                    Vec3::Y,
+                    [1.0, 0.0, 0.0, 1.0],
+                    uv,
+                ));
+            }
+        }
+        let mut indices: Vec<u32> = Vec::with_capacity(resolution as usize * resolution as usize * 6);
+        for row in 0..resolution {
+            for col in 0..resolution {
+                let tl = row * (resolution + 1) + col;
+                let tr = tl + 1;
+                let bl = tl + (resolution + 1);
+                let br = bl + 1;
+                indices.extend_from_slice(&[tl, bl, tr, tr, bl, br]);
+            }
+        }
+        MeshData::new(vertices, IndexBuffer::U32(indices))
+    }
+
+    /// upload a R16Float heightmap to the GPU.
+    fn upload_heightmap(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        data: &[u8],
+        width: u32,
+        height: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[terrain] heightmap"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        if !data.is_empty() {
+            queue.write_texture(
+                tex.as_image_copy(),
+                data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width * 2), // R16Float = 2 bytes per sample
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            );
+        }
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        (tex, view)
+    }
+
+    /// initialise GPU resources for one terrain entity.
+    fn build_terrain_gpu(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        params_bgl: &wgpu::BindGroupLayout,
+        terrain: &Terrain,
+    ) -> TerrainGpu {
+        // build ring meshes: center patch + (clipmap_rings - 1) outer rings
+        let rings = terrain.clipmap_rings.max(1).min(8);
+        let resolution = terrain.ring_resolution.max(4).min(256);
+        let mut ring_meshes = Vec::with_capacity(rings as usize);
+        for _ in 0..rings {
+            let mesh = Self::build_clipmap_patch(resolution);
+            ring_meshes.push(Self::upload_mesh_data(device, queue, &mesh));
+        }
+
+        let (w, h) = (terrain.heightmap_width.max(1), terrain.heightmap_height.max(1));
+        let (heightmap_tex, heightmap_view) =
+            Self::upload_heightmap(device, queue, &terrain.heightmap, w, h);
+
+        let hmap_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("[terrain] heightmap sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let params_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[terrain] params buffer"),
+            size: TERRAIN_PARAMS_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let params_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[terrain] params bg"),
+            layout: params_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&heightmap_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&hmap_sampler) },
+            ],
+        });
+
+        TerrainGpu { heightmap_tex, heightmap_view, ring_meshes, params_buf, params_bg, hmap_sampler }
     }
 
     fn pack_mesh_uniforms(staging: &mut [u8], slot: usize, model: Mat4) {
@@ -3542,6 +3805,113 @@ impl RenderEngine3d {
                     pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
                     pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
                     pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+                    draw_calls += 1;
+                }
+            }
+        }
+
+        // ── terrain pass — geometry clipmap heightmap rendering ─────────
+        {
+            let mut terrain_query = world.query::<(Entity, &mut Terrain, &WorldTransform3d)>();
+            let terrain_entities: Vec<(Entity, Terrain, WorldTransform3d)> = terrain_query
+                .iter_mut(world)
+                .map(|(e, t, wt)| (e, t.clone(), *wt))
+                .collect();
+
+            for (entity, terrain_comp, wt) in &terrain_entities {
+                // lazy-init GPU resources on first encounter or if dirty
+                let needs_rebuild = {
+                    let entry = self.terrain_gpu.get(entity);
+                    entry.is_none() || terrain_comp.dirty
+                };
+                if needs_rebuild {
+                    let gpu = Self::build_terrain_gpu(
+                        &self.device,
+                        &self.queue,
+                        &self.terrain_params_bgl,
+                        terrain_comp,
+                    );
+                    self.terrain_gpu.insert(*entity, gpu);
+                    // mark clean on the actual component
+                    if let Some(mut t) = world.get_mut::<Terrain>(*entity) {
+                        t.dirty = false;
+                    }
+                }
+                let Some(gpu) = self.terrain_gpu.get(entity) else { continue; };
+
+                let terrain_origin = wt.translation;
+                let world_size = terrain_comp.world_size;
+                let rings = terrain_comp.clipmap_rings.max(1).min(8);
+                let resolution = terrain_comp.ring_resolution.max(4).min(256) as f32;
+
+                // on low tier render a single LOD-0 patch covering the whole terrain
+                let effective_rings = if self.render_tier == RenderTier::LowGles { 1 } else { rings };
+
+                for ring in 0..effective_rings as usize {
+                    let Some(ring_mesh) = gpu.ring_meshes.get(ring) else { continue; };
+
+                    // each ring is 2× coarser than the previous
+                    let base_cell = world_size / (resolution * (1 << rings) as f32);
+                    let lod_cell_size = base_cell * (1u32 << ring) as f32;
+
+                    // snap ring origin to cell grid around camera
+                    let ring_half = resolution * lod_cell_size * 0.5;
+                    let ring_origin_x = (cam_pos.x / lod_cell_size).floor() * lod_cell_size - ring_half;
+                    let ring_origin_z = (cam_pos.z / lod_cell_size).floor() * lod_cell_size - ring_half;
+
+                    // sun direction from directional light (default to overhead if none)
+                    let sun_d = if dir_enabled != 0 { dir_direction } else { Vec3::Y };
+                    let (sun_dx, sun_dy, sun_dz, sun_int) = (sun_d.x, sun_d.y, sun_d.z, dir_illuminance.max(1.0));
+
+                    let tint = [terrain_comp.tint.r, terrain_comp.tint.g, terrain_comp.tint.b, terrain_comp.tint.a];
+
+                    let mut data = [0u8; TERRAIN_PARAMS_SIZE as usize];
+                    // ring_origin (vec4)
+                    let ro: [f32; 4] = [ring_origin_x, 0.0, ring_origin_z, 0.0];
+                    data[0..16].copy_from_slice(unsafe { slice_as_bytes(&ro) });
+                    // terrain_origin (vec4)
+                    let to_arr: [f32; 4] = [terrain_origin.x, terrain_origin.y, terrain_origin.z, 0.0];
+                    data[16..32].copy_from_slice(unsafe { slice_as_bytes(&to_arr) });
+                    // misc: lod_cell_size, world_size, height_scale, ring_resolution
+                    let misc: [f32; 4] = [lod_cell_size, world_size, terrain_comp.height_scale, resolution];
+                    data[32..48].copy_from_slice(unsafe { slice_as_bytes(&misc) });
+                    // tint (vec4)
+                    data[48..64].copy_from_slice(unsafe { slice_as_bytes(&tint) });
+                    // sun_dir (vec4)
+                    let sun: [f32; 4] = [sun_dx, sun_dy, sun_dz, sun_int];
+                    data[64..80].copy_from_slice(unsafe { slice_as_bytes(&sun) });
+                    // ambient + pad
+                    let amb: [f32; 4] = [0.15, 0.0, 0.0, 0.0];
+                    data[80..96].copy_from_slice(unsafe { slice_as_bytes(&amb) });
+                    self.queue.write_buffer(&gpu.params_buf, 0, &data);
+
+                    let (color_target, resolve_target) = match &self.msaa_color_view {
+                        Some(msaa) => (msaa as &wgpu::TextureView, Some(&self.hdr_view as &wgpu::TextureView)),
+                        None => (&self.hdr_view as &wgpu::TextureView, None),
+                    };
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("[terrain] pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: color_target,
+                            resolve_target,
+                            ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &self.depth_view,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_pipeline(&self.terrain_pipeline);
+                    pass.set_bind_group(0, &self.terrain_globals_bg, &[]);
+                    pass.set_bind_group(1, &gpu.params_bg, &[]);
+                    pass.set_vertex_buffer(0, ring_mesh.vbuf.slice(..));
+                    pass.set_index_buffer(ring_mesh.ibuf.slice(..), ring_mesh.index_fmt);
+                    pass.draw_indexed(0..ring_mesh.index_count, 0, 0..1);
                     draw_calls += 1;
                 }
             }

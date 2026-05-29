@@ -40,6 +40,7 @@ pub mod fog;
 pub mod mesh_registry;
 pub mod particles;
 pub mod primitives;
+pub mod terrain;
 pub mod visibility;
 pub mod water;
 
@@ -65,6 +66,7 @@ pub use collision::{
 };
 pub use decals::Decal;
 pub use fog::{Fog, FogFalloff};
+pub use terrain::Terrain;
 pub use water::Water;
 pub use particles::ParticleEmitter;
 pub use light::{DirectionalLight, IrradianceSH, PointLight, SpotLight};
