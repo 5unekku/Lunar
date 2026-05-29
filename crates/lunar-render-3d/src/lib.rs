@@ -4148,6 +4148,11 @@ impl RenderEngine3d {
 
         self.raw_scratch.clear();
         self.impostor_scratch.clear();
+        // reserve capacity equal to current peak so steady-state frames never reallocate
+        let prev_raw = self.raw_scratch.capacity();
+        if prev_raw == 0 { self.raw_scratch.reserve(64); }
+        let prev_draw = self.draw_scratch.capacity();
+        if prev_draw == 0 { self.draw_scratch.reserve(64); }
         {
             let mut q = world.query::<(
                 Entity, &Mesh3d, &Material3d, &WorldTransform3d, &ComputedVisibility,
@@ -4555,10 +4560,13 @@ impl RenderEngine3d {
         // SAFETY: closures share a read-only &RenderEngine3d (no writes to self state
         // in the parallel section). each closure writes to a disjoint CommandEncoder.
         {
-            // collect which cascades need recording
-            let dirty_cascades: Vec<usize> = (0..NUM_CASCADES as usize)
+            // rebuild at most 1 dirty cascade per frame (prioritise cascade 0 — nearest/highest detail).
+            // remaining dirty cascades stay dirty and are rebuilt on subsequent frames, spreading
+            // the spike across frames. a stale cascade 2 (far, low detail) is imperceptible for 1-2 frames.
+            let all_dirty: Vec<usize> = (0..NUM_CASCADES as usize)
                 .filter(|&c| dir_enabled != 0 && dir_casts_shadows && self.shadow_cascade_dirty[c])
                 .collect();
+            let dirty_cascades: Vec<usize> = all_dirty.into_iter().take(1).collect();
             for &c in &dirty_cascades { self.shadow_cascade_dirty[c] = false; }
 
             // clear skipped cascades on the main encoder (no content change, just clear)
@@ -5897,6 +5905,20 @@ impl RenderEngine3d {
         }
         // pull near plane back to catch casters behind the frustum
         let z_extend = (max_z - min_z) * 0.5;
+
+        // texel snapping: quantise ortho center to the nearest shadow-map texel in world space.
+        // without this, sub-texel camera movement shifts the texel grid causing shadow shimmer.
+        let extent_x = max_x - min_x;
+        let extent_y = max_y - min_y;
+        let texel_x = extent_x / SHADOW_MAP_SIZE as f32;
+        let texel_y = extent_y / SHADOW_MAP_SIZE as f32;
+        let cx = ((min_x + max_x) * 0.5 / texel_x).round() * texel_x;
+        let cy = ((min_y + max_y) * 0.5 / texel_y).round() * texel_y;
+        let half_x = extent_x * 0.5;
+        let half_y = extent_y * 0.5;
+        let (min_x, max_x) = (cx - half_x, cx + half_x);
+        let (min_y, max_y) = (cy - half_y, cy + half_y);
+
         let light_proj = Mat4::orthographic_rh(min_x, max_x, min_y, max_y, min_z - z_extend, max_z + z_extend);
         light_proj * light_view
     }
