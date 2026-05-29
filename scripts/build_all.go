@@ -294,15 +294,18 @@ func patchWindowsToolchains() {
 	}
 	home, _ := os.UserHomeDir()
 	dest := filepath.Join(home, ".local", "bin", "windres")
-	// overwrite if it's still the old symlink
-	info, err := os.Lstat(dest)
-	if err == nil && info.Mode()&os.ModeSymlink == 0 && info.Mode().IsRegular() {
-		return // already a script
+	if _, err := os.Lstat(dest); err == nil {
+		existing, _ := os.ReadFile(dest)
+		if strings.Contains(string(existing), "any-windows-any") {
+			return // already the current version
+		}
+		os.Remove(dest) // remove old symlink or outdated script
 	}
-	if err == nil {
-		os.Remove(dest) // remove old symlink
-	}
-	script := "#!/bin/sh\nexec llvm-windres ${WINDRES_TARGET:+--target=\"$WINDRES_TARGET\"} \"$@\"\n"
+	script := "#!/bin/sh\n" +
+		"_zig=/usr/lib/zig/libc/include/any-windows-any\n" +
+		"_inc=\"\"\n" +
+		"[ -d \"$_zig\" ] && _inc=\"-I$_zig\"\n" +
+		"exec llvm-windres ${WINDRES_TARGET:+--target=\"$WINDRES_TARGET\"} $_inc \"$@\"\n"
 	if err := os.WriteFile(dest, []byte(script), 0755); err == nil {
 		fmt.Printf("wrote windres wrapper: %s\n", dest)
 	}
