@@ -35,6 +35,7 @@
 pub mod animation;
 pub mod bundles;
 pub mod collision;
+pub mod decals;
 pub mod fog;
 pub mod mesh_registry;
 pub mod particles;
@@ -61,6 +62,7 @@ pub use collision::{
     Collider3d, ColliderEntryRef, ColliderShape3d, CollisionWorld3d, Ray3d, RayHit3d,
     build_collision_world_3d, raycast_3d,
 };
+pub use decals::Decal;
 pub use fog::{Fog, FogFalloff};
 pub use particles::ParticleEmitter;
 pub use light::{DirectionalLight, IrradianceSH, PointLight, SpotLight};

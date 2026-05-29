@@ -37,9 +37,10 @@ use std::collections::{HashMap, HashSet};
 
 use bevy_ecs::prelude::*;
 use lunar_3d::{
-    Aabb3d, ActiveCamera3d, AmbientLight, Camera3d, ComputedVisibility, CullSoa, DirectionalLight,
-    Frustum, IndexBuffer, IrradianceSH, Material3d, Mesh3d, MeshData, MeshRegistry, ParticleEmitter,
-    PointLight, Projection, ShadowCaster, Vertex3d, ViewportAspect, WorldTransform3d,
+    Aabb3d, ActiveCamera3d, AmbientLight, Camera3d, ComputedVisibility, CullSoa, Decal,
+    DirectionalLight, Frustum, IndexBuffer, IrradianceSH, Material3d, Mesh3d, MeshData,
+    MeshRegistry, ParticleEmitter, PointLight, Projection, ShadowCaster, Vertex3d,
+    ViewportAspect, WorldTransform3d,
 };
 use lunar_3d::primitives::{quad_mesh, sphere_mesh};
 use lunar_core::{App, GamePlugin, UpdateStage};
@@ -55,8 +56,9 @@ const FXAA_SHADER_SRC:          &str = include_str!("fxaa.wgsl");
 const SSR_SHADER_SRC:           &str = include_str!("ssr.wgsl");
 const FOG_SHADER_SRC:           &str = include_str!("volumetric_fog.wgsl");
 const ATMOS_SHADER_SRC:         &str = include_str!("atmos.wgsl");
-const PARTICLE_SIM_SHADER_SRC:  &str = include_str!("particle_sim.wgsl");
+const PARTICLE_SIM_SHADER_SRC:    &str = include_str!("particle_sim.wgsl");
 const PARTICLE_RENDER_SHADER_SRC: &str = include_str!("particle_render.wgsl");
+const DECAL_SHADER_SRC:           &str = include_str!("decal.wgsl");
 
 const SKY_RADIUS: f32 = 900.0;
 const SUN_Y: f32 = 895.0;
@@ -126,6 +128,9 @@ const PARTICLE_SIM_PARAMS_SIZE: u64 = 16;
 
 /// one particle in the GPU storage buffer: position(12)+life(4)+vel(12)+maxlife(4)+col_s(16)+col_e(16)+size_s(4)+size_e(4)+pad×2 = 80 bytes.
 const PARTICLE_STRIDE: u64 = 80;
+
+/// decal params UBO: decal_inv_world(64)+inv_view_proj(64)+color(16)+decal_world(64)+misc(16) = 224 bytes.
+const DECAL_PARAMS_SIZE: u64 = 224;
 
 /// stride for dynamic UBO slots — must be ≥ min_uniform_buffer_offset_alignment (256).
 const UNIFORM_STRIDE: u64 = 256;
@@ -549,6 +554,14 @@ pub struct RenderEngine3d {
     particle_render_bg: wgpu::BindGroup,
     particle_render_pipeline: wgpu::RenderPipeline,
     particle_cpu: Vec<CpuParticle>,
+
+    // decal system — box-projected decals rendered after opaques (uses scene depth)
+    decal_params_buf: wgpu::Buffer,
+    decal_bgl0: wgpu::BindGroupLayout,
+    decal_bgl1: wgpu::BindGroupLayout,
+    decal_bg0: wgpu::BindGroup,
+    decal_bg1: wgpu::BindGroup,
+    decal_pipeline: wgpu::RenderPipeline,
 
     // transparent pass — alpha < 1.0 entities drawn back-to-front after opaques
     transparent_pipeline: wgpu::RenderPipeline,
@@ -1753,6 +1766,92 @@ impl RenderEngine3d {
         });
         // atmos_bg0 needs gtao_depth_tex (created in GTAO section); assigned after that section.
 
+        // ── decal system — box-projected, depth-sampled ───────────────────
+
+        let decal_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[decal] params buffer"),
+            size: DECAL_PARAMS_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let decal_bgl0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[decal] bgl0"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(GLOBALS_SIZE),
+                    }, count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    }, count: None,
+                },
+            ],
+        });
+
+        let decal_bgl1 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[decal] bgl1"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0, visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(DECAL_PARAMS_SIZE),
+                }, count: None,
+            }],
+        });
+
+        let decal_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[decal] bg1"),
+            layout: &decal_bgl1,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: decal_params_buf.as_entire_binding() }],
+        });
+
+        let decal_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("[decal] shader"),
+            source: wgpu::ShaderSource::Wgsl(DECAL_SHADER_SRC.into()),
+        });
+        let decal_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[decal] pipeline layout"),
+            bind_group_layouts: &[Some(&decal_bgl0), Some(&decal_bgl1)],
+            immediate_size: 0,
+        });
+        let decal_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("[decal] pipeline"),
+            layout: Some(&decal_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &decal_shader, entry_point: Some("vs_main"),
+                buffers: &[], compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &decal_shader, entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: HDR_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(wgpu::Face::Front),
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            cache: pipeline_cache.as_ref(),
+            multiview_mask: None,
+        });
+        // decal_bg0 needs gtao_depth_tex; assigned after GTAO section.
+
         // ── GTAO ───────────────────────────────────────────────────────────
 
         let ssao_enabled = quality.ssao;
@@ -1975,7 +2074,15 @@ impl RenderEngine3d {
             ],
         });
 
-        // rebuild ssr, fog, and atmos bg0 now that the non-MSAA depth texture is available
+        // rebuild ssr, fog, atmos, and decal bg0 now that the non-MSAA depth texture is available
+        let decal_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[decal] bg0"),
+            layout: &decal_bgl0,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: globals_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&gtao_depth_tex) },
+            ],
+        });
         let atmos_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("[atmos] bg0"),
             layout: &atmos_bgl0,
@@ -2258,6 +2365,12 @@ impl RenderEngine3d {
             atmos_bg1,
             atmos_params_buf,
             atmos_pipeline,
+            decal_params_buf,
+            decal_bgl0,
+            decal_bgl1,
+            decal_bg0,
+            decal_bg1,
+            decal_pipeline,
             particles_enabled,
             particle_cap,
             particle_buf,
@@ -2626,6 +2739,14 @@ impl RenderEngine3d {
         self.atmos_bg0 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("[atmos] bg0"),
             layout: &self.atmos_bgl0,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.globals_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.gtao_depth_view) },
+            ],
+        });
+        self.decal_bg0 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[decal] bg0"),
+            layout: &self.decal_bgl0,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: self.globals_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.gtao_depth_view) },
@@ -3288,6 +3409,58 @@ impl RenderEngine3d {
                     pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
                     draw_calls += 1;
                 }
+            }
+        }
+
+        // ── decal pass — box-projected over scene depth ───────────────────
+        {
+            let width  = self.surface_config.width as f32;
+            let height = self.surface_config.height as f32;
+            let inv_vp = view_proj.inverse();
+            let inv_vp_cols = inv_vp.to_cols_array();
+            let vp_cols = view_proj.to_cols_array();
+
+            let mut decal_query = world.query::<(&Decal, &WorldTransform3d)>();
+            let decals: Vec<(Decal, WorldTransform3d)> = decal_query
+                .iter(world)
+                .map(|(d, wt)| (*d, *wt))
+                .collect();
+
+            for (decal, wt) in &decals {
+                let decal_world_mat = wt.to_matrix();
+                let decal_inv_world = decal_world_mat.inverse();
+                let decal_world_cols = decal_world_mat.to_cols_array();
+                let inv_world_cols  = decal_inv_world.to_cols_array();
+
+                let mut data = [0u8; DECAL_PARAMS_SIZE as usize];
+                data[0..64].copy_from_slice(unsafe { slice_as_bytes(&inv_world_cols) });
+                data[64..128].copy_from_slice(unsafe { slice_as_bytes(&inv_vp_cols) });
+                let color_arr: [f32; 4] = [decal.color.r, decal.color.g, decal.color.b, decal.color.a];
+                data[128..144].copy_from_slice(unsafe { slice_as_bytes(&color_arr) });
+                data[144..208].copy_from_slice(unsafe { slice_as_bytes(&decal_world_cols) });
+                let _ = vp_cols; // available if needed by future extensions
+                let misc: [f32; 4] = [width, height, 0.0, 0.0];
+                data[208..224].copy_from_slice(unsafe { slice_as_bytes(&misc) });
+                self.queue.write_buffer(&self.decal_params_buf, 0, &data);
+
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("[decal] pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.hdr_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.decal_pipeline);
+                pass.set_bind_group(0, &self.decal_bg0, &[]);
+                pass.set_bind_group(1, &self.decal_bg1, &[]);
+                pass.draw(0..36, 0..1);
+                draw_calls += 1;
             }
         }
 
