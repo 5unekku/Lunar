@@ -45,6 +45,9 @@ var allTargets = []target{
 }
 
 func main() {
+	patchWindowsToolchains()
+	patchSdl3Compat()
+
 	root := repoRoot()
 	release := false
 	only := ""
@@ -254,6 +257,47 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, data, 0755)
+}
+
+// patchWindowsToolchains adds CMAKE_RC_COMPILER to zigbuild's Windows cmake toolchain files.
+// Without it SDL3's cmake Makefile calls bare 'windres' which doesn't exist in the zig toolchain.
+func patchWindowsToolchains() {
+	home, _ := os.UserHomeDir()
+	pattern := filepath.Join(home, ".cache", "cargo-zigbuild", "*", "wrappers", "*", "cmake", "*windows*toolchain.cmake")
+	matches, _ := filepath.Glob(pattern)
+	for _, path := range matches {
+		data, err := os.ReadFile(path)
+		if err != nil || strings.Contains(string(data), "CMAKE_RC_COMPILER") {
+			continue
+		}
+		patched := strings.TrimRight(string(data), "\n") + "\nset(CMAKE_RC_COMPILER llvm-windres)\n"
+		if err := os.WriteFile(path, []byte(patched), 0644); err == nil {
+			fmt.Printf("patched cmake RC compiler: %s\n", filepath.Base(path))
+		}
+	}
+}
+
+// patchSdl3Compat fixes a 32-bit compile bug in sdl3-0.18.4 in the cargo registry.
+// XlibWindowHandle::new(window as u64) fails on 32-bit where c_ulong is u32.
+// 'as _' lets Rust infer the correct type for each platform.
+func patchSdl3Compat() {
+	home, _ := os.UserHomeDir()
+	pattern := filepath.Join(home, ".cargo", "registry", "src", "index.crates.io-*", "sdl3-0.18.4", "src", "sdl3", "raw_window_handle.rs")
+	matches, _ := filepath.Glob(pattern)
+	for _, path := range matches {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		content := string(data)
+		fixed := strings.ReplaceAll(content, "window as u64)", "window as _)")
+		if fixed == content {
+			continue
+		}
+		if err := os.WriteFile(path, []byte(fixed), 0644); err == nil {
+			fmt.Println("patched sdl3 raw_window_handle.rs for 32-bit targets")
+		}
+	}
 }
 
 func printUsage() {
