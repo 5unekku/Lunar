@@ -444,6 +444,27 @@ impl QualitySettings {
             },
         }
     }
+
+    /// clamp user quality settings against a dev profile ceiling.
+    ///
+    /// call this after constructing `QualitySettings` and before inserting it as a resource.
+    /// features the dev disabled stay off regardless of tier; msaa and cascade counts are capped.
+    #[must_use]
+    pub fn apply_dev_profile(mut self, dev: &DevRenderProfile) -> Self {
+        if !dev.shadows { self.shadow_cascades = 0; }
+        self.shadow_cascades = self.shadow_cascades.min(dev.max_shadow_cascades);
+        if !dev.bloom          { self.bloom = false; }
+        if !dev.ssao           { self.ssao = false; }
+        if !dev.ssr            { self.ssr = false; }
+        if !dev.volumetric_fog { self.volumetric_fog = false; }
+        if !dev.fxaa           { self.fxaa = false; }
+        if !dev.vignette       { self.vignette = false; }
+        if !dev.chromatic_aberration { self.chromatic_aberration = false; }
+        if !dev.film_grain     { self.film_grain = false; }
+        self.msaa_samples = self.msaa_samples.min(dev.max_msaa);
+        self.particle_cap = self.particle_cap.min(dev.max_particles);
+        self
+    }
 }
 
 /// automatic quality stepping based on frame time EMA.
@@ -461,6 +482,122 @@ pub struct AutoQuality {
 impl Default for AutoQuality {
     fn default() -> Self {
         Self { enabled: false, min: QualityPreset::Minimum, max: QualityPreset::Ultra }
+    }
+}
+
+// ── dev render profile ────────────────────────────────────────────────────
+
+/// what the game is designed to use — a per-feature ceiling the developer controls.
+///
+/// `QualitySettings` is the user's slider within this ceiling. `DevRenderProfile`
+/// is the developer's decision about the game's visual design. they are orthogonal:
+/// a developer building a Quake-style game inserts `DevRenderProfile::classic()` and
+/// users scale shadow resolution and MSAA without ever enabling SSAO or bloom.
+/// a developer building a photorealistic game uses `DevRenderProfile::default()` (all on)
+/// and users can turn features off but the dev's artistic intent is the ceiling.
+///
+/// the renderer takes `min(user_settings, dev_profile)` each frame. features disabled
+/// here are never executed regardless of user or hardware tier.
+///
+/// insert as a resource before adding `RenderPlugin3d`. if not inserted, `default()` is
+/// used — every feature the hardware supports is available to the user.
+#[derive(Resource, Clone)]
+pub struct DevRenderProfile {
+    /// real-time cascaded shadow maps. disable for fully lightmapped games (quake-style).
+    pub shadows: bool,
+    /// bloom post-pass. disable for games that want a clean raster look.
+    pub bloom: bool,
+    /// half-res GTAO ambient occlusion.
+    pub ssao: bool,
+    /// screen-space reflections.
+    pub ssr: bool,
+    /// ray-marched volumetric fog.
+    pub volumetric_fog: bool,
+    /// FXAA post-process AA.
+    pub fxaa: bool,
+    /// screen-space vignette.
+    pub vignette: bool,
+    /// chromatic aberration.
+    pub chromatic_aberration: bool,
+    /// film grain overlay.
+    pub film_grain: bool,
+    /// maximum shadow cascades the game will use (developer ceiling, 1–3).
+    /// independently from whether shadows are on, this caps the cascade count
+    /// regardless of what the user's quality preset requests.
+    pub max_shadow_cascades: u32,
+    /// maximum MSAA sample count the game supports (1, 2, 4, or 8).
+    pub max_msaa: u32,
+    /// maximum particle cap. keep low for simple retro games, high for effects-heavy titles.
+    pub max_particles: u32,
+}
+
+impl Default for DevRenderProfile {
+    /// defaults to `classic()` — no runtime lighting, no post-processing.
+    /// the cheapest possible starting point. devs opt in to complexity rather than
+    /// opting out of it. this matches the accessibility goal.
+    fn default() -> Self { Self::classic() }
+}
+
+impl DevRenderProfile {
+    /// lightmapped game with no post-processing: quake 1 / quake 3 style.
+    /// shadows baked into lightmaps, no bloom, no SSAO, no SSR, no fog.
+    /// user can still scale resolution and MSAA.
+    #[must_use]
+    pub fn classic() -> Self {
+        Self {
+            shadows: false,
+            bloom: false,
+            ssao: false,
+            ssr: false,
+            volumetric_fog: false,
+            fxaa: true,
+            vignette: false,
+            chromatic_aberration: false,
+            film_grain: false,
+            max_shadow_cascades: 1,
+            max_msaa: 8,
+            max_particles: 8192,
+        }
+    }
+
+    /// shadows + bloom, no SSAO/SSR/fog. halo CE / mid-2000s feel.
+    /// good baseline for most indie 3d games that want some dynamism without full pbr cost.
+    #[must_use]
+    pub fn standard() -> Self {
+        Self {
+            shadows: true,
+            bloom: true,
+            ssao: false,
+            ssr: false,
+            volumetric_fog: false,
+            fxaa: true,
+            vignette: true,
+            chromatic_aberration: false,
+            film_grain: false,
+            max_shadow_cascades: 3,
+            max_msaa: 8,
+            max_particles: 32768,
+        }
+    }
+
+    /// everything on — full modern pipeline. use for photorealistic / high-budget titles.
+    /// user can turn individual features off but this is the ceiling.
+    #[must_use]
+    pub fn full() -> Self {
+        Self {
+            shadows: true,
+            bloom: true,
+            ssao: true,
+            ssr: true,
+            volumetric_fog: true,
+            fxaa: true,
+            vignette: true,
+            chromatic_aberration: true,
+            film_grain: true,
+            max_shadow_cascades: 3,
+            max_msaa: 8,
+            max_particles: u32::MAX,
+        }
     }
 }
 
@@ -4301,6 +4438,20 @@ impl RenderEngine3d {
         let view_proj = camera.view_proj(cam_wt, aspect);
         let cam_pos = cam_wt.translation;
 
+        // ── read dev render profile (dev's feature ceiling) ───────────────
+        // all pass gates below AND with this so disabled features are never executed
+        // regardless of user quality settings or hardware tier.
+        let dev_shadows          = world.get_resource::<DevRenderProfile>().map(|d| d.shadows         ).unwrap_or(true);
+        let dev_bloom            = world.get_resource::<DevRenderProfile>().map(|d| d.bloom            ).unwrap_or(true);
+        let dev_ssao             = world.get_resource::<DevRenderProfile>().map(|d| d.ssao             ).unwrap_or(true);
+        let dev_ssr              = world.get_resource::<DevRenderProfile>().map(|d| d.ssr              ).unwrap_or(true);
+        let dev_fog              = world.get_resource::<DevRenderProfile>().map(|d| d.volumetric_fog   ).unwrap_or(true);
+        let dev_fxaa             = world.get_resource::<DevRenderProfile>().map(|d| d.fxaa             ).unwrap_or(true);
+        let dev_vignette         = world.get_resource::<DevRenderProfile>().map(|d| d.vignette         ).unwrap_or(true);
+        let dev_chrom_ab         = world.get_resource::<DevRenderProfile>().map(|d| d.chromatic_aberration).unwrap_or(true);
+        let dev_film_grain       = world.get_resource::<DevRenderProfile>().map(|d| d.film_grain       ).unwrap_or(true);
+        let dev_max_cascades     = world.get_resource::<DevRenderProfile>().map(|d| d.max_shadow_cascades as usize).unwrap_or(NUM_CASCADES as usize);
+
         // ── gather sky ────────────────────────────────────────────────────
         let sky = world.get_resource::<Sky>().copied();
         let sky_color = sky.map_or(Color::rgb(0.1, 0.1, 0.15), |s| s.sky_color);
@@ -5321,7 +5472,7 @@ impl RenderEngine3d {
             // remaining dirty cascades stay dirty and are rebuilt on subsequent frames, spreading
             // the spike across frames. a stale cascade 2 (far, low detail) is imperceptible for 1-2 frames.
             let all_dirty: Vec<usize> = (0..NUM_CASCADES as usize)
-                .filter(|&c| dir_enabled != 0 && dir_casts_shadows && self.shadow_cascade_dirty[c])
+                .filter(|&c| dir_enabled != 0 && dir_casts_shadows && dev_shadows && c < dev_max_cascades && self.shadow_cascade_dirty[c])
                 .collect();
             let dirty_cascades: Vec<usize> = all_dirty.into_iter().take(1).collect();
             for &c in &dirty_cascades { self.shadow_cascade_dirty[c] = false; }
@@ -5659,7 +5810,7 @@ impl RenderEngine3d {
         }
 
         // ── GTAO passes (mid/high tier, ssao enabled) ────────────────────
-        if self.ssao_enabled {
+        if self.ssao_enabled && dev_ssao {
             // non-MSAA depth prepass so GTAO can sample depth without MSAA complication
             {
                 let mut zpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -6355,7 +6506,7 @@ impl RenderEngine3d {
         }
 
         // ── bloom passes ─────────────────────────────────────────────────
-        if self.bloom_enabled && !self.bloom_mip_views.is_empty() {
+        if self.bloom_enabled && dev_bloom && !self.bloom_mip_views.is_empty() {
             let n = self.bloom_mip_views.len();
 
             // upload bloom params for all steps (downsample + upsample)
@@ -6480,7 +6631,7 @@ impl RenderEngine3d {
         }
 
         // ── SSR pass (mid+ tier) ─────────────────────────────────────────
-        if self.ssr_enabled {
+        if self.ssr_enabled && dev_ssr {
             let width  = self.surface_config.width as f32;
             let height = self.surface_config.height as f32;
             let inv_vp   = view_proj.inverse();
@@ -6525,7 +6676,7 @@ impl RenderEngine3d {
         }
 
         // ── volumetric fog pass (mid+ tier) ──────────────────────────────
-        if self.fog_enabled {
+        if self.fog_enabled && dev_fog {
             let width  = self.surface_config.width as f32;
             let height = self.surface_config.height as f32;
             let inv_vp      = view_proj.inverse();
@@ -6584,21 +6735,21 @@ impl RenderEngine3d {
                 let ca_s;
                 let grain_s;
                 if let Some(q) = q {
-                    if self.bloom_enabled && q.bloom { f |= 1; }
-                    if q.vignette { f |= 2; }
-                    if q.chromatic_aberration { f |= 4; }
-                    if q.film_grain { f |= 8; }
-                    if self.ssao_enabled && q.ssao { f |= 16; }
-                    if self.ssr_enabled && q.ssr { f |= 32; }
-                    if self.fog_enabled && q.volumetric_fog { f |= 64; }
+                    if self.bloom_enabled && dev_bloom && q.bloom { f |= 1; }
+                    if dev_vignette && q.vignette { f |= 2; }
+                    if dev_chrom_ab && q.chromatic_aberration { f |= 4; }
+                    if dev_film_grain && q.film_grain { f |= 8; }
+                    if self.ssao_enabled && dev_ssao && q.ssao { f |= 16; }
+                    if self.ssr_enabled && dev_ssr && q.ssr { f |= 32; }
+                    if self.fog_enabled && dev_fog && q.volumetric_fog { f |= 64; }
                     bloom_s = 0.04_f32;
-                    vig_s   = if q.vignette { 0.3 } else { 0.0 };
+                    vig_s   = if dev_vignette && q.vignette { 0.3 } else { 0.0 };
                     vig_r   = 0.3_f32;
-                    ca_s    = if q.chromatic_aberration { 1.5 } else { 0.0 };
-                    grain_s = if q.film_grain { 0.5 } else { 0.0 };
+                    ca_s    = if dev_chrom_ab && q.chromatic_aberration { 1.5 } else { 0.0 };
+                    grain_s = if dev_film_grain && q.film_grain { 0.5 } else { 0.0 };
                 } else {
                     bloom_s = 0.04; vig_s = 0.0; vig_r = 0.0; ca_s = 0.0; grain_s = 0.0;
-                    if self.bloom_enabled { f |= 1; }
+                    if self.bloom_enabled && dev_bloom { f |= 1; }
                 }
                 (bloom_s, vig_s, vig_r, ca_s, grain_s, f)
             };
@@ -6617,7 +6768,7 @@ impl RenderEngine3d {
             // when fxaa is enabled, composite writes to the intermediate ldr texture;
             // the fxaa pass then reads it and outputs to swapchain. this avoids running
             // fxaa on a non-filterable msaa resolve target.
-            let composite_target = if self.fxaa_enabled { &self.fxaa_ldr_view } else { &view };
+            let composite_target = if self.fxaa_enabled && dev_fxaa { &self.fxaa_ldr_view } else { &view };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("[composite] pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -6640,7 +6791,7 @@ impl RenderEngine3d {
         }
 
         // ── FXAA pass → swapchain ─────────────────────────────────────────
-        if self.fxaa_enabled {
+        if self.fxaa_enabled && dev_fxaa {
             let w = self.surface_config.width;
             let h = self.surface_config.height;
             let fxaa_data: [f32; 4] = [1.0 / w as f32, 1.0 / h as f32, 0.0, 0.0];
