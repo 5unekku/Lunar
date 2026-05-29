@@ -271,21 +271,22 @@ func copyFile(src, dst string) error {
 	return os.WriteFile(dst, data, 0755)
 }
 
-// patchWindowsToolchains adds CMAKE_RC_COMPILER to zigbuild's Windows cmake toolchain files.
-// Without it SDL3's cmake Makefile calls bare 'windres' which doesn't exist in the zig toolchain.
+// patchWindowsToolchains creates a 'windres' symlink in ~/.local/bin pointing to llvm-windres.
+// cargo-zigbuild regenerates cmake toolchain files on every run so patching them is not viable.
+// The cmake-generated Makefile calls bare 'windres'; a symlink in PATH is the reliable fix.
 func patchWindowsToolchains() {
+	llvmWindres, err := exec.LookPath("llvm-windres")
+	if err != nil {
+		fmt.Println("warning: llvm-windres not found — Windows builds may fail on .rc files")
+		return
+	}
 	home, _ := os.UserHomeDir()
-	pattern := filepath.Join(home, ".cache", "cargo-zigbuild", "*", "wrappers", "*", "cmake", "*windows*toolchain.cmake")
-	matches, _ := filepath.Glob(pattern)
-	for _, path := range matches {
-		data, err := os.ReadFile(path)
-		if err != nil || strings.Contains(string(data), "CMAKE_RC_COMPILER") {
-			continue
-		}
-		patched := strings.TrimRight(string(data), "\n") + "\nset(CMAKE_RC_COMPILER llvm-windres)\n"
-		if err := os.WriteFile(path, []byte(patched), 0644); err == nil {
-			fmt.Printf("patched cmake RC compiler: %s\n", filepath.Base(path))
-		}
+	dest := filepath.Join(home, ".local", "bin", "windres")
+	if _, err := os.Lstat(dest); err == nil {
+		return // already exists
+	}
+	if err := os.Symlink(llvmWindres, dest); err == nil {
+		fmt.Printf("created windres symlink: %s -> %s\n", dest, llvmWindres)
 	}
 }
 
