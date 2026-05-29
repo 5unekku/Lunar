@@ -289,7 +289,10 @@ pub struct RenderEngine3d {
     surface_config: wgpu::SurfaceConfiguration,
     render_tier: RenderTier,
 
+    msaa_samples: u32,
     depth_view: wgpu::TextureView,
+    // some when msaa_samples > 1; render target for color pass, resolved to swapchain
+    msaa_color_view: Option<wgpu::TextureView>,
 
     // group 0: view-global (camera view-proj + time)
     globals_buf: wgpu::Buffer,
@@ -415,7 +418,14 @@ impl RenderEngine3d {
         };
         surface.configure(&device, &surface_config);
 
-        let depth_view = Self::make_depth_view(&device, config.width, config.height);
+        let msaa_samples = match render_tier {
+            RenderTier::LowGles => 1,
+            RenderTier::Mid | RenderTier::High => 4,
+        };
+        let depth_view = Self::make_depth_view(&device, config.width, config.height, msaa_samples);
+        let msaa_color_view = Self::make_msaa_color_view(
+            &device, config.width, config.height, format, msaa_samples,
+        );
 
         // ── bind group layouts ─────────────────────────────────────────────
 
@@ -706,7 +716,7 @@ impl RenderEngine3d {
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState { count: msaa_samples, ..Default::default() },
             cache: None,
             multiview_mask: None,
         });
@@ -743,7 +753,7 @@ impl RenderEngine3d {
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState { count: msaa_samples, ..Default::default() },
             cache: None,
             multiview_mask: None,
         });
@@ -773,7 +783,7 @@ impl RenderEngine3d {
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState { count: msaa_samples, ..Default::default() },
             cache: None,
             multiview_mask: None,
         });
@@ -821,6 +831,8 @@ impl RenderEngine3d {
             device,
             queue,
             surface,
+            msaa_samples,
+            msaa_color_view,
             surface_config,
             render_tier,
             depth_view,
@@ -863,19 +875,45 @@ impl RenderEngine3d {
 
     // ── helpers ────────────────────────────────────────────────────────────
 
-    fn make_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
+    fn make_depth_view(device: &wgpu::Device, width: u32, height: u32, sample_count: u32) -> wgpu::TextureView {
         device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("[depth] attachment"),
                 size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
                 mip_level_count: 1,
-                sample_count: 1,
+                sample_count,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Depth32Float,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 view_formats: &[],
             })
             .create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    fn make_msaa_color_view(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        sample_count: u32,
+    ) -> Option<wgpu::TextureView> {
+        if sample_count <= 1 {
+            return None;
+        }
+        Some(
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("[msaa] color attachment"),
+                    size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default()),
+        )
     }
 
     fn make_entity_buf(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
@@ -972,7 +1010,10 @@ impl RenderEngine3d {
         self.surface_config.width = width;
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
-        self.depth_view = Self::make_depth_view(&self.device, width, height);
+        self.depth_view = Self::make_depth_view(&self.device, width, height, self.msaa_samples);
+        self.msaa_color_view = Self::make_msaa_color_view(
+            &self.device, width, height, self.surface_config.format, self.msaa_samples,
+        );
     }
 
     pub fn surface_width(&self) -> u32 { self.surface_config.width }
@@ -1345,11 +1386,16 @@ impl RenderEngine3d {
 
         // ── main color pass ───────────────────────────────────────────────
         {
+            // with MSAA: render to msaa texture, resolve to swapchain; without: render direct
+            let (color_target, resolve_target) = match &self.msaa_color_view {
+                Some(msaa) => (msaa as &wgpu::TextureView, Some(&view as &wgpu::TextureView)),
+                None => (&view as &wgpu::TextureView, None),
+            };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("[frame] pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
+                    view: color_target,
+                    resolve_target,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: sky_color.r as f64,
@@ -1357,7 +1403,11 @@ impl RenderEngine3d {
                             b: sky_color.b as f64,
                             a: 1.0,
                         }),
-                        store: wgpu::StoreOp::Store,
+                        store: if self.msaa_color_view.is_some() {
+                            wgpu::StoreOp::Discard  // MSAA tile memory, not needed after resolve
+                        } else {
+                            wgpu::StoreOp::Store
+                        },
                     },
                     depth_slice: None,
                 })],
