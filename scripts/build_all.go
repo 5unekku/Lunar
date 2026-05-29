@@ -46,6 +46,7 @@ var allTargets = []target{
 
 func main() {
 	patchWindowsToolchains()
+	patchMacosToolchains()
 	patchSdl3Compat()
 
 	root := repoRoot()
@@ -296,6 +297,25 @@ func patchSdl3Compat() {
 		}
 		if err := os.WriteFile(path, []byte(fixed), 0644); err == nil {
 			fmt.Println("patched sdl3 raw_window_handle.rs for 32-bit targets")
+		}
+	}
+}
+
+// patchMacosToolchains disables SDL_HIDAPI_LIBUSB in zigbuild's macOS cmake toolchain files.
+// When cross-compiling from Linux, pkg-config finds the Linux libusb (.so) and SDL3 cmake
+// rejects it for not being a .dylib. Disabling the libusb path avoids the check entirely.
+func patchMacosToolchains() {
+	home, _ := os.UserHomeDir()
+	pattern := filepath.Join(home, ".cache", "cargo-zigbuild", "*", "wrappers", "*", "cmake", "*apple*toolchain.cmake")
+	matches, _ := filepath.Glob(pattern)
+	for _, path := range matches {
+		data, err := os.ReadFile(path)
+		if err != nil || strings.Contains(string(data), "SDL_HIDAPI_LIBUSB") {
+			continue
+		}
+		patched := strings.TrimRight(string(data), "\n") + "\nset(SDL_HIDAPI_LIBUSB OFF CACHE BOOL \"\" FORCE)\n"
+		if err := os.WriteFile(path, []byte(patched), 0644); err == nil {
+			fmt.Printf("patched SDL_HIDAPI_LIBUSB: %s\n", filepath.Base(path))
 		}
 	}
 }
