@@ -396,11 +396,22 @@ pub struct RenderEngine3d {
     resolution_scale: f32,       // current scale factor [0.5, 1.0]
     frame_time_budget_ms: f32,   // target frame time (e.g. 14 ms for 60 fps)
 
+    // transparent pass — alpha < 1.0 entities drawn back-to-front after opaques
+    transparent_pipeline: wgpu::RenderPipeline,
+    // indices into draw_scratch for transparent entities, sorted back-to-front
+    transparent_scratch: Vec<usize>,
+
+    // pipeline cache — persists compiled shader binaries across runs (Vulkan/DX12 only)
+    pipeline_cache: Option<wgpu::PipelineCache>,
+
+    // staging belt — explicit frame-temporary upload staging for large buffers
+    staging_belt: wgpu::util::StagingBelt,
+
     // per-frame scratch — cleared at frame start, never reallocated in steady state
     frustum_visible: HashSet<Entity>,
     raw_scratch: Vec<(Entity, u32, u32, Mat4)>,
-    // (entity, mesh_id, base_color, metallic, roughness, model)
-    draw_scratch: Vec<(Entity, u32, Color, f32, f32, Mat4)>,
+    // (entity, mesh_id, base_color, metallic, roughness, model, alpha)
+    draw_scratch: Vec<(Entity, u32, Color, f32, f32, Mat4, f32)>,
     uniform_staging: Vec<u8>,
     point_light_scratch: Vec<(Vec3, Color, f32, f32)>,
 }
@@ -701,6 +712,10 @@ impl RenderEngine3d {
             }],
         });
 
+        // ── pipeline cache (Vulkan/DX12 only) ─────────────────────────────
+        // load compiled shader binaries from previous run to skip recompilation.
+        let pipeline_cache = Self::load_pipeline_cache(&device);
+
         // ── pipelines ──────────────────────────────────────────────────────
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -776,7 +791,7 @@ impl RenderEngine3d {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState { count: msaa_samples, ..Default::default() },
-            cache: None,
+            cache: pipeline_cache.as_ref(),
             multiview_mask: None,
         });
 
@@ -813,7 +828,7 @@ impl RenderEngine3d {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState { count: msaa_samples, ..Default::default() },
-            cache: None,
+            cache: pipeline_cache.as_ref(),
             multiview_mask: None,
         });
 
@@ -843,7 +858,7 @@ impl RenderEngine3d {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState { count: msaa_samples, ..Default::default() },
-            cache: None,
+            cache: pipeline_cache.as_ref(),
             multiview_mask: None,
         });
 
@@ -872,7 +887,45 @@ impl RenderEngine3d {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            cache: None,
+            cache: pipeline_cache.as_ref(),
+            multiview_mask: None,
+        });
+
+        // transparent pipeline: same shader as opaque but no depth write, no backface cull
+        let transparent_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("3d transparent pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: vertex_buffers,
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: HDR_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState { count: msaa_samples, ..Default::default() },
+            cache: pipeline_cache.as_ref(),
             multiview_mask: None,
         });
 
@@ -970,7 +1023,7 @@ impl RenderEngine3d {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            cache: None,
+            cache: pipeline_cache.as_ref(),
             multiview_mask: None,
         });
 
@@ -1004,7 +1057,7 @@ impl RenderEngine3d {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            cache: None,
+            cache: pipeline_cache.as_ref(),
             multiview_mask: None,
         });
 
@@ -1115,7 +1168,7 @@ impl RenderEngine3d {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            cache: None,
+            cache: pipeline_cache.as_ref(),
             multiview_mask: None,
         });
 
@@ -1184,7 +1237,7 @@ impl RenderEngine3d {
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(), // always sample_count=1
-            cache: None,
+            cache: pipeline_cache.as_ref(),
             multiview_mask: None,
         });
 
@@ -1281,7 +1334,7 @@ impl RenderEngine3d {
                 primitive: wgpu::PrimitiveState::default(),
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
-                cache: None,
+                cache: pipeline_cache.as_ref(),
                 multiview_mask: None,
             })
         };
@@ -1347,6 +1400,9 @@ impl RenderEngine3d {
             "lunar-render-3d initialized: {}×{}, vsync={}, tier={:?}",
             config.width, config.height, config.vsync, render_tier,
         );
+
+        // clone before move into struct — wgpu::Device is Arc-backed, clone is cheap
+        let device_for_belt = device.clone();
 
         Self {
             device,
@@ -1414,6 +1470,11 @@ impl RenderEngine3d {
             gtao_blur_h_pipeline,
             gtao_blur_v_pipeline,
             zprepass_nonmsaa_pipeline,
+            transparent_pipeline,
+            transparent_scratch: Vec::new(),
+            pipeline_cache,
+            // 4 MiB chunk — larger than any single write, handles most scene sizes
+            staging_belt: wgpu::util::StagingBelt::new(device_for_belt, 4 * 1024 * 1024),
             frame_time_ema_ms: 16.67,
             resolution_scale: 1.0,
             frame_time_budget_ms: 14.0,
@@ -1422,6 +1483,46 @@ impl RenderEngine3d {
             draw_scratch: Vec::new(),
             uniform_staging,
             point_light_scratch: Vec::new(),
+        }
+    }
+
+    /// load the 3d pipeline cache from disk if available (Vulkan/DX12 only).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_pipeline_cache(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
+        let path = std::path::Path::new(".pipeline_cache_3d.bin");
+        if path.exists() {
+            match std::fs::read(path) {
+                Ok(data) => {
+                    log::info!("[render-3d] loaded pipeline cache ({} bytes)", data.len());
+                    // SAFETY: fallback=true so wgpu rebuilds a fresh cache if validation
+                    // fails; this only runs on Vulkan/DX12 where the format is stable.
+                    Some(unsafe {
+                        device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
+                            label: Some("[render-3d] pipeline cache"),
+                            data: Some(&data),
+                            fallback: true,
+                        })
+                    })
+                }
+                Err(err) => { log::warn!("[render-3d] pipeline cache load failed: {err}"); None }
+            }
+        } else {
+            None
+        }
+    }
+
+    /// persist pipeline cache to disk. call before engine shutdown to speed up
+    /// shader compilation on the next launch (Vulkan/DX12 only).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn save_pipeline_cache(&self) {
+        if let Some(ref cache) = self.pipeline_cache
+            && let Some(data) = cache.get_data()
+        {
+            let path = std::path::Path::new(".pipeline_cache_3d.bin");
+            match std::fs::write(path, &data) {
+                Ok(()) => log::info!("[render-3d] saved pipeline cache ({} bytes)", data.len()),
+                Err(err) => log::warn!("[render-3d] pipeline cache save failed: {err}"),
+            }
         }
     }
 
@@ -1807,11 +1908,15 @@ impl RenderEngine3d {
         {
             let registry = world.resource::<MeshRegistry>();
             for &(entity, mesh_id, mat_id, model) in &self.raw_scratch {
-                let (color, metallic, roughness) = registry
+                let (color, metallic, roughness, alpha) = registry
                     .get_material(lunar_assets::Handle::new(mat_id, 0))
-                    .map(|m| (m.base_color, m.metallic, m.roughness))
-                    .unwrap_or((Color::WHITE, 0.0, 0.5));
-                self.draw_scratch.push((entity, mesh_id, color, metallic, roughness, model));
+                    .map(|m| {
+                        let mut color = m.base_color;
+                        color.a = m.alpha;
+                        (color, m.metallic, m.roughness, m.alpha)
+                    })
+                    .unwrap_or((Color::WHITE, 0.0, 0.5, 1.0));
+                self.draw_scratch.push((entity, mesh_id, color, metallic, roughness, model, alpha));
             }
         }
 
@@ -1870,7 +1975,7 @@ impl RenderEngine3d {
         }
 
         for i in 0..self.draw_scratch.len() {
-            let (_, _, color, metallic, roughness, model) = self.draw_scratch[i];
+            let (_, _, color, metallic, roughness, model, _) = self.draw_scratch[i];
             Self::pack_mesh_uniforms(&mut self.uniform_staging, ENTITY_SLOT_START + i, model);
             Self::pack_material_uniforms(&mut self.material_staging, ENTITY_SLOT_START + i, color, metallic, roughness, 0);
         }
@@ -1922,7 +2027,7 @@ impl RenderEngine3d {
             );
         }
 
-        // ── upload globals + mesh/material buffers ────────────────────────
+        // ── upload globals + small uniforms via queue.write_buffer ───────
         let upload_size = (needed * UNIFORM_STRIDE as usize) as u64;
         let time = world.resource::<lunar_core::Time>();
         let globals_data: [f32; 24] = {
@@ -1938,10 +2043,25 @@ impl RenderEngine3d {
             d
         };
         self.queue.write_buffer(&self.globals_buf, 0, unsafe { slice_as_bytes(&globals_data) });
-        self.queue.write_buffer(&self.entity_buf, 0, &self.uniform_staging[..upload_size as usize]);
-        self.queue.write_buffer(&self.material_buf, 0, &self.material_staging[..upload_size as usize]);
 
-        // ── acquire surface ───────────────────────────────────────────────
+        // ── sort transparent draws back-to-front ──────────────────────────
+        let cam_fwd = cam_wt.forward();
+        self.transparent_scratch.clear();
+        for i in 0..self.draw_scratch.len() {
+            if self.draw_scratch[i].6 < 1.0 {
+                self.transparent_scratch.push(i);
+            }
+        }
+        self.transparent_scratch.sort_unstable_by(|&a, &b| {
+            let wa = self.draw_scratch[a].5.w_axis;
+            let wb = self.draw_scratch[b].5.w_axis;
+            let depth_a = (Vec3::new(wa.x, wa.y, wa.z) - cam_pos).dot(cam_fwd);
+            let depth_b = (Vec3::new(wb.x, wb.y, wb.z) - cam_pos).dot(cam_fwd);
+            // back-to-front: larger depth (further from camera) drawn first
+            depth_b.partial_cmp(&depth_a).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // ── acquire surface and create encoder ────────────────────────────
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) => f,
             wgpu::CurrentSurfaceTexture::Suboptimal(f) => {
@@ -1969,6 +2089,26 @@ impl RenderEngine3d {
             label: Some("[frame] encoder"),
         });
 
+        // ── upload mesh + material buffers via StagingBelt ────────────────
+        // StagingBelt batches these large per-frame uploads into GPU-side staging memory,
+        // issuing a single copy command per buffer instead of multiple queue.write_buffer calls.
+        if upload_size > 0 {
+            let entity_size = wgpu::BufferSize::new(upload_size).unwrap();
+            let material_size = wgpu::BufferSize::new(upload_size).unwrap();
+            {
+                let mut view = self.staging_belt.write_buffer(
+                    &mut encoder, &self.entity_buf, 0, entity_size,
+                );
+                view.copy_from_slice(&self.uniform_staging[..upload_size as usize]);
+            }
+            {
+                let mut view = self.staging_belt.write_buffer(
+                    &mut encoder, &self.material_buf, 0, material_size,
+                );
+                view.copy_from_slice(&self.material_staging[..upload_size as usize]);
+            }
+        }
+
         // ── collect shadow casters ────────────────────────────────────────
         let mut draw_calls: u32 = 0;
         let shadow_list: Vec<(u32, usize)> = {
@@ -1977,7 +2117,7 @@ impl RenderEngine3d {
                 .filter(|(_, _, vis, caster)| vis.0 && caster.is_some())
                 .filter_map(|(_entity, mesh, _, _)| {
                     let mesh_id = mesh.0.id();
-                    let slot = self.draw_scratch.iter().position(|(_, mid, _, _, _, _)| *mid == mesh_id)?;
+                    let slot = self.draw_scratch.iter().position(|(_, mid, _, _, _, _, _)| *mid == mesh_id)?;
                     Some((mesh_id, slot))
                 })
                 .collect()
@@ -2222,9 +2362,10 @@ impl RenderEngine3d {
                 draw_calls += 1;
             }
 
-            // opaque PBR pass
+            // opaque PBR pass — only draw entities with alpha >= 1.0
             pass.set_pipeline(&self.opaque_pipeline);
             for i in 0..self.draw_scratch.len() {
+                if self.draw_scratch[i].6 < 1.0 { continue; } // skip transparents
                 let mesh_id = self.draw_scratch[i].1;
                 let Some(gpu_mesh) = self.mesh_gpu.get(&mesh_id) else { continue; };
                 pass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
@@ -2233,6 +2374,21 @@ impl RenderEngine3d {
                 pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
                 pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
                 draw_calls += 1;
+            }
+
+            // transparent pass — back-to-front sorted, no depth write, alpha blend
+            if !self.transparent_scratch.is_empty() {
+                pass.set_pipeline(&self.transparent_pipeline);
+                for &i in &self.transparent_scratch {
+                    let mesh_id = self.draw_scratch[i].1;
+                    let Some(gpu_mesh) = self.mesh_gpu.get(&mesh_id) else { continue; };
+                    pass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
+                    pass.set_bind_group(2, &self.entity_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
+                    pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
+                    pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
+                    pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+                    draw_calls += 1;
+                }
             }
         }
 
@@ -2382,8 +2538,11 @@ impl RenderEngine3d {
             pass.draw(0..3, 0..1);
         }
 
+        self.staging_belt.finish();
         self.queue.submit(Some(encoder.finish()));
         frame.present();
+        // recycle staging belt memory for the next frame
+        self.staging_belt.recall();
         draw_calls
     }
 
