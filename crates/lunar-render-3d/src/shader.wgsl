@@ -20,14 +20,16 @@ struct MaterialUniforms {
 }
 @group(1) @binding(0) var<uniform> material: MaterialUniforms;
 
-// group 2: per-mesh — dynamic offset
-struct MeshUniforms {
-    model:     mat4x4<f32>,  // 64 bytes
-    normal_c0: vec4<f32>,    // 16 bytes — column 0 of normal matrix
-    normal_c1: vec4<f32>,    // 16 bytes — column 1
-    normal_c2: vec4<f32>,    // 16 bytes — column 2 — total: 112 bytes
+// group 2: per-instance transforms — storage array, indexed by @builtin(instance_index).
+// padded to 256 bytes to match the UNIFORM_STRIDE staging layout on the CPU.
+struct MeshInstance {
+    model:     mat4x4<f32>,          // 64 bytes — offset   0
+    normal_c0: vec4<f32>,            // 16 bytes — offset  64
+    normal_c1: vec4<f32>,            // 16 bytes — offset  80
+    normal_c2: vec4<f32>,            // 16 bytes — offset  96
+    _pad:      array<vec4<f32>, 9>,  // 144 bytes — offset 112 (total: 256)
 }
-@group(2) @binding(0) var<uniform> mesh: MeshUniforms;
+@group(2) @binding(0) var<storage, read> instances: array<MeshInstance>;
 
 // group 3: lights + shadow map array
 struct PointLightGpu {
@@ -99,13 +101,14 @@ struct VertOut {
 }
 
 @vertex
-fn vs_main(in: VertIn) -> VertOut {
-    let world_pos4 = mesh.model * vec4<f32>(in.position, 1.0);
+fn vs_main(in: VertIn, @builtin(instance_index) instance_id: u32) -> VertOut {
+    let inst       = instances[instance_id];
+    let world_pos4 = inst.model * vec4<f32>(in.position, 1.0);
     let view_pos4  = globals.view_proj * world_pos4;
     let normal_mat = mat3x3<f32>(
-        mesh.normal_c0.xyz,
-        mesh.normal_c1.xyz,
-        mesh.normal_c2.xyz,
+        inst.normal_c0.xyz,
+        inst.normal_c1.xyz,
+        inst.normal_c2.xyz,
     );
     var out: VertOut;
     out.clip_pos     = view_pos4;

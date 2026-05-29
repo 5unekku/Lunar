@@ -78,7 +78,9 @@ const GLOBALS_SIZE: u64 = 96;
 /// group 1: base_color (16) + metallic (4) + roughness (4) + flags (4) + pad (4) = 32 bytes.
 const MATERIAL_UNIFORMS_SIZE: u64 = 32;
 
-/// group 2: model mat4 (64) + normal matrix as 3×vec4 (48) = 112 bytes.
+/// per-entity transform data: model mat4 (64) + normal matrix 3×vec4 (48) = 112 bytes,
+/// padded to UNIFORM_STRIDE (256) in the staging buffer.
+#[allow(dead_code)]
 const MESH_UNIFORMS_SIZE: u64 = 112;
 
 /// group 3: ambient(16) + dir(32) + 3×light_space(192) + cascade_splits(16) + point_header(16)
@@ -600,6 +602,8 @@ pub struct RenderEngine3d {
 
     // transparent pass — alpha < 1.0 entities drawn back-to-front after opaques
     transparent_pipeline: wgpu::RenderPipeline,
+    // (entity, mesh_id, mat_id, color, metallic, roughness, model, alpha)
+    // sorted by (mesh_id, mat_id) before the draw loop for batching
     // indices into draw_scratch for transparent entities, sorted back-to-front
     transparent_scratch: Vec<usize>,
 
@@ -614,8 +618,9 @@ pub struct RenderEngine3d {
     // per-frame scratch — cleared at frame start, never reallocated in steady state
     frustum_visible: HashSet<Entity>,
     raw_scratch: Vec<(Entity, u32, u32, Mat4)>,
-    // (entity, mesh_id, base_color, metallic, roughness, model, alpha)
-    draw_scratch: Vec<(Entity, u32, Color, f32, f32, Mat4, f32)>,
+    // (entity, mesh_id, mat_id, base_color, metallic, roughness, model, alpha)
+    // sorted by (mesh_id, mat_id) before drawing for state-change batching and GPU instancing
+    draw_scratch: Vec<(Entity, u32, u32, Color, f32, f32, Mat4, f32)>,
     uniform_staging: Vec<u8>,
     point_light_scratch: Vec<(Vec3, Color, f32, f32)>,
 }
@@ -739,9 +744,9 @@ impl RenderEngine3d {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX,
                 ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: true,
-                    min_binding_size: wgpu::BufferSize::new(MESH_UNIFORMS_SIZE),
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
                 count: None,
             }],
@@ -2866,9 +2871,9 @@ impl RenderEngine3d {
 
     fn make_entity_buf(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
         device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("[draw] entity uniform buffer"),
+            label: Some("[draw] entity storage buffer"),
             size: (capacity * UNIFORM_STRIDE as usize) as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         })
     }
@@ -2883,11 +2888,7 @@ impl RenderEngine3d {
             layout: mesh_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: entity_buf,
-                    offset: 0,
-                    size: wgpu::BufferSize::new(MESH_UNIFORMS_SIZE),
-                }),
+                resource: entity_buf.as_entire_binding(),
             }],
         })
     }
@@ -3330,9 +3331,17 @@ impl RenderEngine3d {
                         (color, m.metallic, m.roughness, m.alpha)
                     })
                     .unwrap_or((Color::WHITE, 0.0, 0.5, 1.0));
-                self.draw_scratch.push((entity, mesh_id, color, metallic, roughness, model, alpha));
+                self.draw_scratch.push((entity, mesh_id, mat_id, color, metallic, roughness, model, alpha));
             }
         }
+        // sort opaque entities by (mesh_id, mat_id) so consecutive entities can share
+        // VBO/IBO and material bind group, and be batched into a single draw_indexed call.
+        // transparents are sorted separately by depth after this.
+        self.draw_scratch.sort_unstable_by_key(|&(_, mesh_id, mat_id, _, _, _, _, alpha)| {
+            // put transparents last, then sort by (mesh_id, mat_id)
+            let transparent = if alpha < 1.0 { 1u8 } else { 0u8 };
+            (transparent, mesh_id, mat_id)
+        });
 
         // ── upload missing meshes ─────────────────────────────────────────
         for i in 0..self.draw_scratch.len() {
@@ -3389,7 +3398,7 @@ impl RenderEngine3d {
         }
 
         for i in 0..self.draw_scratch.len() {
-            let (_, _, color, metallic, roughness, model, _) = self.draw_scratch[i];
+            let (_, _, _, color, metallic, roughness, model, _) = self.draw_scratch[i];
             Self::pack_mesh_uniforms(&mut self.uniform_staging, ENTITY_SLOT_START + i, model);
             Self::pack_material_uniforms(&mut self.material_staging, ENTITY_SLOT_START + i, color, metallic, roughness, 0);
         }
@@ -3480,13 +3489,13 @@ impl RenderEngine3d {
         let cam_fwd = cam_wt.forward();
         self.transparent_scratch.clear();
         for i in 0..self.draw_scratch.len() {
-            if self.draw_scratch[i].6 < 1.0 {
+            if self.draw_scratch[i].7 < 1.0 {
                 self.transparent_scratch.push(i);
             }
         }
         self.transparent_scratch.sort_unstable_by(|&a, &b| {
-            let wa = self.draw_scratch[a].5.w_axis;
-            let wb = self.draw_scratch[b].5.w_axis;
+            let wa = self.draw_scratch[a].6.w_axis;
+            let wb = self.draw_scratch[b].6.w_axis;
             let depth_a = (Vec3::new(wa.x, wa.y, wa.z) - cam_pos).dot(cam_fwd);
             let depth_b = (Vec3::new(wb.x, wb.y, wb.z) - cam_pos).dot(cam_fwd);
             // back-to-front: larger depth (further from camera) drawn first
@@ -3547,16 +3556,20 @@ impl RenderEngine3d {
 
         // ── collect shadow casters ────────────────────────────────────────
         let mut draw_calls: u32 = 0;
+        // shadow_list: (mesh_id, draw_scratch_index) for all visible shadow casters.
+        // using entity lookup so every caster gets its own correct transform.
+        // sorted by mesh_id so consecutive shadow draws can share VBO/IBO.
         let shadow_list: Vec<(u32, usize)> = {
-            let mut q = world.query::<(Entity, &Mesh3d, &ComputedVisibility, Option<&ShadowCaster>)>();
-            q.iter(world)
-                .filter(|(_, _, vis, caster)| vis.0 && caster.is_some())
-                .filter_map(|(_entity, mesh, _, _)| {
-                    let mesh_id = mesh.0.id();
-                    let slot = self.draw_scratch.iter().position(|(_, mid, _, _, _, _, _)| *mid == mesh_id)?;
-                    Some((mesh_id, slot))
-                })
-                .collect()
+            let shadow_entities: HashSet<Entity> = {
+                let mut q = world.query::<(Entity, &ComputedVisibility, &ShadowCaster)>();
+                q.iter(world).filter(|(_, vis, _)| vis.0).map(|(e, _, _)| e).collect()
+            };
+            let mut list: Vec<(u32, usize)> = self.draw_scratch.iter().enumerate()
+                .filter(|(_, (entity, _, _, _, _, _, _, _))| shadow_entities.contains(entity))
+                .map(|(i, (_, mesh_id, _, _, _, _, _, _))| (*mesh_id, i))
+                .collect();
+            list.sort_unstable_by_key(|&(mesh_id, _)| mesh_id);
+            list
         };
 
         // ── shadow pass — 3 cascades ─────────────────────────────────────
@@ -3580,12 +3593,33 @@ impl RenderEngine3d {
                 });
                 shadow_pass.set_pipeline(&self.shadow_pipeline);
                 shadow_pass.set_bind_group(0, &self.shadow_globals_bg, &[Self::slot_offset(cascade)]);
-                for &(mesh_id, slot) in &shadow_list {
-                    let Some(gpu_mesh) = self.mesh_gpu.get(&mesh_id) else { continue; };
-                    shadow_pass.set_bind_group(1, &self.entity_bg, &[Self::slot_offset(ENTITY_SLOT_START + slot)]);
-                    shadow_pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
-                    shadow_pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
-                    shadow_pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+                // entity storage buffer covers all slots; set once.
+                shadow_pass.set_bind_group(1, &self.entity_bg, &[]);
+                // shadow_list is sorted by mesh_id — batch consecutive same-mesh entries
+                let mut last_mesh = u32::MAX;
+                let mut group_start_slot = 0usize;
+                let mut group_start_idx = 0usize;
+                let sn = shadow_list.len();
+                for idx in 0..=sn {
+                    let done = idx == sn;
+                    let cur_mesh = if done { u32::MAX } else { shadow_list[idx].0 };
+                    if cur_mesh != last_mesh && idx > group_start_idx {
+                        if let Some(gpu_mesh) = self.mesh_gpu.get(&last_mesh) {
+                            let base = (ENTITY_SLOT_START + group_start_slot) as u32;
+                            let count = (idx - group_start_idx) as u32;
+                            shadow_pass.draw_indexed(0..gpu_mesh.index_count, 0, base..base + count);
+                        }
+                    }
+                    if done { break; }
+                    if cur_mesh != last_mesh {
+                        if let Some(gpu_mesh) = self.mesh_gpu.get(&cur_mesh) {
+                            shadow_pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
+                            shadow_pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
+                        }
+                        last_mesh = cur_mesh;
+                        group_start_slot = shadow_list[idx].1;
+                        group_start_idx = idx;
+                    }
                 }
             } else {
                 // clear each cascade layer so the sampler has valid data
@@ -3629,14 +3663,34 @@ impl RenderEngine3d {
             zpass.set_pipeline(&self.zprepass_pipeline);
             zpass.set_bind_group(0, &self.globals_bg, &[]);
             zpass.set_bind_group(3, &self.lights_bg, &[]);
-            for i in 0..self.draw_scratch.len() {
-                let mesh_id = self.draw_scratch[i].1;
-                let Some(gpu_mesh) = self.mesh_gpu.get(&mesh_id) else { continue; };
-                zpass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
-                zpass.set_bind_group(2, &self.entity_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
-                zpass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
-                zpass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
-                zpass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+            zpass.set_bind_group(2, &self.entity_bg, &[]);
+            {
+                let mut last_mesh = u32::MAX;
+                let mut last_mat = u32::MAX;
+                let mut group_start = 0usize;
+                let n = self.draw_scratch.len();
+                let mut i = 0usize;
+                while i <= n {
+                    let done = i == n;
+                    let (cur_mesh, cur_mat) = if done { (u32::MAX, u32::MAX) }
+                        else { (self.draw_scratch[i].1, self.draw_scratch[i].2) };
+                    if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start {
+                        if let Some(gpu_mesh) = self.mesh_gpu.get(&last_mesh) {
+                            let base = (ENTITY_SLOT_START + group_start) as u32;
+                            zpass.draw_indexed(0..gpu_mesh.index_count, 0, base..base + (i - group_start) as u32);
+                        }
+                    }
+                    if done { break; }
+                    if cur_mesh != last_mesh || cur_mat != last_mat {
+                        if let Some(gpu_mesh) = self.mesh_gpu.get(&cur_mesh) {
+                            zpass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
+                            zpass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
+                            zpass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
+                        }
+                        last_mesh = cur_mesh; last_mat = cur_mat; group_start = i;
+                    }
+                    i += 1;
+                }
             }
         }
 
@@ -3662,14 +3716,34 @@ impl RenderEngine3d {
                 zpass.set_pipeline(&self.zprepass_nonmsaa_pipeline);
                 zpass.set_bind_group(0, &self.globals_bg, &[]);
                 zpass.set_bind_group(3, &self.lights_bg, &[]);
-                for i in 0..self.draw_scratch.len() {
-                    let mesh_id = self.draw_scratch[i].1;
-                    let Some(gpu_mesh) = self.mesh_gpu.get(&mesh_id) else { continue; };
-                    zpass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
-                    zpass.set_bind_group(2, &self.entity_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
-                    zpass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
-                    zpass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
-                    zpass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+                zpass.set_bind_group(2, &self.entity_bg, &[]);
+                {
+                    let mut last_mesh = u32::MAX;
+                    let mut last_mat = u32::MAX;
+                    let mut group_start = 0usize;
+                    let n = self.draw_scratch.len();
+                    let mut i = 0usize;
+                    while i <= n {
+                        let done = i == n;
+                        let (cur_mesh, cur_mat) = if done { (u32::MAX, u32::MAX) }
+                            else { (self.draw_scratch[i].1, self.draw_scratch[i].2) };
+                        if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start {
+                            if let Some(gpu_mesh) = self.mesh_gpu.get(&last_mesh) {
+                                let base = (ENTITY_SLOT_START + group_start) as u32;
+                                zpass.draw_indexed(0..gpu_mesh.index_count, 0, base..base + (i - group_start) as u32);
+                            }
+                        }
+                        if done { break; }
+                        if cur_mesh != last_mesh || cur_mat != last_mat {
+                            if let Some(gpu_mesh) = self.mesh_gpu.get(&cur_mesh) {
+                                zpass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
+                                zpass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
+                                zpass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
+                            }
+                            last_mesh = cur_mesh; last_mat = cur_mat; group_start = i;
+                        }
+                        i += 1;
+                    }
                 }
             }
 
@@ -3780,49 +3854,73 @@ impl RenderEngine3d {
             pass.set_bind_group(0, &self.globals_bg, &[]);
             pass.set_bind_group(3, &self.lights_bg, &[]);
 
-            // sky pass — unlit, dome always drawn; sun only when sky resource present
+            // sky pass — unlit, dome always drawn; sun only when sky resource present.
+            // entity_bg is set once for the whole pass (covers all slots in storage buffer).
             pass.set_pipeline(&self.sky_pipeline);
+            pass.set_bind_group(2, &self.entity_bg, &[]);
             pass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(SLOT_DOME)]);
-            pass.set_bind_group(2, &self.entity_bg, &[Self::slot_offset(SLOT_DOME)]);
             pass.set_vertex_buffer(0, self.dome_mesh.vbuf.slice(..));
             pass.set_index_buffer(self.dome_mesh.ibuf.slice(..), self.dome_mesh.index_fmt);
-            pass.draw_indexed(0..self.dome_mesh.index_count, 0, 0..1);
+            pass.draw_indexed(0..self.dome_mesh.index_count, 0, SLOT_DOME as u32..SLOT_DOME as u32 + 1);
             draw_calls += 1;
 
             if sky.is_some_and(|s| s.show_sun) {
                 pass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(SLOT_SUN)]);
-                pass.set_bind_group(2, &self.entity_bg, &[Self::slot_offset(SLOT_SUN)]);
                 pass.set_vertex_buffer(0, self.sun_mesh.vbuf.slice(..));
                 pass.set_index_buffer(self.sun_mesh.ibuf.slice(..), self.sun_mesh.index_fmt);
-                pass.draw_indexed(0..self.sun_mesh.index_count, 0, 0..1);
+                pass.draw_indexed(0..self.sun_mesh.index_count, 0, SLOT_SUN as u32..SLOT_SUN as u32 + 1);
                 draw_calls += 1;
             }
 
-            // opaque PBR pass — only draw entities with alpha >= 1.0
+            // opaque PBR pass — batched by (mesh_id, mat_id); draw_scratch is pre-sorted.
+            // entity_bg covers the full storage buffer — set once, instance_index selects transform.
             pass.set_pipeline(&self.opaque_pipeline);
-            for i in 0..self.draw_scratch.len() {
-                if self.draw_scratch[i].6 < 1.0 { continue; } // skip transparents
-                let mesh_id = self.draw_scratch[i].1;
-                let Some(gpu_mesh) = self.mesh_gpu.get(&mesh_id) else { continue; };
-                pass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
-                pass.set_bind_group(2, &self.entity_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
-                pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
-                pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
-                pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
-                draw_calls += 1;
+            pass.set_bind_group(2, &self.entity_bg, &[]);
+            {
+                let mut last_mesh: u32 = u32::MAX;
+                let mut last_mat: u32 = u32::MAX;
+                let mut group_start: usize = 0;
+                let n = self.draw_scratch.len();
+                let mut i = 0;
+                while i <= n {
+                    let flush = i == n || self.draw_scratch[i].7 < 1.0; // end or transparent
+                    let (cur_mesh, cur_mat) = if flush || i == n { (u32::MAX, u32::MAX) }
+                        else { (self.draw_scratch[i].1, self.draw_scratch[i].2) };
+                    let group_changed = cur_mesh != last_mesh || cur_mat != last_mat;
+                    if group_changed && i > group_start {
+                        // flush the completed group
+                        let Some(gpu_mesh) = self.mesh_gpu.get(&last_mesh) else { group_start = i; i += 1; continue; };
+                        let base = (ENTITY_SLOT_START + group_start) as u32;
+                        let count = (i - group_start) as u32;
+                        pass.draw_indexed(0..gpu_mesh.index_count, 0, base..base + count);
+                        draw_calls += 1;
+                    }
+                    if flush { break; }
+                    if cur_mesh != last_mesh || cur_mat != last_mat {
+                        let Some(gpu_mesh) = self.mesh_gpu.get(&cur_mesh) else { i += 1; continue; };
+                        pass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
+                        pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
+                        pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
+                        last_mesh = cur_mesh;
+                        last_mat = cur_mat;
+                        group_start = i;
+                    }
+                    i += 1;
+                }
             }
 
-            // transparent pass — back-to-front sorted, no depth write, alpha blend
+            // transparent pass — back-to-front sorted, no depth write, alpha blend.
+            // transparents are few so no batching needed; entity_bg already set.
             if !self.transparent_scratch.is_empty() {
                 pass.set_pipeline(&self.transparent_pipeline);
                 for &i in &self.transparent_scratch {
                     let mesh_id = self.draw_scratch[i].1;
                     let Some(gpu_mesh) = self.mesh_gpu.get(&mesh_id) else { continue; };
                     pass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
-                    pass.set_bind_group(2, &self.entity_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
                     pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
                     pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
-                    pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+                    let base = (ENTITY_SLOT_START + i) as u32;
+                    pass.draw_indexed(0..gpu_mesh.index_count, 0, base..base + 1);
                     draw_calls += 1;
                 }
             }
