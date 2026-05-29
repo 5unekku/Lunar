@@ -755,6 +755,14 @@ pub struct RenderEngine3d {
     // models pass dependencies via declared texture reads/writes and topological sort.
     render_graph: render_graph::RenderGraph,
 
+    // GPU-driven indirect rendering (High tier, MULTI_DRAW_INDIRECT + INDIRECT_FIRST_INSTANCE).
+    // phase 2: CPU builds DrawIndexedIndirect args, issues draw_indexed_indirect per batch.
+    // phase 4: GPU cull shader writes draw args directly, CPU issues one multi_draw call.
+    has_indirect: bool,
+    // DrawIndexedIndirect × entity_capacity — CPU-filled in phase 2, GPU-filled in phase 4
+    indirect_buf: Option<wgpu::Buffer>,
+    indirect_args: Vec<u32>,   // scratch: 5 u32s per entry (index_count, inst_count, first_idx, base_vert, first_inst)
+
     // GPU-driven frustum culling (high tier only).
     // a compute pass replaces the CPU CullSoa frustum test.
     // 1-frame pipelined: this frame writes to cull_flags_buf, previous frame's
@@ -831,12 +839,16 @@ impl RenderEngine3d {
         }))
         .expect("no wgpu adapter found");
 
-        // request R11G11B10 renderable if the adapter supports it — 2× HDR bandwidth savings
+        // request optional features based on adapter support
         let has_r11 = adapter.features().contains(wgpu::Features::RG11B10UFLOAT_RENDERABLE);
+        // indirect first instance needed for non-zero first_instance in indirect draws
+        let has_indirect = adapter.features().contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
+        let mut required_features = if has_r11 { wgpu::Features::RG11B10UFLOAT_RENDERABLE } else { wgpu::Features::empty() };
+        if has_indirect { required_features |= wgpu::Features::INDIRECT_FIRST_INSTANCE; }
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("lunar-render-3d device"),
-                required_features: if has_r11 { wgpu::Features::RG11B10UFLOAT_RENDERABLE } else { wgpu::Features::empty() },
+                required_features,
                 required_limits: wgpu::Limits::default(),
                 memory_hints: wgpu::MemoryHints::Performance,
                 trace: wgpu::Trace::default(),
@@ -850,8 +862,8 @@ impl RenderEngine3d {
         } else {
             wgpu::TextureFormat::Rgba16Float
         };
-        log::info!("HDR format: {hdr_format:?}");
-        Self::init_with_adapter(&adapter, device, queue, surface, config, hdr_format)
+        log::info!("HDR format: {hdr_format:?}, indirect: {has_indirect}");
+        Self::init_with_adapter(&adapter, device, queue, surface, config, hdr_format, has_indirect)
     }
 
     fn init_with_adapter(
@@ -861,6 +873,7 @@ impl RenderEngine3d {
         surface: wgpu::Surface<'static>,
         config: &RenderConfig3d,
         hdr_format: wgpu::TextureFormat,
+        has_indirect: bool,
     ) -> Self {
         let render_tier = RenderTier::from_adapter(adapter);
         log::info!("render tier: {render_tier:?}");
@@ -2946,6 +2959,10 @@ impl RenderEngine3d {
 
             render_graph: Self::build_render_graph(render_tier, bloom_enabled, ssr_enabled, fog_enabled, fxaa_enabled, ssao_enabled),
 
+            has_indirect,
+            indirect_buf: None,
+            indirect_args: Vec::new(),
+
             gpu_cull_enabled: render_tier == RenderTier::High,
             cull_aabb_buf: None,
             cull_frustum_buf: None,
@@ -4786,6 +4803,56 @@ impl RenderEngine3d {
             }
         }
 
+        // ── build indirect draw args (high tier + INDIRECT_FIRST_INSTANCE) ──
+        // scans opaque batches once, writes DrawIndexedIndirect entries (5×u32 each).
+        // render pass then uses draw_indexed_indirect per batch instead of draw_indexed.
+        let _opaque_indirect_count: u32 = if self.has_indirect {
+            self.indirect_args.clear();
+            let n = self.draw_scratch.len();
+            let mut i = 0usize;
+            let mut last_mesh = u32::MAX;
+            let mut last_mat = u32::MAX;
+            let mut last_lm = u32::MAX;
+            let mut group_start = 0usize;
+            while i <= n {
+                let transparent_or_end = i == n || self.draw_scratch[i].7 < 1.0;
+                let (cur_mesh, cur_mat, cur_lm) = if transparent_or_end {
+                    (u32::MAX, u32::MAX, u32::MAX)
+                } else {
+                    (self.draw_scratch[i].1, self.draw_scratch[i].2, self.draw_scratch[i].9)
+                };
+                let group_changed = cur_mesh != last_mesh || cur_mat != last_mat || cur_lm != last_lm;
+                if group_changed && i > group_start {
+                    if let Some(gpu_mesh) = self.mesh_gpu.get(&last_mesh) {
+                        let base = (ENTITY_SLOT_START + group_start) as u32;
+                        let count = (i - group_start) as u32;
+                        // DrawIndexedIndirect: index_count, instance_count, first_index, base_vertex, first_instance
+                        self.indirect_args.extend_from_slice(&[gpu_mesh.index_count, count, 0, 0u32, base]);
+                    }
+                }
+                if transparent_or_end { break; }
+                if group_changed { last_mesh = cur_mesh; last_mat = cur_mat; last_lm = cur_lm; group_start = i; }
+                i += 1;
+            }
+            let needed_bytes = (self.indirect_args.len() * 4) as u64;
+            if needed_bytes > 0 {
+                let current_cap = self.indirect_buf.as_ref().map(|b| b.size()).unwrap_or(0);
+                if needed_bytes > current_cap {
+                    self.indirect_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("[indirect] opaque draw args"),
+                        size: (self.entity_capacity * 20) as u64,
+                        usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    }));
+                }
+                self.queue.write_buffer(
+                    self.indirect_buf.as_ref().unwrap(), 0,
+                    bytemuck::cast_slice(&self.indirect_args),
+                );
+            }
+            (self.indirect_args.len() / 5) as u32
+        } else { 0 };
+
         // ── collect shadow casters ────────────────────────────────────────
         let mut draw_calls: u32 = 0;
         // shadow_list: (mesh_id, draw_scratch_index) for all visible shadow casters.
@@ -5435,6 +5502,7 @@ impl RenderEngine3d {
 
             // opaque PBR pass — batched by (mesh_id, mat_id, lm_id); draw_scratch is pre-sorted.
             // entity_bg covers the full storage buffer — set once, instance_index selects transform.
+            // on high tier with INDIRECT_FIRST_INSTANCE: uses pre-built indirect_buf for draws.
             pass.set_pipeline(&self.opaque_pipeline);
             pass.set_bind_group(2, &self.entity_bg, &[]);
             {
@@ -5442,6 +5510,7 @@ impl RenderEngine3d {
                 let mut last_mat: u32 = u32::MAX;
                 let mut last_lm: u32 = u32::MAX;
                 let mut group_start: usize = 0;
+                let mut opaque_batch_idx: u64 = 0;
                 let n = self.draw_scratch.len();
                 let mut i = 0;
                 while i <= n {
@@ -5451,9 +5520,16 @@ impl RenderEngine3d {
                     let group_changed = cur_mesh != last_mesh || cur_mat != last_mat || cur_lm != last_lm;
                     if group_changed && i > group_start {
                         let Some(gpu_mesh) = self.mesh_gpu.get(&last_mesh) else { group_start = i; i += 1; continue; };
-                        let base = (ENTITY_SLOT_START + group_start) as u32;
-                        let count = (i - group_start) as u32;
-                        pass.draw_indexed(0..gpu_mesh.index_count, 0, base..base + count);
+                        if self.has_indirect {
+                            if let Some(indirect_buf) = self.indirect_buf.as_ref() {
+                                pass.draw_indexed_indirect(indirect_buf, opaque_batch_idx * 20);
+                            }
+                            opaque_batch_idx += 1;
+                        } else {
+                            let base = (ENTITY_SLOT_START + group_start) as u32;
+                            let count = (i - group_start) as u32;
+                            pass.draw_indexed(0..gpu_mesh.index_count, 0, base..base + count);
+                        }
                         draw_calls += 1;
                     }
                     if flush { break; }
