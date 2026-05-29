@@ -1,5 +1,28 @@
 # renderer sprint 4 — L and J
 
+## status (2026-05-29)
+
+**done:**
+- **item L** — both `wait_indefinitely()` stalls replaced with `Arc<AtomicBool>` + `map_async`.
+  CPU never blocks on GPU. stale flags used when GPU not done (imperceptible for 1 frame).
+- **J phase 1** — material bind group (group 1) changed from dynamic-offset UBO to storage
+  array indexed by `instance_id`. set once per pass; eliminates N_batches bind group changes
+  across all passes (opaque, transparent, z-prepass, HZB, GTAO, static bundle).
+- **J phase 2** — `INDIRECT_FIRST_INSTANCE` feature requested at device creation. on high tier,
+  precomputes `DrawIndexedIndirect` args for all opaque batches before the render pass and
+  issues `draw_indexed_indirect` per batch. same call count; indirect_buf infrastructure in place.
+
+**deferred (next sprint):**
+- **J phase 3 (lightmap atlas)** — requires packing all lightmap textures into one RGBA8
+  atlas texture at level load. adds `lm_uv_offset/scale` to `MaterialUniforms`. complex runtime
+  or offline packer needed. plan says "separate sprint".
+- **J phase 4 (GPU cull writes indirect)** — requires phase 3 atlas (group 4 can't change between
+  draws in `multi_draw_indexed_indirect`). alternatively: per-mesh mega-buffer or per-mesh atomic
+  counters + `multi_draw_indexed_indirect_count` per mesh group. substantial architecture change.
+- **J phase 5 (remove readback)** — converges with L once phase 4 is stable.
+
+---
+
 items L (CPU-GPU pipelining) and J (GPU-driven indirect rendering).
 these interact: J eliminates the cull readback stall that L is partially
 trying to fix. the right order is L first (clean up the sync points),
