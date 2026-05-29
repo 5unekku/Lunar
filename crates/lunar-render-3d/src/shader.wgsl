@@ -41,23 +41,27 @@ struct MeshInstance {
 
 // group 3: lights + shadow map array
 struct PointLightGpu {
-    position:  vec3<f32>,  // offset  0
-    intensity: f32,         // offset 12
-    color:     vec3<f32>,  // offset 16
-    radius:    f32,         // offset 28 — total: 32 bytes
+    position:    vec3<f32>,  // offset  0
+    intensity:   f32,         // offset 12
+    color:       vec3<f32>,  // offset 16
+    radius:      f32,         // offset 28
+    shadow_index: u32,        // offset 32  (0xffffffff = unshadowed)
+    _pad0:        u32,        // offset 36
+    _pad1:        u32,        // offset 40
+    _pad2:        u32,        // offset 44  — total: 48 bytes
 }
 
-// 3 cascades, tight per-slice light-space matrices.
-// layout (std140, all 16-byte aligned):
-//   [0..16]   ambient_color (vec3) + ambient_intensity (f32)
-//   [16..32]  dir_color (vec3) + dir_illuminance (f32)
-//   [32..48]  dir_direction (vec3) + dir_enabled (u32)
-//   [48..112] light_space_0 (mat4)
+// lights uniform buffer layout (total 816 bytes):
+//   [0..16]    ambient_color (vec3) + ambient_intensity (f32)
+//   [16..32]   dir_color (vec3) + dir_illuminance (f32)
+//   [32..48]   dir_direction (vec3) + dir_enabled (u32)
+//   [48..112]  light_space_0 (mat4)
 //   [112..176] light_space_1 (mat4)
 //   [176..240] light_space_2 (mat4)
-//   [240..256] cascade_splits (vec4): [split0, split1, split2, far_plane]
+//   [240..256] cascade_splits (vec4)
 //   [256..272] point header (count + 3 pads)
-//   [272..528] 8 × PointLightGpu (32 bytes each)
+//   [272..656] 8 × PointLightGpu (48 bytes each)
+//   [656..816] SH ambient (header + 9 coefficients)
 struct Lights {
     ambient_color:     vec3<f32>,
     ambient_intensity: f32,
@@ -73,7 +77,7 @@ struct Lights {
     _pad0:             u32,
     _pad1:             u32,
     _pad2:             u32,
-    point_lights:      array<PointLightGpu, 8>,
+    point_lights:      array<PointLightGpu, 8>,   // 8 × 48 bytes = 384 bytes
     // SH ambient: when sh_enabled=1 these 9 pre-scaled L2 coefficients replace flat ambient.
     // each coefficient is vec4(R, G, B, 0). order: L0, L1x, L1y, L1z, L2xy, L2yz, L2_0, L2xz, L2_x2y2
     sh_enabled:        u32,
@@ -84,9 +88,11 @@ struct Lights {
     sh3:  vec4<f32>,   sh4:  vec4<f32>,   sh5:  vec4<f32>,
     sh6:  vec4<f32>,   sh7:  vec4<f32>,   sh8:  vec4<f32>,
 }
-@group(3) @binding(0) var<uniform>  lights:         Lights;
-@group(3) @binding(1) var           shadow_map:     texture_depth_2d_array;
-@group(3) @binding(2) var           shadow_sampler: sampler_comparison;
+@group(3) @binding(0) var<uniform>  lights:            Lights;
+@group(3) @binding(1) var           shadow_map:        texture_depth_2d_array;
+@group(3) @binding(2) var           shadow_sampler:    sampler_comparison;
+// 4 shadowed point lights × 6 faces = 24 layers (u32::MAX shadow_index = unshadowed)
+@group(3) @binding(3) var           point_shadow_maps: texture_depth_2d_array;
 
 // group 4: lightmap — bound per draw group; fallback textures are 1×1
 // binding 0: irradiance (rgba8 srgb, white fallback)
@@ -223,6 +229,50 @@ fn shadow_factor_5x5(world_pos: vec3<f32>, n: vec3<f32>, view_depth: f32) -> f32
     return shadow / 25.0;
 }
 
+// ── point shadow helpers ───────────────────────────────────────────────────
+
+// given a direction vector from light to surface, returns the 2D texture UV and
+// layer index into point_shadow_maps (shadow_index * 6 + face).
+// face numbering follows the OpenGL cube map convention:
+// 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z
+fn point_shadow_layer_uv(dir: vec3<f32>, shadow_index: u32) -> vec3<f32> {
+    let ax = abs(dir.x); let ay = abs(dir.y); let az = abs(dir.z);
+    var face: u32; var u: f32; var v: f32;
+    if ax >= ay && ax >= az {
+        if dir.x > 0.0 {
+            face = 0u;
+            u = (-dir.z / ax + 1.0) * 0.5;
+            v = (1.0 + dir.y / ax) * 0.5;
+        } else {
+            face = 1u;
+            u = (dir.z / ax + 1.0) * 0.5;
+            v = (1.0 + dir.y / ax) * 0.5;
+        }
+    } else if ay >= ax && ay >= az {
+        if dir.y > 0.0 {
+            face = 2u;
+            u = (dir.x / ay + 1.0) * 0.5;
+            v = (1.0 - dir.z / ay) * 0.5;
+        } else {
+            face = 3u;
+            u = (dir.x / ay + 1.0) * 0.5;
+            v = (1.0 + dir.z / ay) * 0.5;
+        }
+    } else {
+        if dir.z > 0.0 {
+            face = 4u;
+            u = (dir.x / az + 1.0) * 0.5;
+            v = (1.0 + dir.y / az) * 0.5;
+        } else {
+            face = 5u;
+            u = (-dir.x / az + 1.0) * 0.5;
+            v = (1.0 + dir.y / az) * 0.5;
+        }
+    }
+    let layer = shadow_index * 6u + face;
+    return vec3<f32>(u, v, f32(layer));
+}
+
 // ── fragment shader ────────────────────────────────────────────────────────
 
 @fragment
@@ -268,7 +318,18 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
         let window = clamp(1.0 - r * r * r * r, 0.0, 1.0);
         let att   = window * window / (dist * dist + 1.0);
         let irradiance = light.color * light.intensity * att;
-        point_lo += pbr_light(n, v, l, albedo, metallic, roughness, irradiance, ndotl);
+        // point shadow: dir from light to surface for face selection
+        var shadow_fac = 1.0;
+        if light.shadow_index != 0xffffffffu {
+            let shadow_dir = in.world_pos - light.position;
+            let luv = point_shadow_layer_uv(shadow_dir, light.shadow_index);
+            let ref_depth = dist / light.radius - 0.01;
+            shadow_fac = textureSampleCompare(
+                point_shadow_maps, shadow_sampler,
+                luv.xy, i32(luv.z), ref_depth,
+            );
+        }
+        point_lo += shadow_fac * pbr_light(n, v, l, albedo, metallic, roughness, irradiance, ndotl);
     }
 
     // ambient — either SH irradiance probe (directional) or flat fallback

@@ -51,11 +51,12 @@ use lunar_core::{App, GamePlugin, UpdateStage};
 use lunar_lightmap::{DirectionalLightmap, Lightmap};
 use lunar_math::{Color, Mat3, Mat4, Vec2, Vec3};
 
-const SHADER_SRC: &str           = include_str!("shader.wgsl");
-const CULL_SHADER_SRC: &str          = include_str!("cull.wgsl");
-const CULL_INDIRECT_SHADER_SRC: &str = include_str!("cull_indirect.wgsl");
-const HZB_SHADER_SRC: &str       = include_str!("hzb.wgsl");
-const SHADOW_SHADER_SRC: &str = include_str!("shadow.wgsl");
+const SHADER_SRC: &str                 = include_str!("shader.wgsl");
+const CULL_SHADER_SRC: &str            = include_str!("cull.wgsl");
+const CULL_INDIRECT_SHADER_SRC: &str   = include_str!("cull_indirect.wgsl");
+const HZB_SHADER_SRC: &str             = include_str!("hzb.wgsl");
+const SHADOW_SHADER_SRC: &str          = include_str!("shadow.wgsl");
+const POINT_SHADOW_SHADER_SRC: &str    = include_str!("point_shadow.wgsl");
 const BLOOM_SHADER_SRC: &str = include_str!("bloom.wgsl");
 const COMPOSITE_SHADER_SRC: &str = include_str!("composite.wgsl");
 const GTAO_SHADER_SRC: &str = include_str!("gtao.wgsl");
@@ -101,7 +102,11 @@ const MESH_UNIFORMS_SIZE: u64 = 112;
 
 /// group 3: ambient(16) + dir(32) + 3×light_space(192) + cascade_splits(16) + point_header(16)
 ///   + 8×point_light(256) = 528 bytes, + sh_header(16) + 9×sh_coeff×vec4(144) = 688 bytes.
-const LIGHTS_SIZE: u64 = 688;
+const LIGHTS_SIZE: u64 = 816;
+/// max point lights that can cast shadows (cube face layers = MAX_POINT_SHADOW_LIGHTS × 6).
+const MAX_POINT_SHADOW_LIGHTS: usize = 4;
+/// size of point shadow globals uniform: mat4 (64) + vec3 (12) + f32 (4).
+const POINT_SHADOW_GLOBALS_SIZE: u64 = 80;
 
 /// shadow globals: light view-projection mat4 per cascade slot (dynamic offset).
 const SHADOW_GLOBALS_SIZE: u64 = 64;
@@ -529,6 +534,9 @@ pub struct DevRenderProfile {
     pub max_msaa: u32,
     /// maximum particle cap. keep low for simple retro games, high for effects-heavy titles.
     pub max_particles: u32,
+    /// point light cube shadow maps. off by default — enable for doom/hl2 style flashlight games.
+    /// requires `with_point_light_shadows(true)` since `classic()` leaves this off.
+    pub point_light_shadows: bool,
 }
 
 impl Default for DevRenderProfile {
@@ -557,6 +565,7 @@ impl DevRenderProfile {
             max_shadow_cascades: 1,
             max_msaa: 8,
             max_particles: 8192,
+            point_light_shadows: false,
         }
     }
 
@@ -577,6 +586,7 @@ impl DevRenderProfile {
             max_shadow_cascades: 3,
             max_msaa: 8,
             max_particles: 32768,
+            point_light_shadows: false,
         }
     }
 
@@ -597,12 +607,14 @@ impl DevRenderProfile {
             max_shadow_cascades: 3,
             max_msaa: 8,
             max_particles: u32::MAX,
+            point_light_shadows: true,
         }
     }
 
     // ── builder methods ───────────────────────────────────────────────────
     // each returns Self so they chain: DevRenderProfile::classic().with_bloom().with_shadows()
 
+    #[must_use] pub fn with_point_light_shadows(mut self, v: bool) -> Self { self.point_light_shadows = v; self }
     #[must_use] pub fn with_shadows(mut self, v: bool) -> Self { self.shadows = v; self }
     #[must_use] pub fn with_bloom(mut self, v: bool) -> Self { self.bloom = v; self }
     #[must_use] pub fn with_ssao(mut self, v: bool) -> Self { self.ssao = v; self }
@@ -725,12 +737,22 @@ pub struct RenderEngine3d {
 
     // dirty-flag shadow cascade re-rendering.
     // cascade N is only re-rendered when shadow_cascade_dirty[N] is true.
-    // set dirty when: light direction changes, shadow-casting geometry moves,
-    // or the draw list changes (entity added/removed/moved in cascade frustum).
     shadow_cascade_dirty: [bool; 3],
-    // last-seen values for dirty detection
     shadow_last_dir: Vec3,
     shadow_last_draw_count: usize,
+
+    // point light cube shadow maps — 4 lights × 6 faces as 24-layer depth 2D array.
+    // layer = shadow_index * 6 + face; face order: 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z.
+    point_shadow_tex: wgpu::Texture,
+    point_shadow_face_views: Vec<wgpu::TextureView>,
+    point_shadow_array_view: wgpu::TextureView,
+    point_shadow_globals_bgl: wgpu::BindGroupLayout,
+    point_shadow_globals_buf: wgpu::Buffer,
+    point_shadow_globals_bg: wgpu::BindGroup,
+    point_shadow_pipeline: wgpu::RenderPipeline,
+    point_shadow_dirty: [[bool; 6]; MAX_POINT_SHADOW_LIGHTS],
+    point_shadow_last_positions: [Vec3; MAX_POINT_SHADOW_LIGHTS],
+    point_shadow_last_draw_count: usize,
 
     mesh_gpu: HashMap<u32, GpuMesh>,
     dome_mesh: GpuMesh,
@@ -938,7 +960,7 @@ pub struct RenderEngine3d {
     // sorted by (alpha_bit, mesh_id, mat_id, lm_id, dir_lm_id) for batching
     draw_scratch: Vec<(Entity, u32, u32, Color, f32, f32, Mat4, f32, u32, u32, u32)>,
     uniform_staging: Vec<u8>,
-    point_light_scratch: Vec<(Vec3, Color, f32, f32)>,
+    point_light_scratch: Vec<(Vec3, Color, f32, f32, bool)>,  // (pos, color, intensity, radius, casts_shadows)
 
     // render graph DAG — built once at init, drives pass execution order in render_frame.
     // models pass dependencies via declared texture reads/writes and topological sort.
@@ -1227,6 +1249,17 @@ impl RenderEngine3d {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                     count: None,
                 },
+                // binding 3: 4 point lights × 6 faces = 24-layer depth array for cube shadows
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -1275,6 +1308,35 @@ impl RenderEngine3d {
             ..Default::default()
         });
 
+        // point light shadow maps: 4 lights × 6 faces = 24 layers
+        let point_shadow_layers = (MAX_POINT_SHADOW_LIGHTS * 6) as u32;
+        let point_shadow_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[point shadow] depth array"),
+            size: wgpu::Extent3d {
+                width:  SHADOW_MAP_SIZE,
+                height: SHADOW_MAP_SIZE,
+                depth_or_array_layers: point_shadow_layers,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let point_shadow_array_view = point_shadow_tex.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        let point_shadow_face_views: Vec<wgpu::TextureView> = (0..point_shadow_layers).map(|layer| {
+            point_shadow_tex.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                base_array_layer: layer,
+                array_layer_count: Some(1),
+                ..Default::default()
+            })
+        }).collect();
+
         let lights_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("[lights] bg"),
             layout: &lights_bgl,
@@ -1282,6 +1344,7 @@ impl RenderEngine3d {
                 wgpu::BindGroupEntry { binding: 0, resource: lights_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&shadow_map_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&shadow_sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&point_shadow_array_view) },
             ],
         });
 
@@ -1315,6 +1378,41 @@ impl RenderEngine3d {
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: shadow_globals_buf.as_entire_binding(),
+            }],
+        });
+
+        // ── point shadow globals ────────────────────────────────────────────
+        // 24 slots × UNIFORM_STRIDE, one per (light × face) combination.
+        // uses dynamic offset so one bind group covers all 24 slots.
+        let point_shadow_globals_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[point shadow globals] bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: wgpu::BufferSize::new(POINT_SHADOW_GLOBALS_SIZE),
+                },
+                count: None,
+            }],
+        });
+        let point_shadow_globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[point shadow globals] buf"),
+            size: (MAX_POINT_SHADOW_LIGHTS * 6) as u64 * UNIFORM_STRIDE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let point_shadow_globals_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[point shadow globals] bg"),
+            layout: &point_shadow_globals_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &point_shadow_globals_buf,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(POINT_SHADOW_GLOBALS_SIZE),
+                }),
             }],
         });
 
@@ -1575,6 +1673,49 @@ impl RenderEngine3d {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 front_face: wgpu::FrontFace::Ccw,
                 // front-face culling reduces peter-panning shadow acne
+                cull_mode: Some(wgpu::Face::Front),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            cache: pipeline_cache_ref,
+            multiview_mask: None,
+        });
+
+        // point shadow pipeline: writes linear depth, uses point_shadow.wgsl
+        let point_shadow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("[point shadow] shader"),
+            source: wgpu::ShaderSource::Wgsl(POINT_SHADOW_SHADER_SRC.into()),
+        });
+        let point_shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[point shadow] pipeline layout"),
+            bind_group_layouts: &[Some(&point_shadow_globals_bgl), Some(&mesh_bgl)],
+            immediate_size: 0,
+        });
+        let point_shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("[point shadow] pipeline"),
+            layout: Some(&point_shadow_layout),
+            vertex: wgpu::VertexState {
+                module: &point_shadow_shader,
+                entry_point: Some("vs_point_shadow"),
+                buffers: vertex_buffers,
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &point_shadow_shader,
+                entry_point: Some("fs_point_shadow"),
+                targets: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
                 cull_mode: Some(wgpu::Face::Front),
                 ..Default::default()
             },
@@ -3060,6 +3201,16 @@ impl RenderEngine3d {
             shadow_cascade_dirty: [true; 3],
             shadow_last_dir: Vec3::ZERO,
             shadow_last_draw_count: 0,
+            point_shadow_tex,
+            point_shadow_face_views,
+            point_shadow_array_view,
+            point_shadow_globals_bgl,
+            point_shadow_globals_buf,
+            point_shadow_globals_bg,
+            point_shadow_pipeline,
+            point_shadow_dirty: [[true; 6]; MAX_POINT_SHADOW_LIGHTS],
+            point_shadow_last_positions: [Vec3::ZERO; MAX_POINT_SHADOW_LIGHTS],
+            point_shadow_last_draw_count: 0,
             mesh_gpu: HashMap::new(),
             dome_mesh,
             sun_mesh,
@@ -4509,6 +4660,7 @@ impl RenderEngine3d {
         let dev_chrom_ab         = world.get_resource::<DevRenderProfile>().map(|d| d.chromatic_aberration).unwrap_or(true);
         let dev_film_grain       = world.get_resource::<DevRenderProfile>().map(|d| d.film_grain       ).unwrap_or(true);
         let dev_max_cascades     = world.get_resource::<DevRenderProfile>().map(|d| d.max_shadow_cascades as usize).unwrap_or(NUM_CASCADES as usize);
+        let dev_point_shadows    = world.get_resource::<DevRenderProfile>().map(|d| d.point_light_shadows).unwrap_or(true);
 
         // ── gather sky ────────────────────────────────────────────────────
         let sky = world.get_resource::<Sky>().copied();
@@ -4539,7 +4691,7 @@ impl RenderEngine3d {
         {
             let mut pq = world.query::<(&PointLight, &WorldTransform3d)>();
             pq.iter(world).for_each(|(pl, wt)| {
-                self.point_light_scratch.push((wt.translation, pl.color, pl.intensity, pl.radius));
+                self.point_light_scratch.push((wt.translation, pl.color, pl.intensity, pl.radius, pl.casts_shadows));
             });
         }
         self.point_light_scratch.sort_unstable_by(|a, b| {
@@ -5225,6 +5377,30 @@ impl RenderEngine3d {
         }
 
         // ── pack lights buffer ────────────────────────────────────────────
+        // assign shadow slots to first MAX_POINT_SHADOW_LIGHTS lights with casts_shadows=true
+        let mut shadow_slot_idx: usize = 0;
+        let shadow_indices: Vec<u32> = self.point_light_scratch.iter()
+            .map(|&(_, _, _, _, casts)| {
+                if casts && dev_point_shadows && shadow_slot_idx < MAX_POINT_SHADOW_LIGHTS {
+                    let idx = shadow_slot_idx as u32;
+                    shadow_slot_idx += 1;
+                    idx
+                } else {
+                    0xffffffff
+                }
+            })
+            .collect();
+
+        #[repr(C)]
+        struct PointLightGpuCpu {
+            position:    [f32; 3],
+            intensity:   f32,
+            color:       [f32; 3],
+            radius:      f32,
+            shadow_index: u32,
+            _pad:        [u32; 3],
+        }
+
         #[repr(C)]
         struct LightsGpu {
             ambient_color:     [f32; 3],
@@ -5236,14 +5412,12 @@ impl RenderEngine3d {
             light_space_0:     [f32; 16],
             light_space_1:     [f32; 16],
             light_space_2:     [f32; 16],
-            cascade_splits:    [f32; 4],   // [split0, split1, split2(=far), unused]
+            cascade_splits:    [f32; 4],
             point_count:       u32,
             _pad:              [u32; 3],
-            point_lights:      [[f32; 8]; 8],
-            // SH ambient: 1 when IrradianceSH resource present, 0 = flat ambient fallback
+            point_lights:      [PointLightGpuCpu; 8],  // 8 × 48 bytes = 384 bytes
             sh_enabled:        u32,
             _sh_pad:           [u32; 3],
-            // 9 L2 SH coefficients as vec4(R, G, B, 0) — pre-scaled by ZH×basis constants
             sh_coeffs:         [[f32; 4]; 9],
         }
 
@@ -5256,6 +5430,10 @@ impl RenderEngine3d {
             }
         }
 
+        const EMPTY_LIGHT: PointLightGpuCpu = PointLightGpuCpu {
+            position: [0.0; 3], intensity: 0.0, color: [0.0; 3],
+            radius: 1.0, shadow_index: 0xffffffff, _pad: [0; 3],
+        };
         let mut lights_gpu = LightsGpu {
             ambient_color: [ambient.color.r, ambient.color.g, ambient.color.b],
             ambient_intensity: ambient.intensity,
@@ -5269,13 +5447,20 @@ impl RenderEngine3d {
             cascade_splits: [cascade_splits[0], cascade_splits[1], cascade_splits[2], SHADOW_FAR],
             point_count: self.point_light_scratch.len() as u32,
             _pad: [0; 3],
-            point_lights: [[0.0; 8]; 8],
+            point_lights: [EMPTY_LIGHT; 8],
             sh_enabled,
             _sh_pad: [0; 3],
             sh_coeffs,
         };
-        for (i, &(pos, color, intensity, radius)) in self.point_light_scratch.iter().enumerate() {
-            lights_gpu.point_lights[i] = [pos.x, pos.y, pos.z, intensity, color.r, color.g, color.b, radius];
+        for (i, &(pos, color, intensity, radius, _)) in self.point_light_scratch.iter().enumerate() {
+            lights_gpu.point_lights[i] = PointLightGpuCpu {
+                position: [pos.x, pos.y, pos.z],
+                intensity,
+                color: [color.r, color.g, color.b],
+                radius,
+                shadow_index: shadow_indices[i],
+                _pad: [0; 3],
+            };
         }
         self.queue.write_buffer(&self.lights_buf, 0, unsafe { slice_as_bytes(std::slice::from_ref(&lights_gpu)) });
 
@@ -5567,6 +5752,121 @@ impl RenderEngine3d {
                 self.shadow_cascade_dirty = [true; 3];
                 self.shadow_last_dir = dir_direction;
                 self.shadow_last_draw_count = shadow_list.len();
+            }
+        }
+
+        // ── point light shadow pass ──────────────────────────────────────
+        // for each light with casts_shadows=true (up to MAX_POINT_SHADOW_LIGHTS),
+        // render scene into the appropriate 6 face layers of point_shadow_tex.
+        if dev_point_shadows {
+            // dirty detection: re-render all faces when any light position changes or draw count changes
+            let pt_draw_count = self.draw_scratch.len();
+            if pt_draw_count != self.point_shadow_last_draw_count {
+                for dirty in &mut self.point_shadow_dirty { *dirty = [true; 6]; }
+                self.point_shadow_last_draw_count = pt_draw_count;
+            }
+            let mut pt_shadow_idx = 0usize;
+            for (light_i, &(light_pos, _, _, light_radius, casts)) in self.point_light_scratch.iter().enumerate() {
+                if !casts || pt_shadow_idx >= MAX_POINT_SHADOW_LIGHTS { break; }
+                let _ = light_i;
+                let lp = Vec3::from(light_pos);
+                let last_pos = self.point_shadow_last_positions[pt_shadow_idx];
+                if (lp - last_pos).length_squared() > 1e-6 {
+                    self.point_shadow_dirty[pt_shadow_idx] = [true; 6];
+                    self.point_shadow_last_positions[pt_shadow_idx] = lp;
+                }
+                // face directions: +X,-X,+Y,-Y,+Z,-Z with their respective up vectors
+                let face_dirs: [(Vec3, Vec3); 6] = [
+                    (Vec3::X,       -Vec3::Y),
+                    (-Vec3::X,      -Vec3::Y),
+                    (Vec3::Y,        Vec3::Z),
+                    (-Vec3::Y,      -Vec3::Z),
+                    (Vec3::Z,       -Vec3::Y),
+                    (-Vec3::Z,      -Vec3::Y),
+                ];
+                let near = 0.05f32;
+                let far = light_radius;
+                for face in 0..6usize {
+                    if !self.point_shadow_dirty[pt_shadow_idx][face] { continue; }
+                    let layer = pt_shadow_idx * 6 + face;
+                    let (dir, up) = face_dirs[face];
+                    let view = Mat4::look_at_rh(Vec3::from(lp), Vec3::from(lp) + dir, up);
+                    let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, near, far);
+                    let face_vp = proj * view;
+                    // upload face VP + light pos + radius to the per-face slot
+                    let slot_offset = (layer as u64) * UNIFORM_STRIDE;
+                    let mut slot_data = [0u8; UNIFORM_STRIDE as usize];
+                    slot_data[..64].copy_from_slice(bytemuck::cast_slice(&face_vp.to_cols_array()));
+                    slot_data[64..76].copy_from_slice(bytemuck::cast_slice(&[lp.x, lp.y, lp.z]));
+                    slot_data[76..80].copy_from_slice(bytemuck::cast_slice(&[light_radius]));
+                    self.queue.write_buffer(&self.point_shadow_globals_buf, slot_offset, &slot_data[..80]);
+                    // render shadow casters into this face layer
+                    {
+                        let mut pt_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("[point shadow] face pass"),
+                            color_attachments: &[],
+                            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                                view: &self.point_shadow_face_views[layer],
+                                depth_ops: Some(wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(1.0),
+                                    store: wgpu::StoreOp::Store,
+                                }),
+                                stencil_ops: None,
+                            }),
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+                        pt_pass.set_pipeline(&self.point_shadow_pipeline);
+                        pt_pass.set_bind_group(0, &self.point_shadow_globals_bg, &[layer as u32 * UNIFORM_STRIDE as u32]);
+                        pt_pass.set_bind_group(1, &self.entity_bg, &[]);
+                        let mut last_mesh = u32::MAX;
+                        let mut last_gs = 0usize;
+                        let sn = self.draw_scratch.len();
+                        for si in 0..=sn {
+                            let cur_mesh = if si == sn { u32::MAX } else { self.draw_scratch[si].1 };
+                            if cur_mesh != last_mesh {
+                                if si > last_gs {
+                                    if let Some(gpu) = self.mesh_gpu.get(&last_mesh) {
+                                        let base = (ENTITY_SLOT_START + last_gs) as u32;
+                                        pt_pass.draw_indexed(0..gpu.index_count, 0, base..base + (si - last_gs) as u32);
+                                    }
+                                }
+                                if si < sn {
+                                    if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
+                                        pt_pass.set_vertex_buffer(0, gpu.vbuf.slice(..));
+                                        pt_pass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+                                    }
+                                    last_mesh = cur_mesh;
+                                    last_gs = si;
+                                }
+                            }
+                        }
+                    }
+                    self.point_shadow_dirty[pt_shadow_idx][face] = false;
+                }
+                pt_shadow_idx += 1;
+            }
+            // clear layers for unused shadow slots
+            for unused in pt_shadow_idx..MAX_POINT_SHADOW_LIGHTS {
+                for face in 0..6usize {
+                    let layer = unused * 6 + face;
+                    let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("[point shadow] clear unused"),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &self.point_shadow_face_views[layer],
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                }
             }
         }
 
