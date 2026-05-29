@@ -183,11 +183,15 @@ Ogre's `StaticGeometry` / impostor page system is the cleanest reference.
 for fairness: things we do that those games *could not* do that help accessibility
 at higher entity counts:
 
-- GPU instancing: 500 identical objects = 1 draw call. Quake 3 couldn't do this.
 - HZB GPU occlusion: finer-grained than portal culling for complex outdoor scenes.
 - Sweep-and-prune physics: matches or exceeds Quake 3's BSP-based clip hull tests
   for dynamic objects.
 - FXAA: cheaper than MSAA while giving similar results for non-hard edges.
+- parallel ECS execution: game logic systems run concurrently on multiple cores.
+
+note: GPU instancing is **not yet implemented** — the draw loop still issues one
+draw call per entity. this is a known gap tracked in `plans/bsp-lightmap-wiring.md`
+under item A. the accessibility-gap.md previously listed this incorrectly.
 
 ---
 
