@@ -106,8 +106,9 @@ pub use bevy_ecs::bundle::Bundle;
 
 // lunar-render types
 pub use lunar_render::{
-    Camera, CameraFollow2d, Layer, RenderConfig, RenderEngine, RenderInfo, RenderQueue,
-    RenderTargetId, RenderTargetStore, ScreenShake, Sprite, Text, YSort, layers,
+    Camera, CameraFollow2d, ColorTint, Layer, PostEffect, PostProcessStack, RenderConfig,
+    RenderEngine, RenderInfo, RenderQueue, RenderTargetId, RenderTargetStore, ScreenFlash,
+    ScreenShake, Sprite, Text, YSort, layers,
 };
 
 // lunar-input types

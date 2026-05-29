@@ -845,6 +845,18 @@ impl RenderEngine {
     fn update_projection_for_layer(&mut self, layer: i32, camera: Option<&Camera>) {
         let (surface_w, surface_h) = (self.config.width as f32, self.config.height as f32);
 
+        // POST_PROCESS layer always uses screen-space projection (ignores camera)
+        if layer >= layers::POST_PROCESS {
+            let projection: [f32; 16] = [
+                2.0 / surface_w, 0.0, 0.0, 0.0,
+                0.0, -2.0 / surface_h, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                -1.0, 1.0, 0.0, 1.0,
+            ];
+            self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&projection));
+            return;
+        }
+
         // if camera has a viewport, compute a letterboxed projection that fits
         // the viewport into the surface while preserving aspect ratio
         let projection = if let Some(cam) = camera
@@ -1919,6 +1931,9 @@ pub mod layers {
     pub const FOREGROUND: i32 = 200;
     /// UI layer — HUD, menus, dialogue boxes
     pub const UI: i32 = 300;
+    /// post-process layer — screen-space fullscreen overlays (flash, tint, fade).
+    /// drawn after UI in screen space; ignores camera position and zoom.
+    pub const POST_PROCESS: i32 = 1000;
 }
 
 /// ECS component that assigns an entity to a render layer.
@@ -2236,6 +2251,13 @@ impl RenderQueue {
         });
     }
 
+    /// draw a colored rectangle in screen space (post-process layer).
+    /// coordinates are in pixels: top-left is (0, 0), bottom-right is (window_w, window_h).
+    /// use this from [`PostEffect::apply`] implementations.
+    pub fn draw_screen_rect(&mut self, position: Vec2, size: Vec2, color: Color) {
+        self.draw_rect_on_layer(position, size, color, layers::POST_PROCESS);
+    }
+
     /// draw a line between two points with the given thickness.
     /// uses a proper rotated rectangle, not an AABB approximation.
     pub fn draw_line(&mut self, start: Vec2, end: Vec2, color: Color, thickness: f32) {
@@ -2545,6 +2567,156 @@ impl Default for RenderQueue {
     }
 }
 
+// ── post-processing ────────────────────────────────────────────────────────
+
+/// trait for a custom post-processing effect applied each frame after the main render.
+///
+/// implement this and push instances onto [`PostProcessStack`] to draw
+/// screen-space overlays. uses [`layers::POST_PROCESS`] coordinates: top-left is
+/// (0, 0), bottom-right is (window_w, window_h).
+///
+/// # example
+///
+/// ```ignore
+/// use lunar::prelude::*;
+///
+/// struct Vignette;
+/// impl PostEffect for Vignette {
+///     fn apply(&self, queue: &mut RenderQueue, w: f32, h: f32) {
+///         let border = 40.0;
+///         let color = Color::rgba(0.0, 0.0, 0.0, 0.35);
+///         queue.draw_screen_rect(Vec2::ZERO, Vec2::new(w, border), color);
+///         queue.draw_screen_rect(Vec2::new(0.0, h - border), Vec2::new(w, border), color);
+///     }
+/// }
+/// ```
+pub trait PostEffect: Send + Sync + 'static {
+    /// draw the effect's commands into the queue.
+    /// `window_w` and `window_h` are the current surface dimensions in pixels.
+    fn apply(&self, queue: &mut RenderQueue, window_w: f32, window_h: f32);
+}
+
+/// ordered stack of post-processing effects applied each frame after the main render.
+///
+/// insert as a resource, then push effects onto it. effects are drawn in push order
+/// (first pushed = drawn first = underneath later effects).
+///
+/// # example
+///
+/// ```ignore
+/// fn setup(mut stack: ResMut<PostProcessStack>) {
+///     stack.push(ScreenFlash { color: Color::RED, intensity: 0.4, decay: 2.0 });
+/// }
+/// ```
+#[derive(Resource, Default)]
+pub struct PostProcessStack {
+    effects: Vec<Box<dyn PostEffect>>,
+}
+
+impl PostProcessStack {
+    /// add an effect to the top of the stack.
+    pub fn push(&mut self, effect: impl PostEffect + 'static) {
+        self.effects.push(Box::new(effect));
+    }
+
+    /// remove all effects from the stack.
+    pub fn clear(&mut self) {
+        self.effects.clear();
+    }
+
+    /// true when the stack has no effects.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.effects.is_empty()
+    }
+}
+
+/// draws a fullscreen colored overlay each frame.
+///
+/// use for damage flashes, screen transitions, fades. set `decay > 0.0` and the
+/// engine automatically reduces `intensity` over time via `decay_screen_flash_system`.
+///
+/// insert this as a resource; remove it when intensity reaches 0 if you don't want
+/// it to linger.
+///
+/// # example
+///
+/// ```ignore
+/// commands.insert_resource(ScreenFlash {
+///     color: Color::RED,
+///     intensity: 0.5,
+///     decay: 3.0,  // fades out in ~0.17 seconds
+/// });
+/// ```
+#[derive(Resource, Clone, Copy)]
+pub struct ScreenFlash {
+    pub color: Color,
+    /// opacity: 0.0 = invisible, 1.0 = fully opaque.
+    pub intensity: f32,
+    /// intensity units lost per second. 0.0 = persistent.
+    pub decay: f32,
+}
+
+/// draws a semi-transparent colored overlay each frame.
+///
+/// lower intensity than a full [`ScreenFlash`]. good for long-lasting status
+/// effects like poison (green tint) or low health (red vignette).
+///
+/// # example
+///
+/// ```ignore
+/// commands.insert_resource(ColorTint { color: Color::GREEN, intensity: 0.15 });
+/// ```
+#[derive(Resource, Clone, Copy)]
+pub struct ColorTint {
+    pub color: Color,
+    /// blend strength: 0.0 = no effect, 1.0 = full tint.
+    pub intensity: f32,
+}
+
+fn apply_post_process_system(
+    mut queue: ResMut<RenderQueue>,
+    flash: Option<Res<ScreenFlash>>,
+    tint: Option<Res<ColorTint>>,
+    stack: Res<PostProcessStack>,
+    info: Res<RenderInfo>,
+) {
+    let w = info.window_width as f32;
+    let h = info.window_height as f32;
+    if w == 0.0 || h == 0.0 {
+        return;
+    }
+    let size = Vec2::new(w, h);
+    for effect in &stack.effects {
+        effect.apply(&mut queue, w, h);
+    }
+    if let Some(tint) = tint {
+        if tint.intensity > 0.0 {
+            queue.draw_screen_rect(Vec2::ZERO, size, Color::rgba(tint.color.r, tint.color.g, tint.color.b, tint.intensity));
+        }
+    }
+    if let Some(flash) = flash {
+        if flash.intensity > 0.0 {
+            queue.draw_screen_rect(Vec2::ZERO, size, Color::rgba(flash.color.r, flash.color.g, flash.color.b, flash.intensity));
+        }
+    }
+}
+
+fn decay_screen_flash_system(
+    mut commands: Commands,
+    flash: Option<ResMut<ScreenFlash>>,
+    time: Res<lunar_core::Time>,
+) {
+    if let Some(mut flash) = flash {
+        if flash.decay > 0.0 {
+            flash.intensity -= flash.decay * time.delta_seconds();
+            if flash.intensity <= 0.0 {
+                commands.remove_resource::<ScreenFlash>();
+            }
+        }
+    }
+}
+
 /// render info resource, tracks rendering statistics.
 ///
 /// updated each frame by the render system. game code can read
@@ -2699,6 +2871,15 @@ impl GamePlugin for RenderPlugin {
         app.insert_resource(RenderQueue::new());
         app.insert_resource(RenderInfo::new());
         app.insert_resource(DebugOverlay::new());
+        app.insert_resource(PostProcessStack::default());
+        app.add_system_to_stage(
+            lunar_core::UpdateStage::PostUpdate,
+            decay_screen_flash_system,
+        );
+        app.add_system_to_stage(
+            lunar_core::UpdateStage::PostUpdate,
+            apply_post_process_system,
+        );
         app.add_system_to_stage(
             lunar_core::UpdateStage::PostUpdate,
             (
