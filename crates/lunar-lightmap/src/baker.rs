@@ -146,6 +146,62 @@ impl LightmapBaker {
         }
         result
     }
+
+    /// bake irradiance + dominant-direction lightmaps for a mesh.
+    ///
+    /// returns `(irradiance, direction)` where:
+    /// - irradiance is an RGBA8 lightmap (same as `bake()`)
+    /// - direction is an RGBA8 texture with dominant light direction packed
+    ///   into RGB as `dir * 0.5 + 0.5`. unpack in shader with `rgb * 2.0 - 1.0`.
+    #[must_use]
+    pub fn bake_directional(&self, mesh: &MeshData) -> (BakeResult, BakeResult) {
+        let w = self.resolution;
+        let h = self.resolution;
+        let tris = build_triangles(mesh);
+        let samples = self.samples;
+        let ambient = self.ambient;
+        let directional = self.directional;
+
+        let row_data: Vec<(Vec<u8>, Vec<u8>)> = (0..h).into_par_iter().map(|row| {
+            let mut irr_row = vec![0u8; w as usize * 4];
+            let mut dir_row = vec![0u8; w as usize * 4];
+            for col in 0..w {
+                let uv = Vec2::new(
+                    (col as f32 + 0.5) / w as f32,
+                    (row as f32 + 0.5) / h as f32,
+                );
+                if let Some(surface) = find_surface(&tris, uv) {
+                    let (color, dominant_dir) = shade_texel_and_dir(
+                        surface.pos, surface.normal, samples, ambient, directional, &tris,
+                    );
+                    let idx = (col as usize) * 4;
+                    irr_row[idx]     = (color.x.clamp(0.0, 1.0) * 255.0) as u8;
+                    irr_row[idx + 1] = (color.y.clamp(0.0, 1.0) * 255.0) as u8;
+                    irr_row[idx + 2] = (color.z.clamp(0.0, 1.0) * 255.0) as u8;
+                    irr_row[idx + 3] = 255;
+                    dir_row[idx]     = ((dominant_dir.x * 0.5 + 0.5).clamp(0.0, 1.0) * 255.0) as u8;
+                    dir_row[idx + 1] = ((dominant_dir.y * 0.5 + 0.5).clamp(0.0, 1.0) * 255.0) as u8;
+                    dir_row[idx + 2] = ((dominant_dir.z * 0.5 + 0.5).clamp(0.0, 1.0) * 255.0) as u8;
+                    dir_row[idx + 3] = 255;
+                }
+            }
+            (irr_row, dir_row)
+        }).collect();
+
+        let mut irr_pixels = Vec::with_capacity((w * h * 4) as usize);
+        let mut dir_pixels = Vec::with_capacity((w * h * 4) as usize);
+        for (irr, dir) in row_data {
+            irr_pixels.extend_from_slice(&irr);
+            dir_pixels.extend_from_slice(&dir);
+        }
+        let mut irr = BakeResult { width: w, height: h, pixels: irr_pixels };
+        let mut dir = BakeResult { width: w, height: h, pixels: dir_pixels };
+        if self.dilation > 0 {
+            dilate(&mut irr, self.dilation);
+            dilate(&mut dir, self.dilation);
+        }
+        (irr, dir)
+    }
 }
 
 struct BakedSurface {
@@ -233,13 +289,26 @@ fn shade_texel(
     directional: Option<BakeDirectional>,
     tris: &[BakeTri],
 ) -> Vec3 {
+    shade_texel_and_dir(pos, normal, samples, ambient, directional, tris).0
+}
+
+/// compute lighting + dominant direction at a surface point.
+/// returns (irradiance, dominant_dir_object_space).
+/// dominant_dir is the cosine-weighted average direction of all light reaching this texel.
+fn shade_texel_and_dir(
+    pos: Vec3,
+    normal: Vec3,
+    samples: u32,
+    ambient: Vec3,
+    directional: Option<BakeDirectional>,
+    tris: &[BakeTri],
+) -> (Vec3, Vec3) {
     let tangent_space = build_tangent_basis(normal);
 
-    // hemisphere AO: cast samples, count unblocked
     let mut ao_weight = 0.0f32;
+    let mut dir_accum = Vec3::ZERO;
     let inv_samples = 1.0 / samples as f32;
     for i in 0..samples {
-        // cosine-weighted hemisphere sample using Halton sequence
         let (xi1, xi2) = halton2(i);
         let cos_theta = (1.0 - xi1).sqrt();
         let sin_theta = xi1.sqrt();
@@ -249,18 +318,17 @@ fn shade_texel(
 
         if !ray_blocked(pos + normal * 1e-3, dir_world, tris) {
             ao_weight += cos_theta * inv_samples;
+            dir_accum += dir_world * cos_theta;
         }
     }
-    // AO weight is in [0, 1/pi * pi] = [0, 1] after cosine weighting
-    // clamp to [0, 1]
     let ao = ao_weight.clamp(0.0, 1.0);
-
     let ambient_contrib = ambient * ao;
 
-    // directional light contribution
     let dir_contrib = if let Some(dir) = directional {
         let ndotl = normal.dot(dir.direction).max(0.0);
         if ndotl > 0.0 && !ray_blocked(pos + normal * 1e-3, dir.direction, tris) {
+            // weight directional heavily so it dominates the direction accumulation
+            dir_accum += dir.direction * ndotl * 10.0;
             dir.color * ndotl
         } else {
             Vec3::ZERO
@@ -269,7 +337,14 @@ fn shade_texel(
         Vec3::ZERO
     };
 
-    ambient_contrib + dir_contrib
+    let irradiance = ambient_contrib + dir_contrib;
+    let dominant_dir = if dir_accum.length_squared() > 1e-6 {
+        dir_accum.normalize_or_zero()
+    } else {
+        normal  // fallback: surface normal when no light reaches this texel
+    };
+
+    (irradiance, dominant_dir)
 }
 
 /// build an orthonormal basis where Z = normal (tangent space → world space matrix).

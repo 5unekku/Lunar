@@ -1,10 +1,15 @@
+// shading_era values — matches ShadingEra enum on the CPU
+const ERA_MODERN:  u32 = 0u;  // full PBR (GGX, SH, shadows)
+const ERA_RETRO:   u32 = 1u;  // q3-style: diffuse × lightmap, simple lambert, no specular
+const ERA_CLASSIC: u32 = 2u;  // q1-style: diffuse × lightmap only, no runtime lights
+
 // group 0: view-global — set once per pass
 struct Globals {
     view_proj:    mat4x4<f32>,  // 64 bytes
     cam_pos:      vec3<f32>,    // 12 bytes (offset 64)
     elapsed_secs: f32,          //  4 bytes (offset 76)
     delta_secs:   f32,          //  4 bytes (offset 80)
-    _pad0:        f32,          //  4 bytes
+    shading_era:  u32,          //  4 bytes (offset 84) — ShadingEra constant above
     _pad1:        f32,          //  4 bytes
     _pad2:        f32,          //  4 bytes — total: 96 bytes
 }
@@ -83,9 +88,13 @@ struct Lights {
 @group(3) @binding(1) var           shadow_map:     texture_depth_2d_array;
 @group(3) @binding(2) var           shadow_sampler: sampler_comparison;
 
-// group 4: lightmap — bound per draw group; fallback is a 1×1 white texture
+// group 4: lightmap — bound per draw group; fallback textures are 1×1
+// binding 0: irradiance (rgba8 srgb, white fallback)
+// binding 1: dominant direction packed as rgb * 0.5 + 0.5 (neutral fallback = (0.5, 0.5, 1.0) = world up)
+// binding 2: shared sampler
 @group(4) @binding(0) var lightmap_tex:     texture_2d<f32>;
-@group(4) @binding(1) var lightmap_sampler: sampler;
+@group(4) @binding(1) var lightmap_dir_tex: texture_2d<f32>;
+@group(4) @binding(2) var lightmap_sampler: sampler;
 
 // ── vertex I/O ─────────────────────────────────────────────────────────────
 
@@ -287,7 +296,17 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     if (material.has_lightmap != 0u) {
         let atlas_uv = material.lm_uv_offset + in.uv_lightmap * material.lm_uv_scale;
         let lm = textureSample(lightmap_tex, lightmap_sampler, atlas_uv).rgb;
-        hdr = lm * albedo + point_lo;
+        var lm_contrib = lm;
+        // bit 1 = has directional lightmap; modulate irradiance by normal/dominant-dir alignment
+        if ((material.flags & 2u) != 0u) {
+            // direction texture uses raw uv_lightmap (not atlased)
+            let lm_dir_raw = textureSample(lightmap_dir_tex, lightmap_sampler, in.uv_lightmap).rgb;
+            let lm_dir = normalize(lm_dir_raw * 2.0 - vec3<f32>(1.0));
+            // weight in [0, 2]; average over hemisphere = 1.0, preserves energy
+            let dir_weight = max(dot(n, lm_dir), 0.0) * 2.0;
+            lm_contrib = lm * dir_weight;
+        }
+        hdr = lm_contrib * albedo + point_lo;
     } else {
         hdr = ambient + dir_lo + point_lo;
     }

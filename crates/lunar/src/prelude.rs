@@ -109,10 +109,10 @@ pub use lunar_bsp::{
     portal::{CameraArea, PortalOpen},
 };
 
-// lunar-lightmap types — CPU lightmap baker and Lightmap component (3d feature)
+// lunar-lightmap types — CPU lightmap baker and Lightmap components (3d feature)
 #[cfg(feature = "3d")]
 pub use lunar_lightmap::{
-    Lightmap,
+    DirectionalLightmap, Lightmap,
     baker::{BakeDirectional, BakeResult, LightmapBaker},
 };
 

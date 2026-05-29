@@ -33,6 +33,23 @@ pub use baker::{BakeDirectional, BakeResult, LightmapBaker};
 use bevy_ecs::prelude::*;
 use lunar_assets::Handle;
 
+/// component: directional lightmap pair for a static `Mesh3d` entity.
+///
+/// extends `Lightmap` with a second texture storing the dominant light direction
+/// per texel, packed as `RGB = dir * 0.5 + 0.5`. use `LightmapBaker::bake_directional`
+/// to produce both textures. when present, the renderer modulates baked irradiance
+/// by how well the surface normal aligns with the baked dominant direction, giving
+/// the appearance of correctly-oriented shading under dynamic relighting.
+#[derive(Debug, Clone, Component)]
+pub struct DirectionalLightmap {
+    /// RGBA8 irradiance texture (same format as `Lightmap.texture`).
+    pub irradiance: Handle<lunar_assets::Texture>,
+    /// RGBA8 direction texture; RGB = dominant_dir * 0.5 + 0.5.
+    pub direction: Handle<lunar_assets::Texture>,
+    /// intensity multiplier, same semantics as `Lightmap.intensity`.
+    pub intensity: f32,
+}
+
 /// component: pre-baked lightmap texture for a static `Mesh3d` entity.
 ///
 /// when present, the renderer samples this texture at `uv_lightmap` (the entity's
