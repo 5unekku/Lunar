@@ -51,6 +51,8 @@ const BLOOM_SHADER_SRC: &str = include_str!("bloom.wgsl");
 const COMPOSITE_SHADER_SRC: &str = include_str!("composite.wgsl");
 const GTAO_SHADER_SRC: &str = include_str!("gtao.wgsl");
 
+const FXAA_SHADER_SRC: &str = include_str!("fxaa.wgsl");
+
 const SKY_RADIUS: f32 = 900.0;
 const SUN_Y: f32 = 895.0;
 const VERTEX_STRIDE: u64 = std::mem::size_of::<Vertex3d>() as u64;
@@ -101,6 +103,9 @@ const COMPOSITE_PARAMS_SIZE: u64 = 32;
 
 /// GTAO params UBO size: inv_proj(64) + proj(64) + 8×f32(32) = 160 bytes.
 const GTAO_PARAMS_SIZE: u64 = 160;
+
+/// FXAA params UBO: rcp_frame(vec2) + 2 pads = 16 bytes.
+const FXAA_PARAMS_SIZE: u64 = 16;
 
 /// stride for dynamic UBO slots — must be ≥ min_uniform_buffer_offset_alignment (256).
 const UNIFORM_STRIDE: u64 = 256;
@@ -194,6 +199,9 @@ pub struct QualitySettings {
     pub film_grain: bool,
     /// maximum live particles.
     pub particle_cap: u32,
+    /// enable FXAA post-process AA. recommended on low tier (no MSAA).
+    /// mid/high tier uses MSAA instead and leaves this off by default.
+    pub fxaa: bool,
 }
 
 impl QualitySettings {
@@ -211,6 +219,7 @@ impl QualitySettings {
                 chromatic_aberration: false,
                 film_grain: false,
                 particle_cap: 1024,
+                fxaa: true, // no MSAA on low tier — FXAA is the only AA path
             },
             RenderTier::Mid => Self {
                 preset: QualityPreset::Medium,
@@ -224,6 +233,7 @@ impl QualitySettings {
                 chromatic_aberration: false,
                 film_grain: false,
                 particle_cap: 8192,
+                fxaa: false, // 4× MSAA is active — FXAA redundant
             },
             RenderTier::High => Self {
                 preset: QualityPreset::High,
@@ -237,6 +247,7 @@ impl QualitySettings {
                 chromatic_aberration: true,
                 film_grain: true,
                 particle_cap: 32768,
+                fxaa: false, // 4× MSAA active
             },
         }
     }
@@ -396,6 +407,16 @@ pub struct RenderEngine3d {
     frame_time_ema_ms: f32,
     resolution_scale: f32,       // current scale factor [0.5, 1.0]
     frame_time_budget_ms: f32,   // target frame time (e.g. 14 ms for 60 fps)
+
+    // FXAA post-process AA — single pass on LDR composite output (low tier only)
+    fxaa_enabled: bool,
+    // intermediate LDR texture — composite writes here when FXAA is active
+    fxaa_ldr_texture: wgpu::Texture,
+    fxaa_ldr_view: wgpu::TextureView,
+    fxaa_bgl: wgpu::BindGroupLayout,
+    fxaa_bg: wgpu::BindGroup,
+    fxaa_params_buf: wgpu::Buffer,
+    fxaa_pipeline: wgpu::RenderPipeline,
 
     // transparent pass — alpha < 1.0 entities drawn back-to-front after opaques
     transparent_pipeline: wgpu::RenderPipeline,
@@ -936,6 +957,7 @@ impl RenderEngine3d {
         let quality = QualitySettings::from_tier(render_tier);
         let bloom_enabled = quality.bloom;
         let bloom_mip_count = quality.bloom_mips as usize;
+        let fxaa_enabled = quality.fxaa;
 
         let (hdr_texture, hdr_view) = Self::make_hdr_texture(&device, config.width, config.height);
 
@@ -1158,6 +1180,106 @@ impl RenderEngine3d {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &composite_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            cache: pipeline_cache.as_ref(),
+            multiview_mask: None,
+        });
+
+        // ── FXAA ───────────────────────────────────────────────────────────
+
+        let fxaa_ldr_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[fxaa] ldr texture"),
+            size: wgpu::Extent3d { width: config.width, height: config.height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let fxaa_ldr_view = fxaa_ldr_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let fxaa_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[fxaa] params buffer"),
+            size: FXAA_PARAMS_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let fxaa_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[fxaa] bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(FXAA_PARAMS_SIZE),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let fxaa_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[fxaa] bg"),
+            layout: &fxaa_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: fxaa_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fxaa_ldr_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&post_sampler) },
+            ],
+        });
+
+        let fxaa_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("[fxaa] shader"),
+            source: wgpu::ShaderSource::Wgsl(FXAA_SHADER_SRC.into()),
+        });
+
+        let fxaa_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[fxaa] pipeline layout"),
+            bind_group_layouts: &[Some(&fxaa_bgl)],
+            immediate_size: 0,
+        });
+
+        let fxaa_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("[fxaa] pipeline"),
+            layout: Some(&fxaa_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &fxaa_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &fxaa_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -1473,6 +1595,13 @@ impl RenderEngine3d {
             zprepass_nonmsaa_pipeline,
             transparent_pipeline,
             transparent_scratch: Vec::new(),
+            fxaa_enabled,
+            fxaa_ldr_texture,
+            fxaa_ldr_view,
+            fxaa_bgl,
+            fxaa_bg,
+            fxaa_params_buf,
+            fxaa_pipeline,
             pipeline_cache,
             // 4 MiB chunk — larger than any single write, handles most scene sizes
             staging_belt: wgpu::util::StagingBelt::new(device_for_belt, 4 * 1024 * 1024),
@@ -1784,7 +1913,7 @@ impl RenderEngine3d {
         self.bloom_downsample_bgs = ds_bgs;
         self.bloom_upsample_bgs = us_bgs;
 
-        // rebuild composite bind group with the new views
+        // rebuild composite bind group with the new views (binding 3 = GTAO ao, binding 4 = sampler)
         let bloom_view = self.bloom_mip_views.first().unwrap_or(&self.hdr_view);
         self.composite_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("[composite] bg"),
@@ -1793,9 +1922,34 @@ impl RenderEngine3d {
                 wgpu::BindGroupEntry { binding: 0, resource: self.composite_params_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(bloom_view) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.gtao_ao_view_a) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
             ],
         });
+
+        // rebuild fxaa ldr texture and bind group at the new resolution
+        let fxaa_ldr_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[fxaa] ldr texture"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.surface_config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let fxaa_ldr_view = fxaa_ldr_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.fxaa_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[fxaa] bg"),
+            layout: &self.fxaa_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.fxaa_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fxaa_ldr_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+            ],
+        });
+        self.fxaa_ldr_view = fxaa_ldr_view;
+        self.fxaa_ldr_texture = fxaa_ldr_texture;
     }
 
     pub fn surface_width(&self) -> u32 { self.surface_config.width }
@@ -2536,10 +2690,14 @@ impl RenderEngine3d {
             ];
             self.queue.write_buffer(&self.composite_params_buf, 0, unsafe { slice_as_bytes(&composite_data) });
 
+            // when fxaa is enabled, composite writes to the intermediate ldr texture;
+            // the fxaa pass then reads it and outputs to swapchain. this avoids running
+            // fxaa on a non-filterable msaa resolve target.
+            let composite_target = if self.fxaa_enabled { &self.fxaa_ldr_view } else { &view };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("[composite] pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: composite_target,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -2554,6 +2712,34 @@ impl RenderEngine3d {
             });
             pass.set_pipeline(&self.composite_pipeline);
             pass.set_bind_group(0, &self.composite_bg, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        // ── FXAA pass → swapchain ─────────────────────────────────────────
+        if self.fxaa_enabled {
+            let w = self.surface_config.width;
+            let h = self.surface_config.height;
+            let fxaa_data: [f32; 4] = [1.0 / w as f32, 1.0 / h as f32, 0.0, 0.0];
+            self.queue.write_buffer(&self.fxaa_params_buf, 0, unsafe { slice_as_bytes(&fxaa_data) });
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("[fxaa] pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.fxaa_pipeline);
+            pass.set_bind_group(0, &self.fxaa_bg, &[]);
             pass.draw(0..3, 0..1);
         }
 
