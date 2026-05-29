@@ -5,6 +5,16 @@ this file tracks what's done, what's next, and the reasoning behind decisions.
 
 ## done
 
+- 3-cascade CSM (1024², log-linear splits λ=0.5, tight frustum fitting), 5×5 PCF, shadow front-face culling
+- Z-prepass on mid/high tier; opaque pass uses `LessEqual` depth compare, `depth_write = false`
+- dynamic resolution scaling: EMA α=0.1, ±5% steps, [0.5, 1.0] range
+- `QualitySettings` resource — per-tier defaults for shadow res, MSAA, bloom, SSAO, vignette/CA/grain
+- proper surface error handling: `Outdated`/`Lost` reconfigure, `Timeout`/`Occluded` skip frame
+- 4× MSAA on mid/high tier: MSAA color texture (HDR_FORMAT) resolves into non-MSAA HDR target
+- HDR RGBA16Float intermediate render target; opaque + sky output raw HDR (no tonemap in main pass)
+- Kawase 13-tap bloom: progressive downsample (5 mips mid, 7 mips high) + 3×3 tent upsample (additive)
+- composite pass: HDR + bloom → ACES filmic tonemap → vignette → chromatic aberration → film grain → swapchain; ACES moved out of `shader.wgsl`
+- GTAO half-res ambient occlusion: horizon-based (XeGTAO formulation), depth reconstruction, interleaved gradient noise, 5-tap bilateral blur, integrated into composite before tonemap
 - fixed timestep accumulator (fiedler pattern) in `game_loop.rs`
 - vsync fast path: `frame_cap == 0` returns 1 tick immediately, no accumulator jitter
 - `desired_maximum_frame_latency: 2` (triple-buffered presentation) in both render crates
@@ -60,9 +70,11 @@ currently both render crates have ad-hoc layouts. making these explicit singleto
 - render graph DAG (extract → prepare → queue → render → cleanup, modelled on Bevy's design)
 - GPU-driven culling via compute + indirect drawing (Vulkan/DX12 only, `DownlevelFlags::INDIRECT_EXECUTION`)
 - HZB two-pass occlusion culling
-- TAA + FSR-style temporal upscaler
-- post stack: bloom (progressive downsample pyramid), tonemap (ACES), color grading LUT, CA/vignette fused pass
+- anti-aliasing: SMAA 1T as a composite-stage post-process (better than FXAA, avoids TAA ghosting); TAA deprioritized due to whole-frame blur even on non-aliased content
+- GTAO quality upgrades: bent normals output for specular AO, TAA-blended AO history accumulation
 - meshlet/virtualized geometry (v2, blocked on wgpu mesh shader support)
+- `StagingBelt` for batched buffer uploads (replaces `queue.write_buffer` on hot path)
+- pipeline cache disk serialization for `lunar-render-3d`
 
 ## rules carried forward from the reference doc
 
