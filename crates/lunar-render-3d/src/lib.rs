@@ -57,6 +57,7 @@ const CULL_INDIRECT_SHADER_SRC: &str   = include_str!("cull_indirect.wgsl");
 const HZB_SHADER_SRC: &str             = include_str!("hzb.wgsl");
 const SHADOW_SHADER_SRC: &str          = include_str!("shadow.wgsl");
 const POINT_SHADOW_SHADER_SRC: &str    = include_str!("point_shadow.wgsl");
+const CLUSTER_SHADER_SRC: &str         = include_str!("cluster.wgsl");
 const BLOOM_SHADER_SRC: &str = include_str!("bloom.wgsl");
 const COMPOSITE_SHADER_SRC: &str = include_str!("composite.wgsl");
 const GTAO_SHADER_SRC: &str = include_str!("gtao.wgsl");
@@ -100,9 +101,19 @@ const ATLAS_SIZE: u32 = 4096;
 #[allow(dead_code)]
 const MESH_UNIFORMS_SIZE: u64 = 112;
 
-/// group 3: ambient(16) + dir(32) + 3×light_space(192) + cascade_splits(16) + point_header(16)
-///   + 8×point_light(256) = 528 bytes, + sh_header(16) + 9×sh_coeff×vec4(144) = 688 bytes.
-const LIGHTS_SIZE: u64 = 816;
+/// group 3: ambient(16) + dir(32) + 3×light_space(192) + cascade_splits(16) + sh(160) = 416 bytes.
+/// point lights moved to group 5 storage buffer.
+const LIGHTS_SIZE: u64 = 416;
+/// cluster grid dimensions and per-cluster limits.
+const CLUSTER_X: u32 = 16;
+const CLUSTER_Y: u32 = 9;
+const CLUSTER_Z: u32 = 24;
+const NUM_CLUSTERS: usize = (CLUSTER_X * CLUSTER_Y * CLUSTER_Z) as usize;  // 3456
+const MAX_LIGHTS_PER_CLUSTER: usize = 32;
+/// cluster params uniform size: mat4 (64) + 4×u32 (16) + 4×f32 (16) = 96 bytes.
+const CLUSTER_PARAMS_SIZE: u64 = 96;
+/// max point lights in the clustered path.
+const MAX_CLUSTERED_LIGHTS: usize = 256;
 /// max point lights that can cast shadows (cube face layers = MAX_POINT_SHADOW_LIGHTS × 6).
 const MAX_POINT_SHADOW_LIGHTS: usize = 4;
 /// size of point shadow globals uniform: mat4 (64) + vec3 (12) + f32 (4).
@@ -537,6 +548,9 @@ pub struct DevRenderProfile {
     /// point light cube shadow maps. off by default — enable for doom/hl2 style flashlight games.
     /// requires `with_point_light_shadows(true)` since `classic()` leaves this off.
     pub point_light_shadows: bool,
+    /// maximum point lights in the scene. classic/standard cap at 8; full allows up to 256
+    /// using the clustered forward path (requires high tier with compute shaders).
+    pub max_point_lights: u32,
 }
 
 impl Default for DevRenderProfile {
@@ -566,6 +580,7 @@ impl DevRenderProfile {
             max_msaa: 8,
             max_particles: 8192,
             point_light_shadows: false,
+            max_point_lights: 8,
         }
     }
 
@@ -587,6 +602,7 @@ impl DevRenderProfile {
             max_msaa: 8,
             max_particles: 32768,
             point_light_shadows: false,
+            max_point_lights: 8,
         }
     }
 
@@ -608,6 +624,7 @@ impl DevRenderProfile {
             max_msaa: 8,
             max_particles: u32::MAX,
             point_light_shadows: true,
+            max_point_lights: 256,
         }
     }
 
@@ -615,6 +632,7 @@ impl DevRenderProfile {
     // each returns Self so they chain: DevRenderProfile::classic().with_bloom().with_shadows()
 
     #[must_use] pub fn with_point_light_shadows(mut self, v: bool) -> Self { self.point_light_shadows = v; self }
+    #[must_use] pub fn with_max_point_lights(mut self, n: u32) -> Self { self.max_point_lights = n; self }
     #[must_use] pub fn with_shadows(mut self, v: bool) -> Self { self.shadows = v; self }
     #[must_use] pub fn with_bloom(mut self, v: bool) -> Self { self.bloom = v; self }
     #[must_use] pub fn with_ssao(mut self, v: bool) -> Self { self.ssao = v; self }
@@ -753,6 +771,18 @@ pub struct RenderEngine3d {
     point_shadow_dirty: [[bool; 6]; MAX_POINT_SHADOW_LIGHTS],
     point_shadow_last_positions: [Vec3; MAX_POINT_SHADOW_LIGHTS],
     point_shadow_last_draw_count: usize,
+
+    // clustered forward lighting (group 5)
+    cluster_shader_src_loaded: bool,  // sentinel; real init happens on first use
+    cluster_bgl_compute: wgpu::BindGroupLayout,
+    cluster_bgl_render: wgpu::BindGroupLayout,
+    cluster_pipeline: wgpu::ComputePipeline,
+    cluster_params_buf: wgpu::Buffer,         // ClusterParams uniform (96 bytes)
+    light_list_buf: wgpu::Buffer,             // PointLightEntry × 256 (storage)
+    cluster_counts_buf: wgpu::Buffer,         // u32 × NUM_CLUSTERS (atomic in compute)
+    cluster_indices_buf: wgpu::Buffer,        // u32 × NUM_CLUSTERS × MAX_PER_CLUSTER
+    cluster_bg_compute: wgpu::BindGroup,      // group 0 for compute pass
+    cluster_bg_render: wgpu::BindGroup,       // group 5 for render passes
 
     mesh_gpu: HashMap<u32, GpuMesh>,
     dome_mesh: GpuMesh,
@@ -1525,9 +1555,40 @@ impl RenderEngine3d {
             ],
         });
 
+        // cluster render BGL must exist before pipeline_layout; full cluster setup done later.
+        let cluster_bgl_render_early = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[cluster] render bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: wgpu::BufferSize::new(CLUSTER_PARAMS_SIZE) },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+            ],
+        });
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("3d pipeline layout"),
-            bind_group_layouts: &[Some(&globals_bgl), Some(&material_bgl), Some(&mesh_bgl), Some(&lights_bgl), Some(&lightmap_bgl)],
+            bind_group_layouts: &[Some(&globals_bgl), Some(&material_bgl), Some(&mesh_bgl), Some(&lights_bgl), Some(&lightmap_bgl), Some(&cluster_bgl_render_early)],
             immediate_size: 0,
         });
 
@@ -1688,6 +1749,86 @@ impl RenderEngine3d {
             multiview_mask: None,
         });
 
+        // ── clustered forward lighting resources ─────────────────────────
+        // cluster_bgl_render was already created above (needed by pipeline_layout)
+        let cluster_bgl_render = cluster_bgl_render_early;
+        let light_entry_size: u64 = 48;  // matches PointLightGpu in shader (48 bytes)
+        let light_list_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[cluster] light list"),
+            size: MAX_CLUSTERED_LIGHTS as u64 * light_entry_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let cluster_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[cluster] params"),
+            size: CLUSTER_PARAMS_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let cluster_counts_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[cluster] counts"),
+            size: (NUM_CLUSTERS * 4) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let cluster_indices_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[cluster] light indices"),
+            size: (NUM_CLUSTERS * MAX_LIGHTS_PER_CLUSTER * 4) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // compute BGL: all bindings in COMPUTE, counts/indices are read_write
+        let cluster_bgl_compute = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[cluster] compute bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: wgpu::BufferSize::new(CLUSTER_PARAMS_SIZE) },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+            ],
+        });
+        // cluster_bgl_render already bound above via cluster_bgl_render_early alias
+        let cluster_bg_compute = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[cluster] compute bg"),
+            layout: &cluster_bgl_compute,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: cluster_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: light_list_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: cluster_counts_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: cluster_indices_buf.as_entire_binding() },
+            ],
+        });
+        let cluster_bg_render = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[cluster] render bg"),
+            layout: &cluster_bgl_render,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: cluster_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: light_list_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: cluster_counts_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: cluster_indices_buf.as_entire_binding() },
+            ],
+        });
+
         // point shadow pipeline: writes linear depth, uses point_shadow.wgsl
         let point_shadow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[point shadow] shader"),
@@ -1729,6 +1870,25 @@ impl RenderEngine3d {
             multisample: wgpu::MultisampleState::default(),
             cache: pipeline_cache_ref,
             multiview_mask: None,
+        });
+
+        // cluster light assignment compute pipeline
+        let cluster_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("[cluster] shader"),
+            source: wgpu::ShaderSource::Wgsl(CLUSTER_SHADER_SRC.into()),
+        });
+        let cluster_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[cluster] pipeline layout"),
+            bind_group_layouts: &[Some(&cluster_bgl_compute)],
+            immediate_size: 0,
+        });
+        let cluster_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("[cluster] pipeline"),
+            layout: Some(&cluster_layout),
+            module: &cluster_shader,
+            entry_point: Some("cs_cluster_assign"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: pipeline_cache_ref,
         });
 
         // transparent pipeline: same shader as opaque but no depth write, no backface cull
@@ -3211,6 +3371,16 @@ impl RenderEngine3d {
             point_shadow_dirty: [[true; 6]; MAX_POINT_SHADOW_LIGHTS],
             point_shadow_last_positions: [Vec3::ZERO; MAX_POINT_SHADOW_LIGHTS],
             point_shadow_last_draw_count: 0,
+            cluster_shader_src_loaded: true,
+            cluster_bgl_compute,
+            cluster_bgl_render,
+            cluster_pipeline,
+            cluster_params_buf,
+            light_list_buf,
+            cluster_counts_buf,
+            cluster_indices_buf,
+            cluster_bg_compute,
+            cluster_bg_render,
             mesh_gpu: HashMap::new(),
             dome_mesh,
             sun_mesh,
@@ -4661,6 +4831,7 @@ impl RenderEngine3d {
         let dev_film_grain       = world.get_resource::<DevRenderProfile>().map(|d| d.film_grain       ).unwrap_or(true);
         let dev_max_cascades     = world.get_resource::<DevRenderProfile>().map(|d| d.max_shadow_cascades as usize).unwrap_or(NUM_CASCADES as usize);
         let dev_point_shadows    = world.get_resource::<DevRenderProfile>().map(|d| d.point_light_shadows).unwrap_or(true);
+        let dev_max_point_lights = world.get_resource::<DevRenderProfile>().map(|d| d.max_point_lights as usize).unwrap_or(MAX_CLUSTERED_LIGHTS);
 
         // ── gather sky ────────────────────────────────────────────────────
         let sky = world.get_resource::<Sky>().copied();
@@ -4699,7 +4870,8 @@ impl RenderEngine3d {
             let db = (b.0 - cam_pos).length_squared();
             da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
         });
-        self.point_light_scratch.truncate(MAX_POINT_LIGHTS);
+        let max_lights = dev_max_point_lights.min(MAX_CLUSTERED_LIGHTS);
+        self.point_light_scratch.truncate(max_lights);
 
         // ── compute cascade splits (log-linear blend, λ=0.5) ─────────────
         // produces 3 split depths in view space separating the 3 cascade slices.
@@ -5413,9 +5585,6 @@ impl RenderEngine3d {
             light_space_1:     [f32; 16],
             light_space_2:     [f32; 16],
             cascade_splits:    [f32; 4],
-            point_count:       u32,
-            _pad:              [u32; 3],
-            point_lights:      [PointLightGpuCpu; 8],  // 8 × 48 bytes = 384 bytes
             sh_enabled:        u32,
             _sh_pad:           [u32; 3],
             sh_coeffs:         [[f32; 4]; 9],
@@ -5430,11 +5599,7 @@ impl RenderEngine3d {
             }
         }
 
-        const EMPTY_LIGHT: PointLightGpuCpu = PointLightGpuCpu {
-            position: [0.0; 3], intensity: 0.0, color: [0.0; 3],
-            radius: 1.0, shadow_index: 0xffffffff, _pad: [0; 3],
-        };
-        let mut lights_gpu = LightsGpu {
+        let lights_gpu = LightsGpu {
             ambient_color: [ambient.color.r, ambient.color.g, ambient.color.b],
             ambient_intensity: ambient.intensity,
             dir_color: [dir_color.r, dir_color.g, dir_color.b],
@@ -5445,24 +5610,70 @@ impl RenderEngine3d {
             light_space_1: light_spaces[1].to_cols_array(),
             light_space_2: light_spaces[2].to_cols_array(),
             cascade_splits: [cascade_splits[0], cascade_splits[1], cascade_splits[2], SHADOW_FAR],
-            point_count: self.point_light_scratch.len() as u32,
-            _pad: [0; 3],
-            point_lights: [EMPTY_LIGHT; 8],
             sh_enabled,
             _sh_pad: [0; 3],
             sh_coeffs,
         };
-        for (i, &(pos, color, intensity, radius, _)) in self.point_light_scratch.iter().enumerate() {
-            lights_gpu.point_lights[i] = PointLightGpuCpu {
-                position: [pos.x, pos.y, pos.z],
-                intensity,
-                color: [color.r, color.g, color.b],
-                radius,
-                shadow_index: shadow_indices[i],
-                _pad: [0; 3],
-            };
-        }
         self.queue.write_buffer(&self.lights_buf, 0, unsafe { slice_as_bytes(std::slice::from_ref(&lights_gpu)) });
+
+        // upload light list to storage buffer (for clustered path in group 5)
+        let light_count = self.point_light_scratch.len();
+        if light_count > 0 {
+            let mut light_data = vec![0u8; light_count * 48];
+            for (i, &(pos, color, intensity, radius, _)) in self.point_light_scratch.iter().enumerate() {
+                let off = i * 48;
+                let entry = PointLightGpuCpu {
+                    position: [pos.x, pos.y, pos.z],
+                    intensity,
+                    color: [color.r, color.g, color.b],
+                    radius,
+                    shadow_index: shadow_indices[i],
+                    _pad: [0; 3],
+                };
+                light_data[off..off + 48].copy_from_slice(unsafe { slice_as_bytes(std::slice::from_ref(&entry)) });
+            }
+            self.queue.write_buffer(&self.light_list_buf, 0, &light_data);
+        }
+
+        // ── cluster params + CPU light assignment (pre-encoder) ──────────
+        // upload ClusterParams; CPU path fills cluster data here.
+        // compute path dispatch happens after encoder creation below.
+        let cluster_needs_compute = light_count > MAX_POINT_LIGHTS && self.has_indirect;
+        {
+            let proj = camera.view_proj(cam_wt, aspect);
+            let focal_x = proj.x_axis.x;
+            let (near, far) = match camera.projection {
+                Projection::Perspective { near, far, .. } => (near, far),
+                Projection::Orthographic { near, far, .. } => (near, far),
+            };
+            let mut cp_data = [0u8; CLUSTER_PARAMS_SIZE as usize];
+            cp_data[..64].copy_from_slice(bytemuck::cast_slice(&proj.to_cols_array()));
+            let sw = self.surface_config.width;
+            let sh_dim = self.surface_config.height;
+            cp_data[64..68].copy_from_slice(bytemuck::cast_slice(&[sw]));
+            cp_data[68..72].copy_from_slice(bytemuck::cast_slice(&[sh_dim]));
+            cp_data[72..76].copy_from_slice(bytemuck::cast_slice(&[light_count as u32]));
+            cp_data[76..80].copy_from_slice(bytemuck::cast_slice(&[0u32]));
+            cp_data[80..84].copy_from_slice(bytemuck::cast_slice(&[near]));
+            cp_data[84..88].copy_from_slice(bytemuck::cast_slice(&[far]));
+            cp_data[88..92].copy_from_slice(bytemuck::cast_slice(&[focal_x]));
+            cp_data[92..96].copy_from_slice(bytemuck::cast_slice(&[0f32]));
+            self.queue.write_buffer(&self.cluster_params_buf, 0, &cp_data);
+
+            if !cluster_needs_compute {
+                // CPU path: all clusters point to the full light list
+                let mut counts = vec![0u32; NUM_CLUSTERS];
+                let mut indices = vec![0u32; NUM_CLUSTERS * MAX_LIGHTS_PER_CLUSTER];
+                for c in 0..NUM_CLUSTERS {
+                    counts[c] = light_count as u32;
+                    for j in 0..light_count {
+                        indices[c * MAX_LIGHTS_PER_CLUSTER + j] = j as u32;
+                    }
+                }
+                self.queue.write_buffer(&self.cluster_counts_buf, 0, bytemuck::cast_slice(&counts));
+                self.queue.write_buffer(&self.cluster_indices_buf, 0, bytemuck::cast_slice(&indices));
+            }
+        }
 
         // ── upload shadow globals (one slot per cascade) ──────────────────
         for (i, &ls) in light_spaces.iter().enumerate() {
@@ -5545,6 +5756,17 @@ impl RenderEngine3d {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("[frame] encoder"),
         });
+
+        // ── cluster compute dispatch (high tier, >8 lights) ─────────────
+        if cluster_needs_compute {
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("[cluster] assign pass"),
+                timestamp_writes: None,
+            });
+            cpass.set_pipeline(&self.cluster_pipeline);
+            cpass.set_bind_group(0, &self.cluster_bg_compute, &[]);
+            cpass.dispatch_workgroups(CLUSTER_X, CLUSTER_Y, CLUSTER_Z);
+        }
 
         // ── render graph pass ordering ────────────────────────────────────
         // the graph's topological sort drives pass execution order.
@@ -6367,6 +6589,7 @@ impl RenderEngine3d {
                 benc.set_bind_group(1, &self.material_bg, &[]);
                 benc.set_bind_group(2, &self.entity_bg, &[]);
                 benc.set_bind_group(3, &self.lights_bg, &[]);
+                benc.set_bind_group(5, &self.cluster_bg_render, &[]);
                 let mut last_mesh = u32::MAX;
                 let mut last_mat = u32::MAX;
                 let mut last_lm = u32::MAX;
@@ -6464,6 +6687,8 @@ impl RenderEngine3d {
             pass.set_bind_group(3, &self.lights_bg, &[]);
             // group 4 fallback — sky/sun are unlit and never sample the lightmap, but pipeline requires it bound
             pass.set_bind_group(4, &self.lightmap_fallback_bg, &[]);
+            // group 5: clustered lights (same for entire pass)
+            pass.set_bind_group(5, &self.cluster_bg_render, &[]);
 
             // sky pass — unlit, dome always drawn; sun only when sky resource present.
             // entity_bg is set once for the whole pass (covers all slots in storage buffer).

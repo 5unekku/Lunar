@@ -73,11 +73,6 @@ struct Lights {
     light_space_1:     mat4x4<f32>,
     light_space_2:     mat4x4<f32>,
     cascade_splits:    vec4<f32>,   // x=split0, y=split1, z=split2, w=far
-    point_count:       u32,
-    _pad0:             u32,
-    _pad1:             u32,
-    _pad2:             u32,
-    point_lights:      array<PointLightGpu, 8>,   // 8 × 48 bytes = 384 bytes
     // SH ambient: when sh_enabled=1 these 9 pre-scaled L2 coefficients replace flat ambient.
     // each coefficient is vec4(R, G, B, 0). order: L0, L1x, L1y, L1z, L2xy, L2yz, L2_0, L2xz, L2_x2y2
     sh_enabled:        u32,
@@ -88,11 +83,35 @@ struct Lights {
     sh3:  vec4<f32>,   sh4:  vec4<f32>,   sh5:  vec4<f32>,
     sh6:  vec4<f32>,   sh7:  vec4<f32>,   sh8:  vec4<f32>,
 }
+// point lights are in group 5 (separate storage buffer for up to 256 lights)
 @group(3) @binding(0) var<uniform>  lights:            Lights;
 @group(3) @binding(1) var           shadow_map:        texture_depth_2d_array;
 @group(3) @binding(2) var           shadow_sampler:    sampler_comparison;
 // 4 shadowed point lights × 6 faces = 24 layers (u32::MAX shadow_index = unshadowed)
 @group(3) @binding(3) var           point_shadow_maps: texture_depth_2d_array;
+
+// group 5: clustered point lighting
+// 16×9×24 = 3456 clusters; each cluster holds up to 32 light indices.
+const CLUSTER_X_F: u32 = 16u;
+const CLUSTER_Y_F: u32 = 9u;
+const CLUSTER_Z_F: u32 = 24u;
+const MAX_LIGHTS_PER_CLUSTER_F: u32 = 32u;
+
+struct ClusterParamsF {
+    view_proj:   mat4x4<f32>,
+    screen_w:    u32,
+    screen_h:    u32,
+    light_count: u32,
+    _pad0:       u32,
+    near:        f32,
+    far:         f32,
+    focal_x:     f32,
+    _pad1:       f32,
+}
+@group(5) @binding(0) var<uniform>       cluster_params_f:       ClusterParamsF;
+@group(5) @binding(1) var<storage, read> light_list_f:           array<PointLightGpu>;
+@group(5) @binding(2) var<storage, read> cluster_counts_f:       array<u32>;
+@group(5) @binding(3) var<storage, read> cluster_light_indices_f: array<u32>;
 
 // group 4: lightmap — bound per draw group; fallback textures are 1×1
 // binding 0: irradiance (rgba8 srgb, white fallback)
@@ -303,33 +322,50 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
         }
     }
 
-    // point lights (up to 8)
+    // point lights — clustered lookup from group 5 storage buffers
     var point_lo = vec3<f32>(0.0);
-    for (var i = 0u; i < min(lights.point_count, 8u); i++) {
-        let light   = lights.point_lights[i];
-        let to_light = light.position - in.world_pos;
-        let dist    = length(to_light);
-        if dist >= light.radius { continue; }
-        let l     = to_light / dist;
-        let ndotl = max(dot(n, l), 0.0);
-        if ndotl <= 0.0 { continue; }
-        // Frostbite smooth-cutoff inverse-square attenuation
-        let r     = dist / light.radius;
-        let window = clamp(1.0 - r * r * r * r, 0.0, 1.0);
-        let att   = window * window / (dist * dist + 1.0);
-        let irradiance = light.color * light.intensity * att;
-        // point shadow: dir from light to surface for face selection
-        var shadow_fac = 1.0;
-        if light.shadow_index != 0xffffffffu {
-            let shadow_dir = in.world_pos - light.position;
-            let luv = point_shadow_layer_uv(shadow_dir, light.shadow_index);
-            let ref_depth = dist / light.radius - 0.01;
-            shadow_fac = textureSampleCompare(
-                point_shadow_maps, shadow_sampler,
-                luv.xy, i32(luv.z), ref_depth,
-            );
+    if cluster_params_f.light_count > 0u {
+        // determine cluster cell for this fragment
+        let screen_x = in.clip_pos.x;
+        let screen_y = in.clip_pos.y;
+        let tile_w = f32(cluster_params_f.screen_w) / f32(CLUSTER_X_F);
+        let tile_h = f32(cluster_params_f.screen_h) / f32(CLUSTER_Y_F);
+        let cx = u32(screen_x / tile_w);
+        let cy = u32(screen_y / tile_h);
+        let depth = in.view_depth;
+        let near = cluster_params_f.near;
+        let far = cluster_params_f.far;
+        let cz = u32(log(depth / near) / log(far / near) * f32(CLUSTER_Z_F));
+        let cluster_idx = min(cz, CLUSTER_Z_F - 1u) * CLUSTER_X_F * CLUSTER_Y_F
+                        + min(cy, CLUSTER_Y_F - 1u) * CLUSTER_X_F
+                        + min(cx, CLUSTER_X_F - 1u);
+        let count = min(cluster_counts_f[cluster_idx], MAX_LIGHTS_PER_CLUSTER_F);
+        let base = cluster_idx * MAX_LIGHTS_PER_CLUSTER_F;
+        for (var j = 0u; j < count; j++) {
+            let light_idx = cluster_light_indices_f[base + j];
+            let light = light_list_f[light_idx];
+            let to_light = light.position - in.world_pos;
+            let dist    = length(to_light);
+            if dist >= light.radius { continue; }
+            let l     = to_light / dist;
+            let ndotl = max(dot(n, l), 0.0);
+            if ndotl <= 0.0 { continue; }
+            let r     = dist / light.radius;
+            let window = clamp(1.0 - r * r * r * r, 0.0, 1.0);
+            let att   = window * window / (dist * dist + 1.0);
+            let irradiance = light.color * light.intensity * att;
+            var shadow_fac = 1.0;
+            if light.shadow_index != 0xffffffffu {
+                let shadow_dir = in.world_pos - light.position;
+                let luv = point_shadow_layer_uv(shadow_dir, light.shadow_index);
+                let ref_depth = dist / light.radius - 0.01;
+                shadow_fac = textureSampleCompare(
+                    point_shadow_maps, shadow_sampler,
+                    luv.xy, i32(luv.z), ref_depth,
+                );
+            }
+            point_lo += shadow_fac * pbr_light(n, v, l, albedo, metallic, roughness, irradiance, ndotl);
         }
-        point_lo += shadow_fac * pbr_light(n, v, l, albedo, metallic, roughness, irradiance, ndotl);
     }
 
     // ambient — either SH irradiance probe (directional) or flat fallback
