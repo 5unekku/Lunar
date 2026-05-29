@@ -320,13 +320,16 @@ func clearSDL3CMakeCache(root, triple string) {
 	}
 }
 
-// windresTarget maps a Rust target triple to the COFF machine type for llvm-windres.
+// windresTarget maps a Rust target triple to the llvm-windres --target value.
+// pe-* COFF machine types don't predefine _WIN32, which mingw headers require.
+// For x86/x64 this doesn't matter (llvm-windres sets it implicitly), but
+// aarch64 needs a full windows triple so _WIN32 is defined by the preprocessor.
 func windresTarget(triple string) string {
 	switch {
 	case strings.HasPrefix(triple, "i686"):
 		return "pe-i386"
 	case strings.HasPrefix(triple, "aarch64"):
-		return "pe-aarch64"
+		return "aarch64-pc-windows-gnu"
 	default:
 		return "pe-x86-64"
 	}
