@@ -1090,6 +1090,7 @@ impl RenderEngine {
             return;
         }
 
+        let mip_count = texture.mip_level_count();
         let gpu_texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("sprite texture"),
             size: wgpu::Extent3d {
@@ -1097,7 +1098,7 @@ impl RenderEngine {
                 height: texture.height,
                 depth_or_array_layers: 1,
             },
-            mip_level_count: 1,
+            mip_level_count: mip_count,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
@@ -1105,6 +1106,7 @@ impl RenderEngine {
             view_formats: &[],
         });
 
+        // upload base mip
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &gpu_texture,
@@ -1124,6 +1126,28 @@ impl RenderEngine {
                 depth_or_array_layers: 1,
             },
         );
+        // upload additional mip levels when present
+        let mut mip_w = texture.width;
+        let mut mip_h = texture.height;
+        for (i, mip_data) in texture.mips.iter().enumerate() {
+            mip_w = (mip_w / 2).max(1);
+            mip_h = (mip_h / 2).max(1);
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &gpu_texture,
+                    mip_level: i as u32 + 1,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                mip_data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * mip_w),
+                    rows_per_image: Some(mip_h),
+                },
+                wgpu::Extent3d { width: mip_w, height: mip_h, depth_or_array_layers: 1 },
+            );
+        }
 
         let view = gpu_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let tex_id = handle.id();

@@ -100,6 +100,28 @@ pub use lunar_3d::{
 #[cfg(feature = "3d")]
 pub use lunar_render_3d::{QualityPreset, QualitySettings, RenderConfig3d, RenderEngine3d, RenderInfo3d, RenderPlugin3d, Sky};
 
+// lunar-bsp types — BVH spatial acceleration and portal culling (3d feature)
+#[cfg(feature = "3d")]
+pub use lunar_bsp::{
+    Area, BspPlugin, Bvh, BvhPlugin, BvhVisible, BvhNode,
+    Portal, PortalCulling, PortalPlugin, VisibleAreas,
+    portal::{CameraArea, PortalOpen},
+};
+
+// lunar-lightmap types — CPU lightmap baker and Lightmap component (3d feature)
+#[cfg(feature = "3d")]
+pub use lunar_lightmap::{
+    Lightmap,
+    baker::{BakeDirectional, BakeResult, LightmapBaker},
+};
+
+// multiview/split-screen types
+#[cfg(feature = "3d")]
+pub use lunar_3d::{ActiveViewports, ViewportRect};
+
+// mip streaming types
+pub use lunar_assets::{MipStreamingConfig, TextureVramUsage};
+
 // Bundle derive — needed for game code that defines its own bundles
 #[cfg(feature = "3d")]
 pub use bevy_ecs::bundle::Bundle;

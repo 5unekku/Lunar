@@ -1,6 +1,6 @@
 use lunar_core::{App, GamePlugin, UpdateStage};
 
-use crate::camera::{ActiveCamera3d, AmbientLight, update_active_camera};
+use crate::camera::{ActiveCamera3d, ActiveViewports, AmbientLight, update_active_camera, update_active_viewports};
 use crate::collision::{CollisionWorld3d, build_collision_world_3d};
 use crate::systems::{TransformScratch3d, propagate_transforms_3d};
 use crate::visibility::{
@@ -31,6 +31,7 @@ impl GamePlugin for Plugin3d {
 
     fn build(&mut self, app: &mut App) {
         app.insert_resource(ActiveCamera3d::default());
+        app.insert_resource(ActiveViewports::default());
         app.insert_resource(AmbientLight::default());
         app.insert_resource(CollisionWorld3d::default());
         app.insert_resource(Frustum::default());
@@ -47,6 +48,7 @@ impl GamePlugin for Plugin3d {
         // can write LocalTransform3d this frame and the renderer sees it immediately.
         app.add_system_to_stage(UpdateStage::Render, propagate_transforms_3d);
         app.add_system_to_stage(UpdateStage::Render, update_active_camera);
+        app.add_system_to_stage(UpdateStage::Render, update_active_viewports);
         app.add_system_to_stage(UpdateStage::Render, update_frustum);
         app.add_system_to_stage(UpdateStage::Render, build_cull_soa);
 

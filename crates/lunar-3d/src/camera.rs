@@ -1,4 +1,4 @@
-use bevy_ecs::prelude::Component;
+use bevy_ecs::prelude::*;
 use lunar_math::{Mat4, Vec3};
 
 use crate::transform::WorldTransform3d;
@@ -118,6 +118,79 @@ impl Default for Camera3d {
 #[derive(bevy_ecs::prelude::Resource, Debug, Clone, Copy, Default)]
 pub struct ActiveCamera3d {
     pub entity: Option<bevy_ecs::entity::Entity>,
+}
+
+/// normalized screen-space viewport rectangle for a camera (split-screen / PiP).
+///
+/// coordinates are in [0,1] relative to the window: (0,0) = top-left, (1,1) = bottom-right.
+/// when absent from a Camera3d entity, the camera uses the full window.
+///
+/// # split-screen example
+///
+/// ```ignore
+/// // player 1: left half
+/// commands.entity(cam1).insert(ViewportRect { x: 0.0, y: 0.0, width: 0.5, height: 1.0 });
+/// // player 2: right half
+/// commands.entity(cam2).insert(ViewportRect { x: 0.5, y: 0.0, width: 0.5, height: 1.0 });
+/// ```
+#[derive(Debug, Clone, Copy, Component)]
+pub struct ViewportRect {
+    /// left edge in normalized window coordinates [0, 1]
+    pub x: f32,
+    /// top edge in normalized window coordinates [0, 1]
+    pub y: f32,
+    /// width in normalized window coordinates [0, 1]
+    pub width: f32,
+    /// height in normalized window coordinates [0, 1]
+    pub height: f32,
+}
+
+impl ViewportRect {
+    /// full-screen viewport (default when no `ViewportRect` component is present).
+    pub const FULL: Self = Self { x: 0.0, y: 0.0, width: 1.0, height: 1.0 };
+
+    /// convert to pixel coordinates given the window size.
+    #[must_use]
+    pub fn to_pixels(&self, win_w: u32, win_h: u32) -> (u32, u32, u32, u32) {
+        (
+            (self.x * win_w as f32) as u32,
+            (self.y * win_h as f32) as u32,
+            ((self.width * win_w as f32) as u32).max(1),
+            ((self.height * win_h as f32) as u32).max(1),
+        )
+    }
+
+    /// aspect ratio (width / height) for projection matrix computation.
+    #[must_use]
+    pub fn aspect(&self) -> f32 {
+        if self.height < 1e-6 { 1.0 } else { self.width / self.height }
+    }
+}
+
+/// resource: ordered list of active cameras and their viewport rects.
+///
+/// built by `update_active_viewports` each frame from all `Camera3d` entities
+/// with `active = true`, sorted by priority (lowest renders first, highest on top).
+/// the renderer iterates this list and renders each camera to its viewport rect.
+#[derive(Resource, Default)]
+pub struct ActiveViewports {
+    pub viewports: Vec<(Entity, ViewportRect)>,
+}
+
+/// system that builds the `ActiveViewports` list from all active Camera3d entities.
+pub fn update_active_viewports(
+    cameras: Query<(Entity, &Camera3d, Option<&ViewportRect>)>,
+    mut active: ResMut<ActiveViewports>,
+) {
+    active.viewports.clear();
+    let mut sorted: Vec<_> = cameras
+        .iter()
+        .filter(|(_, cam, _)| cam.active)
+        .collect();
+    sorted.sort_unstable_by_key(|(_, cam, _)| cam.priority);
+    for (entity, _, rect) in sorted {
+        active.viewports.push((entity, rect.copied().unwrap_or(ViewportRect::FULL)));
+    }
 }
 
 /// system that resolves the highest-priority active Camera3d each frame.

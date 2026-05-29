@@ -70,6 +70,9 @@ fn setup(
     mut registry: ResMut<MeshRegistry>,
     mut settings: ResMut<WindowSettings>,
 ) {
+    // simple demo: no post-processing effects
+    commands.insert_resource(QualitySettings::minimum());
+
     // lock cursor for mouse-look
     settings.cursor_locked = true;
 

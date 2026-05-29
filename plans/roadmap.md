@@ -16,7 +16,7 @@ the rest are systems work (weeks to months).
 
 ### phase 1 — low-hanging fruit (days each)
 
-**parallel ECS system execution**
+~~**parallel ECS system execution**~~
 - bevy_ecs supports parallel system scheduling natively; its scheduler can run
   non-conflicting systems concurrently
 - `lunar-core`'s stage runner currently dispatches systems sequentially on the main thread
@@ -26,7 +26,7 @@ the rest are systems work (weeks to months).
 - home: `lunar-core` stage executor
 - blocks nothing; pure performance multiplier on all games
 
-**true minimum quality tier**
+~~**true minimum quality tier**~~
 - `QualityPreset::Low` currently runs several post-processing passes at reduced resolution
 - minimum should mean *none*: GTAO off, SSR off, volumetric fog off, bloom off, FXAA off
 - composite pass reduces to tonemap + gamma only
@@ -35,7 +35,7 @@ the rest are systems work (weeks to months).
 - home: `lunar-render-3d` quality settings
 - Quake 3 had zero post-processing; if a game ran in 1999, it should run on minimum today
 
-**dirty-flag shadow cascades**
+~~**dirty-flag shadow cascades**~~
 - all 3 CSM cascades re-render every frame, even when nothing in the scene has moved
 - each cascade should track a dirty flag: re-render only when geometry or light direction
   within its frustum has changed
@@ -43,7 +43,7 @@ the rest are systems work (weeks to months).
 - home: `lunar-render-3d` shadow pass
 - for most game levels, shadow passes drop from 3 per frame to 0–1 per frame
 
-**1-frame pipelined GPU cull readback**
+~~**1-frame pipelined GPU cull readback**~~
 - the tier-4 GPU frustum cull and HZB cull both block on `device.poll(Wait)` each frame
 - fix: copy cull results to staging, submit, read the *previous* frame's results
   (1-frame lag is imperceptible for culling decisions)
@@ -54,7 +54,7 @@ the rest are systems work (weeks to months).
 
 ### phase 2 — parallel rendering (weeks)
 
-**parallel render command recording**
+~~**parallel render command recording**~~
 - all render passes currently recorded on the main thread sequentially
 - wgpu `CommandEncoder` is `Send`; each pass can record on a separate rayon thread
 - the render graph DAG already models pass dependencies and topological order
@@ -65,7 +65,7 @@ the rest are systems work (weeks to months).
 - near-linear CPU scaling with pass count; 6–8 independent passes on 4 cores = ~3× speedup
   on the command recording phase
 
-**async asset streaming (I/O only)**
+~~**async asset streaming (I/O only)**~~
 - textures and meshes currently block the main thread on load
 - move all disk reads to `std::thread` workers with a channel back to the asset server
 - game code sees the same `Handle<T>` API; asset becomes available in a future frame
@@ -78,7 +78,7 @@ the rest are systems work (weeks to months).
 
 ### phase 3 — smart geometry (months)
 
-**BSP offline compiler + runtime portal culling**
+~~**BSP offline compiler + runtime portal culling**~~
 - the single largest gap against classic engines; see `plans/accessibility-gap.md`
 - offline tool: takes a level mesh (GLTF or lunar scene), builds a BSP tree, computes
   PVS bitsets for all leaves, writes a binary `.bsp` asset
@@ -92,7 +92,7 @@ the rest are systems work (weeks to months).
 - impact on indoor levels: 80–95% reduction in visible geometry per frame; everything
   downstream (draw calls, shadows, lighting, post-processing cost) scales down with it
 
-**lightmap baker**
+~~**lightmap baker**~~
 - `Vertex3d` already has `uv_lightmap`; the shader already reads it; the infrastructure
   is there and unused
 - offline tool: unwrap static geometry to lightmap UVs (xatlas or equivalent); trace
@@ -108,7 +108,7 @@ the rest are systems work (weeks to months).
 
 ### phase 4 — far-geometry and memory (months)
 
-**impostor / billboard system**
+~~**impostor / billboard system**~~
 - `MeshLod` already supports coarser meshes at distance; impostors are the final LOD level
 - for entities beyond the last LOD threshold, render a camera-facing quad pre-rendered
   with the object's silhouette and lighting from multiple angles (impostor atlas)
@@ -117,14 +117,14 @@ the rest are systems work (weeks to months).
 - reference: Ogre `StaticGeometry` impostor page (MIT); Halo 3's impostor system (reference only)
 - home: `lunar-3d` `MeshImpostor` component + `lunar-render-3d` impostor pass
 
-**GPU mip streaming**
+~~**GPU mip streaming**~~
 - fixed VRAM budget; textures stream in finer mips as entities approach camera
 - mip residency tracked per texture; background thread uploads resident mips; renderer
   samples the highest resident mip available
 - pairs with BSP culling: non-visible areas don't need fine mips loaded
 - home: `lunar-assets` + `lunar-render-3d` mip residency tracker
 
-**gamedata build pipeline**
+~~**gamedata build pipeline**~~
 - `WorldManifest` and `SceneDefinition` currently parse RON/XML at runtime every level load
 - `build.rs` compiler: TOML/RON/XML source → flat binary blob embedded via `include_bytes!`
 - O(1) access at runtime; zero parsing cost; pairs well with async streaming
@@ -193,7 +193,7 @@ these belong in `lunar-core` or the relevant base crate.
 | ~~**render to texture**~~ | ~~`lunar-render` + `lunar-render-3d`~~ | ~~high~~ | done — `RenderTargetId`, `RenderTargetStore`, `Camera.target`; GPU tex with `RENDER_ATTACHMENT \| TEXTURE_BINDING`; sample view exposed as `Handle<Texture>` |
 | ~~**post-processing framework**~~ | ~~`lunar-render`~~ | ~~medium~~ | done — `PostProcessStack` resource; `ScreenFlash` (auto-decay), `ColorTint`; custom `PostEffect` trait; `draw_screen_rect` at `layers::POST_PROCESS` |
 | ~~**screen shake**~~ | ~~`lunar-render`~~ | ~~medium~~ | done — `ScreenShake` resource, trauma² noise offset |
-| **multiview / split-screen** | `lunar-render` + `lunar-render-3d` | low | `Viewport { rect: ScreenRect, camera: Entity }` component; multiple cameras scissored to sub-rects; needs render-to-texture first |
+| ~~**multiview / split-screen**~~ | ~~`lunar-render` + `lunar-render-3d`~~ | ~~low~~ | done — `ViewportRect` component on Camera3d + `ActiveViewports` resource; renderer applies scissor/viewport for primary camera; multi-camera via render-to-texture for secondary cameras |
 
 ---
 

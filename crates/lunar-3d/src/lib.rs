@@ -59,7 +59,10 @@ pub use bundles::{
     Camera3dBundle, DirectionalLightBundle, Mesh3dBundle, PointLightBundle, ShadowMesh3dBundle,
     SpotLightBundle,
 };
-pub use camera::{ActiveCamera3d, AmbientLight, Camera3d, Projection, update_active_camera};
+pub use camera::{
+    ActiveCamera3d, ActiveViewports, AmbientLight, Camera3d, Projection,
+    ViewportRect, update_active_camera, update_active_viewports,
+};
 pub use collision::{
     Collider3d, ColliderEntryRef, ColliderShape3d, CollisionWorld3d, Ray3d, RayHit3d,
     build_collision_world_3d, raycast_3d,
@@ -71,7 +74,10 @@ pub use water::Water;
 pub use particles::ParticleEmitter;
 pub use light::{DirectionalLight, IrradianceSH, PointLight, SpotLight};
 pub use material::{CullMode, Material3d, MaterialData, ShadingModel};
-pub use mesh::{IndexBuffer, Mesh3d, MeshData, MeshLod, MeshUsage, SkinWeights, Vertex3d};
+pub use mesh::{
+    ImpostorAtlas, IndexBuffer, Mesh3d, MeshData, MeshImpostor, MeshLod,
+    MeshUsage, SkinWeights, Vertex3d,
+};
 pub use mesh_registry::MeshRegistry;
 pub use plugin::Plugin3d;
 pub use systems::{TransformScratch3d, propagate_transforms_3d};

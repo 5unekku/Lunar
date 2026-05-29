@@ -1,0 +1,14 @@
+[package]
+name = "lunar-lightmap"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Lightmap baker for static 3D geometry in Lunar"
+
+[dependencies]
+bevy_ecs     = { workspace = true }
+lunar-math   = { path = "../lunar-math" }
+lunar-3d     = { path = "../lunar-3d" }
+lunar-assets = { path = "../lunar-assets" }
+rayon        = { workspace = true }
+png          = "0.17"

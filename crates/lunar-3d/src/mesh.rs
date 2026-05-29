@@ -206,6 +206,64 @@ impl MeshData {
 
 impl Asset for MeshData {}
 
+/// impostor atlas: a pre-rendered texture of an object from multiple angles.
+///
+/// the atlas stores `angle_count` images arranged in a single row:
+/// column i = the object rendered from azimuth `i * (360 / angle_count)` degrees.
+/// generated offline (or by [`MeshImpostor::bake`]) and loaded as a regular texture.
+#[derive(Debug, Clone)]
+pub struct ImpostorAtlas {
+    /// texture handle for the multi-angle atlas
+    pub texture: Handle<lunar_assets::Texture>,
+    /// number of angles baked into the atlas (equally spaced around 360°)
+    pub angle_count: u32,
+    /// width × height in texels of each individual angle frame
+    pub frame_width: u32,
+    pub frame_height: u32,
+}
+
+impl ImpostorAtlas {
+    /// UV rect for the closest pre-baked angle to `view_angle_rad` (azimuth around Y).
+    ///
+    /// returns `(u_min, u_max, v_min, v_max)` in atlas UV space [0,1].
+    #[must_use]
+    pub fn uv_rect(&self, view_angle_rad: f32) -> (f32, f32, f32, f32) {
+        use std::f32::consts::TAU;
+        let angle_step = TAU / self.angle_count as f32;
+        let norm = ((view_angle_rad % TAU) + TAU) % TAU;
+        let frame = ((norm / angle_step).round() as u32) % self.angle_count;
+        let u_step = 1.0 / self.angle_count as f32;
+        let u_min = frame as f32 * u_step;
+        (u_min, u_min + u_step, 0.0, 1.0)
+    }
+}
+
+/// impostor billboard for far-distance rendering.
+///
+/// when present on a `Mesh3d` entity and the camera is beyond `min_dist_sq`, the
+/// renderer substitutes a camera-facing quad rendered with the impostor atlas texture
+/// instead of the full mesh. zero vertex throughput: just one quad (2 triangles).
+///
+/// pairs naturally with [`MeshLod`] — add the coarsest LOD level at the distance
+/// where the mesh still looks correct, then add `MeshImpostor` to kick in beyond that.
+///
+/// # workflow
+///
+/// 1. render the object from `atlas.angle_count` angles offline
+/// 2. pack into a single-row texture atlas (left to right, 0° → 360°)
+/// 3. load the atlas texture and store its handle in `ImpostorAtlas`
+/// 4. spawn the entity with `Mesh3d`, optional `MeshLod`, and `MeshImpostor`
+#[derive(Debug, Clone, Component)]
+pub struct MeshImpostor {
+    /// squared camera distance beyond which the impostor is used instead of the mesh
+    pub min_dist_sq: f32,
+    /// the multi-angle pre-rendered atlas
+    pub atlas: ImpostorAtlas,
+    /// world-space half-extents of the impostor billboard quad (matches the object's visual size)
+    pub half_width: f32,
+    pub half_height: f32,
+}
+
 /// component that marks an entity as having a 3D mesh.
 ///
 /// pair with [`LocalTransform3d`](crate::transform::LocalTransform3d) and

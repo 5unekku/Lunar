@@ -38,10 +38,11 @@ use std::collections::{HashMap, HashSet};
 
 use bevy_ecs::prelude::*;
 use lunar_3d::{
-    Aabb3d, ActiveCamera3d, AmbientLight, Camera3d, ComputedVisibility, CullSoa, Decal,
-    DirectionalLight, Frustum, IndexBuffer, IrradianceSH, Material3d, Mesh3d, MeshData,
-    MeshLod, MeshRegistry, ParticleEmitter, PointLight, Projection, ShadowCaster, Vertex3d,
-    Terrain, ViewportAspect, Water, WorldTransform3d,
+    Aabb3d, ActiveCamera3d, ActiveViewports, AmbientLight, Camera3d, ComputedVisibility,
+    CullSoa, Decal, DirectionalLight, Frustum, IndexBuffer, IrradianceSH, Material3d,
+    Mesh3d, MeshData, MeshImpostor, MeshLod, MeshRegistry, ParticleEmitter, PointLight,
+    Projection, ShadowCaster, Vertex3d, Terrain, ViewportAspect, ViewportRect,
+    Water, WorldTransform3d,
 };
 use lunar_3d::primitives::{quad_mesh, sphere_mesh};
 use lunar_core::{App, GamePlugin, UpdateStage};
@@ -656,9 +657,12 @@ pub struct RenderEngine3d {
     // per-frame scratch — cleared at frame start, never reallocated in steady state
     frustum_visible: HashSet<Entity>,
     raw_scratch: Vec<(Entity, u32, u32, Mat4)>,
+    // impostor billboard draw list — entities replaced by impostors this frame.
+    // (world_pos, half_w, half_h, texture_id, u_min, u_max)
+    impostor_scratch: Vec<(Vec3, f32, f32, u32, f32, f32)>,
     // (entity, mesh_id, mat_id, base_color, metallic, roughness, model, alpha)
     // sorted by (mesh_id, mat_id) before drawing for state-change batching and GPU instancing
-    draw_scratch: Vec<(Entity, u32, u32, Color, f32, f32, Mat4, f32)>,
+    draw_scratch: Vec<(Entity, u32, u32, Color, f32, f32, Mat4, f32, u32)>,
     uniform_staging: Vec<u8>,
     point_light_scratch: Vec<(Vec3, Color, f32, f32)>,
 
@@ -2770,6 +2774,7 @@ impl RenderEngine3d {
             frustum_visible: HashSet::new(),
             raw_scratch: Vec::new(),
             draw_scratch: Vec::new(),
+            impostor_scratch: Vec::new(),
             uniform_staging,
             point_light_scratch: Vec::new(),
 
@@ -3351,10 +3356,10 @@ impl RenderEngine3d {
             }));
         }
 
-        // upsample bind groups: step i reads bloom mip i+1, writes to mip i
+        // upsample bind groups: render pass j reads mip[n-1-j] and writes to mip[n-2-j]
         let mut us_bgs = Vec::with_capacity(actual_mips.saturating_sub(1));
         for i in 0..actual_mips.saturating_sub(1) {
-            let src_view = &mip_views[i + 1];
+            let src_view = &mip_views[actual_mips - 1 - i];
             us_bgs.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("[bloom] upsample bg"),
                 layout: bgl,
@@ -3727,7 +3732,29 @@ impl RenderEngine3d {
         };
         let camera = { let Some(c) = world.get::<Camera3d>(cam_entity) else { return 0; }; *c };
         let cam_wt  = { let Some(t) = world.get::<WorldTransform3d>(cam_entity) else { return 0; }; *t };
-        let aspect = world.resource::<ViewportAspect>().0;
+
+        // viewport rect for the primary camera: used for scissor/viewport state in color passes.
+        // for split-screen, secondary cameras use render-to-texture; the primary camera's rect
+        // is applied here to confine its rendering to its portion of the screen.
+        let primary_viewport: ViewportRect = {
+            let viewports = world.resource::<ActiveViewports>();
+            viewports.viewports.iter()
+                .find(|(e, _)| *e == cam_entity)
+                .map(|(_, r)| *r)
+                .unwrap_or(ViewportRect::FULL)
+        };
+
+        let win_w = self.surface_config.width;
+        let win_h = self.surface_config.height;
+        let (vp_x, vp_y, vp_w, vp_h) = primary_viewport.to_pixels(win_w, win_h);
+
+        // aspect ratio from viewport rect (not full window) so projection is correct for the rect
+        let aspect = if primary_viewport.height > 1e-6 {
+            (vp_w as f32) / (vp_h as f32)
+        } else {
+            world.resource::<ViewportAspect>().0
+        };
+
         let view_proj = camera.view_proj(cam_wt, aspect);
         let cam_pos = cam_wt.translation;
 
@@ -4013,23 +4040,41 @@ impl RenderEngine3d {
 
         // ── gather draw list ──────────────────────────────────────────────
         self.raw_scratch.clear();
+        self.impostor_scratch.clear();
         {
             let mut q = world.query::<(
                 Entity, &Mesh3d, &Material3d, &WorldTransform3d, &ComputedVisibility,
-                Option<&Aabb3d>, Option<&MeshLod>,
+                Option<&Aabb3d>, Option<&MeshLod>, Option<&MeshImpostor>,
             )>();
             q.iter(world)
-                .filter(|(entity, _, _, _, vis, aabb, _)| {
+                .filter(|(entity, _, _, _, vis, aabb, _, _)| {
                     vis.0 && (aabb.is_none() || self.frustum_visible.contains(entity))
                 })
-                .for_each(|(entity, mesh, mat, wt, _, _, lod)| {
-                    // if the entity has LOD levels, select the appropriate mesh based on
-                    // squared camera distance. falls back to Mesh3d handle if no LOD set.
+                .for_each(|(entity, mesh, mat, wt, _, _, lod, impostor)| {
+                    let dist_sq = (wt.translation - cam_pos).length_squared();
+
+                    // check if entity should use impostor billboard
+                    if let Some(imp) = impostor {
+                        if dist_sq >= imp.min_dist_sq {
+                            // compute view azimuth angle around Y for atlas selection
+                            let to_entity = Vec3::from(wt.translation) - cam_pos;
+                            let view_angle = to_entity.z.atan2(to_entity.x);
+                            let (u_min, u_max, _, _) = imp.atlas.uv_rect(view_angle);
+                            self.impostor_scratch.push((
+                                Vec3::from(wt.translation),
+                                imp.half_width,
+                                imp.half_height,
+                                imp.atlas.texture.id(),
+                                u_min,
+                                u_max,
+                            ));
+                            return; // skip mesh draw
+                        }
+                    }
+
+                    // normal mesh draw (with LOD selection)
                     let mesh_id = lod
-                        .and_then(|l| {
-                            let dist_sq = (wt.translation - cam_pos).length_squared();
-                            l.select(dist_sq)
-                        })
+                        .and_then(|l| l.select(dist_sq))
                         .unwrap_or(mesh.0)
                         .id();
                     self.raw_scratch.push((entity, mesh_id, mat.0.id(), wt.to_matrix()));
@@ -4040,21 +4085,22 @@ impl RenderEngine3d {
         {
             let registry = world.resource::<MeshRegistry>();
             for &(entity, mesh_id, mat_id, model) in &self.raw_scratch {
-                let (color, metallic, roughness, alpha) = registry
+                let (color, metallic, roughness, alpha, mat_flags) = registry
                     .get_material(lunar_assets::Handle::new(mat_id, 0))
                     .map(|m| {
                         let mut color = m.base_color;
                         color.a = m.alpha;
-                        (color, m.metallic, m.roughness, m.alpha)
+                        let flags = if m.shading == lunar_3d::ShadingModel::Unlit { 1u32 } else { 0u32 };
+                        (color, m.metallic, m.roughness, m.alpha, flags)
                     })
-                    .unwrap_or((Color::WHITE, 0.0, 0.5, 1.0));
-                self.draw_scratch.push((entity, mesh_id, mat_id, color, metallic, roughness, model, alpha));
+                    .unwrap_or((Color::WHITE, 0.0, 0.5, 1.0, 0u32));
+                self.draw_scratch.push((entity, mesh_id, mat_id, color, metallic, roughness, model, alpha, mat_flags));
             }
         }
         // sort opaque entities by (mesh_id, mat_id) so consecutive entities can share
         // VBO/IBO and material bind group, and be batched into a single draw_indexed call.
         // transparents are sorted separately by depth after this.
-        self.draw_scratch.sort_unstable_by_key(|&(_, mesh_id, mat_id, _, _, _, _, alpha)| {
+        self.draw_scratch.sort_unstable_by_key(|&(_, mesh_id, mat_id, _, _, _, _, alpha, _)| {
             // put transparents last, then sort by (mesh_id, mat_id)
             let transparent = if alpha < 1.0 { 1u8 } else { 0u8 };
             (transparent, mesh_id, mat_id)
@@ -4115,9 +4161,9 @@ impl RenderEngine3d {
         }
 
         for i in 0..self.draw_scratch.len() {
-            let (_, _, _, color, metallic, roughness, model, _) = self.draw_scratch[i];
+            let (_, _, _, color, metallic, roughness, model, _, flags) = self.draw_scratch[i];
             Self::pack_mesh_uniforms(&mut self.uniform_staging, ENTITY_SLOT_START + i, model);
-            Self::pack_material_uniforms(&mut self.material_staging, ENTITY_SLOT_START + i, color, metallic, roughness, 0);
+            Self::pack_material_uniforms(&mut self.material_staging, ENTITY_SLOT_START + i, color, metallic, roughness, flags);
         }
 
         // ── pack lights buffer ────────────────────────────────────────────
@@ -4299,8 +4345,8 @@ impl RenderEngine3d {
                 q.iter(world).filter(|(_, vis, _)| vis.0).map(|(e, _, _)| e).collect()
             };
             let mut list: Vec<(u32, usize)> = self.draw_scratch.iter().enumerate()
-                .filter(|(_, (entity, _, _, _, _, _, _, _))| shadow_entities.contains(entity))
-                .map(|(i, (_, mesh_id, _, _, _, _, _, _))| (*mesh_id, i))
+                .filter(|(_, entry)| shadow_entities.contains(&entry.0))
+                .map(|(i, entry)| (entry.1, i))
                 .collect();
             list.sort_unstable_by_key(|&(mesh_id, _)| mesh_id);
             list
@@ -4823,6 +4869,11 @@ impl RenderEngine3d {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+
+            // apply viewport + scissor so this camera only renders to its screen rect.
+            // for full-screen cameras (ViewportRect::FULL), these are no-ops with max extents.
+            pass.set_viewport(vp_x as f32, vp_y as f32, vp_w as f32, vp_h as f32, 0.0, 1.0);
+            pass.set_scissor_rect(vp_x, vp_y, vp_w, vp_h);
 
             pass.set_bind_group(0, &self.globals_bg, &[]);
             pass.set_bind_group(3, &self.lights_bg, &[]);

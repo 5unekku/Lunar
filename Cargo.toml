@@ -26,6 +26,8 @@ members = [
     "crates/lunar-physics-3d",
     "crates/lunar-camera-3d",
     "crates/lunar-spline",
+    "crates/lunar-bsp",
+    "crates/lunar-lightmap",
     "crates/lunar-timeline",
     "crates/lunar-gamedata",
     "crates/lunar-gamedata-build",

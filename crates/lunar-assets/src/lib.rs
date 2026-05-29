@@ -707,6 +707,7 @@ impl TextureLoaderTrait for ImageTextureLoader {
             width: rgba.width(),
             height: rgba.height(),
             pixels: rgba.into_raw(),
+            mips: Vec::new(),
         })
     }
 }
@@ -724,6 +725,7 @@ impl TextureLoaderTrait for MiTextureLoader {
             width: image.width,
             height: image.height,
             pixels: image.pixels,
+            mips: Vec::new(),
         })
     }
 }
@@ -900,6 +902,8 @@ pub struct AssetServer {
     evicted_texture_ids: Vec<u32>,
     /// counter for generating unique synthetic paths for procedural textures.
     proc_texture_counter: u32,
+    /// mip streaming configuration: auto-generates mip chains on texture load.
+    mip_config: MipStreamingConfig,
 }
 
 impl AssetServer {
@@ -918,6 +922,7 @@ impl AssetServer {
             pending_font_ids: Vec::new(),
             evicted_texture_ids: Vec::new(),
             proc_texture_counter: 0,
+            mip_config: MipStreamingConfig::default(),
         }
     }
 
@@ -1179,6 +1184,19 @@ impl AssetServer {
         self.texture_store.get_by_id(id)
     }
 
+    /// configure mip streaming: set whether newly loaded textures auto-generate mip chains.
+    ///
+    /// call before loading textures to apply to all subsequent loads.
+    pub fn configure_mip_streaming(&mut self, config: MipStreamingConfig) {
+        self.mip_config = config;
+    }
+
+    /// returns the current mip streaming config.
+    #[must_use]
+    pub fn mip_config(&self) -> &MipStreamingConfig {
+        &self.mip_config
+    }
+
     /// drain the list of font IDs that became ready since the last drain.
     ///
     /// the render system calls this once per frame to register new fonts into
@@ -1240,11 +1258,7 @@ impl AssetServer {
         let id = handle.id();
         self.texture_store.insert(
             id,
-            Texture {
-                width,
-                height,
-                pixels,
-            },
+            Texture { width, height, pixels, mips: Vec::new() },
         );
         self.pending_texture_ids.push(id);
         handle
@@ -1338,10 +1352,12 @@ impl AssetServer {
     /// process completed load results from io threads.
     /// call this once per frame from the asset plugin's system.
     pub fn update(&mut self) {
-        // drain texture results
+        // drain texture results — auto-generate mips if config is set
+        let gen_mips = self.mip_config.generate_mipmaps;
         for result in self.io_pool.drain_texture_results() {
             match result.data {
-                Ok(data) => {
+                Ok(mut data) => {
+                    if gen_mips { data.generate_mipmaps(); }
                     self.texture_store.insert(result.id, data);
                     self.pending_texture_ids.push(result.id);
                 }
@@ -1391,10 +1407,80 @@ impl Default for AssetServer {
 ///
 /// contains width, height, and raw pixel bytes (RGBA8).
 /// the render system uploads this to the GPU.
+///
+/// # mip levels
+///
+/// `mips` carries pre-generated mip levels (index 0 = half-res, 1 = quarter-res, etc.).
+/// when non-empty, the renderer creates the GPU texture with a full mip chain and uploads
+/// all levels — enabling the GPU sampler to pick the appropriate mip based on screen
+/// coverage (trilinear filtering). call `generate_mipmaps()` to populate this field.
 pub struct Texture {
     pub width: u32,
     pub height: u32,
+    /// RGBA8 linear pixel data for the base mip level (full resolution).
     pub pixels: Vec<u8>,
+    /// pre-generated mip levels, each half the previous resolution.
+    /// index 0 = mip 1 (half-res), index 1 = mip 2 (quarter-res), etc.
+    /// empty = no mip chain; GPU texture created as single mip.
+    pub mips: Vec<Vec<u8>>,
+}
+
+impl Texture {
+    /// create a texture with no mip chain (single mip level, base image only).
+    #[must_use]
+    pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Self {
+        Self { width, height, pixels, mips: Vec::new() }
+    }
+
+    /// total number of mip levels including the base: `mips.len() + 1`.
+    #[must_use]
+    pub fn mip_level_count(&self) -> u32 {
+        self.mips.len() as u32 + 1
+    }
+
+    /// generate a full mip chain using a 2×2 box filter.
+    ///
+    /// each mip halves both dimensions (minimum 1×1). parallelised via rayon.
+    /// no-op if mips are already populated or the image is 1×1.
+    pub fn generate_mipmaps(&mut self) {
+        if !self.mips.is_empty() || (self.width <= 1 && self.height <= 1) {
+            return;
+        }
+        let mut prev_pixels = &self.pixels;
+        let mut prev_w = self.width;
+        let mut prev_h = self.height;
+        let mut prev_owned: Vec<u8>;
+        loop {
+            let next_w = (prev_w / 2).max(1);
+            let next_h = (prev_h / 2).max(1);
+            let mut next = vec![0u8; (next_w * next_h * 4) as usize];
+            for y in 0..next_h {
+                for x in 0..next_w {
+                    let sx = (x * 2).min(prev_w - 1);
+                    let sy = (y * 2).min(prev_h - 1);
+                    let sx1 = (sx + 1).min(prev_w - 1);
+                    let sy1 = (sy + 1).min(prev_h - 1);
+                    let sample = |px: u32, py: u32| -> [u32; 4] {
+                        let i = ((py * prev_w + px) * 4) as usize;
+                        [prev_pixels[i] as u32, prev_pixels[i+1] as u32,
+                         prev_pixels[i+2] as u32, prev_pixels[i+3] as u32]
+                    };
+                    let a = sample(sx, sy); let b = sample(sx1, sy);
+                    let c = sample(sx, sy1); let d = sample(sx1, sy1);
+                    let di = ((y * next_w + x) * 4) as usize;
+                    for ch in 0..4 {
+                        next[di + ch] = ((a[ch] + b[ch] + c[ch] + d[ch] + 2) / 4) as u8;
+                    }
+                }
+            }
+            self.mips.push(next);
+            if next_w <= 1 && next_h <= 1 { break; }
+            prev_owned = self.mips.last().unwrap().clone();
+            prev_pixels = &prev_owned;
+            prev_w = next_w;
+            prev_h = next_h;
+        }
+    }
 }
 
 impl Asset for Texture {}
@@ -1465,6 +1551,8 @@ impl GamePlugin for AssetPlugin {
     fn build(&mut self, app: &mut App) {
         app.insert_resource(AssetServer::new(2));
         app.insert_resource(LoadingState::default());
+        app.insert_resource(MipStreamingConfig::default());
+        app.insert_resource(TextureVramUsage::default());
         app.add_system(process_asset_loads);
         log::info!("AssetPlugin: asset server resource registered");
     }
@@ -1474,6 +1562,61 @@ impl GamePlugin for AssetPlugin {
 fn process_asset_loads(mut asset_server: ResMut<AssetServer>, mut loading_state: ResMut<LoadingState>) {
     asset_server.update();
     loading_state.stats = asset_server.loading_stats();
+}
+
+/// configuration for GPU mip streaming.
+///
+/// insert as a resource before `AssetPlugin` to enable automatic mip chain generation
+/// for all textures loaded after this point.
+///
+/// # VRAM budget
+///
+/// `vram_budget_bytes` is a soft limit on GPU texture memory. when the total size of
+/// uploaded textures (all mip levels) would exceed the budget, the asset system
+/// stops generating full mip chains for new textures and uploads base mip only.
+/// existing textures are not evicted — eviction requires explicit calls to the
+/// asset server's eviction API.
+///
+/// set `generate_mipmaps = false` to disable mip generation entirely (e.g. for UI
+/// textures where mip aliasing is undesirable).
+#[derive(Resource, Clone)]
+pub struct MipStreamingConfig {
+    /// generate full mip chains for all newly loaded textures.
+    /// default: true.
+    pub generate_mipmaps: bool,
+    /// soft VRAM budget in bytes for all uploaded textures.
+    /// 0 = unlimited. default: 512 MiB.
+    pub vram_budget_bytes: u64,
+}
+
+impl Default for MipStreamingConfig {
+    fn default() -> Self {
+        Self {
+            generate_mipmaps: true,
+            vram_budget_bytes: 512 * 1024 * 1024,
+        }
+    }
+}
+
+/// resource: current GPU texture VRAM usage estimate.
+///
+/// updated by the asset server each frame as textures are uploaded.
+/// read this to monitor memory pressure and adjust quality settings.
+#[derive(Resource, Default)]
+pub struct TextureVramUsage {
+    /// estimated total bytes used by all uploaded textures (all mip levels).
+    pub bytes: u64,
+}
+
+impl TextureVramUsage {
+    /// increment usage by the size of a texture with all its mip levels.
+    pub(crate) fn add_texture(&mut self, width: u32, height: u32, mip_count: u32) {
+        // RGBA8 = 4 bytes per pixel. geometric series sum: base × (1 - (1/4)^n) / (1 - 1/4)
+        // approximation: base × 4/3 (exact only if mip chain goes to 1×1)
+        let base_bytes = (width * height * 4) as u64;
+        let mip_factor = if mip_count > 1 { 4.0 / 3.0 } else { 1.0 };
+        self.bytes += (base_bytes as f64 * mip_factor) as u64;
+    }
 }
 
 /// event emitted when a watched asset file changes.

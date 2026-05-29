@@ -40,6 +40,7 @@
 use std::collections::HashMap;
 
 use lunar_gamedata::{DataRecord, DataTable, DataValue, GameData};
+use lunar_core::{SceneDefinition, WorldManifest};
 
 /// compile a TOML source string into a binary blob.
 ///
@@ -180,6 +181,63 @@ pub fn compile_toml_file(path: &str) -> Result<Vec<u8>, String> {
     let source =
         std::fs::read_to_string(path).map_err(|e| format!("failed to read '{path}': {e}"))?;
     compile_toml(&source)
+}
+
+/// compile a RON scene source string into the compact binary format.
+///
+/// the resulting blob can be embedded via `include_bytes!` and loaded at runtime
+/// using [`SceneDefinition::from_binary`] — zero runtime parsing cost.
+///
+/// # build.rs example
+///
+/// ```ignore
+/// fn main() {
+///     let src = std::fs::read_to_string("assets/scenes/level1.ron").unwrap();
+///     let blob = lunar_gamedata_build::compile_scene(&src).unwrap();
+///     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+///     std::fs::write(out.join("level1.bin"), blob).unwrap();
+///     println!("cargo:rerun-if-changed=assets/scenes/level1.ron");
+/// }
+/// ```
+///
+/// # Errors
+///
+/// returns an error if the RON source fails to parse or binary serialization fails.
+pub fn compile_scene(source: &str) -> Result<Vec<u8>, String> {
+    SceneDefinition::from_ron(source)?.to_binary()
+}
+
+/// compile a RON scene file into the compact binary format.
+///
+/// # Errors
+///
+/// returns an error if the file cannot be read or compilation fails.
+pub fn compile_scene_file(path: &str) -> Result<Vec<u8>, String> {
+    let source =
+        std::fs::read_to_string(path).map_err(|e| format!("failed to read '{path}': {e}"))?;
+    compile_scene(&source)
+}
+
+/// compile a world manifest XML source string into the compact binary format.
+///
+/// the resulting blob can be loaded at runtime using [`WorldManifest::from_binary`].
+///
+/// # Errors
+///
+/// returns an error if the XML source fails to parse or binary serialization fails.
+pub fn compile_world_manifest(source: &str) -> Result<Vec<u8>, String> {
+    WorldManifest::from_xml(source)?.compile()?.to_binary()
+}
+
+/// compile a world manifest XML file into the compact binary format.
+///
+/// # Errors
+///
+/// returns an error if the file cannot be read or compilation fails.
+pub fn compile_world_manifest_file(path: &str) -> Result<Vec<u8>, String> {
+    let source =
+        std::fs::read_to_string(path).map_err(|e| format!("failed to read '{path}': {e}"))?;
+    compile_world_manifest(&source)
 }
 
 #[cfg(test)]

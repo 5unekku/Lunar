@@ -7,6 +7,7 @@ description = "build-time TOML-to-binary compiler for lunar game data tables"
 
 [dependencies]
 lunar-gamedata = { path = "../lunar-gamedata" }
+lunar-core     = { path = "../lunar-core" }
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 bincode = "1"
