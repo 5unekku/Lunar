@@ -78,8 +78,10 @@ these belong in `lunar-core` or the relevant base crate.
 | feature | home | priority | notes |
 |---|---|---|---|
 | ~~**3d raycasting**~~ | ~~`lunar-3d`~~ | ~~critical~~ | done — `Ray3d`, `RayHit3d`, `raycast_3d`: CullSoa AABB broad phase + Möller–Trumbore triangle narrow phase; AABB fallback for mesh-less entities |
-| ~~**proper PBR lighting**~~ | ~~`lunar-render-3d`~~ | ~~high~~ | done — Cook-Torrance BRDF (GGX NDF, Smith-GGX geometry, Schlick Fresnel); directional + 8 point lights; 3-cascade CSM at 1024² with 5×5 PCF; Z-prepass on mid/high tier; ACES filmic tonemap; dynamic resolution scaling (EMA frame-time, 0.5–1.0 scale) |
-| ~~**bind group layout standardisation**~~ | ~~`lunar-render-3d`~~ | ~~medium~~ | done — 3-group layout live: group 0 globals (view\_proj + time), group 1 material (base\_color), group 2 per-mesh (model matrix) |
+| ~~**proper PBR lighting**~~ | ~~`lunar-render-3d`~~ | ~~high~~ | done — Cook-Torrance BRDF (GGX NDF, Smith-GGX geometry, Schlick Fresnel); directional + 8 point lights; 3-cascade CSM at 1024² with 5×5 PCF; Z-prepass on mid/high tier; dynamic resolution scaling |
+| ~~**bind group layout standardisation**~~ | ~~`lunar-render-3d`~~ | ~~medium~~ | done — 4-group layout: group 0 globals, group 1 material, group 2 per-mesh, group 3 lights+shadow |
+| ~~**post-processing pipeline**~~ | ~~`lunar-render-3d`~~ | ~~medium~~ | done — HDR RGBA16Float intermediate target; 4×MSAA on mid/high; Kawase bloom (5 mips mid, 7 mips high); ACES filmic tonemap; composite pass: vignette, chromatic aberration, film grain; `QualitySettings` resource with per-tier defaults |
+| ~~**GTAO ambient occlusion**~~ | ~~`lunar-render-3d`~~ | ~~medium~~ | done — half-res horizon-based AO (XeGTAO-style); depth reconstruction from z-prepass; 5-tap bilateral blur; enabled mid/high via `QualitySettings.ssao` |
 
 ---
 
