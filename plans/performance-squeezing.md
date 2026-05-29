@@ -12,8 +12,14 @@ reference engines are at `/var/tmp/lunar-ref/`. license notes:
 
 ## implementation status
 
-tiers 1–3 fully implemented as of the perf branch commits. tier 4 items remain far-term
-architectural work and are already tracked in `plans/performance.md` under "next / far term".
+all tiers fully implemented. tier 4 notes:
+- **mesh LOD**: `MeshLod` component + select() in gather pass — done
+- **render graph DAG**: `render_graph.rs` with Kahn topological sort, all passes registered,
+  drives execution order in render_frame — done
+- **GPU frustum cull**: `cull.wgsl` compute shader replacing CPU CullSoa on high tier — done
+- **HZB occlusion cull**: `hzb.wgsl` (depth copy + min-depth mip chain + AABB screen-projection
+  occlusion test), runs as two-pass system on high tier — done
+- **meshlets**: blocked on wgpu mesh shader support; cannot implement until wgpu adds the feature
 
 note: the "2D tile and sprite batching" tier 1 item turned out to be already implemented —
 the 2D renderer already sorts draw commands by (layer, tex_id) and batches all same-texture
