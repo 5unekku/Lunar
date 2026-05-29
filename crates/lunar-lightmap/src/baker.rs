@@ -56,6 +56,7 @@ pub struct LightmapBaker {
     samples: u32,
     directional: Option<BakeDirectional>,
     ambient: Vec3,
+    dilation: u32,
 }
 
 impl Default for LightmapBaker {
@@ -65,6 +66,7 @@ impl Default for LightmapBaker {
             samples: 64,
             directional: None,
             ambient: Vec3::splat(0.1),
+            dilation: 2,
         }
     }
 }
@@ -87,6 +89,12 @@ impl LightmapBaker {
 
     #[must_use]
     pub fn with_ambient(mut self, ambient: Vec3) -> Self { self.ambient = ambient; self }
+
+    /// set UV island dilation radius in texels (default 2).
+    /// 2 texels eliminates seam artifacts at mip level 1.
+    /// set to 0 to disable dilation.
+    #[must_use]
+    pub fn with_dilation(mut self, texels: u32) -> Self { self.dilation = texels; self }
 
     /// bake a lightmap for a mesh.
     ///
@@ -132,7 +140,11 @@ impl LightmapBaker {
 
         let mut pixels = Vec::with_capacity((w * h * 4) as usize);
         for row in row_data { pixels.extend_from_slice(&row); }
-        BakeResult { width: w, height: h, pixels }
+        let mut result = BakeResult { width: w, height: h, pixels };
+        if self.dilation > 0 {
+            dilate(&mut result, self.dilation);
+        }
+        result
     }
 }
 
@@ -330,4 +342,39 @@ fn moller_trumbore(origin: Vec3, direction: Vec3, v0: Vec3, v1: Vec3, v2: Vec3) 
     let t = inv_det * e2.dot(q);
     if t < EPSILON { return None; }
     Some(t)
+}
+
+/// flood-fill unwritten texels (alpha=0) with the nearest written texel value.
+/// `radius` passes of 4-connected flood fill; each pass propagates by 1 texel.
+/// eliminates dark UV-island seams at mip 1+ caused by bilinear filtering of unwritten pixels.
+fn dilate(result: &mut BakeResult, radius: u32) {
+    let w = result.width as usize;
+    let h = result.height as usize;
+    let pixels = &mut result.pixels;
+    let mut work = pixels.clone();
+    for _ in 0..radius {
+        for row in 0..h {
+            for col in 0..w {
+                let idx = (row * w + col) * 4;
+                if work[idx + 3] != 0 { continue; } // already written
+                // check 4-connected neighbours for a written texel
+                let neighbours: [(i32, i32); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+                for (dr, dc) in neighbours {
+                    let nr = row as i32 + dr;
+                    let nc = col as i32 + dc;
+                    if nr < 0 || nr >= h as i32 || nc < 0 || nc >= w as i32 { continue; }
+                    let nidx = (nr as usize * w + nc as usize) * 4;
+                    if work[nidx + 3] != 0 {
+                        pixels[idx]     = work[nidx];
+                        pixels[idx + 1] = work[nidx + 1];
+                        pixels[idx + 2] = work[nidx + 2];
+                        pixels[idx + 3] = 255;
+                        break;
+                    }
+                }
+            }
+        }
+        // update work buffer for the next pass so we propagate from newly filled texels
+        work.copy_from_slice(pixels);
+    }
 }

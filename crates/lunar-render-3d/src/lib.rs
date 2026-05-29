@@ -347,6 +347,44 @@ impl QualitySettings {
         }
     }
 
+    /// build settings for a given tier, overriding the preset.
+    /// useful for adaptive quality stepping: tier determines hardware capabilities,
+    /// preset determines feature toggles within that capability.
+    #[must_use]
+    pub fn from_tier_and_preset(tier: RenderTier, preset: QualityPreset) -> Self {
+        let mut base = Self::from_tier(tier);
+        base.preset = preset;
+        // override feature toggles that depend on preset, not tier
+        match preset {
+            QualityPreset::Minimum => {
+                base.msaa_samples = 1;
+                base.bloom = false;
+                base.ssao = false;
+                base.ssr = false;
+                base.volumetric_fog = false;
+                base.vignette = false;
+                base.chromatic_aberration = false;
+                base.film_grain = false;
+                base.fxaa = false;
+                base.shadow_cascades = 1;
+            }
+            QualityPreset::Low => {
+                base.msaa_samples = 1;
+                base.bloom = false;
+                base.ssao = false;
+                base.ssr = false;
+                base.volumetric_fog = false;
+                base.fxaa = true;
+                base.shadow_cascades = 1;
+            }
+            QualityPreset::Medium => {
+                base.msaa_samples = if tier == RenderTier::LowGles { 1 } else { 4 };
+            }
+            QualityPreset::High | QualityPreset::Ultra => {}
+        }
+        base
+    }
+
     pub fn from_tier(tier: RenderTier) -> Self {
         match tier {
             RenderTier::LowGles => Self {
@@ -398,6 +436,24 @@ impl QualitySettings {
                 volumetric_fog: true,
             },
         }
+    }
+}
+
+/// automatic quality stepping based on frame time EMA.
+///
+/// when enabled, the renderer steps `QualityPreset` down after 3 seconds over
+/// budget and up after 10 seconds under budget. respects `min` and `max` bounds.
+/// insert into the app alongside `RenderPlugin3d` to enable.
+#[derive(Resource, Clone)]
+pub struct AutoQuality {
+    pub enabled: bool,
+    pub min: QualityPreset,
+    pub max: QualityPreset,
+}
+
+impl Default for AutoQuality {
+    fn default() -> Self {
+        Self { enabled: false, min: QualityPreset::Minimum, max: QualityPreset::Ultra }
     }
 }
 
@@ -564,6 +620,9 @@ pub struct RenderEngine3d {
     frame_time_ema_ms: f32,
     resolution_scale: f32,       // current scale factor [0.5, 1.0]
     frame_time_budget_ms: f32,   // target frame time (e.g. 14 ms for 60 fps)
+    // adaptive quality stepping: consecutive frames over/under budget
+    auto_quality_over_frames: u32,   // frames consecutively over budget
+    auto_quality_under_frames: u32,  // frames consecutively under budget
 
     // FXAA post-process AA — single pass on LDR composite output (low tier only)
     fxaa_enabled: bool,
@@ -647,6 +706,9 @@ pub struct RenderEngine3d {
     // sorted by (mesh_id, mat_id) before the draw loop for batching
     // indices into draw_scratch for transparent entities, sorted back-to-front
     transparent_scratch: Vec<usize>,
+    // sort-skip: quantized depth keys (mm precision) from the previous frame
+    transparent_last_depths: Vec<i32>,
+    transparent_last_cam_fwd: Vec3,
 
     // pipeline cache — persists compiled shader binaries across runs (Vulkan/DX12 only)
     #[cfg(not(target_arch = "wasm32"))]
@@ -802,10 +864,9 @@ impl RenderEngine3d {
         };
         surface.configure(&device, &surface_config);
 
-        let msaa_samples = match render_tier {
-            RenderTier::LowGles => 1,
-            RenderTier::Mid | RenderTier::High => 4,
-        };
+        // derive quality settings early so msaa_samples and other tier-specific values come from one place
+        let quality_early = QualitySettings::from_tier(render_tier);
+        let msaa_samples = quality_early.msaa_samples;
         let depth_view = Self::make_depth_view(&device, config.width, config.height, msaa_samples);
         let msaa_color_view = Self::make_msaa_color_view(
             &device, config.width, config.height, HDR_FORMAT, msaa_samples,
@@ -1310,7 +1371,7 @@ impl RenderEngine3d {
         // ── HDR texture ────────────────────────────────────────────────────
         // color pass renders here; MSAA (if enabled) resolves into this non-MSAA tex
 
-        let quality = QualitySettings::from_tier(render_tier);
+        let quality = quality_early;
         let bloom_enabled = quality.bloom;
         let bloom_mip_count = quality.bloom_mips as usize;
         let fxaa_enabled = quality.fxaa;
@@ -2773,6 +2834,8 @@ impl RenderEngine3d {
             zprepass_nonmsaa_pipeline,
             transparent_pipeline,
             transparent_scratch: Vec::new(),
+            transparent_last_depths: Vec::new(),
+            transparent_last_cam_fwd: Vec3::ZERO,
             fxaa_enabled,
             fxaa_ldr_texture,
             fxaa_ldr_view,
@@ -2840,6 +2903,8 @@ impl RenderEngine3d {
             frame_time_ema_ms: 16.67,
             resolution_scale: 1.0,
             frame_time_budget_ms: 14.0,
+            auto_quality_over_frames: 0,
+            auto_quality_under_frames: 0,
             lightmap_bgl,
             lightmap_sampler,
             lightmap_fallback_tex,
@@ -3482,27 +3547,142 @@ impl RenderEngine3d {
         });
         queue.write_buffer(&vbuf, 0, vdata);
 
-        let (idata, index_count, index_fmt) = match &data.indices {
-            IndexBuffer::U16(v) => (
-                unsafe { slice_as_bytes(v.as_slice()) },
-                v.len() as u32,
-                wgpu::IndexFormat::Uint16,
-            ),
-            IndexBuffer::U32(v) => (
-                unsafe { slice_as_bytes(v.as_slice()) },
-                v.len() as u32,
-                wgpu::IndexFormat::Uint32,
-            ),
-        };
-        let ibuf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("[mesh] ibuf"),
-            size: idata.len() as u64,
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&ibuf, 0, idata);
+        match &data.indices {
+            IndexBuffer::U16(v) => {
+                let u32_indices: Vec<u32> = v.iter().map(|&i| i as u32).collect();
+                let optimized = Self::forsyth_optimize(&u32_indices, data.vertices.len());
+                let u16_opt: Vec<u16> = optimized.iter().map(|&i| i as u16).collect();
+                let ibuf = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("[mesh] ibuf"),
+                    size: (u16_opt.len() * 2) as u64,
+                    usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                queue.write_buffer(&ibuf, 0, unsafe { slice_as_bytes(u16_opt.as_slice()) });
+                GpuMesh { vbuf, ibuf, index_count: u16_opt.len() as u32, index_fmt: wgpu::IndexFormat::Uint16 }
+            }
+            IndexBuffer::U32(v) => {
+                let optimized = Self::forsyth_optimize(v, data.vertices.len());
+                let ibuf = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("[mesh] ibuf"),
+                    size: (optimized.len() * 4) as u64,
+                    usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                queue.write_buffer(&ibuf, 0, unsafe { slice_as_bytes(optimized.as_slice()) });
+                GpuMesh { vbuf, ibuf, index_count: optimized.len() as u32, index_fmt: wgpu::IndexFormat::Uint32 }
+            }
+        }
+    }
 
-        GpuMesh { vbuf, ibuf, index_count, index_fmt }
+    /// reorder triangle indices to maximize GPU vertex cache utilization (Forsyth 2006).
+    /// improves post-transform cache hit rate from ~50% to ~90% for typical meshes.
+    /// runs once per mesh at upload time; the original index buffer is not modified.
+    fn forsyth_optimize(indices: &[u32], vertex_count: usize) -> Vec<u32> {
+        const CACHE_SIZE: usize = 32;
+        let tri_count = indices.len() / 3;
+        if tri_count == 0 || vertex_count == 0 { return indices.to_vec(); }
+
+        // per-vertex: remaining triangle count + list of triangle indices
+        let mut vert_tris: Vec<Vec<u32>> = vec![Vec::new(); vertex_count];
+        for (ti, chunk) in indices.chunks_exact(3).enumerate() {
+            for &vi in chunk {
+                if (vi as usize) < vertex_count {
+                    vert_tris[vi as usize].push(ti as u32);
+                }
+            }
+        }
+        let mut vert_remaining: Vec<u32> = vert_tris.iter().map(|v| v.len() as u32).collect();
+
+        // vertex score: cache position → score
+        let cache_score = |pos: usize| -> f32 {
+            if pos >= CACHE_SIZE { return 0.0; }
+            if pos < 3 { return 0.75; } // just used
+            ((1.0 - (pos - 3) as f32 / (CACHE_SIZE - 3) as f32).powi(3)) * 0.5
+        };
+        let valence_score = |remaining: u32| -> f32 {
+            if remaining == 0 { return 0.0; }
+            2.0 * (remaining as f32).sqrt().recip()
+        };
+
+        let mut vert_score: Vec<f32> = (0..vertex_count)
+            .map(|v| valence_score(vert_remaining[v]) + cache_score(CACHE_SIZE))
+            .collect();
+
+        // per-triangle: sum of vertex scores; u32::MAX = already emitted
+        let mut tri_score: Vec<f32> = (0..tri_count).map(|ti| {
+            indices[ti * 3..ti * 3 + 3].iter().map(|&vi| vert_score[vi as usize]).sum()
+        }).collect();
+        let mut tri_emitted: Vec<bool> = vec![false; tri_count];
+
+        let mut out = Vec::with_capacity(indices.len());
+        let mut cache: Vec<i32> = vec![-1i32; CACHE_SIZE]; // -1 = empty slot
+
+        let mut best_tri = (0..tri_count)
+            .max_by(|&a, &b| tri_score[a].partial_cmp(&tri_score[b]).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(0);
+
+        while out.len() < indices.len() {
+            if tri_emitted[best_tri] {
+                // find next unemitted triangle with highest score
+                best_tri = (0..tri_count)
+                    .filter(|&t| !tri_emitted[t])
+                    .max_by(|&a, &b| tri_score[a].partial_cmp(&tri_score[b]).unwrap_or(std::cmp::Ordering::Equal))
+                    .unwrap_or_else(|| (0..tri_count).find(|&t| !tri_emitted[t]).unwrap_or(0));
+            }
+            tri_emitted[best_tri] = true;
+            let v0 = indices[best_tri * 3] as usize;
+            let v1 = indices[best_tri * 3 + 1] as usize;
+            let v2 = indices[best_tri * 3 + 2] as usize;
+            out.push(v0 as u32); out.push(v1 as u32); out.push(v2 as u32);
+
+            // update cache: insert v0, v1, v2 at front, shift others
+            let new_verts = [v0, v1, v2];
+            let mut new_cache: Vec<i32> = new_verts.iter().map(|&v| v as i32).collect();
+            for &slot in &cache {
+                if slot >= 0 && !new_verts.contains(&(slot as usize)) {
+                    new_cache.push(slot);
+                    if new_cache.len() >= CACHE_SIZE { break; }
+                }
+            }
+            while new_cache.len() < CACHE_SIZE { new_cache.push(-1); }
+            cache.copy_from_slice(&new_cache[..CACHE_SIZE]);
+
+            // recompute vertex scores for vertices now in cache
+            let mut verts_to_update: Vec<usize> = new_verts.to_vec();
+            for &slot in &cache { if slot >= 0 { verts_to_update.push(slot as usize); } }
+            verts_to_update.sort_unstable(); verts_to_update.dedup();
+
+            for &vi in &verts_to_update {
+                if vi >= vertex_count { continue; }
+                let cache_pos = cache.iter().position(|&s| s == vi as i32).unwrap_or(CACHE_SIZE);
+                vert_remaining[vi] = vert_tris[vi].iter().filter(|&&ti| !tri_emitted[ti as usize]).count() as u32;
+                vert_score[vi] = valence_score(vert_remaining[vi]) + cache_score(cache_pos);
+            }
+
+            // update triangle scores for triangles adjacent to updated vertices
+            let mut tris_to_update: Vec<usize> = Vec::new();
+            for &vi in &verts_to_update {
+                if vi >= vertex_count { continue; }
+                for &ti in &vert_tris[vi] {
+                    if !tri_emitted[ti as usize] { tris_to_update.push(ti as usize); }
+                }
+            }
+            tris_to_update.sort_unstable(); tris_to_update.dedup();
+
+            let mut best_score = f32::NEG_INFINITY;
+            let mut best_in_cache: usize = usize::MAX;
+            for &ti in &tris_to_update {
+                tri_score[ti] = indices[ti * 3..ti * 3 + 3].iter()
+                    .map(|&vi| vert_score[vi as usize]).sum();
+                if tri_score[ti] > best_score {
+                    best_score = tri_score[ti];
+                    best_in_cache = ti;
+                }
+            }
+            best_tri = if best_in_cache != usize::MAX { best_in_cache } else { 0 };
+        }
+        out
     }
 
     /// build a flat NxN quad grid for one clipmap ring.
@@ -3645,6 +3825,8 @@ impl RenderEngine3d {
     }
 
     // ── public surface management ──────────────────────────────────────────
+
+    pub fn tier(&self) -> RenderTier { self.render_tier }
 
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
@@ -4441,14 +4623,24 @@ impl RenderEngine3d {
                 self.transparent_scratch.push(i);
             }
         }
-        self.transparent_scratch.sort_unstable_by(|&a, &b| {
-            let wa = self.draw_scratch[a].6.w_axis;
-            let wb = self.draw_scratch[b].6.w_axis;
-            let depth_a = (Vec3::new(wa.x, wa.y, wa.z) - cam_pos).dot(cam_fwd);
-            let depth_b = (Vec3::new(wb.x, wb.y, wb.z) - cam_pos).dot(cam_fwd);
-            // back-to-front: larger depth (further from camera) drawn first
-            depth_b.partial_cmp(&depth_a).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        // skip re-sort when camera direction and all transparent entity depths match
+        // the previous frame within 1mm (quantized to i32 millimetres)
+        let cur_depths: Vec<i32> = self.transparent_scratch.iter().map(|&i| {
+            let w = self.draw_scratch[i].6.w_axis;
+            ((Vec3::new(w.x, w.y, w.z) - cam_pos).dot(cam_fwd) * 1000.0) as i32
+        }).collect();
+        let cam_fwd_changed = (cam_fwd - self.transparent_last_cam_fwd).length_squared() > 1e-8;
+        if cam_fwd_changed || cur_depths != self.transparent_last_depths {
+            self.transparent_scratch.sort_unstable_by(|&a, &b| {
+                let wa = self.draw_scratch[a].6.w_axis;
+                let wb = self.draw_scratch[b].6.w_axis;
+                let depth_a = (Vec3::new(wa.x, wa.y, wa.z) - cam_pos).dot(cam_fwd);
+                let depth_b = (Vec3::new(wb.x, wb.y, wb.z) - cam_pos).dot(cam_fwd);
+                depth_b.partial_cmp(&depth_a).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            self.transparent_last_depths = cur_depths;
+            self.transparent_last_cam_fwd = cam_fwd;
+        }
 
         // ── acquire surface and create encoder ────────────────────────────
         let frame = match self.surface.get_current_texture() {
@@ -5832,11 +6024,52 @@ impl RenderEngine3d {
         if self.frame_time_ema_ms > budget * 0.95 {
             // over 95% of budget: drop 5%, floor at 0.5
             self.resolution_scale = (self.resolution_scale - 0.05).max(0.5);
+            self.auto_quality_over_frames += 1;
+            self.auto_quality_under_frames = 0;
         } else if self.frame_time_ema_ms < budget * 0.80 {
             // under 80% of budget: raise 5%, ceil at 1.0
             self.resolution_scale = (self.resolution_scale + 0.05).min(1.0);
+            self.auto_quality_under_frames += 1;
+            self.auto_quality_over_frames = 0;
+        } else {
+            self.auto_quality_over_frames = 0;
+            self.auto_quality_under_frames = 0;
         }
         self.resolution_scale
+    }
+
+    fn preset_ord(p: QualityPreset) -> u8 {
+        match p {
+            QualityPreset::Minimum => 0,
+            QualityPreset::Low     => 1,
+            QualityPreset::Medium  => 2,
+            QualityPreset::High    => 3,
+            QualityPreset::Ultra   => 4,
+        }
+    }
+
+    /// step quality preset down by one level (respects `min`).
+    fn preset_step_down(current: QualityPreset, min: QualityPreset) -> QualityPreset {
+        let next = match current {
+            QualityPreset::Ultra   => QualityPreset::High,
+            QualityPreset::High    => QualityPreset::Medium,
+            QualityPreset::Medium  => QualityPreset::Low,
+            QualityPreset::Low     => QualityPreset::Minimum,
+            QualityPreset::Minimum => QualityPreset::Minimum,
+        };
+        if Self::preset_ord(next) < Self::preset_ord(min) { min } else { next }
+    }
+
+    /// step quality preset up by one level (respects `max`).
+    fn preset_step_up(current: QualityPreset, max: QualityPreset) -> QualityPreset {
+        let next = match current {
+            QualityPreset::Minimum => QualityPreset::Low,
+            QualityPreset::Low     => QualityPreset::Medium,
+            QualityPreset::Medium  => QualityPreset::High,
+            QualityPreset::High    => QualityPreset::Ultra,
+            QualityPreset::Ultra   => QualityPreset::Ultra,
+        };
+        if Self::preset_ord(next) > Self::preset_ord(max) { max } else { next }
     }
 
     #[inline(always)]
@@ -5933,6 +6166,34 @@ fn render_3d_system(world: &mut World) {
     let draw_calls = engine.render_frame(world);
     let frame_ms = t0.elapsed().as_secs_f32() * 1000.0;
     let scale = engine.tick_dynamic_resolution(frame_ms);
+
+    // adaptive quality: step preset up/down based on sustained over/under budget
+    // 3 consecutive seconds over → step down; 10 consecutive seconds under → step up
+    // at 60fps: 180 frames over / 600 frames under
+    const OVER_THRESHOLD: u32  = 180;
+    const UNDER_THRESHOLD: u32 = 600;
+    let auto = world.get_resource::<AutoQuality>().cloned();
+    if let Some(auto) = auto {
+        if auto.enabled {
+            let (over_f, under_f) = (engine.auto_quality_over_frames, engine.auto_quality_under_frames);
+            let current = world.resource::<QualitySettings>().preset;
+            let tier = engine.tier();
+            if over_f >= OVER_THRESHOLD && RenderEngine3d::preset_ord(current) > RenderEngine3d::preset_ord(auto.min) {
+                let next = RenderEngine3d::preset_step_down(current, auto.min);
+                if let Some(mut qs) = world.get_resource_mut::<QualitySettings>() {
+                    *qs = QualitySettings::from_tier_and_preset(tier, next);
+                }
+                engine.auto_quality_over_frames = 0;
+            } else if under_f >= UNDER_THRESHOLD && RenderEngine3d::preset_ord(current) < RenderEngine3d::preset_ord(auto.max) {
+                let next = RenderEngine3d::preset_step_up(current, auto.max);
+                if let Some(mut qs) = world.get_resource_mut::<QualitySettings>() {
+                    *qs = QualitySettings::from_tier_and_preset(tier, next);
+                }
+                engine.auto_quality_under_frames = 0;
+            }
+        }
+    }
+
     world.insert_resource(engine);
     if let Some(mut info) = world.get_resource_mut::<RenderInfo3d>() {
         info.draw_calls = draw_calls;
