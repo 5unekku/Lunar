@@ -24,7 +24,6 @@ pub struct GameAssets {
 pub struct NpcData {
     pub start_col: i32,
     pub start_row: i32,
-    pub label: String,
     pub dialogue_name: String,
     pub has_icon: bool,
     pub icon_color: Color,

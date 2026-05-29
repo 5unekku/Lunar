@@ -73,7 +73,6 @@ pub fn setup(
         NpcData {
             start_col: 18,
             start_row: 15,
-            label: "old man".into(),
             dialogue_name: "npc1".into(),
             has_icon: true,
             icon_color: Color::rgb(0.75, 0.19, 0.19),
@@ -82,7 +81,6 @@ pub fn setup(
         NpcData {
             start_col: 31,
             start_row: 21,
-            label: "traveler".into(),
             dialogue_name: "npc2".into(),
             has_icon: false,
             icon_color: Color::rgb(0.82, 0.69, 0.24),
@@ -91,7 +89,6 @@ pub fn setup(
         NpcData {
             start_col: 12,
             start_row: 28,
-            label: "merchant".into(),
             dialogue_name: "npc3".into(),
             has_icon: true,
             icon_color: Color::rgb(0.19, 0.63, 0.25),
