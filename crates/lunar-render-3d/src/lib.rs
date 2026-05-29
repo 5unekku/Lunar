@@ -38,8 +38,8 @@ use std::collections::{HashMap, HashSet};
 use bevy_ecs::prelude::*;
 use lunar_3d::{
     Aabb3d, ActiveCamera3d, AmbientLight, Camera3d, ComputedVisibility, CullSoa, DirectionalLight,
-    Frustum, IndexBuffer, Material3d, Mesh3d, MeshData, MeshRegistry, PointLight, ShadowCaster,
-    Vertex3d, ViewportAspect, WorldTransform3d,
+    Frustum, IndexBuffer, Material3d, Mesh3d, MeshData, MeshRegistry, PointLight, Projection,
+    ShadowCaster, Vertex3d, ViewportAspect, WorldTransform3d,
 };
 use lunar_3d::primitives::{quad_mesh, sphere_mesh};
 use lunar_core::{App, GamePlugin, UpdateStage};
@@ -52,8 +52,11 @@ const SKY_RADIUS: f32 = 900.0;
 const SUN_Y: f32 = 895.0;
 const VERTEX_STRIDE: u64 = std::mem::size_of::<Vertex3d>() as u64;
 
-/// shadow map resolution — 1024×1024 for the directional light cascade.
+/// shadow map resolution per cascade.
 const SHADOW_MAP_SIZE: u32 = 1024;
+
+/// number of shadow cascades for the directional light.
+const NUM_CASCADES: u32 = 3;
 
 /// group 0: view_proj (64) + cam_pos (12) + elapsed (4) + delta (4) + pad (12) = 96 bytes.
 const GLOBALS_SIZE: u64 = 96;
@@ -64,14 +67,21 @@ const MATERIAL_UNIFORMS_SIZE: u64 = 32;
 /// group 2: model mat4 (64) + normal matrix as 3×vec4 (48) = 112 bytes.
 const MESH_UNIFORMS_SIZE: u64 = 112;
 
-/// group 3: ambient (16) + dir light (32) + light_space mat4 (64) + point header (16) + 8 point lights (256) = 384 bytes.
-const LIGHTS_SIZE: u64 = 384;
+/// group 3: ambient(16) + dir(32) + 3×light_space(192) + cascade_splits(16) + point_header(16) + 8×point_light(256) = 528 bytes.
+const LIGHTS_SIZE: u64 = 528;
 
-/// shadow globals: just the light view-projection mat4 = 64 bytes.
+/// shadow globals: light view-projection mat4 per cascade slot (dynamic offset).
 const SHADOW_GLOBALS_SIZE: u64 = 64;
 
 /// maximum point lights uploaded per frame.
 const MAX_POINT_LIGHTS: usize = 8;
+
+/// cascade split lambda for logarithmic-linear blending (0=linear, 1=log).
+const CASCADE_LAMBDA: f32 = 0.5;
+
+/// near and far planes used for cascade split computation.
+const SHADOW_NEAR: f32 = 0.1;
+const SHADOW_FAR:  f32 = 200.0;
 
 /// stride for dynamic UBO slots — must be ≥ min_uniform_buffer_offset_alignment (256).
 const UNIFORM_STRIDE: u64 = 256;
@@ -157,13 +167,29 @@ impl Default for RenderConfig3d {
 // ── render info ────────────────────────────────────────────────────────────
 
 /// per-frame rendering statistics. updated by `render_3d_system`.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct RenderInfo3d {
     pub window_width: u32,
     pub window_height: u32,
     pub draw_calls: u32,
     pub fps: f32,
     pub frame_time_ms: f32,
+    /// current render resolution scale (1.0 = native, 0.5 = half resolution).
+    /// adjusted automatically by the dynamic resolution scaler.
+    pub resolution_scale: f32,
+}
+
+impl Default for RenderInfo3d {
+    fn default() -> Self {
+        Self {
+            window_width: 0,
+            window_height: 0,
+            draw_calls: 0,
+            fps: 0.0,
+            frame_time_ms: 0.0,
+            resolution_scale: 1.0,
+        }
+    }
 }
 
 // ── render engine ──────────────────────────────────────────────────────────
@@ -173,6 +199,7 @@ pub struct RenderInfo3d {
 /// inserted as a resource by [`RenderPlugin3d`]. game code should not
 /// interact with this directly — use [`MeshRegistry`] and ECS components instead.
 #[cfg_attr(not(target_arch = "wasm32"), derive(Resource))]
+#[allow(dead_code)]
 pub struct RenderEngine3d {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -198,8 +225,9 @@ pub struct RenderEngine3d {
     entity_bg: wgpu::BindGroup,
     entity_capacity: usize,
 
-    opaque_pipeline: wgpu::RenderPipeline,
+    opaque_pipeline: wgpu::RenderPipeline,  // depth_compare=LessEqual when z-prepass active
     sky_pipeline: wgpu::RenderPipeline,
+    zprepass_pipeline: wgpu::RenderPipeline, // depth-only pre-pass (mid/high tier)
 
     // group 3: lights uniform + shadow map
     lights_bgl: wgpu::BindGroupLayout,
@@ -208,16 +236,21 @@ pub struct RenderEngine3d {
     shadow_map_view: wgpu::TextureView,
     shadow_sampler: wgpu::Sampler,
 
-    // shadow pass
-    shadow_globals_buf: wgpu::Buffer,
+    // shadow pass — 3 cascades, each a layer of the array depth texture
+    shadow_globals_buf: wgpu::Buffer,           // 3 × UNIFORM_STRIDE slots
     shadow_globals_bgl: wgpu::BindGroupLayout,
-    shadow_globals_bg: wgpu::BindGroup,
+    shadow_globals_bg: wgpu::BindGroup,         // bound with dynamic offset per cascade
     shadow_pipeline: wgpu::RenderPipeline,
-    shadow_depth_view: wgpu::TextureView,
+    shadow_cascade_views: [wgpu::TextureView; 3], // per-cascade render attachment views
 
     mesh_gpu: HashMap<u32, GpuMesh>,
     dome_mesh: GpuMesh,
     sun_mesh: GpuMesh,
+
+    // dynamic resolution scaling — EMA of frame time drives scale adjustments
+    frame_time_ema_ms: f32,
+    resolution_scale: f32,       // current scale factor [0.5, 1.0]
+    frame_time_budget_ms: f32,   // target frame time (e.g. 14 ms for 60 fps)
 
     // per-frame scratch — cleared at frame start, never reallocated in steady state
     frustum_visible: HashSet<Entity>,
@@ -415,7 +448,7 @@ impl RenderEngine3d {
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
                         multisampled: false,
                     },
                     count: None,
@@ -436,9 +469,14 @@ impl RenderEngine3d {
             mapped_at_creation: false,
         });
 
+        // 3-layer depth array — one layer per cascade
         let shadow_map = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("[shadow] depth map"),
-            size: wgpu::Extent3d { width: SHADOW_MAP_SIZE, height: SHADOW_MAP_SIZE, depth_or_array_layers: 1 },
+            label: Some("[shadow] cascade depth array"),
+            size: wgpu::Extent3d {
+                width: SHADOW_MAP_SIZE,
+                height: SHADOW_MAP_SIZE,
+                depth_or_array_layers: NUM_CASCADES,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -446,8 +484,20 @@ impl RenderEngine3d {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        let shadow_map_view = shadow_map.create_view(&wgpu::TextureViewDescriptor::default());
-        let shadow_depth_view = shadow_map.create_view(&wgpu::TextureViewDescriptor::default());
+        // full-array view for shader sampling
+        let shadow_map_view = shadow_map.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        // per-cascade single-layer views for render attachments
+        let shadow_cascade_views = std::array::from_fn(|i| {
+            shadow_map.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                base_array_layer: i as u32,
+                array_layer_count: Some(1),
+                ..Default::default()
+            })
+        });
 
         let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("[shadow] comparison sampler"),
@@ -483,9 +533,10 @@ impl RenderEngine3d {
             }],
         });
 
+        // 3 cascade slots, 256-byte aligned (one per cascade, selected via dynamic offset)
         let shadow_globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("[shadow globals] light VP"),
-            size: SHADOW_GLOBALS_SIZE,
+            label: Some("[shadow globals] cascade VPs"),
+            size: NUM_CASCADES as u64 * UNIFORM_STRIDE,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -563,8 +614,13 @@ impl RenderEngine3d {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
+                // with z-prepass (mid/high) depth is already populated — use LessEqual
+                depth_write_enabled: Some(render_tier == RenderTier::LowGles),
+                depth_compare: Some(if render_tier == RenderTier::LowGles {
+                    wgpu::CompareFunction::Less
+                } else {
+                    wgpu::CompareFunction::LessEqual
+                }),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
@@ -602,6 +658,36 @@ impl RenderEngine3d {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: Some(false),
                 depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            cache: None,
+            multiview_mask: None,
+        });
+
+        // Z-prepass: depth-only, no fragment shader, uses same vertex layout as opaque.
+        // on mid/high tier this runs before the opaque pass to eliminate overdraw.
+        let zprepass_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("3d z-prepass pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: vertex_buffers,
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: None,
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
@@ -668,6 +754,7 @@ impl RenderEngine3d {
             entity_capacity,
             opaque_pipeline,
             sky_pipeline,
+            zprepass_pipeline,
             lights_bgl,
             lights_buf,
             lights_bg,
@@ -677,10 +764,13 @@ impl RenderEngine3d {
             shadow_globals_bgl,
             shadow_globals_bg,
             shadow_pipeline,
-            shadow_depth_view,
+            shadow_cascade_views,
             mesh_gpu: HashMap::new(),
             dome_mesh,
             sun_mesh,
+            frame_time_ema_ms: 16.67,
+            resolution_scale: 1.0,
+            frame_time_budget_ms: 14.0,
             frustum_visible: HashSet::new(),
             raw_scratch: Vec::new(),
             draw_scratch: Vec::new(),
@@ -810,13 +900,16 @@ impl RenderEngine3d {
     // ── render ─────────────────────────────────────────────────────────────
 
     fn render_frame(&mut self, world: &mut World) -> u32 {
-        // ── gather camera ──────────────────────────────────────────────────
-        let active = world.resource::<ActiveCamera3d>();
-        let Some(cam_entity) = active.entity else { return 0; };
-        let Some(camera) = world.get::<Camera3d>(cam_entity) else { return 0; };
-        let Some(cam_wt) = world.get::<WorldTransform3d>(cam_entity) else { return 0; };
+        // ── gather camera — copy immediately so world borrows end here ────
+        let cam_entity = {
+            let active = world.resource::<ActiveCamera3d>();
+            let Some(e) = active.entity else { return 0; };
+            e
+        };
+        let camera = { let Some(c) = world.get::<Camera3d>(cam_entity) else { return 0; }; *c };
+        let cam_wt  = { let Some(t) = world.get::<WorldTransform3d>(cam_entity) else { return 0; }; *t };
         let aspect = world.resource::<ViewportAspect>().0;
-        let view_proj = camera.view_proj(*cam_wt, aspect);
+        let view_proj = camera.view_proj(cam_wt, aspect);
         let cam_pos = cam_wt.translation;
 
         // ── gather sky ────────────────────────────────────────────────────
@@ -858,16 +951,26 @@ impl RenderEngine3d {
         });
         self.point_light_scratch.truncate(MAX_POINT_LIGHTS);
 
-        // ── compute light-space matrix ────────────────────────────────────
-        let light_space = if dir_enabled != 0 {
-            let light_dir_n = dir_direction.normalize();
-            let up = if light_dir_n.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
-            let light_pos = cam_pos - light_dir_n * 100.0;
-            let light_view = Mat4::look_at_rh(light_pos, cam_pos, up);
-            let light_proj = Mat4::orthographic_rh(-50.0, 50.0, -50.0, 50.0, 0.1, 200.0);
-            light_proj * light_view
+        // ── compute cascade splits (log-linear blend, λ=0.5) ─────────────
+        // produces 3 split depths in view space separating the 3 cascade slices.
+        let cascade_splits = Self::compute_cascade_splits(SHADOW_NEAR, SHADOW_FAR, NUM_CASCADES as usize, CASCADE_LAMBDA);
+
+        // ── compute per-cascade light-space matrices ──────────────────────
+        let light_spaces = if dir_enabled != 0 {
+            let cam_forward = cam_wt.forward();
+            let cam_up_vec  = cam_wt.up();
+            let cam_right   = cam_wt.right();
+            let (fov_y, near) = match camera.projection {
+                Projection::Perspective { fov_y, near, .. } => (fov_y, near),
+                Projection::Orthographic { .. } => (std::f32::consts::FRAC_PI_3, 0.1),
+            };
+            [
+                Self::cascade_light_space(cam_pos, cam_forward, cam_up_vec, cam_right, fov_y, aspect, dir_direction, near, cascade_splits[0]),
+                Self::cascade_light_space(cam_pos, cam_forward, cam_up_vec, cam_right, fov_y, aspect, dir_direction, cascade_splits[0], cascade_splits[1]),
+                Self::cascade_light_space(cam_pos, cam_forward, cam_up_vec, cam_right, fov_y, aspect, dir_direction, cascade_splits[1], cascade_splits[2]),
+            ]
         } else {
-            Mat4::IDENTITY
+            [Mat4::IDENTITY; 3]
         };
 
         // ── frustum cull via CullSoa ──────────────────────────────────────
@@ -978,7 +1081,10 @@ impl RenderEngine3d {
             dir_illuminance:   f32,
             dir_direction:     [f32; 3],
             dir_enabled:       u32,
-            light_space:       [f32; 16],
+            light_space_0:     [f32; 16],
+            light_space_1:     [f32; 16],
+            light_space_2:     [f32; 16],
+            cascade_splits:    [f32; 4],   // [split0, split1, split2(=far), unused]
             point_count:       u32,
             _pad:              [u32; 3],
             point_lights:      [[f32; 8]; 8],
@@ -990,7 +1096,10 @@ impl RenderEngine3d {
             dir_illuminance,
             dir_direction: [dir_direction.x, dir_direction.y, dir_direction.z],
             dir_enabled,
-            light_space: light_space.to_cols_array(),
+            light_space_0: light_spaces[0].to_cols_array(),
+            light_space_1: light_spaces[1].to_cols_array(),
+            light_space_2: light_spaces[2].to_cols_array(),
+            cascade_splits: [cascade_splits[0], cascade_splits[1], cascade_splits[2], SHADOW_FAR],
             point_count: self.point_light_scratch.len() as u32,
             _pad: [0; 3],
             point_lights: [[0.0; 8]; 8],
@@ -1000,9 +1109,15 @@ impl RenderEngine3d {
         }
         self.queue.write_buffer(&self.lights_buf, 0, unsafe { slice_as_bytes(std::slice::from_ref(&lights_gpu)) });
 
-        // ── upload shadow globals ─────────────────────────────────────────
-        let light_vp_cols = light_space.to_cols_array();
-        self.queue.write_buffer(&self.shadow_globals_buf, 0, unsafe { slice_as_bytes(&light_vp_cols) });
+        // ── upload shadow globals (one slot per cascade) ──────────────────
+        for (i, &ls) in light_spaces.iter().enumerate() {
+            let cols = ls.to_cols_array();
+            self.queue.write_buffer(
+                &self.shadow_globals_buf,
+                (i * UNIFORM_STRIDE as usize) as u64,
+                unsafe { slice_as_bytes(&cols) },
+            );
+        }
 
         // ── upload globals + mesh/material buffers ────────────────────────
         let upload_size = (needed * UNIFORM_STRIDE as usize) as u64;
@@ -1034,50 +1149,77 @@ impl RenderEngine3d {
             label: Some("[frame] encoder"),
         });
 
-        // ── shadow pass (depth-only, directional light) ───────────────────
+        // ── collect shadow casters ────────────────────────────────────────
         let mut draw_calls: u32 = 0;
-        if dir_enabled != 0 && dir_casts_shadows {
-            let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("[shadow] pass"),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.shadow_depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
+        let shadow_list: Vec<(u32, usize)> = {
+            let mut q = world.query::<(Entity, &Mesh3d, &ComputedVisibility, Option<&ShadowCaster>)>();
+            q.iter(world)
+                .filter(|(_, _, vis, caster)| vis.0 && caster.is_some())
+                .filter_map(|(_entity, mesh, _, _)| {
+                    let mesh_id = mesh.0.id();
+                    let slot = self.draw_scratch.iter().position(|(_, mid, _, _, _, _)| *mid == mesh_id)?;
+                    Some((mesh_id, slot))
+                })
+                .collect()
+        };
+
+        // ── shadow pass — 3 cascades ─────────────────────────────────────
+        for cascade in 0..NUM_CASCADES as usize {
+            let label = format!("[shadow] cascade-{cascade}");
+            if dir_enabled != 0 && dir_casts_shadows {
+                let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some(label.as_str()),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.shadow_cascade_views[cascade],
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
                     }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            shadow_pass.set_pipeline(&self.shadow_pipeline);
-            shadow_pass.set_bind_group(0, &self.shadow_globals_bg, &[]);
-            let mut shadow_draw_query = world.query::<(
-                Entity, &Mesh3d, &WorldTransform3d, &ComputedVisibility, Option<&ShadowCaster>,
-            )>();
-            let shadow_entities: Vec<_> = shadow_draw_query
-                .iter(world)
-                .filter(|(_, _, _, vis, caster)| vis.0 && caster.is_some())
-                .map(|(entity, mesh, _, _, _)| (entity, mesh.0.id()))
-                .collect();
-            for (_, mesh_id) in shadow_entities {
-                let Some(gpu_mesh) = self.mesh_gpu.get(&mesh_id) else { continue; };
-                // find the slot index for this mesh in draw_scratch
-                let Some(slot) = self.draw_scratch.iter().position(|(_, mid, _, _, _, _)| *mid == mesh_id) else { continue; };
-                shadow_pass.set_bind_group(1, &self.entity_bg, &[Self::slot_offset(ENTITY_SLOT_START + slot)]);
-                shadow_pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
-                shadow_pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
-                shadow_pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                shadow_pass.set_pipeline(&self.shadow_pipeline);
+                shadow_pass.set_bind_group(0, &self.shadow_globals_bg, &[Self::slot_offset(cascade)]);
+                for &(mesh_id, slot) in &shadow_list {
+                    let Some(gpu_mesh) = self.mesh_gpu.get(&mesh_id) else { continue; };
+                    shadow_pass.set_bind_group(1, &self.entity_bg, &[Self::slot_offset(ENTITY_SLOT_START + slot)]);
+                    shadow_pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
+                    shadow_pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
+                    shadow_pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+                }
+            } else {
+                // clear each cascade layer so the sampler has valid data
+                let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some(label.as_str()),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.shadow_cascade_views[cascade],
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
             }
-        } else {
-            // clear shadow map even when not in use so the sampler has valid data
-            let mut clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("[shadow] clear"),
+        }
+
+        // ── z-prepass (mid/high tier only) ───────────────────────────────
+        // renders all opaque geometry depth-only, so the opaque color pass
+        // can use LessEqual depth compare to skip shading on occluded fragments.
+        if self.render_tier != RenderTier::LowGles {
+            let mut zpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("[z-prepass]"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.shadow_depth_view,
+                    view: &self.depth_view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -1088,7 +1230,18 @@ impl RenderEngine3d {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            drop(clear_pass);
+            zpass.set_pipeline(&self.zprepass_pipeline);
+            zpass.set_bind_group(0, &self.globals_bg, &[]);
+            zpass.set_bind_group(3, &self.lights_bg, &[]);
+            for i in 0..self.draw_scratch.len() {
+                let mesh_id = self.draw_scratch[i].1;
+                let Some(gpu_mesh) = self.mesh_gpu.get(&mesh_id) else { continue; };
+                zpass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
+                zpass.set_bind_group(2, &self.entity_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
+                zpass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
+                zpass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
+                zpass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+            }
         }
 
         // ── main color pass ───────────────────────────────────────────────
@@ -1112,7 +1265,12 @@ impl RenderEngine3d {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        // load z-prepass depth on mid/high; clear on low (no prepass)
+                        load: if self.render_tier != RenderTier::LowGles {
+                            wgpu::LoadOp::Load
+                        } else {
+                            wgpu::LoadOp::Clear(1.0)
+                        },
                         store: wgpu::StoreOp::Discard,
                     }),
                     stencil_ops: None,
@@ -1162,9 +1320,91 @@ impl RenderEngine3d {
         draw_calls
     }
 
+    /// update the EMA frame-time tracker and adjust resolution scale.
+    /// called by `render_3d_system` after each frame with the measured CPU frame time.
+    pub fn tick_dynamic_resolution(&mut self, frame_time_ms: f32) -> f32 {
+        // EMA with α=0.1 (smooths over ~10 frames)
+        const ALPHA: f32 = 0.1;
+        self.frame_time_ema_ms = ALPHA * frame_time_ms + (1.0 - ALPHA) * self.frame_time_ema_ms;
+
+        let budget = self.frame_time_budget_ms;
+        if self.frame_time_ema_ms > budget * 0.95 {
+            // over 95% of budget: drop 5%, floor at 0.5
+            self.resolution_scale = (self.resolution_scale - 0.05).max(0.5);
+        } else if self.frame_time_ema_ms < budget * 0.80 {
+            // under 80% of budget: raise 5%, ceil at 1.0
+            self.resolution_scale = (self.resolution_scale + 0.05).min(1.0);
+        }
+        self.resolution_scale
+    }
+
     #[inline(always)]
     fn slot_offset(slot: usize) -> u32 {
         (slot * UNIFORM_STRIDE as usize) as u32
+    }
+
+    /// compute cascade split depths using logarithmic-linear blending.
+    /// returns `n` split values in view-space depth (positive distance from camera).
+    fn compute_cascade_splits(near: f32, far: f32, n: usize, lambda: f32) -> Vec<f32> {
+        (1..=n)
+            .map(|i| {
+                let uniform = near + (far - near) * (i as f32 / n as f32);
+                let log = near * (far / near).powf(i as f32 / n as f32);
+                lambda * log + (1.0 - lambda) * uniform
+            })
+            .collect()
+    }
+
+    /// compute a tight orthographic light-space matrix for one cascade slice.
+    /// fits the ortho projection to the 8 corners of the camera frustum slice.
+    fn cascade_light_space(
+        cam_pos: Vec3,
+        cam_fwd: Vec3,
+        cam_up: Vec3,
+        cam_right: Vec3,
+        fov_y: f32,
+        aspect: f32,
+        light_dir: Vec3,
+        slice_near: f32,
+        slice_far: f32,
+    ) -> Mat4 {
+        let tan_half = (fov_y * 0.5).tan();
+        let corners: [Vec3; 8] = {
+            let mut c = [Vec3::ZERO; 8];
+            let mut idx = 0;
+            for &depth in &[slice_near, slice_far] {
+                let half_h = tan_half * depth;
+                let half_w = half_h * aspect;
+                for sy in [-1.0_f32, 1.0] {
+                    for sx in [-1.0_f32, 1.0] {
+                        c[idx] = cam_pos + cam_fwd * depth + cam_up * (sy * half_h) + cam_right * (sx * half_w);
+                        idx += 1;
+                    }
+                }
+            }
+            c
+        };
+
+        // centroid of corners → light looks at it
+        let centroid = corners.iter().fold(Vec3::ZERO, |acc, &c| acc + c) / 8.0;
+        let light_dir_n = light_dir.normalize();
+        let light_up = if light_dir_n.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
+        let light_view = Mat4::look_at_rh(centroid - light_dir_n * 100.0, centroid, light_up);
+
+        // AABB of corners in light view space
+        let (mut min_x, mut max_x) = (f32::MAX, f32::MIN);
+        let (mut min_y, mut max_y) = (f32::MAX, f32::MIN);
+        let (mut min_z, mut max_z) = (f32::MAX, f32::MIN);
+        for &c in &corners {
+            let lc = light_view * Vec3::new(c.x, c.y, c.z).extend(1.0);
+            min_x = min_x.min(lc.x); max_x = max_x.max(lc.x);
+            min_y = min_y.min(lc.y); max_y = max_y.max(lc.y);
+            min_z = min_z.min(lc.z); max_z = max_z.max(lc.z);
+        }
+        // pull near plane back to catch casters behind the frustum
+        let z_extend = (max_z - min_z) * 0.5;
+        let light_proj = Mat4::orthographic_rh(min_x, max_x, min_y, max_y, min_z - z_extend, max_z + z_extend);
+        light_proj * light_view
     }
 }
 
@@ -1172,11 +1412,17 @@ impl RenderEngine3d {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn render_3d_system(world: &mut World) {
+    let t0 = std::time::Instant::now();
     let mut engine = world.remove_resource::<RenderEngine3d>().unwrap();
     let draw_calls = engine.render_frame(world);
+    let frame_ms = t0.elapsed().as_secs_f32() * 1000.0;
+    let scale = engine.tick_dynamic_resolution(frame_ms);
     world.insert_resource(engine);
     if let Some(mut info) = world.get_resource_mut::<RenderInfo3d>() {
         info.draw_calls = draw_calls;
+        info.frame_time_ms = frame_ms;
+        info.fps = if frame_ms > 0.0 { 1000.0 / frame_ms } else { 0.0 };
+        info.resolution_scale = scale;
     }
 }
 

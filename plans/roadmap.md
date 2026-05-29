@@ -57,7 +57,7 @@ these belong in `lunar-core` or the relevant base crate.
 | ~~**save/load**~~ | ~~`lunar-core/persist`~~ | ~~critical~~ | done — `persist::save/load<T>`, RON, WASM stub |
 | ~~**entity pooling**~~ | ~~`lunar-core/pool`~~ | ~~high~~ | done — `Pool` resource, acquire/release/grow |
 | ~~**render to texture**~~ | ~~`lunar-render` + `lunar-render-3d`~~ | ~~high~~ | done — `RenderTargetId`, `RenderTargetStore`, `Camera.target`; GPU tex with `RENDER_ATTACHMENT \| TEXTURE_BINDING`; sample view exposed as `Handle<Texture>` |
-| **post-processing framework** | `lunar-render` + `lunar-render-3d` | medium | `PostProcessStack` resource; built-in: `ScreenFlash`, `ColorTint`; custom passes via `RenderPass` trait |
+| ~~**post-processing framework**~~ | ~~`lunar-render`~~ | ~~medium~~ | done — `PostProcessStack` resource; `ScreenFlash` (auto-decay), `ColorTint`; custom `PostEffect` trait; `draw_screen_rect` at `layers::POST_PROCESS` |
 | ~~**screen shake**~~ | ~~`lunar-render`~~ | ~~medium~~ | done — `ScreenShake` resource, trauma² noise offset |
 | **multiview / split-screen** | `lunar-render` + `lunar-render-3d` | low | `Viewport { rect: ScreenRect, camera: Entity }` component; multiple cameras scissored to sub-rects; needs render-to-texture first |
 
@@ -78,7 +78,7 @@ these belong in `lunar-core` or the relevant base crate.
 | feature | home | priority | notes |
 |---|---|---|---|
 | ~~**3d raycasting**~~ | ~~`lunar-3d`~~ | ~~critical~~ | done — `Ray3d`, `RayHit3d`, `raycast_3d`: CullSoa AABB broad phase + Möller–Trumbore triangle narrow phase; AABB fallback for mesh-less entities |
-| **proper PBR lighting** | `lunar-render-3d` | high | Cook-Torrance BRDF; directional + point lights; one shadow cascade at 1024²; see `optimize.md` for shadow filter progression |
+| ~~**proper PBR lighting**~~ | ~~`lunar-render-3d`~~ | ~~high~~ | done — Cook-Torrance BRDF (GGX NDF, Smith-GGX geometry, Schlick Fresnel); directional + 8 point lights; 3-cascade CSM at 1024² with 5×5 PCF; Z-prepass on mid/high tier; ACES filmic tonemap; dynamic resolution scaling (EMA frame-time, 0.5–1.0 scale) |
 | ~~**bind group layout standardisation**~~ | ~~`lunar-render-3d`~~ | ~~medium~~ | done — 3-group layout live: group 0 globals (view\_proj + time), group 1 material (base\_color), group 2 per-mesh (model matrix) |
 
 ---

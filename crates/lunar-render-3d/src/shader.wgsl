@@ -1,12 +1,12 @@
 // group 0: view-global — set once per pass
 struct Globals {
     view_proj:    mat4x4<f32>,  // 64 bytes
-    cam_pos:      vec3<f32>,    // 12 bytes (offset 64, align 16 ✓)
+    cam_pos:      vec3<f32>,    // 12 bytes (offset 64)
     elapsed_secs: f32,          //  4 bytes (offset 76)
     delta_secs:   f32,          //  4 bytes (offset 80)
-    _pad0:        f32,          //  4 bytes (offset 84)
-    _pad1:        f32,          //  4 bytes (offset 88)
-    _pad2:        f32,          //  4 bytes (offset 92) — total: 96 bytes
+    _pad0:        f32,          //  4 bytes
+    _pad1:        f32,          //  4 bytes
+    _pad2:        f32,          //  4 bytes — total: 96 bytes
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 
@@ -29,7 +29,7 @@ struct MeshUniforms {
 }
 @group(2) @binding(0) var<uniform> mesh: MeshUniforms;
 
-// group 3: lights + shadow map
+// group 3: lights + shadow map array
 struct PointLightGpu {
     position:  vec3<f32>,  // offset  0
     intensity: f32,         // offset 12
@@ -37,22 +37,36 @@ struct PointLightGpu {
     radius:    f32,         // offset 28 — total: 32 bytes
 }
 
+// 3 cascades, tight per-slice light-space matrices.
+// layout (std140, all 16-byte aligned):
+//   [0..16]   ambient_color (vec3) + ambient_intensity (f32)
+//   [16..32]  dir_color (vec3) + dir_illuminance (f32)
+//   [32..48]  dir_direction (vec3) + dir_enabled (u32)
+//   [48..112] light_space_0 (mat4)
+//   [112..176] light_space_1 (mat4)
+//   [176..240] light_space_2 (mat4)
+//   [240..256] cascade_splits (vec4): [split0, split1, split2, far_plane]
+//   [256..272] point header (count + 3 pads)
+//   [272..528] 8 × PointLightGpu (32 bytes each)
 struct Lights {
-    ambient_color:     vec3<f32>,              // offset   0
-    ambient_intensity: f32,                     // offset  12
-    dir_color:         vec3<f32>,              // offset  16
-    dir_illuminance:   f32,                     // offset  28
-    dir_direction:     vec3<f32>,              // offset  32
-    dir_enabled:       u32,                    // offset  44
-    light_space:       mat4x4<f32>,            // offset  48 (16-aligned ✓)
-    point_count:       u32,                    // offset 112
-    _pad0:             u32,                    // offset 116
-    _pad1:             u32,                    // offset 120
-    _pad2:             u32,                    // offset 124
-    point_lights:      array<PointLightGpu, 8>, // offset 128 — total: 384 bytes
+    ambient_color:     vec3<f32>,
+    ambient_intensity: f32,
+    dir_color:         vec3<f32>,
+    dir_illuminance:   f32,
+    dir_direction:     vec3<f32>,
+    dir_enabled:       u32,
+    light_space_0:     mat4x4<f32>,
+    light_space_1:     mat4x4<f32>,
+    light_space_2:     mat4x4<f32>,
+    cascade_splits:    vec4<f32>,   // x=split0, y=split1, z=split2, w=far
+    point_count:       u32,
+    _pad0:             u32,
+    _pad1:             u32,
+    _pad2:             u32,
+    point_lights:      array<PointLightGpu, 8>,
 }
 @group(3) @binding(0) var<uniform>  lights:         Lights;
-@group(3) @binding(1) var           shadow_map:     texture_depth_2d;
+@group(3) @binding(1) var           shadow_map:     texture_depth_2d_array;
 @group(3) @binding(2) var           shadow_sampler: sampler_comparison;
 
 // ── vertex I/O ─────────────────────────────────────────────────────────────
@@ -72,22 +86,26 @@ struct VertOut {
     @location(1)       world_normal: vec3<f32>,
     @location(2)       uv:           vec2<f32>,
     @location(3)       color:        vec4<f32>,
+    @location(4)       view_depth:   f32,   // linear view-space depth for cascade selection
 }
 
 @vertex
 fn vs_main(in: VertIn) -> VertOut {
     let world_pos4 = mesh.model * vec4<f32>(in.position, 1.0);
+    let view_pos4  = globals.view_proj * world_pos4;
     let normal_mat = mat3x3<f32>(
         mesh.normal_c0.xyz,
         mesh.normal_c1.xyz,
         mesh.normal_c2.xyz,
     );
     var out: VertOut;
-    out.clip_pos     = globals.view_proj * world_pos4;
+    out.clip_pos     = view_pos4;
     out.world_pos    = world_pos4.xyz;
     out.world_normal = normalize(normal_mat * in.normal);
     out.uv           = in.uv;
     out.color        = in.color;
+    // view_depth is positive distance from the camera (clip_w ≈ view_z in RH perspective)
+    out.view_depth   = view_pos4.w;
     return out;
 }
 
@@ -136,10 +154,26 @@ fn pbr_light(
     return (kd * albedo / PI + specular) * irradiance * ndotl;
 }
 
-// 3×3 PCF shadow sample (returns 1.0 = fully lit, 0.0 = fully shadowed)
-fn shadow_factor(world_pos: vec3<f32>, n: vec3<f32>) -> f32 {
+// ── cascade shadow helpers ─────────────────────────────────────────────────
+
+// select cascade index from view-space depth
+fn cascade_index(view_depth: f32) -> i32 {
+    if view_depth < lights.cascade_splits.x { return 0; }
+    if view_depth < lights.cascade_splits.y { return 1; }
+    return 2;
+}
+
+fn cascade_light_space(idx: i32) -> mat4x4<f32> {
+    if idx == 0 { return lights.light_space_0; }
+    if idx == 1 { return lights.light_space_1; }
+    return lights.light_space_2;
+}
+
+// 5×5 PCF over the selected cascade array layer (mid/high quality)
+fn shadow_factor_5x5(world_pos: vec3<f32>, n: vec3<f32>, view_depth: f32) -> f32 {
     let bias = max(0.005 * (1.0 - dot(n, -lights.dir_direction)), 0.001);
-    let lsp = lights.light_space * vec4<f32>(world_pos, 1.0);
+    let idx = cascade_index(view_depth);
+    let lsp = cascade_light_space(idx) * vec4<f32>(world_pos, 1.0);
     var proj = lsp.xyz / lsp.w;
     proj.x =  proj.x * 0.5 + 0.5;
     proj.y = -proj.y * 0.5 + 0.5;
@@ -148,13 +182,25 @@ fn shadow_factor(world_pos: vec3<f32>, n: vec3<f32>) -> f32 {
     }
     let texel = 1.0 / 1024.0;
     var shadow = 0.0;
-    for (var xi = -1; xi <= 1; xi++) {
-        for (var yi = -1; yi <= 1; yi++) {
+    for (var xi = -2; xi <= 2; xi++) {
+        for (var yi = -2; yi <= 2; yi++) {
             let off = vec2<f32>(f32(xi) * texel, f32(yi) * texel);
-            shadow += textureSampleCompare(shadow_map, shadow_sampler, proj.xy + off, proj.z - bias);
+            shadow += textureSampleCompare(shadow_map, shadow_sampler, proj.xy + off, idx, proj.z - bias);
         }
     }
-    return shadow / 9.0;
+    return shadow / 25.0;
+}
+
+// ── ACES filmic tonemap ────────────────────────────────────────────────────
+
+// ACES filmic curve approximation (Narkowicz 2015)
+fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
+    let a = 2.51;
+    let b = 0.03;
+    let c = 2.43;
+    let d = 0.59;
+    let e = 0.14;
+    return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
 }
 
 // ── fragment shader ────────────────────────────────────────────────────────
@@ -176,14 +222,13 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
 
     var lo = vec3<f32>(0.0);
 
-    // directional light
+    // directional light with cascaded shadow
     if lights.dir_enabled != 0u {
         let l = normalize(-lights.dir_direction);
         let ndotl = max(dot(n, l), 0.0);
         if ndotl > 0.0 {
-            // convert lux to scene-scale irradiance (80 000 lux = full sun ≈ 1.0)
             let irradiance = lights.dir_color * (lights.dir_illuminance / 80000.0);
-            let shadow = shadow_factor(in.world_pos, n);
+            let shadow = shadow_factor_5x5(in.world_pos, n, in.view_depth);
             lo += pbr_light(n, v, l, albedo, metallic, roughness, irradiance, ndotl) * shadow;
         }
     }
@@ -208,5 +253,9 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     // ambient (Lambert-weighted to avoid flat look)
     let ambient = lights.ambient_color * lights.ambient_intensity * albedo * (1.0 - metallic * 0.9);
 
-    return vec4<f32>(ambient + lo, alpha);
+    // ACES filmic tonemap before output
+    let hdr = ambient + lo;
+    let ldr = aces_tonemap(hdr);
+
+    return vec4<f32>(ldr, alpha);
 }
