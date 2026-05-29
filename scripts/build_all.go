@@ -136,7 +136,12 @@ func main() {
 			// merge stderr into stdout so everything appears in a redirected log
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stdout
-			if t.sdk != "" {
+			if t.ext == ".exe" {
+				// cross-compiling for windows: tell the windres wrapper which COFF
+				// architecture to use — llvm-windres defaults to x64, so i686 and
+				// aarch64 objects get the wrong machine type without this
+				cmd.Env = append(os.Environ(), "WINDRES_TARGET="+windresTarget(t.triple))
+			} else if t.sdk != "" {
 				// cross-compiling for macos: clear pkg-config host library dirs and
 				// disable SDL HIDAPI so cmake does not try to validate libusb as a
 				// .dylib (find_library still returns the linux .so despite root path
@@ -271,22 +276,40 @@ func copyFile(src, dst string) error {
 	return os.WriteFile(dst, data, 0755)
 }
 
-// patchWindowsToolchains creates a 'windres' symlink in ~/.local/bin pointing to llvm-windres.
+// patchWindowsToolchains writes a 'windres' wrapper script to ~/.local/bin.
 // cargo-zigbuild regenerates cmake toolchain files on every run so patching them is not viable.
-// The cmake-generated Makefile calls bare 'windres'; a symlink in PATH is the reliable fix.
+// The cmake-generated Makefile calls bare 'windres'; a wrapper in PATH is the reliable fix.
+// The wrapper reads $WINDRES_TARGET so each triple gets the correct COFF machine type.
 func patchWindowsToolchains() {
-	llvmWindres, err := exec.LookPath("llvm-windres")
-	if err != nil {
+	if _, err := exec.LookPath("llvm-windres"); err != nil {
 		fmt.Println("warning: llvm-windres not found — Windows builds may fail on .rc files")
 		return
 	}
 	home, _ := os.UserHomeDir()
 	dest := filepath.Join(home, ".local", "bin", "windres")
-	if _, err := os.Lstat(dest); err == nil {
-		return // already exists
+	// overwrite if it's still the old symlink
+	info, err := os.Lstat(dest)
+	if err == nil && info.Mode()&os.ModeSymlink == 0 && info.Mode().IsRegular() {
+		return // already a script
 	}
-	if err := os.Symlink(llvmWindres, dest); err == nil {
-		fmt.Printf("created windres symlink: %s -> %s\n", dest, llvmWindres)
+	if err == nil {
+		os.Remove(dest) // remove old symlink
+	}
+	script := "#!/bin/sh\nexec llvm-windres ${WINDRES_TARGET:+--target=\"$WINDRES_TARGET\"} \"$@\"\n"
+	if err := os.WriteFile(dest, []byte(script), 0755); err == nil {
+		fmt.Printf("wrote windres wrapper: %s\n", dest)
+	}
+}
+
+// windresTarget maps a Rust target triple to the COFF machine type for llvm-windres.
+func windresTarget(triple string) string {
+	switch {
+	case strings.HasPrefix(triple, "i686"):
+		return "pe-i386"
+	case strings.HasPrefix(triple, "aarch64"):
+		return "pe-aarch64"
+	default:
+		return "pe-x86-64"
 	}
 }
 
