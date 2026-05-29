@@ -8,34 +8,24 @@ use lunar_math::Color;
 /// - `Unlit` — no lighting, full-bright color/texture (HUD elements, debug geometry)
 /// - `Phong` — classic diffuse + specular, one texture per channel (Quake 3 / Doom 3 baseline)
 /// - `Pbr` — metallic-roughness PBR (Halo CE and later, modern target)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShadingModel {
     Unlit,
+    #[default]
     Phong,
     Pbr,
 }
 
-impl Default for ShadingModel {
-    fn default() -> Self {
-        Self::Phong
-    }
-}
-
 /// face culling mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CullMode {
     /// cull back faces (standard — solids use this).
+    #[default]
     Back,
     /// cull front faces (shadow volumes, portals).
     Front,
     /// no culling (foliage, portals, decals).
     None,
-}
-
-impl Default for CullMode {
-    fn default() -> Self {
-        Self::Back
-    }
 }
 
 /// surface material data.

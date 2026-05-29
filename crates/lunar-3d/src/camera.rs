@@ -115,15 +115,9 @@ impl Default for Camera3d {
 ///
 /// the render system sets this automatically to the highest-priority active
 /// [`Camera3d`] entity each frame.
-#[derive(bevy_ecs::prelude::Resource, Debug, Clone, Copy)]
+#[derive(bevy_ecs::prelude::Resource, Debug, Clone, Copy, Default)]
 pub struct ActiveCamera3d {
     pub entity: Option<bevy_ecs::entity::Entity>,
-}
-
-impl Default for ActiveCamera3d {
-    fn default() -> Self {
-        Self { entity: None }
-    }
 }
 
 /// system that resolves the highest-priority active Camera3d each frame.

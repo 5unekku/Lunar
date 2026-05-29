@@ -90,11 +90,10 @@ pub fn propagate_transforms(world: &mut World) {
     scratch.parent_idx.clear();
     scratch.parent_idx.resize(n, None);
     for (i, &(_, _, parent_entity)) in scratch.snapshot.iter().enumerate() {
-        if let Some(parent_entity) = parent_entity {
-            if let Ok(j) = scratch.entity_idx.binary_search_by_key(&parent_entity, |&(e, _)| e) {
+        if let Some(parent_entity) = parent_entity
+            && let Ok(j) = scratch.entity_idx.binary_search_by_key(&parent_entity, |&(e, _)| e) {
                 scratch.parent_idx[i] = Some(scratch.entity_idx[j].1);
             }
-        }
     }
 
     scratch.depths.clear();

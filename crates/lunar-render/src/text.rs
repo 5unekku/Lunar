@@ -188,8 +188,8 @@ impl GlyphAtlas {
             .map(|img| {
                 (
                     img.data.to_vec(),
-                    img.placement.clone(),
-                    img.content.clone(),
+                    img.placement,
+                    img.content,
                 )
             });
         let Some((data, placement, content)) = image_data else {
@@ -382,6 +382,7 @@ pub fn measure_text(atlas: &mut GlyphAtlas, font_id: u32, text: &str, font_size:
 ///
 /// unlike `layout_text_wrapped`, all runs are flattened into a single `out` vec — use this
 /// in the hot path to avoid per-frame inner-vec allocations.
+#[allow(clippy::too_many_arguments)]
 pub fn layout_text_wrapped_into(
     atlas: &mut GlyphAtlas,
     font_id: u32,

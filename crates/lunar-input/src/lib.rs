@@ -910,26 +910,23 @@ impl SdlGamepadProvider {
                 }
             }
             Event::ControllerButtonDown { which, button, .. } => {
-                if let Some((_, engine_index)) = self.open_gamepads.get(which) {
-                    if let Some(mapped) = gamepad_button_from_sdl(*button) {
+                if let Some((_, engine_index)) = self.open_gamepads.get(which)
+                    && let Some(mapped) = gamepad_button_from_sdl(*button) {
                         input.press_gamepad_button(*engine_index, mapped);
                     }
-                }
             }
             Event::ControllerButtonUp { which, button, .. } => {
-                if let Some((_, engine_index)) = self.open_gamepads.get(which) {
-                    if let Some(mapped) = gamepad_button_from_sdl(*button) {
+                if let Some((_, engine_index)) = self.open_gamepads.get(which)
+                    && let Some(mapped) = gamepad_button_from_sdl(*button) {
                         input.release_gamepad_button(*engine_index, mapped);
                     }
-                }
             }
             Event::ControllerAxisMotion { which, axis, value, .. } => {
-                if let Some((_, engine_index)) = self.open_gamepads.get(which) {
-                    if let Some(mapped) = gamepad_axis_from_sdl(*axis) {
+                if let Some((_, engine_index)) = self.open_gamepads.get(which)
+                    && let Some(mapped) = gamepad_axis_from_sdl(*axis) {
                         let normalized = (*value as f32 / 32767.0).clamp(-1.0, 1.0);
                         input.set_gamepad_axis(*engine_index, mapped, normalized);
                     }
-                }
             }
             _ => {}
         }
@@ -996,11 +993,10 @@ pub fn process_events(
         }
     }
 
-    if got_quit {
-        if let Some(mut state) = world.get_resource_mut::<EngineState>() {
+    if got_quit
+        && let Some(mut state) = world.get_resource_mut::<EngineState>() {
             *state = EngineState::Stopping;
         }
-    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

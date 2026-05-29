@@ -394,11 +394,10 @@ impl<T: Asset> AssetStore<T> {
     }
 
     fn remove(&mut self, id: u32) {
-        if let Some(slot) = self.entries.get_mut(id as usize) {
-            if let Some(entry) = slot.take() {
+        if let Some(slot) = self.entries.get_mut(id as usize)
+            && let Some(entry) = slot.take() {
                 self.path_index.remove(&entry.path);
             }
-        }
     }
 }
 
@@ -1286,7 +1285,7 @@ impl AssetServer {
         while !self.texture_store.is_ready(handle)
             && self.texture_store.entries.get(handle.id as usize)
                 .and_then(|e| e.as_ref())
-                .map_or(false, |e| e.state == LoadState::Loading)
+                .is_some_and(|e| e.state == LoadState::Loading)
         {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
@@ -1298,7 +1297,7 @@ impl AssetServer {
         while !self.font_store.is_ready(handle)
             && self.font_store.entries.get(handle.id as usize)
                 .and_then(|e| e.as_ref())
-                .map_or(false, |e| e.state == LoadState::Loading)
+                .is_some_and(|e| e.state == LoadState::Loading)
         {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }

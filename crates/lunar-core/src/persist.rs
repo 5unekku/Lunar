@@ -72,11 +72,10 @@ impl From<std::io::Error> for PersistError {
 pub fn save<T: Serialize>(path: &str, value: &T) -> Result<(), PersistError> {
     let content = ron::ser::to_string_pretty(value, ron::ser::PrettyConfig::default())
         .map_err(PersistError::Serialize)?;
-    if let Some(parent) = std::path::Path::new(path).parent() {
-        if !parent.as_os_str().is_empty() {
+    if let Some(parent) = std::path::Path::new(path).parent()
+        && !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
         }
-    }
     std::fs::write(path, content.as_bytes())?;
     Ok(())
 }

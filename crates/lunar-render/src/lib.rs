@@ -1419,7 +1419,7 @@ impl RenderEngine {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -1566,7 +1566,7 @@ impl RenderEngine {
             let mut custom_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(pass.name()),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
@@ -2690,16 +2690,14 @@ fn apply_post_process_system(
     for effect in &stack.effects {
         effect.apply(&mut queue, w, h);
     }
-    if let Some(tint) = tint {
-        if tint.intensity > 0.0 {
+    if let Some(tint) = tint
+        && tint.intensity > 0.0 {
             queue.draw_screen_rect(Vec2::ZERO, size, Color::rgba(tint.color.r, tint.color.g, tint.color.b, tint.intensity));
         }
-    }
-    if let Some(flash) = flash {
-        if flash.intensity > 0.0 {
+    if let Some(flash) = flash
+        && flash.intensity > 0.0 {
             queue.draw_screen_rect(Vec2::ZERO, size, Color::rgba(flash.color.r, flash.color.g, flash.color.b, flash.intensity));
         }
-    }
 }
 
 fn decay_screen_flash_system(
@@ -2707,14 +2705,13 @@ fn decay_screen_flash_system(
     flash: Option<ResMut<ScreenFlash>>,
     time: Res<lunar_core::Time>,
 ) {
-    if let Some(mut flash) = flash {
-        if flash.decay > 0.0 {
+    if let Some(mut flash) = flash
+        && flash.decay > 0.0 {
             flash.intensity -= flash.decay * time.delta_seconds();
             if flash.intensity <= 0.0 {
                 commands.remove_resource::<ScreenFlash>();
             }
         }
-    }
 }
 
 /// render info resource, tracks rendering statistics.

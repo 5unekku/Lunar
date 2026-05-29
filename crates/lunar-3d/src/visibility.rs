@@ -9,20 +9,15 @@ use crate::transform::WorldTransform3d;
 ///
 /// hierarchy propagation computes [`ComputedVisibility`] from this and the parent chain.
 /// if an entity has no parent, `Inherited` and `Visible` are equivalent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Component, Default)]
 pub enum Visibility {
     /// inherit from parent — hidden if any ancestor is `Hidden`.
+    #[default]
     Inherited,
     /// always hidden regardless of parent or children.
     Hidden,
     /// always visible regardless of parent.
     Visible,
-}
-
-impl Default for Visibility {
-    fn default() -> Self {
-        Self::Inherited
-    }
 }
 
 /// computed visibility — propagated from [`Visibility`] through the entity hierarchy.
@@ -262,11 +257,10 @@ pub fn propagate_visibility(world: &mut World) {
     scratch.parent_idx.clear();
     scratch.parent_idx.resize(n, None);
     for (i, &(_, _, parent_entity)) in scratch.snapshot.iter().enumerate() {
-        if let Some(parent_entity) = parent_entity {
-            if let Ok(j) = scratch.entity_idx.binary_search_by_key(&parent_entity, |&(e, _)| e) {
+        if let Some(parent_entity) = parent_entity
+            && let Ok(j) = scratch.entity_idx.binary_search_by_key(&parent_entity, |&(e, _)| e) {
                 scratch.parent_idx[i] = Some(scratch.entity_idx[j].1);
             }
-        }
     }
 
     scratch.depths.clear();

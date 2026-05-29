@@ -2781,7 +2781,7 @@ impl RenderEngine3d {
     }
 
     /// creates the bloom mip chain texture, per-mip views, and per-step bind groups.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn build_bloom_resources(
         device: &wgpu::Device,
         hdr_texture: &wgpu::Texture,
@@ -2797,7 +2797,7 @@ impl RenderEngine3d {
         Vec<wgpu::BindGroup>,
         Vec<wgpu::BindGroup>,
     ) {
-        let actual_mips = mip_count.min(MAX_BLOOM_MIPS).max(1);
+        let actual_mips = mip_count.clamp(1, MAX_BLOOM_MIPS);
 
         // one bloom texture with mip_count mip levels
         let bloom_tex = device.create_texture(&wgpu::TextureDescriptor {
@@ -2999,8 +2999,8 @@ impl RenderEngine3d {
         terrain: &Terrain,
     ) -> TerrainGpu {
         // build ring meshes: center patch + (clipmap_rings - 1) outer rings
-        let rings = terrain.clipmap_rings.max(1).min(8);
-        let resolution = terrain.ring_resolution.max(4).min(256);
+        let rings = terrain.clipmap_rings.clamp(1, 8);
+        let resolution = terrain.ring_resolution.clamp(4, 256);
         let mut ring_meshes = Vec::with_capacity(rings as usize);
         for _ in 0..rings {
             let mesh = Self::build_clipmap_patch(resolution);
@@ -3856,8 +3856,8 @@ impl RenderEngine3d {
 
                 let terrain_origin = wt.translation;
                 let world_size = terrain_comp.world_size;
-                let rings = terrain_comp.clipmap_rings.max(1).min(8);
-                let resolution = terrain_comp.ring_resolution.max(4).min(256) as f32;
+                let rings = terrain_comp.clipmap_rings.clamp(1, 8);
+                let resolution = terrain_comp.ring_resolution.clamp(4, 256) as f32;
 
                 // on low tier render a single LOD-0 patch covering the whole terrain
                 let effective_rings = if self.render_tier == RenderTier::LowGles { 1 } else { rings };
@@ -4124,7 +4124,7 @@ impl RenderEngine3d {
                 });
                 cpass.set_pipeline(&self.particle_sim_pipeline);
                 cpass.set_bind_group(0, &self.particle_sim_bg, &[]);
-                let wg = (alive_count + 63) / 64;
+                let wg = alive_count.div_ceil(64);
                 cpass.dispatch_workgroups(wg, 1, 1);
                 drop(cpass);
 
@@ -4529,6 +4529,7 @@ impl RenderEngine3d {
 
     /// compute a tight orthographic light-space matrix for one cascade slice.
     /// fits the ortho projection to the 8 corners of the camera frustum slice.
+    #[allow(clippy::too_many_arguments)]
     fn cascade_light_space(
         cam_pos: Vec3,
         cam_fwd: Vec3,

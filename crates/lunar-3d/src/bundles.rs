@@ -103,55 +103,25 @@ pub struct ShadowMesh3dBundle {
 ///
 /// direction is taken from the entity's `WorldTransform3d` forward vector.
 /// position is irrelevant for directional lights — only rotation matters.
-#[derive(Bundle)]
+#[derive(Bundle, Default)]
 pub struct DirectionalLightBundle {
     pub local: LocalTransform3d,
     pub world: WorldTransform3d,
     pub light: DirectionalLight,
 }
 
-impl Default for DirectionalLightBundle {
-    fn default() -> Self {
-        Self {
-            local: LocalTransform3d::default(),
-            world: WorldTransform3d::default(),
-            light: DirectionalLight::default(),
-        }
-    }
-}
-
 /// bundle for a point light.
-#[derive(Bundle)]
+#[derive(Bundle, Default)]
 pub struct PointLightBundle {
     pub local: LocalTransform3d,
     pub world: WorldTransform3d,
     pub light: PointLight,
 }
 
-impl Default for PointLightBundle {
-    fn default() -> Self {
-        Self {
-            local: LocalTransform3d::default(),
-            world: WorldTransform3d::default(),
-            light: PointLight::default(),
-        }
-    }
-}
-
 /// bundle for a spot light.
-#[derive(Bundle)]
+#[derive(Bundle, Default)]
 pub struct SpotLightBundle {
     pub local: LocalTransform3d,
     pub world: WorldTransform3d,
     pub light: SpotLight,
-}
-
-impl Default for SpotLightBundle {
-    fn default() -> Self {
-        Self {
-            local: LocalTransform3d::default(),
-            world: WorldTransform3d::default(),
-            light: SpotLight::default(),
-        }
-    }
 }

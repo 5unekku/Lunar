@@ -441,7 +441,7 @@ fn moller_trumbore(origin: Vec3, direction: Vec3, v0: Vec3, v1: Vec3, v2: Vec3) 
 }
 
 /// iterate mesh triangles, transform ray into model space, return nearest world-space hit.
-fn raycast_mesh<'a>(
+fn raycast_mesh(
     ray: Ray3d,
     vertices: impl Iterator<Item = Vec3> + Clone,
     indices: &crate::mesh::IndexBuffer,
@@ -477,12 +477,11 @@ fn raycast_mesh<'a>(
         let v0 = verts[tri[0]];
         let v1 = verts[tri[1]];
         let v2 = verts[tri[2]];
-        if let Some((t, model_normal)) = moller_trumbore(model_origin, model_dir, v0, v1, v2) {
-            if t < nearest_t {
+        if let Some((t, model_normal)) = moller_trumbore(model_origin, model_dir, v0, v1, v2)
+            && t < nearest_t {
                 nearest_t = t;
                 nearest_model_normal = model_normal;
             }
-        }
     }
 
     if nearest_t == f32::MAX {

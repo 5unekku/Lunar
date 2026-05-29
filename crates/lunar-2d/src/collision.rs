@@ -299,11 +299,10 @@ pub fn ray_cast_2d(
                 ray_vs_circle(origin, direction, entry.position, radius, max_dist)
             }
         };
-        if let Some((distance, point, normal)) = hit {
-            if nearest.as_ref().map_or(true, |n| distance < n.distance) {
+        if let Some((distance, point, normal)) = hit
+            && nearest.as_ref().is_none_or(|n| distance < n.distance) {
                 nearest = Some(RayHit2d { entity: entry.entity, point, normal, distance });
             }
-        }
     }
 
     nearest
