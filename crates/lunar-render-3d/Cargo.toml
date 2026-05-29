@@ -19,6 +19,9 @@ wgpu        = { workspace = true, features = ["wgsl"] }
 log         = { workspace = true }
 bytemuck    = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.rayon]
+workspace = true
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 wgpu     = { workspace = true, features = ["vulkan", "gles"] }
 pollster = "0.4"

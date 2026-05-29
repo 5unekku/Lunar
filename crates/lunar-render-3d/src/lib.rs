@@ -4320,125 +4320,245 @@ impl RenderEngine3d {
             }
         }
 
-        // ── shadow pass — 3 cascades ─────────────────────────────────────
-        for cascade in 0..NUM_CASCADES as usize {
-            let label = format!("[shadow] cascade-{cascade}");
-            if dir_enabled != 0 && dir_casts_shadows && self.shadow_cascade_dirty[cascade] {
-                self.shadow_cascade_dirty[cascade] = false;
-                let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some(label.as_str()),
-                    color_attachments: &[],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &self.shadow_cascade_views[cascade],
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
-                            store: wgpu::StoreOp::Store,
+        // ── shadow + z-prepass: parallel command recording ───────────────
+        // each shadow cascade and the z-prepass get their own CommandEncoder recorded
+        // in parallel on a Rayon thread pool. shadow cascades and z-prepass have no
+        // read/write conflicts with each other (each writes to a disjoint texture).
+        // submitted in order before the main encoder so the opaque pass can use them.
+        //
+        // SAFETY: closures share a read-only &RenderEngine3d (no writes to self state
+        // in the parallel section). each closure writes to a disjoint CommandEncoder.
+        {
+            // collect which cascades need recording
+            let dirty_cascades: Vec<usize> = (0..NUM_CASCADES as usize)
+                .filter(|&c| dir_enabled != 0 && dir_casts_shadows && self.shadow_cascade_dirty[c])
+                .collect();
+            for &c in &dirty_cascades { self.shadow_cascade_dirty[c] = false; }
+
+            // clear skipped cascades on the main encoder (no content change, just clear)
+            for cascade in 0..NUM_CASCADES as usize {
+                if !dirty_cascades.contains(&cascade) {
+                    let label = format!("[shadow] cascade-{cascade}");
+                    let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some(label.as_str()),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &self.shadow_cascade_views[cascade],
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
                         }),
-                        stencil_ops: None,
-                    }),
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                shadow_pass.set_pipeline(&self.shadow_pipeline);
-                shadow_pass.set_bind_group(0, &self.shadow_globals_bg, &[Self::slot_offset(cascade)]);
-                // entity storage buffer covers all slots; set once.
-                shadow_pass.set_bind_group(1, &self.entity_bg, &[]);
-                // shadow_list is sorted by mesh_id — batch consecutive same-mesh entries
-                let mut last_mesh = u32::MAX;
-                let mut group_start_slot = 0usize;
-                let mut group_start_idx = 0usize;
-                let sn = shadow_list.len();
-                for idx in 0..=sn {
-                    let done = idx == sn;
-                    let cur_mesh = if done { u32::MAX } else { shadow_list[idx].0 };
-                    if cur_mesh != last_mesh && idx > group_start_idx {
-                        if let Some(gpu_mesh) = self.mesh_gpu.get(&last_mesh) {
-                            let base = (ENTITY_SLOT_START + group_start_slot) as u32;
-                            let count = (idx - group_start_idx) as u32;
-                            shadow_pass.draw_indexed(0..gpu_mesh.index_count, 0, base..base + count);
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                }
+            }
+
+            // record dirty shadow cascades + z-prepass in parallel (native only)
+            #[cfg(not(target_arch = "wasm32"))]
+            let parallel_cmds = {
+                use rayon::prelude::*;
+                // total parallel tasks: dirty cascades + 1 if z-prepass needed
+                let needs_zprepass = self.render_tier != RenderTier::LowGles;
+                let _task_count = dirty_cascades.len() + if needs_zprepass { 1 } else { 0 };
+                let mut tasks: Vec<usize> = dirty_cascades.clone(); // cascade indices
+                if needs_zprepass { tasks.push(usize::MAX); } // sentinel for z-prepass
+
+                // extract the read-only references needed by all recording closures.
+                // all wgpu pipeline/buffer types are Send+Sync on native, so the
+                // move closures are Send and rayon can dispatch them across threads.
+                let device        = &self.device;
+                let shad_pl       = &self.shadow_pipeline;
+                let shad_gbg      = &self.shadow_globals_bg;
+                let ent_bg        = &self.entity_bg;
+                let casc_views    = &self.shadow_cascade_views;
+                let mesh_gpu      = &self.mesh_gpu;
+                let zpr_pl        = &self.zprepass_pipeline;
+                let glob_bg       = &self.globals_bg;
+                let lights_bg_ref = &self.lights_bg;
+                let mat_bg        = &self.material_bg;
+                let depth_vw      = &self.depth_view;
+                let draw_ref      = &self.draw_scratch;
+                tasks.par_iter().map(move |&task| {
+                    // shadow_list is owned locally and shared by reference across tasks
+                    let s_device     = device;
+                    let s_shad_pl    = shad_pl;
+                    let s_shad_gbg   = shad_gbg;
+                    let s_ent_bg     = ent_bg;
+                    let s_casc       = casc_views;
+                    let s_mesh_gpu   = mesh_gpu;
+                    let s_zpr_pl     = zpr_pl;
+                    let s_glob_bg    = glob_bg;
+                    let s_lights     = lights_bg_ref;
+                    let s_mat_bg     = mat_bg;
+                    let s_depth      = depth_vw;
+                    let s_draw       = draw_ref;
+                    let label = if task == usize::MAX { "[z-prepass]".to_string() } else { format!("[shadow] cascade-{task}") };
+                    let mut enc = s_device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(&label) });
+                    if task == usize::MAX {
+                        let mut zpass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("[z-prepass]"),
+                            color_attachments: &[],
+                            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                                view: s_depth,
+                                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                                stencil_ops: None,
+                            }),
+                            timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                        });
+                        zpass.set_pipeline(s_zpr_pl);
+                        zpass.set_bind_group(0, s_glob_bg, &[]);
+                        zpass.set_bind_group(3, s_lights, &[]);
+                        zpass.set_bind_group(2, s_ent_bg, &[]);
+                        let n = s_draw.len();
+                        let mut last_mesh = u32::MAX; let mut last_mat = u32::MAX; let mut group_start = 0usize;
+                        let mut i = 0usize;
+                        while i <= n {
+                            let done = i == n;
+                            let (cur_mesh, cur_mat) = if done { (u32::MAX, u32::MAX) } else { (s_draw[i].1, s_draw[i].2) };
+                            if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start {
+                                if let Some(gpu) = s_mesh_gpu.get(&last_mesh) {
+                                    let base = (ENTITY_SLOT_START + group_start) as u32;
+                                    zpass.draw_indexed(0..gpu.index_count, 0, base..base + (i - group_start) as u32);
+                                }
+                            }
+                            if done { break; }
+                            if cur_mesh != last_mesh || cur_mat != last_mat {
+                                if let Some(gpu) = s_mesh_gpu.get(&cur_mesh) {
+                                    zpass.set_bind_group(1, s_mat_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
+                                    zpass.set_vertex_buffer(0, gpu.vbuf.slice(..));
+                                    zpass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+                                }
+                                last_mesh = cur_mesh; last_mat = cur_mat; group_start = i;
+                            }
+                            i += 1;
+                        }
+                    } else {
+                        let cascade = task;
+                        let mut spass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some(&label),
+                            color_attachments: &[],
+                            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                                view: &s_casc[cascade],
+                                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                                stencil_ops: None,
+                            }),
+                            timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                        });
+                        spass.set_pipeline(s_shad_pl);
+                        spass.set_bind_group(0, s_shad_gbg, &[Self::slot_offset(cascade)]);
+                        spass.set_bind_group(1, s_ent_bg, &[]);
+                        let mut last_mesh = u32::MAX; let mut gs_slot = 0usize; let mut gs_idx = 0usize;
+                        let sn = shadow_list.len();
+                        for idx in 0..=sn {
+                            let done = idx == sn;
+                            let cur_mesh = if done { u32::MAX } else { shadow_list[idx].0 };
+                            if cur_mesh != last_mesh && idx > gs_idx {
+                                if let Some(gpu) = s_mesh_gpu.get(&last_mesh) {
+                                    let base = (ENTITY_SLOT_START + gs_slot) as u32;
+                                    spass.draw_indexed(0..gpu.index_count, 0, base..base + (idx - gs_idx) as u32);
+                                }
+                            }
+                            if done { break; }
+                            if cur_mesh != last_mesh {
+                                if let Some(gpu) = s_mesh_gpu.get(&cur_mesh) {
+                                    spass.set_vertex_buffer(0, gpu.vbuf.slice(..));
+                                    spass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+                                }
+                                last_mesh = cur_mesh; gs_slot = shadow_list[idx].1; gs_idx = idx;
+                            }
                         }
                     }
-                    if done { break; }
-                    if cur_mesh != last_mesh {
-                        if let Some(gpu_mesh) = self.mesh_gpu.get(&cur_mesh) {
-                            shadow_pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
-                            shadow_pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
+                    enc.finish()
+                }).collect::<Vec<_>>()
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if !parallel_cmds.is_empty() {
+                    self.queue.submit(parallel_cmds);
+                }
+            }
+
+            // WASM: sequential shadow + z-prepass on the main encoder
+            #[cfg(target_arch = "wasm32")]
+            {
+                for &cascade in &dirty_cascades {
+                    let label = format!("[shadow] cascade-{cascade}");
+                    let mut sp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some(label.as_str()),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &self.shadow_cascade_views[cascade],
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                    });
+                    sp.set_pipeline(&self.shadow_pipeline);
+                    sp.set_bind_group(0, &self.shadow_globals_bg, &[Self::slot_offset(cascade)]);
+                    sp.set_bind_group(1, &self.entity_bg, &[]);
+                    let mut last_mesh = u32::MAX; let mut gs_slot = 0usize; let mut gs_idx = 0usize;
+                    let sn = shadow_list.len();
+                    for idx in 0..=sn {
+                        let done = idx == sn;
+                        let cur_mesh = if done { u32::MAX } else { shadow_list[idx].0 };
+                        if cur_mesh != last_mesh && idx > gs_idx {
+                            if let Some(gpu) = self.mesh_gpu.get(&last_mesh) {
+                                let base = (ENTITY_SLOT_START + gs_slot) as u32;
+                                sp.draw_indexed(0..gpu.index_count, 0, base..base + (idx - gs_idx) as u32);
+                            }
                         }
-                        last_mesh = cur_mesh;
-                        group_start_slot = shadow_list[idx].1;
-                        group_start_idx = idx;
+                        if done { break; }
+                        if cur_mesh != last_mesh {
+                            if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
+                                sp.set_vertex_buffer(0, gpu.vbuf.slice(..));
+                                sp.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+                            }
+                            last_mesh = cur_mesh; gs_slot = shadow_list[idx].1; gs_idx = idx;
+                        }
                     }
                 }
-            } else {
-                // clear each cascade layer so the sampler has valid data
-                let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some(label.as_str()),
-                    color_attachments: &[],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &self.shadow_cascade_views[cascade],
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
-                            store: wgpu::StoreOp::Store,
+                if self.render_tier != RenderTier::LowGles {
+                    let mut zpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("[z-prepass]"),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &self.depth_view,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
                         }),
-                        stencil_ops: None,
-                    }),
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-            }
-        }
-
-        // ── z-prepass (mid/high tier only) ───────────────────────────────
-        // renders all opaque geometry depth-only, so the opaque color pass
-        // can use LessEqual depth compare to skip shading on occluded fragments.
-        if self.render_tier != RenderTier::LowGles {
-            let mut zpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("[z-prepass]"),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            zpass.set_pipeline(&self.zprepass_pipeline);
-            zpass.set_bind_group(0, &self.globals_bg, &[]);
-            zpass.set_bind_group(3, &self.lights_bg, &[]);
-            zpass.set_bind_group(2, &self.entity_bg, &[]);
-            {
-                let mut last_mesh = u32::MAX;
-                let mut last_mat = u32::MAX;
-                let mut group_start = 0usize;
-                let n = self.draw_scratch.len();
-                let mut i = 0usize;
-                while i <= n {
-                    let done = i == n;
-                    let (cur_mesh, cur_mat) = if done { (u32::MAX, u32::MAX) }
-                        else { (self.draw_scratch[i].1, self.draw_scratch[i].2) };
-                    if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start {
-                        if let Some(gpu_mesh) = self.mesh_gpu.get(&last_mesh) {
-                            let base = (ENTITY_SLOT_START + group_start) as u32;
-                            zpass.draw_indexed(0..gpu_mesh.index_count, 0, base..base + (i - group_start) as u32);
+                        timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                    });
+                    zpass.set_pipeline(&self.zprepass_pipeline);
+                    zpass.set_bind_group(0, &self.globals_bg, &[]);
+                    zpass.set_bind_group(3, &self.lights_bg, &[]);
+                    zpass.set_bind_group(2, &self.entity_bg, &[]);
+                    let n = self.draw_scratch.len();
+                    let mut last_mesh = u32::MAX; let mut last_mat = u32::MAX; let mut group_start = 0usize;
+                    let mut i = 0usize;
+                    while i <= n {
+                        let done = i == n;
+                        let (cur_mesh, cur_mat) = if done { (u32::MAX, u32::MAX) } else { (self.draw_scratch[i].1, self.draw_scratch[i].2) };
+                        if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start {
+                            if let Some(gpu) = self.mesh_gpu.get(&last_mesh) {
+                                let base = (ENTITY_SLOT_START + group_start) as u32;
+                                zpass.draw_indexed(0..gpu.index_count, 0, base..base + (i - group_start) as u32);
+                            }
                         }
-                    }
-                    if done { break; }
-                    if cur_mesh != last_mesh || cur_mat != last_mat {
-                        if let Some(gpu_mesh) = self.mesh_gpu.get(&cur_mesh) {
-                            zpass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
-                            zpass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
-                            zpass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
+                        if done { break; }
+                        if cur_mesh != last_mesh || cur_mat != last_mat {
+                            if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
+                                zpass.set_bind_group(1, &self.material_bg, &[Self::slot_offset(ENTITY_SLOT_START + i)]);
+                                zpass.set_vertex_buffer(0, gpu.vbuf.slice(..));
+                                zpass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+                            }
+                            last_mesh = cur_mesh; last_mat = cur_mat; group_start = i;
                         }
-                        last_mesh = cur_mesh; last_mat = cur_mat; group_start = i;
+                        i += 1;
                     }
-                    i += 1;
                 }
             }
         }
