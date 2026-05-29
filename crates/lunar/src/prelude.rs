@@ -105,6 +105,8 @@ pub use lunar_render_3d::{RenderConfig3d, RenderEngine3d, RenderInfo3d, RenderPl
 pub use bevy_ecs::bundle::Bundle;
 
 // lunar-render types
+pub use lunar_gamedata::{DataRecord, DataTable, DataValue, GameData};
+
 pub use lunar_render::{
     Camera, CameraFollow2d, ColorTint, Layer, PostEffect, PostProcessStack, RenderConfig,
     RenderEngine, RenderInfo, RenderQueue, RenderTargetId, RenderTargetStore, ScreenFlash,

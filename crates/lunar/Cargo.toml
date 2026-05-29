@@ -29,6 +29,7 @@ lunar-render = { path = "../lunar-render" }
 lunar-input = { path = "../lunar-input" }
 lunar-assets = { path = "../lunar-assets" }
 lunar-dialogue = { path = "../lunar-dialogue", optional = true }
+lunar-gamedata = { path = "../lunar-gamedata" }
 log = { workspace = true }
 env_logger = { workspace = true }
 # wgsl is the shader language on every platform — declared once here

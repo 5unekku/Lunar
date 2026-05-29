@@ -27,6 +27,8 @@ members = [
     "crates/lunar-camera-3d",
     "crates/lunar-spline",
     "crates/lunar-timeline",
+    "crates/lunar-gamedata",
+    "crates/lunar-gamedata-build",
     "tests/api_seal",
 ]
 resolver = "2"
