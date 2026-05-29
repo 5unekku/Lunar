@@ -221,7 +221,7 @@ pub fn tick_particles(
             emitter.spawn_accumulator -= 1.0;
             pool.noise_offset += 0.618_034; // golden angle increment
 
-            let angle_offset = (pool.noise_offset.sin() * 0.5 + 0.5 * 2.0 - 1.0) * emitter.spread;
+            let angle_offset = pool.noise_offset.sin() * emitter.spread;
             let base_angle = emitter.direction.y.atan2(emitter.direction.x);
             let angle = base_angle + angle_offset;
             let velocity = Vec2::new(angle.cos(), angle.sin()) * emitter.speed;

@@ -45,6 +45,7 @@ impl TileAtlas {
     /// after the texture is confirmed loaded; pass 0 to defer.
     #[must_use]
     pub fn new(texture: Handle<Texture>, tile_width: u32, tile_height: u32) -> Self {
+        assert!(tile_width > 0 && tile_height > 0, "tile dimensions must be > 0");
         Self {
             texture,
             tile_width,

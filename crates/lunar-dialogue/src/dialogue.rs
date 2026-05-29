@@ -174,14 +174,15 @@ impl ScriptBuilder {
     /// resolve all string IDs to integer indices and produce a [`Script`].
     ///
     /// # Errors
-    /// returns an error if the start ID or any `next`/choice target does not match a declared block.
+    /// returns an error if the start ID or any `next`/choice target does not match a declared block,
+    /// or if two blocks share the same id.
     pub fn build(self) -> Result<Script, String> {
-        let id_to_index: HashMap<&str, u32> = self
-            .entries
-            .iter()
-            .enumerate()
-            .map(|(i, e)| (e.id.as_str(), i as u32))
-            .collect();
+        let mut id_to_index: HashMap<&str, u32> = HashMap::new();
+        for (i, entry) in self.entries.iter().enumerate() {
+            if id_to_index.insert(entry.id.as_str(), i as u32).is_some() {
+                return Err(format!("duplicate block id '{}'", entry.id));
+            }
+        }
 
         let start = *id_to_index
             .get(self.start.as_str())

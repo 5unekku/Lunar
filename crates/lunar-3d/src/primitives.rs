@@ -150,13 +150,13 @@ pub fn sphere_mesh(radius: f32, sectors: u32, stacks: u32) -> MeshData {
     }
 
     let ring_width = sectors + 1;
-    let mut indices: Vec<u16> = Vec::with_capacity((stacks * sectors * 6) as usize);
+    let mut indices: Vec<u32> = Vec::with_capacity((stacks * sectors * 6) as usize);
 
     for stack in 0..stacks {
         for sector in 0..sectors {
-            let top_left = (stack * ring_width + sector) as u16;
+            let top_left = stack * ring_width + sector;
             let top_right = top_left + 1;
-            let bottom_left = ((stack + 1) * ring_width + sector) as u16;
+            let bottom_left = (stack + 1) * ring_width + sector;
             let bottom_right = bottom_left + 1;
 
             // skip degenerate triangles at poles
@@ -170,9 +170,9 @@ pub fn sphere_mesh(radius: f32, sectors: u32, stacks: u32) -> MeshData {
     }
 
     let index_buf = if vertices.len() <= u16::MAX as usize {
-        IndexBuffer::U16(indices)
+        IndexBuffer::U16(indices.into_iter().map(|i| i as u16).collect())
     } else {
-        IndexBuffer::U32(indices.into_iter().map(|i| i as u32).collect())
+        IndexBuffer::U32(indices)
     };
 
     MeshData::new(vertices, index_buf)

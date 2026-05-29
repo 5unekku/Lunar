@@ -164,10 +164,11 @@ pub fn resolve_collisions(
                 let sign = delta_y.signum();
                 transform.translation.y += sign * overlap_y;
                 if delta_y > 0.0 {
-                    // landed on top: zero downward velocity
-                    velocity.linear.y = velocity.linear.y.min(0.0);
-                } else {
+                    // entity below other = hit ceiling: zero upward velocity
                     velocity.linear.y = velocity.linear.y.max(0.0);
+                } else {
+                    // entity above other = landed on top: zero downward velocity
+                    velocity.linear.y = velocity.linear.y.min(0.0);
                 }
             }
         }

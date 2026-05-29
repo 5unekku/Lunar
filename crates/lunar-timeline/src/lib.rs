@@ -224,15 +224,15 @@ pub fn tick_timelines(
             }
         }
 
-        if timeline.playhead >= timeline.duration {
-            if timeline.looping {
+        if timeline.looping && timeline.duration > 0.0 {
+            while timeline.playhead >= timeline.duration {
                 timeline.playhead -= timeline.duration;
                 for track in &mut timeline.tracks {
                     track.reset();
                 }
-            } else {
-                timeline.state = TimelineState::Finished;
             }
+        } else if timeline.playhead >= timeline.duration {
+            timeline.state = TimelineState::Finished;
         }
     }
 }

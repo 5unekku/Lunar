@@ -50,6 +50,8 @@ pub struct Textbox {
 pub struct TypewriterState {
     /// how many characters are currently visible.
     pub visible_chars: usize,
+    /// total number of unicode characters in the text (cached at start).
+    pub char_count: usize,
     /// time in seconds between each character reveal.
     pub interval: f32,
     /// accumulated time since last reveal.
@@ -102,9 +104,10 @@ impl Textbox {
 
     /// start the typewriter animation.
     /// `interval` is the time in seconds between each character reveal.
-    pub const fn start_typewriter(&mut self, interval: f32) {
+    pub fn start_typewriter(&mut self, interval: f32) {
         self.typewriter = Some(TypewriterState {
             visible_chars: 0,
+            char_count: self.text.chars().count(),
             interval,
             accumulator: 0.0,
             complete: false,
@@ -124,12 +127,12 @@ impl Textbox {
 
         state.accumulator += delta;
 
-        while state.accumulator >= state.interval && state.visible_chars < self.text.len() {
+        while state.accumulator >= state.interval && state.visible_chars < state.char_count {
             state.accumulator -= state.interval;
             state.visible_chars += 1;
         }
 
-        if state.visible_chars >= self.text.len() {
+        if state.visible_chars >= state.char_count {
             state.complete = true;
             false
         } else {
@@ -138,9 +141,9 @@ impl Textbox {
     }
 
     /// skip the typewriter animation and show all text.
-    pub const fn skip_typewriter(&mut self) {
+    pub fn skip_typewriter(&mut self) {
         if let Some(state) = &mut self.typewriter {
-            state.visible_chars = self.text.len();
+            state.visible_chars = state.char_count;
             state.complete = true;
         }
     }
