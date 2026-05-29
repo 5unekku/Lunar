@@ -116,6 +116,13 @@ func main() {
 	var results []result
 
 	for _, t := range targets {
+		// windows: clear sdl3-sys cmake cache before the first example for this triple
+		// so version.rc.obj is compiled with the correct COFF machine type (WINDRES_TARGET).
+		// cargo does not invalidate the cache when WINDRES_TARGET changes because sdl3-sys
+		// does not declare cargo:rerun-if-env-changed=WINDRES_TARGET.
+		if t.ext == ".exe" {
+			clearSDL3CMakeCache(root, t.triple)
+		}
 		for _, ex := range examples {
 			label := fmt.Sprintf("%s / %s", t.triple, ex)
 			fmt.Printf("\n── building %s ──\n", label)
@@ -298,6 +305,15 @@ func patchWindowsToolchains() {
 	script := "#!/bin/sh\nexec llvm-windres ${WINDRES_TARGET:+--target=\"$WINDRES_TARGET\"} \"$@\"\n"
 	if err := os.WriteFile(dest, []byte(script), 0755); err == nil {
 		fmt.Printf("wrote windres wrapper: %s\n", dest)
+	}
+}
+
+// clearSDL3CMakeCache removes the sdl3-sys cmake build directory for a given triple.
+func clearSDL3CMakeCache(root, triple string) {
+	pattern := filepath.Join(root, "target", triple, "debug", "build", "sdl3-sys-*")
+	matches, _ := filepath.Glob(pattern)
+	for _, path := range matches {
+		os.RemoveAll(path)
 	}
 }
 
