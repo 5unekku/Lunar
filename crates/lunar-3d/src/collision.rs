@@ -92,7 +92,7 @@ impl Collider3d {
 /// a single entry in the collision world snapshot.
 ///
 /// `min_x` / `max_x` are precomputed for the sweep-and-prune broad phase.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ColliderEntry {
     entity: Entity,
     position: Vec3,
@@ -181,14 +181,22 @@ pub struct CollisionWorld3d {
 }
 
 impl CollisionWorld3d {
+    /// sweep-and-prune range for X span `[qmin_x, qmax_x]`.
+    fn x_candidates(&self, qmin_x: f32, qmax_x: f32) -> &[ColliderEntry] {
+        let end = self.entries.partition_point(|e| e.min_x <= qmax_x);
+        &self.entries[..end]
+    }
+
     /// iterator over all entities that overlap `entity` this frame, filtered by layer/mask.
+    ///
+    /// uses sweep-and-prune on X to skip entries that can't possibly overlap.
     pub fn overlapping(&self, entity: Entity) -> impl Iterator<Item = Entity> + '_ {
-        let target = self.entries.iter().find(|e| e.entity == entity);
-        self.entries.iter().filter_map(move |other| {
-            if other.entity == entity {
-                return None;
-            }
-            target.is_some_and(|t| t.overlaps(other)).then_some(other.entity)
+        let target = self.entries.iter().find(|e| e.entity == entity).cloned();
+        let candidates = target.as_ref().map_or(&[] as &[_], |t| self.x_candidates(t.min_x, t.max_x));
+        candidates.iter().filter_map(move |other| {
+            if other.entity == entity { return None; }
+            target.as_ref().is_some_and(|t| other.max_x > t.min_x && t.overlaps(other))
+                .then_some(other.entity)
         })
     }
 
@@ -200,21 +208,33 @@ impl CollisionWorld3d {
     }
 
     /// iterator over all entities whose collider overlaps a sphere at `center` with `radius`.
+    ///
+    /// uses sweep-and-prune on X.
     pub fn query_sphere(&self, center: Vec3, radius: f32) -> impl Iterator<Item = Entity> + '_ {
+        let qmin_x = center.x - radius;
+        let qmax_x = center.x + radius;
+        let candidates = self.x_candidates(qmin_x, qmax_x);
         let query_shape = ColliderShape3d::Sphere { radius };
-        self.entries.iter().filter_map(move |entry| {
+        candidates.iter().filter_map(move |entry| {
+            if entry.max_x <= qmin_x { return None; }
             shapes_overlap(center, query_shape, entry.position, entry.shape).then_some(entry.entity)
         })
     }
 
     /// iterator over all entities whose collider overlaps a box at `center` with `half_extents`.
+    ///
+    /// uses sweep-and-prune on X.
     pub fn query_aabb(
         &self,
         center: Vec3,
         half_extents: Vec3,
     ) -> impl Iterator<Item = Entity> + '_ {
+        let qmin_x = center.x - half_extents.x;
+        let qmax_x = center.x + half_extents.x;
+        let candidates = self.x_candidates(qmin_x, qmax_x);
         let query_shape = ColliderShape3d::Aabb { half_extents };
-        self.entries.iter().filter_map(move |entry| {
+        candidates.iter().filter_map(move |entry| {
+            if entry.max_x <= qmin_x { return None; }
             shapes_overlap(center, query_shape, entry.position, entry.shape).then_some(entry.entity)
         })
     }
@@ -224,6 +244,19 @@ impl CollisionWorld3d {
     /// used by physics systems that need to test a swept position against all colliders.
     pub fn all_entries(&self) -> impl Iterator<Item = ColliderEntryRef<'_>> {
         self.entries.iter().map(|entry| ColliderEntryRef {
+            entity: entry.entity,
+            position: entry.position,
+            shape: entry.shape,
+            layer: entry.layer,
+            mask: entry.mask,
+            _phantom: std::marker::PhantomData,
+        })
+    }
+
+    /// entries in the X range `[qmin_x, qmax_x]` — sweep-and-prune pre-filter for physics queries.
+    pub fn query_aabb_entries(&self, qmin_x: f32, qmax_x: f32) -> impl Iterator<Item = ColliderEntryRef<'_>> {
+        let candidates = self.x_candidates(qmin_x, qmax_x);
+        candidates.iter().filter(move |e| e.max_x > qmin_x).map(|entry| ColliderEntryRef {
             entity: entry.entity,
             position: entry.position,
             shape: entry.shape,

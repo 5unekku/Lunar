@@ -176,13 +176,12 @@ impl CollisionWorldExt for CollisionWorld3d {
         half_extents: Vec3,
         mask: u32,
     ) -> impl Iterator<Item = OverlapEntry> + '_ {
-        self.all_entries().filter_map(move |entry| {
-            if entry.entity == entity {
-                return None;
-            }
-            if mask & entry.layer == 0 {
-                return None;
-            }
+        // sweep-and-prune on X: only test entries whose X range overlaps ours
+        let qmin_x = position.x - half_extents.x;
+        let qmax_x = position.x + half_extents.x;
+        self.query_aabb_entries(qmin_x, qmax_x).filter_map(move |entry| {
+            if entry.entity == entity { return None; }
+            if mask & entry.layer == 0 { return None; }
             let other_he = match entry.shape {
                 ColliderShape3d::Aabb { half_extents: he } => he,
                 ColliderShape3d::Sphere { radius } => Vec3::splat(radius),

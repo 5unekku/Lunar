@@ -176,14 +176,25 @@ pub struct CollisionWorld {
 }
 
 impl CollisionWorld {
+    /// sweep-and-prune range for a query span `[qmin_x, qmax_x]`.
+    /// returns a slice of entries that could overlap along X — use as a pre-filter.
+    fn x_candidates(&self, qmin_x: f32, qmax_x: f32) -> &[ColliderEntry] {
+        // entries sorted by min_x; stop at the first entry entirely to the right
+        let end = self.entries.partition_point(|e| e.min_x <= qmax_x);
+        &self.entries[..end]
+    }
+
     /// iterator over all entities that overlap `entity` this frame, filtered by layer/mask.
+    ///
+    /// uses sweep-and-prune on X to skip entries that can't possibly overlap.
     pub fn overlapping(&self, entity: Entity) -> impl Iterator<Item = Entity> + '_ {
-        let target = self.entries.iter().find(|e| e.entity == entity);
-        self.entries.iter().filter_map(move |other| {
-            if other.entity == entity {
-                return None;
-            }
-            let overlaps = target.is_some_and(|t| t.overlaps(other));
+        let target = self.entries.iter().find(|e| e.entity == entity).cloned();
+        let candidates = target.as_ref().map_or(&[] as &[_], |t| self.x_candidates(t.min_x, t.max_x));
+        candidates.iter().filter_map(move |other| {
+            if other.entity == entity { return None; }
+            let overlaps = target.as_ref().is_some_and(|t| {
+                other.max_x > t.min_x && t.overlaps(other)
+            });
             overlaps.then_some(other.entity)
         })
     }
@@ -196,13 +207,19 @@ impl CollisionWorld {
     }
 
     /// iterator over all entities whose collider overlaps `rect` (center + half_extents).
+    ///
+    /// uses sweep-and-prune on X.
     pub fn query_rect(
         &self,
         center: Vec2,
         half_extents: Vec2,
     ) -> impl Iterator<Item = Entity> + '_ {
+        let qmin_x = center.x - half_extents.x;
+        let qmax_x = center.x + half_extents.x;
+        let candidates = self.x_candidates(qmin_x, qmax_x);
         let rect_shape = ColliderShape::Aabb { half_extents };
-        self.entries.iter().filter_map(move |entry| {
+        candidates.iter().filter_map(move |entry| {
+            if entry.max_x <= qmin_x { return None; }
             shapes_overlap(center, &rect_shape, entry.position, &entry.shape)
                 .then_some(entry.entity)
         })
