@@ -75,7 +75,10 @@ pub fn compile_toml(source: &str) -> Result<Vec<u8>, String> {
     for (table_name, value) in table_map {
         let records_toml = match value.as_array() {
             Some(arr) => arr,
-            None => continue, // skip non-array top-level keys
+            None => {
+                println!("cargo:warning=gamedata: top-level key '{table_name}' is not an array-of-tables and will be skipped");
+                continue;
+            }
         };
 
         // check first element to see if it's a table (array-of-tables)

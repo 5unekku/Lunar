@@ -176,12 +176,9 @@ impl PathFollower {
     }
 }
 
-/// system — advance all [`PathFollower`] components and update their `LocalTransform3d` positions.
+/// system — advance all [`PathFollower`] components and update their 2D `LocalTransform` positions.
 ///
-/// splines must be stored in a resource implementing `Fn(Handle<Spline>) -> Option<&Spline>`.
-/// in practice this is the `MeshRegistry`-style pattern; game code builds a lookup closure.
-///
-/// this system takes a spline lookup function as a system parameter via a marker resource.
+/// for 3D path followers use [`advance_path_followers_3d`].
 pub fn advance_path_followers(
     time: Res<lunar_core::Time>,
     splines: Res<SplineStore>,
@@ -196,24 +193,50 @@ pub fn advance_path_followers(
             continue;
         };
 
-        follower.t += follower.speed * follower.direction * delta;
-
-        if follower.ping_pong {
-            if follower.t >= 1.0 {
-                follower.t = 1.0;
-                follower.direction = -1.0;
-            } else if follower.t <= 0.0 {
-                follower.t = 0.0;
-                follower.direction = 1.0;
-            }
-        } else if follower.looping {
-            follower.t = follower.t.rem_euclid(1.0);
-        } else {
-            follower.t = follower.t.clamp(0.0, 1.0);
-        }
-
+        advance_follower_t(&mut follower, delta);
         let pos = spline.sample(follower.t);
         transform.translation = lunar_math::Vec2::new(pos.x, pos.y);
+    }
+}
+
+/// system — advance all [`PathFollower`] components and update their 3D `LocalTransform3d` positions.
+///
+/// for 2D path followers use [`advance_path_followers`].
+pub fn advance_path_followers_3d(
+    time: Res<lunar_core::Time>,
+    splines: Res<SplineStore>,
+    mut query: Query<(&mut PathFollower, &mut lunar_math::LocalTransform3d)>,
+) {
+    let delta = time.delta_seconds();
+    for (mut follower, mut transform) in query.iter_mut() {
+        if follower.paused {
+            continue;
+        }
+        let Some(spline) = splines.get(follower.spline) else {
+            continue;
+        };
+
+        advance_follower_t(&mut follower, delta);
+        transform.translation = spline.sample(follower.t);
+    }
+}
+
+/// advance follower.t by one frame, applying ping-pong/looping/clamping.
+fn advance_follower_t(follower: &mut PathFollower, delta: f32) {
+    follower.t += follower.speed * follower.direction * delta;
+
+    if follower.ping_pong {
+        if follower.t >= 1.0 {
+            follower.t = 1.0;
+            follower.direction = -1.0;
+        } else if follower.t <= 0.0 {
+            follower.t = 0.0;
+            follower.direction = 1.0;
+        }
+    } else if follower.looping {
+        follower.t = follower.t.rem_euclid(1.0);
+    } else {
+        follower.t = follower.t.clamp(0.0, 1.0);
     }
 }
 

@@ -334,7 +334,7 @@ impl<T: Asset> AssetStore<T> {
         self.entries
             .get(handle.id as usize)
             .and_then(|e| e.as_ref())
-            .is_some_and(|entry| entry.state == LoadState::Loaded)
+            .is_some_and(|entry| entry.generation == handle.generation && entry.state == LoadState::Loaded)
     }
 
     fn get_info(&self, handle: &Handle<T>) -> Option<AssetInfo> {
@@ -361,11 +361,7 @@ impl<T: Asset> AssetStore<T> {
     }
 
     fn loading_count(&self) -> usize {
-        self.entries
-            .iter()
-            .flatten()
-            .filter(|e| e.state == LoadState::Loading)
-            .count()
+        self.entries.iter().flatten().filter(|e| e.state == LoadState::Loading).count()
     }
 
     fn loaded_count(&self) -> usize {
@@ -374,6 +370,21 @@ impl<T: Asset> AssetStore<T> {
 
     fn failed_count(&self) -> usize {
         self.entries.iter().flatten().filter(|e| e.state == LoadState::Failed).count()
+    }
+
+    /// count loading/loaded/failed/total in one pass.
+    fn state_counts(&self) -> (usize, usize, usize, usize) {
+        let mut loading = 0;
+        let mut loaded = 0;
+        let mut failed = 0;
+        for entry in self.entries.iter().flatten() {
+            match entry.state {
+                LoadState::Loading => loading += 1,
+                LoadState::Loaded => loaded += 1,
+                LoadState::Failed => failed += 1,
+            }
+        }
+        (loading, loaded, failed, loading + loaded + failed)
     }
 
     fn total_count(&self) -> usize {
@@ -779,14 +790,7 @@ fn sound_loader_for(path: &str) -> Arc<dyn SoundLoaderTrait> {
 }
 
 /// determine the appropriate font loader for a file extension.
-fn font_loader_for(path: &str) -> Arc<dyn FontLoaderTrait> {
-    let ext = Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-
-    let _ = ext;
+fn font_loader_for(_path: &str) -> Arc<dyn FontLoaderTrait> {
     Arc::new(TtfFontLoader)
 }
 
@@ -1306,16 +1310,13 @@ impl AssetServer {
     /// snapshot of current loading progress across all asset types.
     #[must_use]
     pub fn loading_stats(&self) -> LoadingStats {
+        let (_, tl, tf, tt) = self.texture_store.state_counts();
+        let (_, sl, sf, st) = self.sound_store.state_counts();
+        let (_, fl, ff, ft) = self.font_store.state_counts();
         LoadingStats {
-            total: (self.texture_store.total_count()
-                + self.sound_store.total_count()
-                + self.font_store.total_count()) as u32,
-            loaded: (self.texture_store.loaded_count()
-                + self.sound_store.loaded_count()
-                + self.font_store.loaded_count()) as u32,
-            failed: (self.texture_store.failed_count()
-                + self.sound_store.failed_count()
-                + self.font_store.failed_count()) as u32,
+            total: (tt + st + ft) as u32,
+            loaded: (tl + sl + fl) as u32,
+            failed: (tf + sf + ff) as u32,
         }
     }
 

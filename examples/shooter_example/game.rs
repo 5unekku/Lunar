@@ -303,10 +303,15 @@ fn render(
     }
 
     let hud = layers::UI;
-    queue.draw_text_on_layer(&font.0, &format!("score: {}", score.0),
-        Vec2::new(8.0, 8.0), 18.0, Color::WHITE, hud);
-    queue.draw_text_on_layer(&font.0, &format!("lives: {}", lives.0),
-        Vec2::new(8.0, 30.0), 18.0, Color::rgb(0.9, 0.4, 0.4), hud);
+    {
+        use std::fmt::Write as _;
+        let mut hud_buf = String::with_capacity(20);
+        let _ = write!(hud_buf, "score: {}", score.0);
+        queue.draw_text_on_layer(&font.0, &hud_buf, Vec2::new(8.0, 8.0), 18.0, Color::WHITE, hud);
+        hud_buf.clear();
+        let _ = write!(hud_buf, "lives: {}", lives.0);
+        queue.draw_text_on_layer(&font.0, &hud_buf, Vec2::new(8.0, 30.0), 18.0, Color::rgb(0.9, 0.4, 0.4), hud);
+    }
 
     if *game_state == GameState::GameOver {
         queue.draw_rect_on_layer(

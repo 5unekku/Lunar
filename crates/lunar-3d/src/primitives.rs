@@ -228,7 +228,7 @@ pub fn cylinder_mesh(radius: f32, height: f32, sectors: u32, caps: bool) -> Mesh
         let bottom_y = -half_h;
         let top_y = half_h;
 
-        for (y, normal_y, v_offset) in [
+        for (y, normal_y, _v_offset) in [
             (bottom_y, -1.0_f32, 0),
             (top_y, 1.0_f32, sectors as usize + 1),
         ] {
@@ -261,7 +261,6 @@ pub fn cylinder_mesh(radius: f32, height: f32, sectors: u32, caps: bool) -> Mesh
                 }
             }
 
-            let _ = v_offset;
         }
     }
 

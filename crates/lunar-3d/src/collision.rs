@@ -356,7 +356,7 @@ pub fn raycast_3d(
         let hit = registry
             .get_mesh(mesh_handle.0)
             .and_then(|mesh_data| {
-                raycast_mesh(ray, mesh_data.vertices.iter().map(|v| v.position), &mesh_data.indices, world, current_max)
+                raycast_mesh(ray, mesh_data.vertices.iter().map(|v| v.position), &mesh_data.indices, world, current_max, entity)
             })
             .unwrap_or_else(|| {
                 // no mesh data — use AABB hit point
@@ -366,7 +366,7 @@ pub fn raycast_3d(
             });
 
         if hit.distance < nearest.as_ref().map(|h| h.distance).unwrap_or(f32::MAX) {
-            nearest = Some(RayHit3d { entity, ..hit });
+            nearest = Some(hit);
         }
     }
 
@@ -443,10 +443,11 @@ fn moller_trumbore(origin: Vec3, direction: Vec3, v0: Vec3, v1: Vec3, v2: Vec3) 
 /// iterate mesh triangles, transform ray into model space, return nearest world-space hit.
 fn raycast_mesh(
     ray: Ray3d,
-    vertices: impl Iterator<Item = Vec3> + Clone,
+    vertices: impl Iterator<Item = Vec3>,
     indices: &crate::mesh::IndexBuffer,
     world: &WorldTransform3d,
     max_dist: f32,
+    entity: Entity,
 ) -> Option<RayHit3d> {
     let inv_rot = Quat::from_xyzw(-world.rotation.x, -world.rotation.y, -world.rotation.z, world.rotation.w);
     let inv_scale = Vec3::new(
@@ -461,27 +462,27 @@ fn raycast_mesh(
 
     let verts: Vec<Vec3> = vertices.collect();
 
-    let index_triples: Vec<[usize; 3]> = match indices {
-        crate::mesh::IndexBuffer::U16(idx) => {
-            idx.chunks_exact(3).map(|c| [c[0] as usize, c[1] as usize, c[2] as usize]).collect()
-        }
-        crate::mesh::IndexBuffer::U32(idx) => {
-            idx.chunks_exact(3).map(|c| [c[0] as usize, c[1] as usize, c[2] as usize]).collect()
-        }
-    };
-
     let mut nearest_t = f32::MAX;
     let mut nearest_model_normal = Vec3::Y;
 
-    for tri in &index_triples {
-        let v0 = verts[tri[0]];
-        let v1 = verts[tri[1]];
-        let v2 = verts[tri[2]];
-        if let Some((t, model_normal)) = moller_trumbore(model_origin, model_dir, v0, v1, v2)
-            && t < nearest_t {
-                nearest_t = t;
-                nearest_model_normal = model_normal;
+    macro_rules! test_tris {
+        ($chunks:expr, $cast:ty) => {
+            for tri in $chunks {
+                let v0 = verts[tri[0] as $cast];
+                let v1 = verts[tri[1] as $cast];
+                let v2 = verts[tri[2] as $cast];
+                if let Some((t, model_normal)) = moller_trumbore(model_origin, model_dir, v0, v1, v2)
+                    && t < nearest_t {
+                        nearest_t = t;
+                        nearest_model_normal = model_normal;
+                    }
             }
+        };
+    }
+
+    match indices {
+        crate::mesh::IndexBuffer::U16(idx) => test_tris!(idx.chunks_exact(3), usize),
+        crate::mesh::IndexBuffer::U32(idx) => test_tris!(idx.chunks_exact(3), usize),
     }
 
     if nearest_t == f32::MAX {
@@ -503,7 +504,7 @@ fn raycast_mesh(
     let world_normal = if world_normal.dot(ray.direction) > 0.0 { -world_normal } else { world_normal };
 
     Some(RayHit3d {
-        entity: Entity::PLACEHOLDER,
+        entity,
         point: world_hit,
         normal: world_normal,
         distance: world_dist,

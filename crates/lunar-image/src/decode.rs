@@ -54,36 +54,48 @@ impl Image {
     /// get the RGBA value at a pixel coordinate.
     ///
     /// # Panics
-    /// panics if the coordinate is out of bounds.
+    /// panics if the coordinate is out of bounds. use [`try_get_pixel`](Self::try_get_pixel) to
+    /// handle out-of-bounds without panicking.
     #[must_use]
     pub fn get_pixel(&self, x: u32, y: u32) -> [u8; 4] {
-        assert!(
-            self.contains(x, y),
-            "pixel coordinate ({x}, {y}) out of bounds"
-        );
+        self.try_get_pixel(x, y).expect("pixel coordinate out of bounds")
+    }
+
+    /// get the RGBA value at a pixel coordinate, or `None` if out of bounds.
+    #[must_use]
+    pub fn try_get_pixel(&self, x: u32, y: u32) -> Option<[u8; 4]> {
+        if !self.contains(x, y) {
+            return None;
+        }
         let idx = ((y * self.width + x) as usize) * 4;
-        [
+        Some([
             self.pixels[idx],
             self.pixels[idx + 1],
             self.pixels[idx + 2],
             self.pixels[idx + 3],
-        ]
+        ])
     }
 
     /// set the RGBA value at a pixel coordinate.
     ///
     /// # Panics
-    /// panics if the coordinate is out of bounds.
+    /// panics if the coordinate is out of bounds. use [`try_set_pixel`](Self::try_set_pixel) to
+    /// handle out-of-bounds without panicking.
     pub fn set_pixel(&mut self, x: u32, y: u32, rgba: [u8; 4]) {
-        assert!(
-            self.contains(x, y),
-            "pixel coordinate ({x}, {y}) out of bounds"
-        );
+        self.try_set_pixel(x, y, rgba).expect("pixel coordinate out of bounds");
+    }
+
+    /// set the RGBA value at a pixel coordinate. returns `None` if out of bounds.
+    pub fn try_set_pixel(&mut self, x: u32, y: u32, rgba: [u8; 4]) -> Option<()> {
+        if !self.contains(x, y) {
+            return None;
+        }
         let idx = ((y * self.width + x) as usize) * 4;
         self.pixels[idx] = rgba[0];
         self.pixels[idx + 1] = rgba[1];
         self.pixels[idx + 2] = rgba[2];
         self.pixels[idx + 3] = rgba[3];
+        Some(())
     }
 }
 
@@ -103,17 +115,15 @@ pub fn decode(data: &[u8]) -> Result<Image, DecodeError> {
     // Walk chunks starting after header
     let mut offset = format::HEADER_SIZE;
     let mut pixels: Option<Vec<u8>> = None;
-    let mut metadata: Option<String> = None;
-    let mut icc: Option<Vec<u8>> = None;
 
     while offset < data.len() {
         let chunk_header = format::ChunkHeader::parse(&data[offset..])?;
         offset += format::CHUNK_HEADER_SIZE;
 
-        let chunk_data_end = offset + (chunk_header.compressed_size as usize);
-        if chunk_data_end > data.len() {
-            return Err(DecodeError::TruncatedChunk);
-        }
+        let chunk_data_end = offset
+            .checked_add(chunk_header.compressed_size as usize)
+            .filter(|&end| end <= data.len())
+            .ok_or(DecodeError::TruncatedChunk)?;
         let compressed = &data[offset..chunk_data_end];
         offset = chunk_data_end;
 
@@ -139,21 +149,13 @@ pub fn decode(data: &[u8]) -> Result<Image, DecodeError> {
                 };
                 pixels = Some(rgba);
             }
-            ChunkType::Metadata => {
-                let decompressed = zstd::decode_all(std::io::Cursor::new(compressed))
-                    .map_err(DecodeError::ZstdError)?;
-                metadata = Some(String::from_utf8_lossy(&decompressed).into_owned());
-            }
-            ChunkType::IccProfile => {
-                let decompressed = zstd::decode_all(std::io::Cursor::new(compressed))
-                    .map_err(DecodeError::ZstdError)?;
-                icc = Some(decompressed);
+            ChunkType::Metadata | ChunkType::IccProfile => {
+                // not yet exposed through the public API; skip without decompressing
             }
         }
     }
 
     let pixels = pixels.ok_or(DecodeError::MissingPixelData)?;
-    let _ = (metadata, icc); // unused for now but parsed for future use
 
     Ok(Image {
         width: header.width,

@@ -76,24 +76,28 @@ impl Textbox {
     }
 
     /// set the font for this textbox.
-    pub const fn set_font(&mut self, font_id: u32, font_size: f32) {
+    pub fn set_font(&mut self, font_id: u32, font_size: f32) -> &mut Self {
         self.font_id = font_id;
         self.font_size = font_size;
+        self
     }
 
     /// set the text color.
-    pub const fn set_color(&mut self, color: Color) {
+    pub fn set_color(&mut self, color: Color) -> &mut Self {
         self.color = color;
+        self
     }
 
     /// set the background color.
-    pub const fn set_background(&mut self, color: Color) {
+    pub fn set_background(&mut self, color: Color) -> &mut Self {
         self.background_color = Some(color);
+        self
     }
 
     /// set the padding.
-    pub const fn set_padding(&mut self, padding: f32) {
+    pub fn set_padding(&mut self, padding: f32) -> &mut Self {
         self.padding = padding;
+        self
     }
 
     /// start the typewriter animation.

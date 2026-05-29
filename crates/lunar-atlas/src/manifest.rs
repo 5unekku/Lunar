@@ -182,19 +182,15 @@ impl AtlasManifest {
         writer.write_all(&VERSION.to_le_bytes())?;
         writer.write_all(&self.atlas_width.to_le_bytes())?;
         writer.write_all(&self.atlas_height.to_le_bytes())?;
-        writer.write_all(
-            &u32::try_from(self.regions.len())
-                .unwrap_or(u32::MAX)
-                .to_le_bytes(),
-        )?;
+        let region_count = u32::try_from(self.regions.len())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "too many regions to serialize"))?;
+        writer.write_all(&region_count.to_le_bytes())?;
 
         for (name, region) in &self.regions {
             let name_bytes = name.as_bytes();
-            writer.write_all(
-                &u16::try_from(name_bytes.len())
-                    .unwrap_or(u16::MAX)
-                    .to_le_bytes(),
-            )?;
+            let name_len = u16::try_from(name_bytes.len())
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "region name too long to serialize"))?;
+            writer.write_all(&name_len.to_le_bytes())?;
             writer.write_all(name_bytes)?;
             writer.write_all(&region.x.to_le_bytes())?;
             writer.write_all(&region.y.to_le_bytes())?;

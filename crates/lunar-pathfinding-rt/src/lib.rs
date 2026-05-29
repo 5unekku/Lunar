@@ -190,7 +190,8 @@ fn heuristic(from: [u32; 2], to: [u32; 2], diagonal: bool) -> f32 {
 }
 
 fn neighbors(grid: &NavGrid, x: u32, y: u32, diagonal: bool) -> impl Iterator<Item = (u32, u32, f32)> {
-    let mut result = Vec::with_capacity(8);
+    let mut buf = [(0u32, 0u32, 0.0f32); 8];
+    let mut len = 0usize;
     let dirs: &[(i32, i32, f32)] = if diagonal {
         &[
             (-1, 0, 1.0), (1, 0, 1.0), (0, -1, 1.0), (0, 1, 1.0),
@@ -217,11 +218,12 @@ fn neighbors(grid: &NavGrid, x: u32, y: u32, diagonal: bool) -> impl Iterator<It
                         continue;
                     }
                 }
-                result.push((nx, ny, cost));
+                buf[len] = (nx, ny, cost);
+                len += 1;
             }
         }
     }
-    result.into_iter()
+    buf.into_iter().take(len)
 }
 
 fn reconstruct_path(grid: &NavGrid, parent: &HashMap<u32, u32>, mut current: u32) -> Vec<[u32; 2]> {

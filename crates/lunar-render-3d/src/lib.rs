@@ -2262,7 +2262,7 @@ impl RenderEngine3d {
 
         let make_gtao_pipeline = |entry: &'static str, blend: Option<wgpu::BlendState>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("[gtao] pipeline"),
+                label: Some(entry),
                 layout: Some(&gtao_pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &gtao_shader,
@@ -3068,6 +3068,9 @@ impl RenderEngine3d {
 
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
+            return;
+        }
+        if self.surface_config.width == width && self.surface_config.height == height {
             return;
         }
         self.surface_config.width = width;

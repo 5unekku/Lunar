@@ -48,8 +48,10 @@ impl Localization {
 
     /// set the base path for locale directories.
     ///
-    /// the engine expects a directory structure like:
-    /// `{base_path}/{lang_code}/strings.yaml`
+    /// when set, relative paths passed to [`load_strings_from_file`](Self::load_strings_from_file)
+    /// are resolved under this directory. absolute paths bypass it.
+    ///
+    /// example structure: `{base_path}/{lang_code}/strings.ron`
     pub fn set_locale_path(&mut self, path: &str) {
         self.locale_base_path = path.to_string();
     }
@@ -85,17 +87,24 @@ impl Localization {
         Ok(())
     }
 
-    /// load a string table for a language from a yaml file.
-    /// the file should contain key-value pairs:
-    /// ```yaml
-    /// greeting: "hello"
-    /// farewell: "goodbye"
+    /// load a string table for a language from a RON file.
+    /// the file should contain a map of string keys to translated values:
+    /// ```ron
+    /// { "greeting": "hello", "farewell": "goodbye" }
     /// ```
+    /// if `path` is relative and a locale base path is set via [`set_locale_path`](Self::set_locale_path),
+    /// the path is resolved as `{base_path}/{path}`.
+    ///
     /// # Errors
-    /// returns an error if the file cannot be read or if the yaml is invalid.
+    /// returns an error if the file cannot be read or the RON is invalid.
     pub fn load_strings_from_file(&mut self, lang: &str, path: &str) -> Result<(), String> {
-        let source = std::fs::read_to_string(path)
-            .map_err(|e| format!("failed to read strings file '{path}': {e}"))?;
+        let full_path = if std::path::Path::new(path).is_absolute() || self.locale_base_path.is_empty() {
+            path.to_string()
+        } else {
+            format!("{}/{}", self.locale_base_path, path)
+        };
+        let source = std::fs::read_to_string(&full_path)
+            .map_err(|e| format!("failed to read strings file '{full_path}': {e}"))?;
         self.load_strings(lang, &source)
     }
 

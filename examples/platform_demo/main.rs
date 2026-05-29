@@ -159,12 +159,11 @@ fn fps_controller(
     if input.is_key_held(KeyCode::S) { move_z += 1.0; }
     if input.is_key_held(KeyCode::W) { move_z -= 1.0; }
     // clamp combined input to unit length so diagonal + stick don't stack
-    let input_len = (move_x * move_x + move_z * move_z).sqrt().min(1.0);
-    let (move_x, move_z) = if input_len > 0.0 {
-        (move_x / input_len.max(f32::EPSILON) * input_len,
-         move_z / input_len.max(f32::EPSILON) * input_len)
+    let input_len = (move_x * move_x + move_z * move_z).sqrt();
+    let (move_x, move_z) = if input_len > 1.0 {
+        (move_x / input_len, move_z / input_len)
     } else {
-        (0.0, 0.0)
+        (move_x, move_z)
     };
 
     let mut pos = transform.translation;

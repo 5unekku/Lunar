@@ -155,14 +155,14 @@ impl MeshData {
     /// create a skinned mesh with bone weights.
     ///
     /// # Panics
-    /// panics (debug only) if `skin.len() != vertices.len()`.
+    /// panics if `skin.len() != vertices.len()`.
     #[must_use]
     pub fn new_skinned(
         vertices: Vec<Vertex3d>,
         indices: IndexBuffer,
         skin: Vec<SkinWeights>,
     ) -> Self {
-        debug_assert_eq!(
+        assert_eq!(
             vertices.len(),
             skin.len(),
             "skin weights must match vertex count"

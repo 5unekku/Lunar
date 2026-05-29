@@ -49,8 +49,8 @@ pub struct SpringArm3d {
     pub recover_speed: f32,
     /// collision mask passed to the raycast. default 1.
     pub collision_mask: u32,
-    /// current actual arm length (updated by the system — do not set manually).
-    pub current_length: f32,
+    /// current actual arm length (updated by the system).
+    current_length: f32,
 }
 
 impl SpringArm3d {
@@ -67,6 +67,12 @@ impl SpringArm3d {
             collision_mask: 1,
             current_length: desired_length,
         }
+    }
+
+    /// the current actual arm length (may be shorter than `desired_length` due to obstacles).
+    #[must_use]
+    pub fn current_length(&self) -> f32 {
+        self.current_length
     }
 
     /// compute the arm direction vector (unit length, pointing from target to camera).
@@ -142,7 +148,14 @@ pub fn spring_arm_system(
 
 /// build a rotation that points +Z at `forward` with +Y approximating `up`.
 fn look_rotation(forward: Vec3, up: Vec3) -> Quat {
-    let right = up.cross(forward).normalize_or_zero();
+    let right = up.cross(forward);
+    // degenerate: forward parallel to up (looking straight up/down); fall back to world X as up
+    let right = if right.length_squared() > 1e-6 {
+        right.normalize()
+    } else {
+        let alt = Vec3::X.cross(forward);
+        if alt.length_squared() > 1e-6 { alt.normalize() } else { return Quat::IDENTITY; }
+    };
     let actual_up = forward.cross(right);
     Quat::from_mat3(&lunar_math::Mat3::from_cols(right, actual_up, forward))
 }

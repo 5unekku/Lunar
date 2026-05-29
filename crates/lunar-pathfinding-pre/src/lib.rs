@@ -71,6 +71,9 @@ impl FlowField {
         let mut cost_map = vec![f32::MAX; n];
         let mut flow = vec![[0i8; 2]; n];
 
+        if goal[0] >= grid.width || goal[1] >= grid.height {
+            return Self { width: grid.width, height: grid.height, cost_map, flow, goal };
+        }
         let goal_idx = pack(grid.width, goal[0], goal[1]);
         cost_map[goal_idx as usize] = 0.0;
 
@@ -174,7 +177,8 @@ fn dijkstra_neighbors(
     diagonal: bool,
 ) -> impl Iterator<Item = (u32, f32)> {
     let width = grid.width;
-    let mut result = Vec::with_capacity(8);
+    let mut buf = [(0u32, 0.0f32); 8];
+    let mut len = 0usize;
     let dirs: &[(i32, i32, f32)] = if diagonal {
         &[
             (-1, 0, 1.0), (1, 0, 1.0), (0, -1, 1.0), (0, 1, 1.0),
@@ -199,11 +203,12 @@ fn dijkstra_neighbors(
                         continue;
                     }
                 }
-                result.push((pack(width, nx, ny), step_cost));
+                buf[len] = (pack(width, nx, ny), step_cost);
+                len += 1;
             }
         }
     }
-    result.into_iter()
+    buf.into_iter().take(len)
 }
 
 #[cfg(test)]

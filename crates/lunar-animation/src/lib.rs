@@ -206,41 +206,15 @@ pub fn advance_animations(
         let clip_name = animator.current_clip.as_deref().unwrap();
         let clip = animator.clips.get(clip_name).unwrap();
 
-        let mut accumulated = 0.0_f32;
-        let mut new_index = 0;
-        let mut finished = false;
-
-        if looping {
-            let looped_elapsed = if total_duration > 0.0 {
-                animator.elapsed % total_duration
-            } else {
-                0.0
-            };
-            for (index, frame) in clip.frames.iter().enumerate() {
-                accumulated += frame.duration_secs;
-                if looped_elapsed < accumulated {
-                    new_index = index;
-                    break;
-                }
-                new_index = index;
-            }
+        let check_elapsed = if looping && total_duration > 0.0 {
+            animator.elapsed % total_duration
         } else {
-            let mut past_end = true;
-            for (index, frame) in clip.frames.iter().enumerate() {
-                accumulated += frame.duration_secs;
-                if animator.elapsed < accumulated {
-                    new_index = index;
-                    past_end = false;
-                    break;
-                }
-                new_index = index;
-            }
-            if past_end {
-                new_index = frame_count - 1;
-                if !animator.finished {
-                    finished = true;
-                }
-            }
+            animator.elapsed
+        };
+        let (new_index, past_end) = frame_index_at(&clip.frames, check_elapsed);
+        let mut finished = false;
+        if past_end && !looping && !animator.finished {
+            finished = true;
         }
 
         // copy frame rect before borrow ends, then write back
@@ -267,6 +241,20 @@ pub fn advance_animations(
 /// add this alongside [`lunar_render::RenderPlugin`]. the `advance_animations`
 /// system runs in Update so `Sprite::source_rect` is set before the render stage.
 pub struct AnimationPlugin;
+
+/// find which frame is active at `elapsed` seconds.
+///
+/// returns `(index, past_end)`. `past_end` is true when elapsed exceeds all frame durations.
+fn frame_index_at(frames: &[AnimationFrame], elapsed: f32) -> (usize, bool) {
+    let mut accumulated = 0.0f32;
+    for (i, frame) in frames.iter().enumerate() {
+        accumulated += frame.duration_secs;
+        if elapsed < accumulated {
+            return (i, false);
+        }
+    }
+    (frames.len().saturating_sub(1), true)
+}
 
 impl GamePlugin for AnimationPlugin {
     fn name(&self) -> &'static str {

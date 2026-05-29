@@ -273,7 +273,10 @@ impl Rect {
         }
     }
 
-    /// check if a point lies inside this rectangle (inclusive of edges).
+    /// check if a point lies inside this rectangle.
+    ///
+    /// inclusive of all edges (touching counts as inside). contrast with [`intersects`](Self::intersects),
+    /// which is exclusive (touching edges do not count as overlap).
     #[must_use]
     pub fn contains(&self, point: Vec2) -> bool {
         point.x >= self.x
@@ -282,7 +285,10 @@ impl Rect {
             && point.y <= self.y + self.h
     }
 
-    /// check if this rectangle overlaps another (exclusive of touching edges).
+    /// check if this rectangle overlaps another.
+    ///
+    /// exclusive of touching edges (two rects that share only an edge do not overlap). contrast with
+    /// [`contains`](Self::contains), which is inclusive.
     #[must_use]
     pub fn intersects(&self, other: &Self) -> bool {
         self.x < other.x + other.w
@@ -305,7 +311,7 @@ impl Rect {
 
     /// get the bottom-right corner position.
     #[must_use]
-    pub fn bottom_right(&self) -> Vec2 {
+    pub const fn bottom_right(&self) -> Vec2 {
         Vec2::new(self.x + self.w, self.y + self.h)
     }
 
