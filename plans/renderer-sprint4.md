@@ -2,24 +2,21 @@
 
 ## status (2026-05-29)
 
-**done:**
+**all phases complete:**
 - **item L** — both `wait_indefinitely()` stalls replaced with `Arc<AtomicBool>` + `map_async`.
   CPU never blocks on GPU. stale flags used when GPU not done (imperceptible for 1 frame).
-- **J phase 1** — material bind group (group 1) changed from dynamic-offset UBO to storage
-  array indexed by `instance_id`. set once per pass; eliminates N_batches bind group changes
-  across all passes (opaque, transparent, z-prepass, HZB, GTAO, static bundle).
-- **J phase 2** — `INDIRECT_FIRST_INSTANCE` feature requested at device creation. on high tier,
-  precomputes `DrawIndexedIndirect` args for all opaque batches before the render pass and
-  issues `draw_indexed_indirect` per batch. same call count; indirect_buf infrastructure in place.
-
-**deferred (next sprint):**
-- **J phase 3 (lightmap atlas)** — requires packing all lightmap textures into one RGBA8
-  atlas texture at level load. adds `lm_uv_offset/scale` to `MaterialUniforms`. complex runtime
-  or offline packer needed. plan says "separate sprint".
-- **J phase 4 (GPU cull writes indirect)** — requires phase 3 atlas (group 4 can't change between
-  draws in `multi_draw_indexed_indirect`). alternatively: per-mesh mega-buffer or per-mesh atomic
-  counters + `multi_draw_indexed_indirect_count` per mesh group. substantial architecture change.
-- **J phase 5 (remove readback)** — converges with L once phase 4 is stable.
+- **J phase 1** — material bind group converted to storage array indexed by `instance_id`.
+  set once per pass; eliminates all per-batch material bind group changes.
+- **J phase 2** — `INDIRECT_FIRST_INSTANCE` requested; CPU-built `DrawIndexedIndirect` args
+  uploaded to `indirect_buf`; `draw_indexed_indirect` used per batch on high tier.
+- **J phase 3** — runtime lightmap atlas (4096×4096 RGBA8 shelf packer). `MaterialUniforms`
+  extended to 48 bytes with `lm_uv_offset` + `lm_uv_scale`. atlas bound once per pass on high tier.
+- **J phase 4** — GPU indirect cull with mega-VBO/IBO. `cull_indirect.wgsl` writes
+  `DrawIndexedIndirect` entries atomically. late-frame cull dispatched after `draw_scratch`.
+  `multi_draw_indexed_indirect_count` on mega-buffers eliminates per-entity CPU draw cost.
+- **J phase 5** — render path no longer uses `frustum_visible` when GPU-driven is active.
+  early-frame cull readback kept async (item L) for game code (AI LOS etc.); renderer uses
+  `indirect_buf` directly. `gpu_indirect_active()` gates the fast path.
 
 ---
 

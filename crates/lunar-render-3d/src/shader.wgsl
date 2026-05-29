@@ -12,11 +12,14 @@ struct Globals {
 
 // group 1: material storage — indexed by instance_id, set once per pass
 struct MaterialUniforms {
-    base_color:   vec4<f32>,  // 16 bytes
-    metallic:     f32,         //  4 bytes
-    roughness:    f32,         //  4 bytes
-    flags:        u32,         //  4 bytes  (bit 0 = unlit)
-    has_lightmap: u32,         //  4 bytes — total: 32 bytes
+    base_color:    vec4<f32>,  // 16 bytes, offset  0
+    metallic:      f32,         //  4 bytes, offset 16
+    roughness:     f32,         //  4 bytes, offset 20
+    flags:         u32,         //  4 bytes, offset 24  (bit 0 = unlit)
+    has_lightmap:  u32,         //  4 bytes, offset 28
+    lm_uv_offset:  vec2<f32>,  //  8 bytes, offset 32  (atlas offset; identity = (0,0))
+    lm_uv_scale:   vec2<f32>,  //  8 bytes, offset 40  (atlas scale;  identity = (1,1))
+    // total: 48 bytes
 }
 @group(1) @binding(0) var<storage, read> materials: array<MaterialUniforms>;
 
@@ -282,7 +285,8 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     // lightmap replaces directional + ambient for static baked geometry.
     var hdr: vec3<f32>;
     if (material.has_lightmap != 0u) {
-        let lm = textureSample(lightmap_tex, lightmap_sampler, in.uv_lightmap).rgb;
+        let atlas_uv = material.lm_uv_offset + in.uv_lightmap * material.lm_uv_scale;
+        let lm = textureSample(lightmap_tex, lightmap_sampler, atlas_uv).rgb;
         hdr = lm * albedo + point_lo;
     } else {
         hdr = ambient + dir_lo + point_lo;

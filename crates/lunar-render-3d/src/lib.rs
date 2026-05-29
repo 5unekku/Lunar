@@ -52,7 +52,8 @@ use lunar_lightmap::Lightmap;
 use lunar_math::{Color, Mat3, Mat4, Vec2, Vec3};
 
 const SHADER_SRC: &str           = include_str!("shader.wgsl");
-const CULL_SHADER_SRC: &str      = include_str!("cull.wgsl");
+const CULL_SHADER_SRC: &str          = include_str!("cull.wgsl");
+const CULL_INDIRECT_SHADER_SRC: &str = include_str!("cull_indirect.wgsl");
 const HZB_SHADER_SRC: &str       = include_str!("hzb.wgsl");
 const SHADOW_SHADER_SRC: &str = include_str!("shadow.wgsl");
 const BLOOM_SHADER_SRC: &str = include_str!("bloom.wgsl");
@@ -82,8 +83,16 @@ const NUM_CASCADES: u32 = 3;
 /// group 0: view_proj (64) + cam_pos (12) + elapsed (4) + delta (4) + pad (12) = 96 bytes.
 const GLOBALS_SIZE: u64 = 96;
 
-/// group 1: base_color (16) + metallic (4) + roughness (4) + flags (4) + pad (4) = 32 bytes.
-const MATERIAL_UNIFORMS_SIZE: u64 = 32;
+/// group 1: base_color (16) + metallic (4) + roughness (4) + flags (4) + has_lightmap (4)
+///          + lm_uv_offset (8) + lm_uv_scale (8) = 48 bytes.
+const MATERIAL_UNIFORMS_SIZE: u64 = 48;
+
+/// initial size of the mega vertex buffer (16 MB).
+const MEGA_VBUF_INIT: u64 = 16 * 1024 * 1024;
+/// initial size of the mega index buffer (4 MB, u32 indices).
+const MEGA_IBUF_INIT: u64 = 4 * 1024 * 1024;
+/// lightmap atlas max side length.
+const ATLAS_SIZE: u32 = 4096;
 
 /// per-entity transform data: model mat4 (64) + normal matrix 3×vec4 (48) = 112 bytes,
 /// padded to UNIFORM_STRIDE (256) in the staging buffer.
@@ -737,6 +746,25 @@ pub struct RenderEngine3d {
     lightmap_fallback_bg: wgpu::BindGroup,
     // per-texture-id lightmap bind group cache; populated lazily from AssetServer
     lightmap_bg_cache: HashMap<u32, wgpu::BindGroup>,
+    // lightmap atlas (phase 3) — packs all lightmap textures into one RGBA8 4096×4096 texture.
+    // built/rebuilt when has_indirect and lightmap_bg_cache changes.
+    // atlas_lm_uvs maps lm_id → [offset_u, offset_v, scale_u, scale_v]
+    atlas_tex: Option<wgpu::Texture>,
+    atlas_view: Option<wgpu::TextureView>,
+    atlas_bg: Option<wgpu::BindGroup>,
+    atlas_lm_uvs: HashMap<u32, [f32; 4]>,
+    atlas_lm_ids: Vec<u32>,   // sorted list of lm_ids in current atlas (change detection)
+
+    // mega vertex/index buffers (phase 4) — all meshes packed into one buffer.
+    // enables one multi_draw_indexed_indirect_count call for all visible geometry.
+    mega_vbuf: Option<wgpu::Buffer>,
+    mega_ibuf: Option<wgpu::Buffer>,
+    mega_vbuf_bytes: u64,
+    mega_ibuf_bytes: u64,
+    // draw params per mesh_id: (first_index_u32, index_count, base_vertex_as_i32_bits)
+    mega_mesh_entries: HashMap<u32, [u32; 3]>,
+    // per-entity GPU draw params buffer for cull shader input (index_count, first_index, base_vertex, entity_slot)
+    entity_draw_params_buf: Option<wgpu::Buffer>,
 
     // per-frame scratch — cleared at frame start, never reallocated in steady state
     frustum_visible: HashSet<Entity>,
@@ -781,6 +809,15 @@ pub struct RenderEngine3d {
     // whether the staging buffer has been written and is ready to map next frame
     cull_staging_pending: bool,
     cull_pending_entity_count: usize,
+    // indirect cull pipeline (6 bindings) — created alongside standard pipeline when has_indirect
+    cull_indirect_bgl: Option<wgpu::BindGroupLayout>,
+    cull_indirect_pipeline: Option<wgpu::ComputePipeline>,
+    // per-entity draw params buffer (input to indirect cull shader)
+    cull_draw_params_buf: Option<wgpu::Buffer>,
+    // indirect output count buffer (u32, zeroed each frame)
+    cull_indirect_count_buf: Option<wgpu::Buffer>,
+    // separate frustum params buffer for late-frame indirect cull (different entity_count)
+    late_cull_frustum_buf: Option<wgpu::Buffer>,
 
     // hierarchical Z-buffer occlusion culling (high tier only).
     // built after the z-prepass; used next frame to cull occluded entities.
@@ -2950,6 +2987,17 @@ impl RenderEngine3d {
             lightmap_fallback_tex,
             lightmap_fallback_bg,
             lightmap_bg_cache: HashMap::new(),
+            atlas_tex: None,
+            atlas_view: None,
+            atlas_bg: None,
+            atlas_lm_uvs: HashMap::new(),
+            atlas_lm_ids: Vec::new(),
+            mega_vbuf: None,
+            mega_ibuf: None,
+            mega_vbuf_bytes: 0,
+            mega_ibuf_bytes: 0,
+            mega_mesh_entries: HashMap::new(),
+            entity_draw_params_buf: None,
             frustum_visible: HashSet::new(),
             raw_scratch: Vec::new(),
             draw_scratch: Vec::new(),
@@ -2975,6 +3023,11 @@ impl RenderEngine3d {
             cull_entity_capacity: 0,
             cull_staging_pending: false,
             cull_pending_entity_count: 0,
+            cull_indirect_bgl: None,
+            cull_indirect_pipeline: None,
+            cull_draw_params_buf: None,
+            cull_indirect_count_buf: None,
+            late_cull_frustum_buf: None,
 
             hzb_enabled: render_tier == RenderTier::High,
             hzb_texture: None,
@@ -3059,6 +3112,91 @@ impl RenderEngine3d {
             g.add_pass("present", vec![ldr], vec![swapchain]);
         }
         g
+    }
+
+    /// append a mesh to the mega vertex/index buffers (all indices converted to u32).
+    /// records base_vertex and first_index for the mesh in mega_mesh_entries.
+    fn append_to_mega_buffers(&mut self, mesh_id: u32, data: &MeshData) {
+        let vertex_bytes = (data.vertices.len() * std::mem::size_of::<Vertex3d>()) as u64;
+        let index_bytes = (data.indices.len() * 4) as u64; // always u32 in mega-IBO
+
+        // lazy init mega-buffers
+        if self.mega_vbuf.is_none() {
+            self.mega_vbuf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("[mega] vbuf"),
+                size: MEGA_VBUF_INIT,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        if self.mega_ibuf.is_none() {
+            self.mega_ibuf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("[mega] ibuf"),
+                size: MEGA_IBUF_INIT,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+
+        // grow mega-VBO if needed
+        if self.mega_vbuf_bytes + vertex_bytes > self.mega_vbuf.as_ref().unwrap().size() {
+            let new_size = (self.mega_vbuf.as_ref().unwrap().size() * 2).max(self.mega_vbuf_bytes + vertex_bytes);
+            let new_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("[mega] vbuf"),
+                size: new_size,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            // mark entries dirty — caller will re-upload when these meshes are next needed
+            // simpler: just mark all mega entries dirty — they'll be re-uploaded by caller
+            self.mega_mesh_entries.clear();
+            self.mega_vbuf_bytes = 0;
+            self.mega_ibuf_bytes = 0;
+            self.mega_vbuf = Some(new_buf);
+        }
+
+        // grow mega-IBO if needed
+        if self.mega_ibuf_bytes + index_bytes > self.mega_ibuf.as_ref().unwrap().size() {
+            let new_size = (self.mega_ibuf.as_ref().unwrap().size() * 2).max(self.mega_ibuf_bytes + index_bytes);
+            let new_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("[mega] ibuf"),
+                size: new_size,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.mega_mesh_entries.clear();
+            self.mega_vbuf_bytes = 0;
+            self.mega_ibuf_bytes = 0;
+            self.mega_ibuf = Some(new_buf);
+        }
+
+        let base_vertex = (self.mega_vbuf_bytes / std::mem::size_of::<Vertex3d>() as u64) as u32;
+        let first_index = (self.mega_ibuf_bytes / 4) as u32;
+        let index_count = data.indices.len() as u32;
+        let _ = index_count; // stored in mega_mesh_entries below
+
+        // upload vertices
+        self.queue.write_buffer(
+            self.mega_vbuf.as_ref().unwrap(),
+            self.mega_vbuf_bytes,
+            unsafe { std::slice::from_raw_parts(data.vertices.as_ptr() as *const u8, vertex_bytes as usize) },
+        );
+        self.mega_vbuf_bytes += vertex_bytes;
+
+        // upload indices as u32 (convert u16 → u32 if needed)
+        let idx32: Vec<u32> = match &data.indices {
+            IndexBuffer::U16(v) => v.iter().map(|&x| x as u32).collect(),
+            IndexBuffer::U32(v) => v.clone(),
+        };
+        self.queue.write_buffer(
+            self.mega_ibuf.as_ref().unwrap(),
+            self.mega_ibuf_bytes,
+            bytemuck::cast_slice(&idx32),
+        );
+        self.mega_ibuf_bytes += index_bytes;
+
+        // store [first_index, index_count, base_vertex_as_bits]
+        self.mega_mesh_entries.insert(mesh_id, [first_index, index_count, base_vertex]);
     }
 
     /// lazily create (or grow) GPU frustum cull buffers and pipeline.
@@ -3146,6 +3284,97 @@ impl RenderEngine3d {
                     cache: None,
                 }));
                 self.cull_bgl = Some(bgl);
+
+                // create indirect cull pipeline (6 bindings) when has_indirect
+                if self.has_indirect && self.cull_indirect_pipeline.is_none() {
+                    let storage_ro = |binding: u32| wgpu::BindGroupLayoutEntry {
+                        binding, visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false, min_binding_size: None,
+                        },
+                        count: None,
+                    };
+                    let storage_rw = |binding: u32| wgpu::BindGroupLayoutEntry {
+                        binding, visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false, min_binding_size: None,
+                        },
+                        count: None,
+                    };
+                    let indirect_bgl = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                        label: Some("[cull indirect] bgl"),
+                        entries: &[
+                            storage_ro(0),
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 1, visibility: wgpu::ShaderStages::COMPUTE,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Uniform,
+                                    has_dynamic_offset: false, min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                            storage_rw(2),
+                            storage_ro(3),
+                            storage_rw(4),
+                            storage_rw(5),
+                        ],
+                    });
+                    let indirect_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("[cull indirect] pipeline layout"),
+                        bind_group_layouts: &[Some(&indirect_bgl)],
+                        immediate_size: 0,
+                    });
+                    let indirect_module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some("[cull indirect] shader"),
+                        source: wgpu::ShaderSource::Wgsl(CULL_INDIRECT_SHADER_SRC.into()),
+                    });
+                    self.cull_indirect_pipeline = Some(self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("[cull indirect] pipeline"),
+                        layout: Some(&indirect_layout),
+                        module: &indirect_module,
+                        entry_point: Some("cs_cull"),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        cache: None,
+                    }));
+                    self.cull_indirect_bgl = Some(indirect_bgl);
+                }
+            }
+
+            // grow per-entity draw params and indirect output buffers when has_indirect
+            if self.has_indirect {
+                self.cull_draw_params_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("[cull] draw params"),
+                    size: (cap * 16) as u64, // 4 u32s per entity
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+                // indirect_out: 20 bytes per entry, needs both INDIRECT and STORAGE
+                if self.indirect_buf.as_ref().map(|b| b.size() < (cap * 20) as u64).unwrap_or(true) {
+                    self.indirect_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("[indirect] opaque draw args"),
+                        size: (cap * 20) as u64,
+                        usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    }));
+                }
+                if self.cull_indirect_count_buf.is_none() {
+                    self.cull_indirect_count_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("[cull] indirect count"),
+                        size: 4,
+                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    }));
+                }
+                if self.late_cull_frustum_buf.is_none() {
+                    self.late_cull_frustum_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("[late cull] frustum"),
+                        size: 128,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    }));
+                }
             }
         }
     }
@@ -3863,17 +4092,28 @@ impl RenderEngine3d {
         staging[offset + 64..offset + 112].copy_from_slice(unsafe { slice_as_bytes(&normal_packed) });
     }
 
-    fn pack_material_uniforms(staging: &mut [u8], slot: usize, color: Color, metallic: f32, roughness: f32, flags: u32, has_lightmap: u32) {
+    fn pack_material_uniforms(
+        staging: &mut [u8], slot: usize,
+        color: Color, metallic: f32, roughness: f32, flags: u32, has_lightmap: u32,
+        lm_uv_offset: [f32; 2], lm_uv_scale: [f32; 2],
+    ) {
         let offset = slot * MATERIAL_UNIFORMS_SIZE as usize;
         // base_color(16) + metallic(4) + roughness(4) + flags(4) + has_lightmap(4) = 32 bytes
         let data: [f32; 7] = [color.r, color.g, color.b, color.a, metallic, roughness, f32::from_bits(flags)];
         staging[offset..offset + 28].copy_from_slice(unsafe { slice_as_bytes(&data) });
         staging[offset + 28..offset + 32].copy_from_slice(&has_lightmap.to_le_bytes());
+        // lm_uv_offset(8) + lm_uv_scale(8) = 16 bytes at offset 32
+        staging[offset + 32..offset + 40].copy_from_slice(unsafe { slice_as_bytes(&lm_uv_offset) });
+        staging[offset + 40..offset + 48].copy_from_slice(unsafe { slice_as_bytes(&lm_uv_scale) });
     }
 
     // ── public surface management ──────────────────────────────────────────
 
     pub fn tier(&self) -> RenderTier { self.render_tier }
+
+    fn gpu_indirect_active(&self) -> bool {
+        self.has_indirect && self.cull_indirect_pipeline.is_some() && !self.mega_mesh_entries.is_empty()
+    }
 
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
@@ -4509,6 +4749,13 @@ impl RenderEngine3d {
                     self.mesh_gpu.insert(mesh_id, gpu);
                 }
             }
+            // also append to mega-buffers when has_indirect and not yet there
+            if self.has_indirect && !self.mega_mesh_entries.contains_key(&mesh_id) {
+                let registry = world.resource::<MeshRegistry>();
+                if let Some(data) = registry.get_mesh(lunar_assets::Handle::new(mesh_id, 0)) {
+                    self.append_to_mega_buffers(mesh_id, data);
+                }
+            }
         }
 
         // ── grow buffers if needed ────────────────────────────────────────
@@ -4540,12 +4787,12 @@ impl RenderEngine3d {
         // sky dome and sun are unlit (flags = 1)
         let dome_model = Mat4::from_translation(cam_pos);
         Self::pack_mesh_uniforms(&mut self.uniform_staging, SLOT_DOME, dome_model);
-        Self::pack_material_uniforms(&mut self.material_staging, SLOT_DOME, sky_color, 0.0, 1.0, 1, 0);
+        Self::pack_material_uniforms(&mut self.material_staging, SLOT_DOME, sky_color, 0.0, 1.0, 1, 0, [0.0, 0.0], [1.0, 1.0]);
 
         if let Some(sky) = sky {
             let sun_model = Mat4::from_translation(cam_pos + Vec3::new(0.0, SUN_Y, 0.0));
             Self::pack_mesh_uniforms(&mut self.uniform_staging, SLOT_SUN, sun_model);
-            Self::pack_material_uniforms(&mut self.material_staging, SLOT_SUN, sky.sun_color, 0.0, 1.0, 1, 0);
+            Self::pack_material_uniforms(&mut self.material_staging, SLOT_SUN, sky.sun_color, 0.0, 1.0, 1, 0, [0.0, 0.0], [1.0, 1.0]);
         }
 
         // upload lightmap textures for any new lightmap texture ids
@@ -4617,11 +4864,103 @@ impl RenderEngine3d {
             }
         }
 
+        // ── lightmap atlas (phase 3, has_indirect path) ───────────────────
+        // pack all loaded lightmap textures into one RGBA8 atlas when has_indirect.
+        // rebuild when the set of lm_ids in lightmap_bg_cache changes.
+        if self.has_indirect && !self.lightmap_bg_cache.is_empty() {
+            let mut current_ids: Vec<u32> = self.lightmap_bg_cache.keys().copied().collect();
+            current_ids.sort_unstable();
+            if current_ids != self.atlas_lm_ids {
+                // collect texture data for all lightmap ids
+                let asset_server = world.resource::<lunar_assets::AssetServer>();
+                // gather (lm_id, width, height, pixels-as-rgba8) for each
+                let mut entries: Vec<(u32, u32, u32, Vec<u8>)> = Vec::new();
+                for &lm_id in &current_ids {
+                    if let Some(tex) = asset_server.get_texture_by_id(lm_id) {
+                        // only handle non-compressed textures for now; compressed ones get identity UV
+                        if let lunar_assets::TextureCompression::None = tex.compression {
+                            entries.push((lm_id, tex.width, tex.height, tex.pixels.to_vec()));
+                        }
+                    }
+                }
+                if !entries.is_empty() {
+                    // shelf packer: sort by height desc, place left-to-right
+                    entries.sort_unstable_by(|a, b| b.3.len().cmp(&a.3.len()));
+                    let atlas_dim = ATLAS_SIZE;
+                    let mut atlas_pixels = vec![0u8; (atlas_dim * atlas_dim * 4) as usize];
+                    let mut cursor_x: u32 = 0;
+                    let mut cursor_y: u32 = 0;
+                    let mut row_height: u32 = 0;
+                    let mut new_uvs: HashMap<u32, [f32; 4]> = HashMap::new();
+                    for (lm_id, tw, th, pixels) in &entries {
+                        let tw = *tw; let th = *th;
+                        if tw > atlas_dim || th > atlas_dim { continue; }
+                        if cursor_x + tw > atlas_dim {
+                            cursor_x = 0;
+                            cursor_y += row_height;
+                            row_height = 0;
+                        }
+                        if cursor_y + th > atlas_dim { break; } // atlas full
+                        // blit this texture into atlas
+                        for row in 0..th {
+                            let src_off = (row * tw * 4) as usize;
+                            let dst_off = ((cursor_y + row) * atlas_dim * 4 + cursor_x * 4) as usize;
+                            let len = (tw * 4) as usize;
+                            atlas_pixels[dst_off..dst_off + len].copy_from_slice(&pixels[src_off..src_off + len]);
+                        }
+                        let f = atlas_dim as f32;
+                        new_uvs.insert(*lm_id, [cursor_x as f32 / f, cursor_y as f32 / f, tw as f32 / f, th as f32 / f]);
+                        cursor_x += tw;
+                        row_height = row_height.max(th);
+                    }
+                    // create/recreate atlas texture
+                    let atlas_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("[lightmap] atlas"),
+                        size: wgpu::Extent3d { width: atlas_dim, height: atlas_dim, depth_or_array_layers: 1 },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    });
+                    self.queue.write_texture(
+                        atlas_tex.as_image_copy(),
+                        &atlas_pixels,
+                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(atlas_dim * 4), rows_per_image: Some(atlas_dim) },
+                        wgpu::Extent3d { width: atlas_dim, height: atlas_dim, depth_or_array_layers: 1 },
+                    );
+                    let atlas_view = atlas_tex.create_view(&Default::default());
+                    let atlas_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("[lightmap] atlas bg"),
+                        layout: &self.lightmap_bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&atlas_view) },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.lightmap_sampler) },
+                        ],
+                    });
+                    self.atlas_tex = Some(atlas_tex);
+                    self.atlas_view = Some(atlas_view);
+                    self.atlas_bg = Some(atlas_bg);
+                    self.atlas_lm_uvs = new_uvs;
+                    self.atlas_lm_ids = current_ids;
+                }
+            }
+        }
+
         for i in 0..self.draw_scratch.len() {
             let (_, _, _, color, metallic, roughness, model, _, flags, lm_id) = self.draw_scratch[i];
             Self::pack_mesh_uniforms(&mut self.uniform_staging, ENTITY_SLOT_START + i, model);
             let has_lightmap: u32 = if lm_id != u32::MAX { 1 } else { 0 };
-            Self::pack_material_uniforms(&mut self.material_staging, ENTITY_SLOT_START + i, color, metallic, roughness, flags, has_lightmap);
+            let (lm_uv_offset, lm_uv_scale) = if lm_id != u32::MAX {
+                match self.atlas_lm_uvs.get(&lm_id) {
+                    Some(&uvs) => ([uvs[0], uvs[1]], [uvs[2], uvs[3]]),
+                    None => ([0.0f32, 0.0], [1.0f32, 1.0]),
+                }
+            } else {
+                ([0.0f32, 0.0], [1.0f32, 1.0])
+            };
+            Self::pack_material_uniforms(&mut self.material_staging, ENTITY_SLOT_START + i, color, metallic, roughness, flags, has_lightmap, lm_uv_offset, lm_uv_scale);
         }
 
         // ── pack lights buffer ────────────────────────────────────────────
@@ -4806,7 +5145,8 @@ impl RenderEngine3d {
         // ── build indirect draw args (high tier + INDIRECT_FIRST_INSTANCE) ──
         // scans opaque batches once, writes DrawIndexedIndirect entries (5×u32 each).
         // render pass then uses draw_indexed_indirect per batch instead of draw_indexed.
-        let _opaque_indirect_count: u32 = if self.has_indirect {
+        // phase 4 (GPU-driven indirect) supersedes phase 2 (CPU-built indirect)
+        let _opaque_indirect_count: u32 = if self.has_indirect && !self.gpu_indirect_active() {
             self.indirect_args.clear();
             let n = self.draw_scratch.len();
             let mut i = 0usize;
@@ -4852,6 +5192,89 @@ impl RenderEngine3d {
             }
             (self.indirect_args.len() / 5) as u32
         } else { 0 };
+
+        // ── late GPU indirect cull (phase 4) ─────────────────────────────
+        // runs after draw_scratch is built. dispatches cull_indirect_pipeline:
+        // GPU tests each draw_scratch entity's AABB and writes DrawIndexedIndirect
+        // commands for visible entities into indirect_buf.
+        // phase 5: the early-frame cull readback (item L) remains for game code;
+        // the render path uses indirect_buf directly (no CPU readback for rendering).
+        if self.gpu_indirect_active() {
+            let entity_count = self.draw_scratch.len();
+            if entity_count > 0 {
+                self.ensure_gpu_cull_resources(entity_count);
+
+                // build late AABB data in draw_scratch order
+                let mut late_aabb: Vec<f32> = Vec::with_capacity(entity_count * 8);
+                for i in 0..entity_count {
+                    let entity = self.draw_scratch[i].0;
+                    let (center, half) = match world.get::<Aabb3d>(entity) {
+                        Some(aabb) => (Vec3::from(aabb.center), Vec3::from(aabb.half_extents)),
+                        None => (Vec3::ZERO, Vec3::splat(1e6)),
+                    };
+                    late_aabb.extend_from_slice(&[center.x, center.y, center.z, 0.0, half.x, half.y, half.z, 0.0]);
+                }
+
+                // build draw params in draw_scratch order: [index_count, first_index, base_vertex, first_instance]
+                let mut dp_data: Vec<u32> = Vec::with_capacity(entity_count * 4);
+                for i in 0..entity_count {
+                    let mesh_id = self.draw_scratch[i].1;
+                    let slot = (ENTITY_SLOT_START + i) as u32;
+                    if let Some(entry) = self.mega_mesh_entries.get(&mesh_id) {
+                        dp_data.extend_from_slice(&[entry[1], entry[0], entry[2], slot]);
+                    } else {
+                        dp_data.extend_from_slice(&[0, 0, 0, slot]);
+                    }
+                }
+
+                // build late frustum params with draw_scratch entity_count
+                let frustum = *world.resource::<Frustum>();
+                let planes = frustum.planes;
+                let mut late_fp = [0f32; 32];
+                for (p, plane) in planes.iter().enumerate() {
+                    late_fp[p * 4] = plane.x; late_fp[p * 4 + 1] = plane.y;
+                    late_fp[p * 4 + 2] = plane.z; late_fp[p * 4 + 3] = plane.w;
+                }
+                late_fp[24] = f32::from_bits(entity_count as u32);
+
+                let aabb_buf = self.cull_aabb_buf.as_ref().unwrap();
+                let late_fp_buf = self.late_cull_frustum_buf.as_ref().unwrap();
+                let flags_buf = self.cull_flags_buf.as_ref().unwrap();
+                let dp_buf = self.cull_draw_params_buf.as_ref().unwrap();
+                let ind_buf = self.indirect_buf.as_ref().unwrap();
+                let cnt_buf = self.cull_indirect_count_buf.as_ref().unwrap();
+
+                self.queue.write_buffer(aabb_buf, 0, bytemuck::cast_slice(&late_aabb));
+                self.queue.write_buffer(late_fp_buf, 0, bytemuck::cast_slice(&late_fp));
+                self.queue.write_buffer(dp_buf, 0, bytemuck::cast_slice(&dp_data));
+                self.queue.write_buffer(cnt_buf, 0, bytemuck::bytes_of(&0u32));
+
+                let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("[late cull] bg"),
+                    layout: self.cull_indirect_bgl.as_ref().unwrap(),
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: aabb_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 1, resource: late_fp_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 2, resource: flags_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 3, resource: dp_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 4, resource: ind_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 5, resource: cnt_buf.as_entire_binding() },
+                    ],
+                });
+                let mut late_enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("[late cull indirect]"),
+                });
+                {
+                    let mut cpass = late_enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("[late cull indirect] pass"), timestamp_writes: None,
+                    });
+                    cpass.set_pipeline(self.cull_indirect_pipeline.as_ref().unwrap());
+                    cpass.set_bind_group(0, &bg, &[]);
+                    cpass.dispatch_workgroups((entity_count as u32 + 63) / 64, 1, 1);
+                }
+                self.queue.submit([late_enc.finish()]);
+            }
+        }
 
         // ── collect shadow casters ────────────────────────────────────────
         let mut draw_calls: u32 = 0;
@@ -5500,12 +5923,26 @@ impl RenderEngine3d {
                 pass.execute_bundles(std::iter::once(bundle));
             }
 
-            // opaque PBR pass — batched by (mesh_id, mat_id, lm_id); draw_scratch is pre-sorted.
-            // entity_bg covers the full storage buffer — set once, instance_index selects transform.
-            // on high tier with INDIRECT_FIRST_INSTANCE: uses pre-built indirect_buf for draws.
+            // opaque PBR pass — entity_bg set once; instance_index selects transform + material.
             pass.set_pipeline(&self.opaque_pipeline);
             pass.set_bind_group(2, &self.entity_bg, &[]);
-            {
+            if self.gpu_indirect_active() {
+                // phase 4: GPU cull wrote draw commands to indirect_buf.
+                // bind atlas once (all lightmaps packed into it), bind mega-VBO/IBO, one call.
+                // phase 5: render path doesn't use frustum_visible — GPU handles culling entirely.
+                let atlas_bg = self.atlas_bg.as_ref().unwrap_or(&self.lightmap_fallback_bg);
+                pass.set_bind_group(4, atlas_bg, &[]);
+                let mega_vbuf = self.mega_vbuf.as_ref().unwrap();
+                let mega_ibuf = self.mega_ibuf.as_ref().unwrap();
+                let indirect_buf = self.indirect_buf.as_ref().unwrap();
+                let count_buf = self.cull_indirect_count_buf.as_ref().unwrap();
+                pass.set_vertex_buffer(0, mega_vbuf.slice(..));
+                pass.set_index_buffer(mega_ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                let max_draws = self.draw_scratch.len() as u32;
+                pass.multi_draw_indexed_indirect_count(indirect_buf, 0, count_buf, 0, max_draws);
+                draw_calls += 1; // one logical draw (multi-draw)
+            } else {
+                // phase 2 / non-GPU-driven: per-batch draw_indexed or draw_indexed_indirect
                 let mut last_mesh: u32 = u32::MAX;
                 let mut last_mat: u32 = u32::MAX;
                 let mut last_lm: u32 = u32::MAX;
@@ -5514,7 +5951,7 @@ impl RenderEngine3d {
                 let n = self.draw_scratch.len();
                 let mut i = 0;
                 while i <= n {
-                    let flush = i == n || self.draw_scratch[i].7 < 1.0; // end or transparent
+                    let flush = i == n || self.draw_scratch[i].7 < 1.0;
                     let (cur_mesh, cur_mat, cur_lm) = if flush || i == n { (u32::MAX, u32::MAX, u32::MAX) }
                         else { (self.draw_scratch[i].1, self.draw_scratch[i].2, self.draw_scratch[i].9) };
                     let group_changed = cur_mesh != last_mesh || cur_mat != last_mat || cur_lm != last_lm;
@@ -5543,10 +5980,7 @@ impl RenderEngine3d {
                         pass.set_bind_group(4, lm_bg, &[]);
                         pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
                         pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
-                        last_mesh = cur_mesh;
-                        last_mat = cur_mat;
-                        last_lm = cur_lm;
-                        group_start = i;
+                        last_mesh = cur_mesh; last_mat = cur_mat; last_lm = cur_lm; group_start = i;
                     }
                     i += 1;
                 }
