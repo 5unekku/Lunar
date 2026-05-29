@@ -599,6 +599,22 @@ impl DevRenderProfile {
             max_particles: u32::MAX,
         }
     }
+
+    // ── builder methods ───────────────────────────────────────────────────
+    // each returns Self so they chain: DevRenderProfile::classic().with_bloom().with_shadows()
+
+    #[must_use] pub fn with_shadows(mut self, v: bool) -> Self { self.shadows = v; self }
+    #[must_use] pub fn with_bloom(mut self, v: bool) -> Self { self.bloom = v; self }
+    #[must_use] pub fn with_ssao(mut self, v: bool) -> Self { self.ssao = v; self }
+    #[must_use] pub fn with_ssr(mut self, v: bool) -> Self { self.ssr = v; self }
+    #[must_use] pub fn with_volumetric_fog(mut self, v: bool) -> Self { self.volumetric_fog = v; self }
+    #[must_use] pub fn with_fxaa(mut self, v: bool) -> Self { self.fxaa = v; self }
+    #[must_use] pub fn with_vignette(mut self, v: bool) -> Self { self.vignette = v; self }
+    #[must_use] pub fn with_chromatic_aberration(mut self, v: bool) -> Self { self.chromatic_aberration = v; self }
+    #[must_use] pub fn with_film_grain(mut self, v: bool) -> Self { self.film_grain = v; self }
+    #[must_use] pub fn with_max_shadow_cascades(mut self, n: u32) -> Self { self.max_shadow_cascades = n; self }
+    #[must_use] pub fn with_max_msaa(mut self, n: u32) -> Self { self.max_msaa = n; self }
+    #[must_use] pub fn with_max_particles(mut self, n: u32) -> Self { self.max_particles = n; self }
 }
 
 // ── render config ──────────────────────────────────────────────────────────
