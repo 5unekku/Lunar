@@ -33,13 +33,11 @@ var allTargets = []target{
 	{"i686-unknown-linux-musl", "zigbuild", "", ""},
 	{"armv7-unknown-linux-musleabihf", "zigbuild", "", ""},
 
-	// ── windows (mingw — no SDK required) ────────────────────────────────
+	// ── windows (gnu — no MSVC SDK required) ─────────────────────────────
 	{"x86_64-pc-windows-gnu", "zigbuild", ".exe", ""},
 	{"i686-pc-windows-gnu", "zigbuild", ".exe", ""},
-
-	// ── windows (msvc — requires Windows SDK via cargo-xwin) ─────────────
-	{"x86_64-pc-windows-msvc", "xwin", ".exe", "windows-sdk (auto-downloaded by cargo-xwin, ~4 GB first run)"},
-	{"aarch64-pc-windows-msvc", "xwin", ".exe", "windows-sdk (auto-downloaded by cargo-xwin, ~4 GB first run)"},
+	// aarch64 uses gnullvm (LLVM-mingw) since there is no aarch64-pc-windows-gnu
+	{"aarch64-pc-windows-gnullvm", "zigbuild", ".exe", ""},
 
 	// ── macos (requires macOS SDK via osxcross) ───────────────────────────
 	{"x86_64-apple-darwin", "zigbuild", "", "macos-sdk (set SDKROOT or install osxcross)"},
@@ -182,8 +180,6 @@ func buildArgs(t target, example string, release bool) []string {
 	switch t.tool {
 	case "zigbuild":
 		args = []string{"zigbuild"}
-	case "xwin":
-		args = []string{"xwin", "build"}
 	default:
 		args = []string{"build"}
 	}
