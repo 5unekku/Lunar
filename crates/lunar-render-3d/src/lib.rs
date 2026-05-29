@@ -141,6 +141,88 @@ impl RenderTier {
     }
 }
 
+// ── quality settings ──────────────────────────────────────────────────────
+
+/// coarse quality tier. individual toggles in `QualitySettings` can be
+/// overridden independently of the preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QualityPreset { Low, Medium, High, Ultra }
+
+/// per-feature quality knobs. inserted as a resource by [`RenderPlugin3d`]
+/// using defaults derived from the detected [`RenderTier`].
+///
+/// game code can override individual fields after plugin init.
+#[derive(Resource, Clone)]
+pub struct QualitySettings {
+    pub preset: QualityPreset,
+    /// shadow map resolution per cascade side (pixels).
+    pub shadow_res: u32,
+    /// number of shadow cascades (1 on Low, 3 on Mid/High).
+    pub shadow_cascades: u32,
+    /// msaa sample count: 1 = off, 4 = 4× (applied on Mid/High).
+    pub msaa_samples: u32,
+    /// enable the bloom post-pass.
+    pub bloom: bool,
+    /// number of bloom downsample mip levels (3 Low, 5 Mid, 7 High).
+    pub bloom_mips: u32,
+    /// enable half-res GTAO ambient occlusion (Mid/High only).
+    pub ssao: bool,
+    /// enable screen-space vignette in the composite pass.
+    pub vignette: bool,
+    /// enable chromatic aberration in the composite pass.
+    pub chromatic_aberration: bool,
+    /// enable film grain in the composite pass.
+    pub film_grain: bool,
+    /// maximum live particles.
+    pub particle_cap: u32,
+}
+
+impl QualitySettings {
+    pub fn from_tier(tier: RenderTier) -> Self {
+        match tier {
+            RenderTier::LowGles => Self {
+                preset: QualityPreset::Low,
+                shadow_res: 512,
+                shadow_cascades: 1,
+                msaa_samples: 1,
+                bloom: false,
+                bloom_mips: 3,
+                ssao: false,
+                vignette: false,
+                chromatic_aberration: false,
+                film_grain: false,
+                particle_cap: 1024,
+            },
+            RenderTier::Mid => Self {
+                preset: QualityPreset::Medium,
+                shadow_res: 1024,
+                shadow_cascades: 3,
+                msaa_samples: 4,
+                bloom: true,
+                bloom_mips: 5,
+                ssao: true,
+                vignette: true,
+                chromatic_aberration: false,
+                film_grain: false,
+                particle_cap: 8192,
+            },
+            RenderTier::High => Self {
+                preset: QualityPreset::High,
+                shadow_res: 2048,
+                shadow_cascades: 3,
+                msaa_samples: 4,
+                bloom: true,
+                bloom_mips: 7,
+                ssao: true,
+                vignette: true,
+                chromatic_aberration: true,
+                film_grain: true,
+                particle_cap: 32768,
+            },
+        }
+    }
+}
+
 // ── render config ──────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -1139,10 +1221,27 @@ impl RenderEngine3d {
         self.queue.write_buffer(&self.material_buf, 0, &self.material_staging[..upload_size as usize]);
 
         // ── acquire surface ───────────────────────────────────────────────
-        let (wgpu::CurrentSurfaceTexture::Success(frame)
-        | wgpu::CurrentSurfaceTexture::Suboptimal(frame)) = self.surface.get_current_texture()
-        else {
-            return 0;
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(f) => f,
+            wgpu::CurrentSurfaceTexture::Suboptimal(f) => {
+                // render this frame, reconfigure at the end so next frame is clean
+                self.surface.configure(&self.device, &self.surface_config);
+                f
+            }
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                self.surface.configure(&self.device, &self.surface_config);
+                return 0;
+            }
+            wgpu::CurrentSurfaceTexture::Lost => {
+                self.surface.configure(&self.device, &self.surface_config);
+                return 0;
+            }
+            wgpu::CurrentSurfaceTexture::Timeout
+            | wgpu::CurrentSurfaceTexture::Occluded => return 0,
+            wgpu::CurrentSurfaceTexture::Validation => {
+                log::error!("wgpu validation error acquiring surface texture");
+                return 0;
+            }
         };
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1449,6 +1548,7 @@ impl GamePlugin for RenderPlugin3d {
             // and expose it as a standalone resource for game systems to query
             if let Some(engine) = app.world_mut().get_resource::<RenderEngine3d>() {
                 let tier = engine.render_tier();
+                app.insert_resource(QualitySettings::from_tier(tier));
                 app.insert_resource(tier);
             }
 

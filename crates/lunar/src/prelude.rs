@@ -98,7 +98,7 @@ pub use lunar_3d::{
 };
 // lunar-render-3d types — only available when the 3d feature is enabled
 #[cfg(feature = "3d")]
-pub use lunar_render_3d::{RenderConfig3d, RenderEngine3d, RenderInfo3d, RenderPlugin3d, Sky};
+pub use lunar_render_3d::{QualityPreset, QualitySettings, RenderConfig3d, RenderEngine3d, RenderInfo3d, RenderPlugin3d, Sky};
 
 // Bundle derive — needed for game code that defines its own bundles
 #[cfg(feature = "3d")]
