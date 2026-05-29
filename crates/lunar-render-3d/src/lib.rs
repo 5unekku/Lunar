@@ -52,6 +52,8 @@ const COMPOSITE_SHADER_SRC: &str = include_str!("composite.wgsl");
 const GTAO_SHADER_SRC: &str = include_str!("gtao.wgsl");
 
 const FXAA_SHADER_SRC: &str = include_str!("fxaa.wgsl");
+const SSR_SHADER_SRC:  &str = include_str!("ssr.wgsl");
+const FOG_SHADER_SRC:  &str = include_str!("volumetric_fog.wgsl");
 
 const SKY_RADIUS: f32 = 900.0;
 const SUN_Y: f32 = 895.0;
@@ -106,6 +108,12 @@ const GTAO_PARAMS_SIZE: u64 = 160;
 
 /// FXAA params UBO: rcp_frame(vec2) + 2 pads = 16 bytes.
 const FXAA_PARAMS_SIZE: u64 = 16;
+
+/// SSR params UBO: inv_view_proj(64) + proj(64) + view(64) + misc(32) = 224 bytes.
+const SSR_PARAMS_SIZE: u64 = 224;
+
+/// volumetric fog params UBO: inv_view_proj(64) + misc(64) = 128 bytes (std140 aligned).
+const FOG_PARAMS_SIZE: u64 = 128;
 
 /// stride for dynamic UBO slots — must be ≥ min_uniform_buffer_offset_alignment (256).
 const UNIFORM_STRIDE: u64 = 256;
@@ -202,6 +210,10 @@ pub struct QualitySettings {
     /// enable FXAA post-process AA. recommended on low tier (no MSAA).
     /// mid/high tier uses MSAA instead and leaves this off by default.
     pub fxaa: bool,
+    /// enable quarter-res screen-space reflections (mid+ tier).
+    pub ssr: bool,
+    /// enable quarter-res ray-marched volumetric fog (mid+ tier).
+    pub volumetric_fog: bool,
 }
 
 impl QualitySettings {
@@ -220,6 +232,8 @@ impl QualitySettings {
                 film_grain: false,
                 particle_cap: 1024,
                 fxaa: true, // no MSAA on low tier — FXAA is the only AA path
+                ssr: false,
+                volumetric_fog: false,
             },
             RenderTier::Mid => Self {
                 preset: QualityPreset::Medium,
@@ -234,6 +248,8 @@ impl QualitySettings {
                 film_grain: false,
                 particle_cap: 8192,
                 fxaa: false, // 4× MSAA is active — FXAA redundant
+                ssr: true,
+                volumetric_fog: true,
             },
             RenderTier::High => Self {
                 preset: QualityPreset::High,
@@ -248,6 +264,8 @@ impl QualitySettings {
                 film_grain: true,
                 particle_cap: 32768,
                 fxaa: false, // 4× MSAA active
+                ssr: true,
+                volumetric_fog: true,
             },
         }
     }
@@ -417,6 +435,28 @@ pub struct RenderEngine3d {
     fxaa_bg: wgpu::BindGroup,
     fxaa_params_buf: wgpu::Buffer,
     fxaa_pipeline: wgpu::RenderPipeline,
+
+    // SSR — quarter-res screen-space reflections (mid+ tier)
+    ssr_enabled: bool,
+    ssr_texture: wgpu::Texture,
+    ssr_view: wgpu::TextureView,
+    ssr_bgl0: wgpu::BindGroupLayout,
+    ssr_bgl1: wgpu::BindGroupLayout,
+    ssr_bg0: wgpu::BindGroup,
+    ssr_bg1: wgpu::BindGroup,
+    ssr_params_buf: wgpu::Buffer,
+    ssr_pipeline: wgpu::RenderPipeline,
+
+    // volumetric fog — quarter-res ray-marched sun scattering (mid+ tier)
+    fog_enabled: bool,
+    fog_texture: wgpu::Texture,
+    fog_view: wgpu::TextureView,
+    fog_bgl0: wgpu::BindGroupLayout,
+    fog_bgl1: wgpu::BindGroupLayout,
+    fog_bg0: wgpu::BindGroup,
+    fog_bg1: wgpu::BindGroup,
+    fog_params_buf: wgpu::Buffer,
+    fog_pipeline: wgpu::RenderPipeline,
 
     // transparent pass — alpha < 1.0 entities drawn back-to-front after opaques
     transparent_pipeline: wgpu::RenderPipeline,
@@ -1152,6 +1192,28 @@ impl RenderEngine3d {
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
                     visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 5: fog_tex (rgba16f volumetric scattering result)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 6: sampler (was 4)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
@@ -1285,6 +1347,226 @@ impl RenderEngine3d {
                     format,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            cache: pipeline_cache.as_ref(),
+            multiview_mask: None,
+        });
+
+        // ── SSR (screen-space reflections, mid+ tier) ─────────────────────
+
+        let ssr_enabled = quality.ssr;
+        let ssr_w = (config.width / 2).max(1);
+        let ssr_h = (config.height / 2).max(1);
+
+        let ssr_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[ssr] reflection texture"),
+            size: wgpu::Extent3d { width: ssr_w, height: ssr_h, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let ssr_view = ssr_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let ssr_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[ssr] params buffer"),
+            size: SSR_PARAMS_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // group 0: globals + hdr + depth + samplers
+        // group 0: globals + hdr_tex + depth_tex (float, textureLoad) + linear sampler
+        let ssr_bgl0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[ssr] bgl0"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(GLOBALS_SIZE),
+                    }, count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    }, count: None,
+                },
+                // depth texture read via textureLoad — TextureSampleType::Depth works with texture_2d<f32>
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    }, count: None,
+                },
+                // linear sampler for HDR texture sampling on ray hit
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        // group 1: SSR params
+        let ssr_bgl1 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[ssr] bgl1"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(SSR_PARAMS_SIZE),
+                }, count: None,
+            }],
+        });
+
+        // point (non-filtering) sampler for depth texture reads in SSR + fog
+        let _depth_point_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("[depth] point sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        // SSR bg0 uses the non-MSAA depth texture (created below in GTAO section).
+        // Declare as uninitialized here and assign after GTAO init via shadowing let.
+        let ssr_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[ssr] bg1"),
+            layout: &ssr_bgl1,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: ssr_params_buf.as_entire_binding() }],
+        });
+
+        let ssr_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("[ssr] shader"),
+            source: wgpu::ShaderSource::Wgsl(SSR_SHADER_SRC.into()),
+        });
+        let ssr_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[ssr] pipeline layout"),
+            bind_group_layouts: &[Some(&ssr_bgl0), Some(&ssr_bgl1)],
+            immediate_size: 0,
+        });
+        let ssr_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("[ssr] pipeline"),
+            layout: Some(&ssr_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &ssr_shader, entry_point: Some("vs_main"),
+                buffers: &[], compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &ssr_shader, entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    blend: None, write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            cache: pipeline_cache.as_ref(),
+            multiview_mask: None,
+        });
+
+        // ── volumetric fog (mid+ tier) ─────────────────────────────────────
+
+        let fog_enabled = quality.volumetric_fog;
+        let fog_w = (config.width / 2).max(1);
+        let fog_h = (config.height / 2).max(1);
+
+        let fog_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[fog] scattering texture"),
+            size: wgpu::Extent3d { width: fog_w, height: fog_h, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let fog_view = fog_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let fog_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[fog] params buffer"),
+            size: FOG_PARAMS_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let fog_bgl0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[fog] bgl0"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(GLOBALS_SIZE),
+                    }, count: None,
+                },
+                // depth texture read via textureLoad — TextureSampleType::Depth with texture_2d<f32>
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    }, count: None,
+                },
+            ],
+        });
+        let fog_bgl1 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[fog] bgl1"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(FOG_PARAMS_SIZE),
+                }, count: None,
+            }],
+        });
+
+        // fog bg0 uses the non-MSAA depth texture (created in GTAO section, assigned below).
+        let fog_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[fog] bg1"),
+            layout: &fog_bgl1,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: fog_params_buf.as_entire_binding() }],
+        });
+
+        let fog_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("[fog] shader"),
+            source: wgpu::ShaderSource::Wgsl(FOG_SHADER_SRC.into()),
+        });
+        let fog_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[fog] pipeline layout"),
+            bind_group_layouts: &[Some(&fog_bgl0), Some(&fog_bgl1)],
+            immediate_size: 0,
+        });
+        let fog_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("[fog] pipeline"),
+            layout: Some(&fog_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &fog_shader, entry_point: Some("vs_main"),
+                buffers: &[], compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &fog_shader, entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    blend: None, write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
@@ -1501,7 +1783,8 @@ impl RenderEngine3d {
             ],
         });
 
-        // rebuild composite_bg now that ao_view_a is available
+        // rebuild composite_bg now that ao_view_a, ssr_view, and fog_view are available
+        // binding 4 = ssr_tex, binding 5 = fog_tex, binding 6 = sampler
         let composite_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("[composite] bg"),
             layout: &composite_bgl,
@@ -1510,7 +1793,29 @@ impl RenderEngine3d {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&hdr_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(bloom_mip_views.first().unwrap_or(&hdr_view)) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&gtao_ao_view_a) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&post_sampler) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&ssr_view) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&fog_view) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&post_sampler) },
+            ],
+        });
+
+        // rebuild ssr and fog bg0 now that the non-MSAA depth texture is available
+        let ssr_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[ssr] bg0"),
+            layout: &ssr_bgl0,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: globals_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&hdr_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&gtao_depth_tex) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&post_sampler) },
+            ],
+        });
+        let fog_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[fog] bg0"),
+            layout: &fog_bgl0,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: globals_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&gtao_depth_tex) },
             ],
         });
 
@@ -1602,6 +1907,24 @@ impl RenderEngine3d {
             fxaa_bg,
             fxaa_params_buf,
             fxaa_pipeline,
+            ssr_enabled,
+            ssr_texture,
+            ssr_view,
+            ssr_bgl0,
+            ssr_bgl1,
+            ssr_bg0,
+            ssr_bg1,
+            ssr_params_buf,
+            ssr_pipeline,
+            fog_enabled,
+            fog_texture,
+            fog_view,
+            fog_bgl0,
+            fog_bgl1,
+            fog_bg0,
+            fog_bg1,
+            fog_params_buf,
+            fog_pipeline,
             pipeline_cache,
             // 4 MiB chunk — larger than any single write, handles most scene sizes
             staging_belt: wgpu::util::StagingBelt::new(device_for_belt, 4 * 1024 * 1024),
@@ -1913,7 +2236,56 @@ impl RenderEngine3d {
         self.bloom_downsample_bgs = ds_bgs;
         self.bloom_upsample_bgs = us_bgs;
 
-        // rebuild composite bind group with the new views (binding 3 = GTAO ao, binding 4 = sampler)
+        // rebuild SSR and fog textures at the new resolution
+        let ssr_hw = (width / 2).max(1);
+        let ssr_hh = (height / 2).max(1);
+        let ssr_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[ssr] reflection texture"),
+            size: wgpu::Extent3d { width: ssr_hw, height: ssr_hh, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let ssr_view = ssr_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let fog_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[fog] scattering texture"),
+            size: wgpu::Extent3d { width: ssr_hw, height: ssr_hh, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let fog_view = fog_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // rebuild SSR bg0 with new depth view
+        self.ssr_bg0 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[ssr] bg0"),
+            layout: &self.ssr_bgl0,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.globals_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.gtao_depth_view) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+            ],
+        });
+        self.fog_bg0 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[fog] bg0"),
+            layout: &self.fog_bgl0,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.globals_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.gtao_depth_view) },
+            ],
+        });
+
+        self.ssr_view = ssr_view;
+        self.ssr_texture = ssr_texture;
+        self.fog_view = fog_view;
+        self.fog_texture = fog_texture;
+
+        // rebuild composite bind group (binding 4=ssr, 5=fog, 6=sampler)
         let bloom_view = self.bloom_mip_views.first().unwrap_or(&self.hdr_view);
         self.composite_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("[composite] bg"),
@@ -1923,7 +2295,9 @@ impl RenderEngine3d {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(bloom_view) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.gtao_ao_view_a) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&self.ssr_view) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&self.fog_view) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
             ],
         });
 
@@ -2649,6 +3023,98 @@ impl RenderEngine3d {
             }
         }
 
+        // ── SSR pass (mid+ tier) ─────────────────────────────────────────
+        if self.ssr_enabled {
+            let width  = self.surface_config.width as f32;
+            let height = self.surface_config.height as f32;
+            let inv_vp   = view_proj.inverse();
+            let view_mat = Mat4::look_at_rh(cam_pos, cam_pos + cam_wt.forward(), cam_wt.up());
+            let inv_vp_cols  = inv_vp.to_cols_array();
+            let vp_cols      = view_proj.to_cols_array();
+            let view_cols    = view_mat.to_cols_array();
+            let mut ssr_data = [0u8; SSR_PARAMS_SIZE as usize];
+            ssr_data[0..64].copy_from_slice(unsafe { slice_as_bytes(&inv_vp_cols) });
+            ssr_data[64..128].copy_from_slice(unsafe { slice_as_bytes(&vp_cols) });
+            ssr_data[128..192].copy_from_slice(unsafe { slice_as_bytes(&view_cols) });
+            // screen_size(vec2) + max_steps(u32) + thickness + stride + fade_start + 2 pads
+            let max_steps: u32 = 32;
+            ssr_data[192..196].copy_from_slice(&width.to_le_bytes());
+            ssr_data[196..200].copy_from_slice(&height.to_le_bytes());
+            ssr_data[200..204].copy_from_slice(&max_steps.to_le_bytes());
+            ssr_data[204..208].copy_from_slice(&0.5_f32.to_le_bytes()); // thickness
+            ssr_data[208..212].copy_from_slice(&1.0_f32.to_le_bytes()); // stride
+            ssr_data[212..216].copy_from_slice(&0.1_f32.to_le_bytes()); // fade_start
+            self.queue.write_buffer(&self.ssr_params_buf, 0, &ssr_data);
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("[ssr] pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.ssr_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.ssr_pipeline);
+            pass.set_bind_group(0, &self.ssr_bg0, &[]);
+            pass.set_bind_group(1, &self.ssr_bg1, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        // ── volumetric fog pass (mid+ tier) ──────────────────────────────
+        if self.fog_enabled {
+            let width  = self.surface_config.width as f32;
+            let height = self.surface_config.height as f32;
+            let inv_vp      = view_proj.inverse();
+            let inv_vp_cols = inv_vp.to_cols_array();
+            // write fog params: inv_view_proj(64) + rest(64) = 128 bytes
+            let mut fog_data = [0u8; FOG_PARAMS_SIZE as usize];
+            fog_data[0..64].copy_from_slice(unsafe { slice_as_bytes(&inv_vp_cols) });
+            // rest 64 bytes: dir_direction(12)+step_count(4)+dir_color(12)+density(4)+
+            //                fog_color(12)+max_dist(4)+sun(4)+aniso(4)+w(4)+h(4)
+            let dir_d = dir_direction.normalize();
+            let step_count: u32 = 16;
+            // sun_dir points towards sun (negate scene light direction)
+            let sun_dir: [f32; 3] = [-dir_d.x, -dir_d.y, -dir_d.z];
+            let fog_color: [f32; 3] = [sky_color.r * 0.5, sky_color.g * 0.5, sky_color.b * 0.7];
+            let rest: [f32; 16] = [
+                sun_dir[0], sun_dir[1], sun_dir[2], f32::from_bits(step_count),
+                dir_color.r, dir_color.g, dir_color.b, 0.01_f32,    // density
+                fog_color[0], fog_color[1], fog_color[2], 200.0_f32, // max_distance
+                2.0_f32, 0.6_f32, width, height,                     // sun_intensity, anisotropy
+            ];
+            fog_data[64..128].copy_from_slice(unsafe { slice_as_bytes(&rest) });
+            self.queue.write_buffer(&self.fog_params_buf, 0, &fog_data);
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("[fog] pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.fog_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.fog_pipeline);
+            pass.set_bind_group(0, &self.fog_bg0, &[]);
+            pass.set_bind_group(1, &self.fog_bg1, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
         // ── composite pass → swapchain ────────────────────────────────────
         {
             let time = world.resource::<lunar_core::Time>();
@@ -2667,6 +3133,8 @@ impl RenderEngine3d {
                     if q.chromatic_aberration { f |= 4; }
                     if q.film_grain { f |= 8; }
                     if self.ssao_enabled && q.ssao { f |= 16; }
+                    if self.ssr_enabled && q.ssr { f |= 32; }
+                    if self.fog_enabled && q.volumetric_fog { f |= 64; }
                     bloom_s = 0.04_f32;
                     vig_s   = if q.vignette { 0.3 } else { 0.0 };
                     vig_r   = 0.3_f32;
