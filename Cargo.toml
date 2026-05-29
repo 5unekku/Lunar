@@ -49,7 +49,7 @@ bevy_ecs = "0.18"
 glam = "0.33"
 wgpu = { version = "29.0.3", default-features = false }
 raw-window-handle = "0.6"
-sdl3 = "0.18"
+sdl3 = { version = "0.18", features = ["build-from-source-static"] }
 log = "0.4"
 env_logger = "0.11"
 pollster = "0.4"

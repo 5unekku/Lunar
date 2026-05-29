@@ -129,8 +129,9 @@ func main() {
 			args := buildArgs(t, ex, release)
 			cmd := exec.Command("cargo", args...)
 			cmd.Dir = root
+			// merge stderr into stdout so everything appears in a redirected log
 			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
+			cmd.Stderr = os.Stdout
 
 			err := cmd.Run()
 			if err != nil {
