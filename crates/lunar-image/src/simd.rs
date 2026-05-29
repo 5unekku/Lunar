@@ -166,15 +166,15 @@ pub fn rgba_to_bgra(buf: &mut [u8]) {
     }
 }
 
-/// convert sRGB byte values to linear f32. output must be 4x input length.
+/// convert sRGB byte values to linear f32. output must be the same length as input.
 ///
 /// # Panics
-/// panics if output length is not exactly 4x input length.
+/// panics if output length does not equal input length.
 pub fn srgb_to_linear(input: &[u8], output: &mut [f32]) {
     assert_eq!(
-        input.len() * 4,
+        input.len(),
         output.len(),
-        "output must be 4x input length"
+        "output must be same length as input"
     );
     for (i, &byte) in input.iter().enumerate() {
         let s = f32::from(byte) / 255.0;
