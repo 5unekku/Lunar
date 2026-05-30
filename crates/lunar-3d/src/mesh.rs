@@ -138,6 +138,10 @@ pub struct MeshData {
     /// when `Some`, must have the same length as `vertices`.
     pub skin: Option<Vec<SkinWeights>>,
     pub usage: MeshUsage,
+    /// when true, the renderer drops vertex/index data from MeshRegistry after GPU upload.
+    /// safe to set after collision world is built — Collider3d holds its own vertex copy.
+    /// do not set for skinned meshes (cpu data needed for bone blending).
+    pub gpu_only: bool,
 }
 
 impl MeshData {
@@ -149,6 +153,7 @@ impl MeshData {
             indices,
             skin: None,
             usage: MeshUsage::Static,
+            gpu_only: false,
         }
     }
 
@@ -172,6 +177,7 @@ impl MeshData {
             indices,
             skin: Some(skin),
             usage: MeshUsage::Cached,
+            gpu_only: false,
         }
     }
 

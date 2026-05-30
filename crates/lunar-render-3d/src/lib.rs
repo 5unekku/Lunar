@@ -5410,6 +5410,7 @@ impl RenderEngine3d {
         });
 
         // ── upload missing meshes ─────────────────────────────────────────
+        let mut mesh_evict_ids: Vec<u32> = Vec::new();
         for i in 0..self.draw_scratch.len() {
             let mesh_id = self.draw_scratch[i].1;
             if !self.mesh_gpu.contains_key(&mesh_id) {
@@ -5417,6 +5418,7 @@ impl RenderEngine3d {
                 if let Some(data) = registry.get_mesh(lunar_assets::Handle::new(mesh_id, 0)) {
                     let gpu = Self::upload_mesh_data(&self.device, &self.queue, data);
                     self.mesh_gpu.insert(mesh_id, gpu);
+                    if data.gpu_only { mesh_evict_ids.push(mesh_id); }
                 }
             }
             // also append to mega-buffers when has_indirect and not yet there
@@ -5473,6 +5475,7 @@ impl RenderEngine3d {
                         if let Some(data) = registry.get_mesh(lunar_assets::Handle::new(mesh_id, 0)) {
                             let gpu = Self::upload_mesh_data(&self.device, &self.queue, data);
                             self.mesh_gpu.insert(mesh_id, gpu);
+                            if data.gpu_only { mesh_evict_ids.push(mesh_id); }
                         }
                     }
                 }
@@ -5480,6 +5483,16 @@ impl RenderEngine3d {
                 Self::pack_mesh_uniforms(&mut self.uniform_staging, slot, wt.to_matrix());
                 self.surface_scratch.push((entity, slot, tex_ids, packed));
                 surface_idx += 1;
+            }
+        }
+
+        // evict cpu mesh data for newly uploaded gpu_only meshes
+        if !mesh_evict_ids.is_empty() {
+            mesh_evict_ids.sort_unstable();
+            mesh_evict_ids.dedup();
+            let mut registry = world.resource_mut::<MeshRegistry>();
+            for id in mesh_evict_ids {
+                registry.evict_cpu_data(lunar_assets::Handle::new(id, 0));
             }
         }
 
