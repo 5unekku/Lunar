@@ -6,19 +6,30 @@ still separates us from each target's full visual and performance ceiling.
 
 ---
 
-## where we stand after sprint 5
+## where we stand (current)
 
 feature parity achieved:
 - lightmapped indoor rendering (q1/q3 level) ✓
 - surface shader system (q3 animated surfaces) ✓
 - directional lightmaps (hl2 radiosity) ✓
-- csm directional shadows ✓
+- csm directional shadows + soft shadows (pcss + soft point pcf) ✓
 - point light cube shadows (doom 3 flashlight) ✓
 - clustered forward lighting up to 256 lights ✓
 - ssao, bloom, ssr, volumetric fog ✓
-- fxaa, msaa up to 8× ✓
+- fxaa, msaa up to 8×, staa ✓
 - gpu-driven indirect rendering ✓
 - hzb occlusion culling ✓
+- pvs offline bake + runtime bsp portal culling ✓
+- lightmap baker (`lunar-lightmap`) wired into renderer ✓
+- auto-lod generation tool (`gen-lods`) ✓
+- gpu-driven lod selection ✓
+- ambient light probe grid ✓
+- detail sprites, planar reflections ✓
+- contact shadows, motion vectors ✓
+- mip streaming infrastructure ✓
+- spirv pre-compilation via build.rs ✓
+- bc1/bc6h/bc7 texture compression ✓
+- vertex quantization (60→32 bytes/vertex) ✓
 
 ---
 
@@ -28,17 +39,15 @@ feature parity achieved:
 nothing left. we exceed it on every axis.
 
 ### quake 3 (1999)
-remaining:
-- **q3's bsp/pvs culling is precomputed** — ours is runtime. precomputed pvs would eliminate all
-  per-frame culling cpu work entirely for indoor scenes. (our bsp plugin can route to it already;
-  pvs tables need offline bake tooling)
+nothing left. bsp/pvs precomputed culling is done (`lunar-bsp-build`, `bake-pvs` tool,
+`a9f711b`). we exceed q3 on every axis.
 
 ### doom 3 (2004)
 remaining:
-- **soft shadows** — doom 3 hard shadows are matched. soft penumbra (pcss or vsm) is above doom 3
-  but expected by modern users of that style
 - **decal stacking** — doom 3 had robust decal depth-sorting; ours is functional but unverified
   under heavy decal load
+
+(soft shadows matched via pcss + soft point pcf since `0621c2c`.)
 
 ### half-life 2 (2004)
 remaining:
@@ -48,11 +57,9 @@ remaining:
   replicating exactly, but a patch/vertex-blend terrain variant would cover it
 - **facial animation system** — hl2 flex-based morph system for character faces. we have
   skeletal animation but no vertex-level morph blending with the flex controller api
-- **detail sprite system** — hl2 covered ground with hundreds of cpu-placed sprites
-  (grass blades, pebbles). we have particles but not the static detail-sprite renderer
-- **water with real-time reflection + refraction** — our water shader exists but uses screen-space
-  only; hl2's water reflected the full scene (planar reflection). for games using hl2-style water
-  this matters visually
+
+(detail sprites done since `e3a9628`. planar reflections done since `e3a9628` — water now
+reflects the full scene.)
 
 ### portal 2 (2011)
 remaining:
@@ -60,34 +67,19 @@ remaining:
   correct perspective. our portal culling exists for pvs but doesn't recurse the render pass
   through a portal viewport. implementing this requires a second full render pass per portal pair
   visible in the frame (expensive but finite: at most 2-4 portal surfaces per scene)
-- **taa (temporal anti-aliasing)** — portal 2 era games moved from fxaa to taa for better quality.
-  taa requires a history buffer and per-pixel jitter in the projection matrix. it eliminates
-  shimmering on specular and thin geometry that fxaa misses
-- **reflective surfaces beyond ssr** — portal 2's floors and panels used cube environment maps
-  + ssr combined. our ssr alone handles most cases but has gaps at screen edges
+- **full taa** — portal 2 era games moved from fxaa to taa for better quality. we have STAA
+  (selective temporal AA, per-pixel mask on top of msaa), which handles specular shimmering on
+  non-moving geometry. full frame-history taa with velocity reprojection is not yet implemented
 
 ### halo ce (2001)
-remaining:
-- nothing critical; we exceed it
+nothing left. we exceed it on every axis.
 
 ### halo 3 (2007)
 remaining (hardest target):
-- **automatic lod generation** — halo 3 auto-generated 4-5 lod levels per mesh offline.
-  we have manual meshLod component but no pipeline that auto-generates them. without auto-lod,
-  devs must manually create lod meshes, which is friction. a build.rs-integrated mesh simplifier
-  (meshopt or similar) that generates lods from the base mesh at multiple ratios would close this
 - **deferred lighting for high-density outdoor scenes** — halo 3 used deferred shading for outdoor
-  areas with 30-60 simultaneous dynamic lights (vehicle headlights, explosions, ambient volumes).
-  our clustered forward handles this fine up to ~50 lights, but deferred removes the per-fragment
-  lighting cost entirely for high-overdraw outdoor scenes. see the forward+ vs deferred section below
-- **ambient light probes per volume** — halo 3 divided the world into volumes, each with its own
-  sh probe. dynamic objects in that volume get the correct colored ambient from the nearest probe.
-  we have a single global irradianceSH resource. volumetric light probes would make dynamic
-  characters match the static environment much better
-- **gpu-driven lod selection** — halo 3 selected lod per-object on the gpu via a depth pyramid
-  (similar to our hzb). the lod selection compute pass outputs instance data that drives the
-  indirect draw. we select lod on the cpu before building draw_scratch. gpu lod selection removes
-  the cpu readback entirely
+  areas with 30-60 simultaneous dynamic lights. our clustered forward handles this fine up to ~50
+  lights, but deferred removes the per-fragment lighting cost entirely for high-overdraw outdoor
+  scenes. see the forward+ vs deferred section below
 - **texture virtual texturing or mega-texture** — halo 3 streamed unique per-polygon texture detail
   via texture atlases and streaming. our mip streaming does coverage-based quality reduction but
   doesn't support unique textures per poly (mega-texture style). this matters for large unique
@@ -95,6 +87,9 @@ remaining (hardest target):
 - **skin/subsurface scattering** — character skin in halo 3 had a subtle wrap-lighting and sss
   approximation. our pbr has no sss term. for games with prominent character close-ups this is
   visible
+
+(auto-lod generation done since `2ca524f`. ambient light probes per-volume done since `0621c2c`.
+gpu-driven lod selection done since `f8a17b9`.)
 
 ---
 
@@ -254,20 +249,15 @@ none of these require switching to deferred.
 
 ---
 
-## priority order for next sprints
+## open items by priority
 
 | item                              | target           | effort | impact |
 |-----------------------------------|------------------|--------|--------|
-| shader spirv pre-compilation      | all              | low    | high   |
-| mesh vertex cache optimization    | all              | low    | high   |
-| auto-lod generation (build.rs)    | halo 3           | medium | high   |
-| pvs baking tooling                | q1, q3 indoor    | medium | high   |
-| taa                               | portal 2, modern | medium | medium |
-| ambient light probes per-volume   | halo 3, hl2      | medium | medium |
+| full taa (history + reprojection) | portal 2, modern | medium | medium |
 | portal viewport rendering         | portal 2         | high   | medium |
-| soft shadows (pcss/vsm)           | all w/ shadows   | medium | medium |
-| gpu-driven lod selection          | halo 3 outdoor   | medium | medium |
-| texture virtual texturing         | halo 3 outdoor   | high   | low    |
 | displacement terrain              | hl2 outdoor      | high   | low    |
 | subsurface scattering             | character games  | medium | low    |
+| texture virtual texturing         | halo 3 outdoor   | high   | low    |
 | visibility buffer (nanite-style)  | halo 3 extreme   | high   | future |
+| decal stacking robustness         | doom 3           | low    | low    |
+| facial animation (flex morphs)    | hl2 characters   | high   | low    |
