@@ -1,4 +1,4 @@
-# renderer sprint 5 — visual feature gaps
+# renderer sprint 5 — visual feature gaps ✓ complete
 
 cpu render overhead is no longer the bottleneck. the remaining gaps vs reference
 games are visual features that didn't exist yet, not performance problems.
