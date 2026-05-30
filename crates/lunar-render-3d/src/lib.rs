@@ -5108,27 +5108,9 @@ impl RenderEngine3d {
                 bind_group_layouts: &[Some(&bgl)],
                 immediate_size: 0,
             });
-            // inline WGSL for LOD selection compute (avoids a separate file)
-            let lod_wgsl = "
-struct LodParams { cam_pos: vec3<f32>, entity_count: u32, thresholds: vec4<f32> }
-@group(0) @binding(0) var<uniform>             params:      LodParams;
-@group(0) @binding(1) var<storage, read>       aabbs:       array<vec4<f32>>;
-@group(0) @binding(2) var<storage, read_write> lod_indices: array<u32>;
-@compute @workgroup_size(64)
-fn cs_lod_select(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x;
-    if i >= params.entity_count { return; }
-    let centre = aabbs[i * 2u].xyz;
-    let d = centre - params.cam_pos;
-    let dist_sq = dot(d, d);
-    let t = params.thresholds;
-    var lod: u32 = 4u;
-    if      dist_sq <= t.x { lod = 0u; }
-    else if dist_sq <= t.y { lod = 1u; }
-    else if dist_sq <= t.z { lod = 2u; }
-    else if dist_sq <= t.w { lod = 3u; }
-    lod_indices[i] = lod;
-}";
+            // LOD selection compute shader (matches the external-file convention
+            // used by every other shader in this crate).
+            let lod_wgsl = include_str!("lod_select.wgsl");
             let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("[lod select] shader"),
                 source: wgpu::ShaderSource::Wgsl(lod_wgsl.into()),
@@ -5894,160 +5876,10 @@ fn cs_lod_select(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // ── render ─────────────────────────────────────────────────────────────
 
-    fn render_frame(&mut self, world: &mut World) -> u32 {
-        // ── gather camera — copy immediately so world borrows end here ────
-        let cam_entity = {
-            let active = world.resource::<ActiveCamera3d>();
-            let Some(e) = active.entity else { return 0; };
-            e
-        };
-        let camera = { let Some(c) = world.get::<Camera3d>(cam_entity) else { return 0; }; *c };
-        let cam_wt  = { let Some(t) = world.get::<WorldTransform3d>(cam_entity) else { return 0; }; *t };
-
-        // viewport rect for the primary camera: used for scissor/viewport state in color passes.
-        // for split-screen, secondary cameras use render-to-texture; the primary camera's rect
-        // is applied here to confine its rendering to its portion of the screen.
-        let primary_viewport: ViewportRect = {
-            let viewports = world.resource::<ActiveViewports>();
-            viewports.viewports.iter()
-                .find(|(e, _)| *e == cam_entity)
-                .map(|(_, r)| *r)
-                .unwrap_or(ViewportRect::FULL)
-        };
-
-        let win_w = self.surface_config.width;
-        let win_h = self.surface_config.height;
-        let (vp_x, vp_y, vp_w, vp_h) = primary_viewport.to_pixels(win_w, win_h);
-
-        // aspect ratio from viewport rect (not full window) so projection is correct for the rect
-        let aspect = if primary_viewport.height > 1e-6 {
-            (vp_w as f32) / (vp_h as f32)
-        } else {
-            world.resource::<ViewportAspect>().0
-        };
-
-        // unjittered vp — used for taa prev_vp storage and as the shadow/other-pass matrix
-        let view_proj_unjittered = camera.view_proj(cam_wt, aspect);
-
-        // when taa is active, jitter the projection matrix using Halton(2,3) 8-point sequence.
-        // this sub-pixel shift (≤0.5px) is applied via the projection matrix column 2 so the
-        // jitter is depth-independent (constant screen-space offset for all vertices).
-        // the jitter makes each frame sample a different sub-pixel position; TAA then accumulates
-        // these samples to achieve effective temporal super-sampling on edge-adjacent pixels.
-        // jitter is only useful when there is stable history to accumulate against.
-        // during camera movement the history is being reprojected anyway and any
-        // remaining jitter in the output frame just oscillates visibly as stutter.
-        // compare to previous unjittered vp: any difference means the camera moved.
-        let camera_stationary = self.staa_prev_vp == view_proj_unjittered;
-
-        let (view_proj, staa_jitter_ndc) = if self.staa_enabled && camera_stationary {
-            // Halton low-discrepancy sequence: base 2 for x, base 3 for y.
-            // use frame_index+1 so index 0 maps to a non-zero offset (avoids identity jitter).
-            let idx = (self.staa_frame_index % 8 + 1) as u64;
-            fn halton(mut i: u64, base: u64) -> f32 {
-                let (mut f, mut r) = (1.0f64, 0.0f64);
-                while i > 0 { f /= base as f64; r += f * (i % base) as f64; i /= base; }
-                r as f32
-            }
-            // NDC jitter: ≤0.5px in screen space (NDC = 2/width per pixel)
-            let jx = (halton(idx, 2) - 0.5) * 2.0 / win_w as f32;
-            let jy = (halton(idx, 3) - 0.5) * 2.0 / win_h as f32;
-
-            // modify the projection column 2 (z-axis.xy) to add a constant NDC offset.
-            // P[2][0] += Δx shifts NDC.x by -Δx for all depths (clip.w cancels out).
-            let view_mat = Camera3d::view_matrix(cam_wt);
-            let mut jittered_proj = camera.projection.matrix(aspect);
-            jittered_proj.z_axis.x -= jx;
-            jittered_proj.z_axis.y -= jy;
-            // jitter in UV space = NDC jitter / 2 (NDC spans [-1,1], UV spans [0,1])
-            (jittered_proj * view_mat, Vec2::new(jx * 0.5, jy * 0.5))
-        } else {
-            (view_proj_unjittered, Vec2::ZERO)
-        };
-
-        let cam_pos = cam_wt.translation;
-
-        // ── read dev render profile (dev's feature ceiling) ───────────────
-        // all pass gates below AND with this so disabled features are never executed
-        // regardless of user quality settings or hardware tier.
-        let dev_shadows          = world.get_resource::<DevRenderProfile>().map(|d| d.shadows         ).unwrap_or(true);
-        let dev_bloom            = world.get_resource::<DevRenderProfile>().map(|d| d.bloom            ).unwrap_or(true);
-        let dev_ssao             = world.get_resource::<DevRenderProfile>().map(|d| d.ssao             ).unwrap_or(true);
-        let dev_ssr              = world.get_resource::<DevRenderProfile>().map(|d| d.ssr              ).unwrap_or(true);
-        let dev_fog              = world.get_resource::<DevRenderProfile>().map(|d| d.volumetric_fog   ).unwrap_or(true);
-        let dev_fxaa             = world.get_resource::<DevRenderProfile>().map(|d| d.fxaa             ).unwrap_or(true);
-        let dev_staa              = world.get_resource::<DevRenderProfile>().map(|d| d.staa              ).unwrap_or(true);
-        let dev_vignette         = world.get_resource::<DevRenderProfile>().map(|d| d.vignette         ).unwrap_or(true);
-        let dev_chrom_ab         = world.get_resource::<DevRenderProfile>().map(|d| d.chromatic_aberration).unwrap_or(true);
-        let dev_film_grain       = world.get_resource::<DevRenderProfile>().map(|d| d.film_grain       ).unwrap_or(true);
-        let dev_max_cascades     = world.get_resource::<DevRenderProfile>().map(|d| d.max_shadow_cascades as usize).unwrap_or(NUM_CASCADES as usize);
-        let dev_point_shadows    = world.get_resource::<DevRenderProfile>().map(|d| d.point_light_shadows).unwrap_or(true);
-        let dev_max_point_lights = world.get_resource::<DevRenderProfile>().map(|d| d.max_point_lights as usize).unwrap_or(MAX_CLUSTERED_LIGHTS);
-        let dev_soft_shadows     = world.get_resource::<DevRenderProfile>().map(|d| d.soft_shadows     ).unwrap_or(false);
-        let dev_contact_shadows  = world.get_resource::<DevRenderProfile>().map(|d| d.contact_shadows  ).unwrap_or(false);
-
-        // ── gather sky ────────────────────────────────────────────────────
-        let sky = world.get_resource::<Sky>().copied();
-        let sky_color = sky.map_or(Color::rgb(0.1, 0.1, 0.15), |s| s.sky_color);
-
-        // ── gather lights ─────────────────────────────────────────────────
-        let ambient = world.get_resource::<AmbientLight>().copied().unwrap_or_default();
-
-        // directional light: first entity with both DirectionalLight + WorldTransform3d
-        let mut dir_color = Color::WHITE;
-        let mut dir_illuminance: f32 = 0.0;
-        let mut dir_direction = Vec3::NEG_Y;
-        let mut dir_enabled: u32 = 0;
-        let mut dir_casts_shadows = false;
-        {
-            let mut dq = world.query::<(&DirectionalLight, &WorldTransform3d)>();
-            if let Some((dl, wt)) = dq.iter(world).next() {
-                dir_color = dl.color;
-                dir_illuminance = dl.illuminance;
-                dir_direction = wt.forward();
-                dir_enabled = 1;
-                dir_casts_shadows = dl.casts_shadows;
-            }
-        }
-
-        // point lights: up to MAX_POINT_LIGHTS closest to camera
-        self.point_light_scratch.clear();
-        {
-            let mut pq = world.query::<(&PointLight, &WorldTransform3d)>();
-            pq.iter(world).for_each(|(pl, wt)| {
-                self.point_light_scratch.push((wt.translation, pl.color, pl.intensity, pl.radius, pl.casts_shadows));
-            });
-        }
-        self.point_light_scratch.sort_unstable_by(|a, b| {
-            let da = (a.0 - cam_pos).length_squared();
-            let db = (b.0 - cam_pos).length_squared();
-            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        let max_lights = dev_max_point_lights.min(MAX_CLUSTERED_LIGHTS);
-        self.point_light_scratch.truncate(max_lights);
-
-        // ── compute cascade splits (log-linear blend, λ=0.5) ─────────────
-        // produces 3 split depths in view space separating the 3 cascade slices.
-        let cascade_splits = Self::compute_cascade_splits(SHADOW_NEAR, SHADOW_FAR, NUM_CASCADES as usize, CASCADE_LAMBDA);
-
-        // ── compute per-cascade light-space matrices ──────────────────────
-        let light_spaces = if dir_enabled != 0 {
-            let cam_forward = cam_wt.forward();
-            let cam_up_vec  = cam_wt.up();
-            let cam_right   = cam_wt.right();
-            let (fov_y, near) = match camera.projection {
-                Projection::Perspective { fov_y, near, .. } => (fov_y, near),
-                Projection::Orthographic { .. } => (std::f32::consts::FRAC_PI_3, 0.1),
-            };
-            [
-                Self::cascade_light_space(cam_pos, cam_forward, cam_up_vec, cam_right, fov_y, aspect, dir_direction, near, cascade_splits[0]),
-                Self::cascade_light_space(cam_pos, cam_forward, cam_up_vec, cam_right, fov_y, aspect, dir_direction, cascade_splits[0], cascade_splits[1]),
-                Self::cascade_light_space(cam_pos, cam_forward, cam_up_vec, cam_right, fov_y, aspect, dir_direction, cascade_splits[1], cascade_splits[2]),
-            ]
-        } else {
-            [Mat4::IDENTITY; 3]
-        };
-
+    /// frustum + HZB occlusion culling for this frame. high tier reads the
+    /// previous frame's GPU compute result (no stall) and dispatches this
+    /// frame's; mid/low tier does a CPU AABB test. populates `self.frustum_visible`.
+    fn cull_entities(&mut self, world: &mut World, view_proj: Mat4, cam_pos: Vec3) {
         // ── frustum cull ─────────────────────────────────────────────────
         // high tier: 1-frame pipelined GPU compute cull.
         //   frame N: read previous frame's staging result (no stall), dispatch this frame's compute.
@@ -6370,6 +6202,164 @@ fn cs_lod_select(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
+    }
+
+    fn render_frame(&mut self, world: &mut World) -> u32 {
+        // ── gather camera — copy immediately so world borrows end here ────
+        let cam_entity = {
+            let active = world.resource::<ActiveCamera3d>();
+            let Some(e) = active.entity else { return 0; };
+            e
+        };
+        let camera = { let Some(c) = world.get::<Camera3d>(cam_entity) else { return 0; }; *c };
+        let cam_wt  = { let Some(t) = world.get::<WorldTransform3d>(cam_entity) else { return 0; }; *t };
+
+        // viewport rect for the primary camera: used for scissor/viewport state in color passes.
+        // for split-screen, secondary cameras use render-to-texture; the primary camera's rect
+        // is applied here to confine its rendering to its portion of the screen.
+        let primary_viewport: ViewportRect = {
+            let viewports = world.resource::<ActiveViewports>();
+            viewports.viewports.iter()
+                .find(|(e, _)| *e == cam_entity)
+                .map(|(_, r)| *r)
+                .unwrap_or(ViewportRect::FULL)
+        };
+
+        let win_w = self.surface_config.width;
+        let win_h = self.surface_config.height;
+        let (vp_x, vp_y, vp_w, vp_h) = primary_viewport.to_pixels(win_w, win_h);
+
+        // aspect ratio from viewport rect (not full window) so projection is correct for the rect
+        let aspect = if primary_viewport.height > 1e-6 {
+            (vp_w as f32) / (vp_h as f32)
+        } else {
+            world.resource::<ViewportAspect>().0
+        };
+
+        // unjittered vp — used for taa prev_vp storage and as the shadow/other-pass matrix
+        let view_proj_unjittered = camera.view_proj(cam_wt, aspect);
+
+        // when taa is active, jitter the projection matrix using Halton(2,3) 8-point sequence.
+        // this sub-pixel shift (≤0.5px) is applied via the projection matrix column 2 so the
+        // jitter is depth-independent (constant screen-space offset for all vertices).
+        // the jitter makes each frame sample a different sub-pixel position; TAA then accumulates
+        // these samples to achieve effective temporal super-sampling on edge-adjacent pixels.
+        // jitter is only useful when there is stable history to accumulate against.
+        // during camera movement the history is being reprojected anyway and any
+        // remaining jitter in the output frame just oscillates visibly as stutter.
+        // compare to previous unjittered vp: any difference means the camera moved.
+        let camera_stationary = self.staa_prev_vp == view_proj_unjittered;
+
+        let (view_proj, staa_jitter_ndc) = if self.staa_enabled && camera_stationary {
+            // Halton low-discrepancy sequence: base 2 for x, base 3 for y.
+            // use frame_index+1 so index 0 maps to a non-zero offset (avoids identity jitter).
+            let idx = (self.staa_frame_index % 8 + 1) as u64;
+            fn halton(mut i: u64, base: u64) -> f32 {
+                let (mut f, mut r) = (1.0f64, 0.0f64);
+                while i > 0 { f /= base as f64; r += f * (i % base) as f64; i /= base; }
+                r as f32
+            }
+            // NDC jitter: ≤0.5px in screen space (NDC = 2/width per pixel)
+            let jx = (halton(idx, 2) - 0.5) * 2.0 / win_w as f32;
+            let jy = (halton(idx, 3) - 0.5) * 2.0 / win_h as f32;
+
+            // modify the projection column 2 (z-axis.xy) to add a constant NDC offset.
+            // P[2][0] += Δx shifts NDC.x by -Δx for all depths (clip.w cancels out).
+            let view_mat = Camera3d::view_matrix(cam_wt);
+            let mut jittered_proj = camera.projection.matrix(aspect);
+            jittered_proj.z_axis.x -= jx;
+            jittered_proj.z_axis.y -= jy;
+            // jitter in UV space = NDC jitter / 2 (NDC spans [-1,1], UV spans [0,1])
+            (jittered_proj * view_mat, Vec2::new(jx * 0.5, jy * 0.5))
+        } else {
+            (view_proj_unjittered, Vec2::ZERO)
+        };
+
+        let cam_pos = cam_wt.translation;
+
+        // ── read dev render profile (dev's feature ceiling) ───────────────
+        // all pass gates below AND with this so disabled features are never executed
+        // regardless of user quality settings or hardware tier.
+        let dev_shadows          = world.get_resource::<DevRenderProfile>().map(|d| d.shadows         ).unwrap_or(true);
+        let dev_bloom            = world.get_resource::<DevRenderProfile>().map(|d| d.bloom            ).unwrap_or(true);
+        let dev_ssao             = world.get_resource::<DevRenderProfile>().map(|d| d.ssao             ).unwrap_or(true);
+        let dev_ssr              = world.get_resource::<DevRenderProfile>().map(|d| d.ssr              ).unwrap_or(true);
+        let dev_fog              = world.get_resource::<DevRenderProfile>().map(|d| d.volumetric_fog   ).unwrap_or(true);
+        let dev_fxaa             = world.get_resource::<DevRenderProfile>().map(|d| d.fxaa             ).unwrap_or(true);
+        let dev_staa              = world.get_resource::<DevRenderProfile>().map(|d| d.staa              ).unwrap_or(true);
+        let dev_vignette         = world.get_resource::<DevRenderProfile>().map(|d| d.vignette         ).unwrap_or(true);
+        let dev_chrom_ab         = world.get_resource::<DevRenderProfile>().map(|d| d.chromatic_aberration).unwrap_or(true);
+        let dev_film_grain       = world.get_resource::<DevRenderProfile>().map(|d| d.film_grain       ).unwrap_or(true);
+        let dev_max_cascades     = world.get_resource::<DevRenderProfile>().map(|d| d.max_shadow_cascades as usize).unwrap_or(NUM_CASCADES as usize);
+        let dev_point_shadows    = world.get_resource::<DevRenderProfile>().map(|d| d.point_light_shadows).unwrap_or(true);
+        let dev_max_point_lights = world.get_resource::<DevRenderProfile>().map(|d| d.max_point_lights as usize).unwrap_or(MAX_CLUSTERED_LIGHTS);
+        let dev_soft_shadows     = world.get_resource::<DevRenderProfile>().map(|d| d.soft_shadows     ).unwrap_or(false);
+        let dev_contact_shadows  = world.get_resource::<DevRenderProfile>().map(|d| d.contact_shadows  ).unwrap_or(false);
+
+        // ── gather sky ────────────────────────────────────────────────────
+        let sky = world.get_resource::<Sky>().copied();
+        let sky_color = sky.map_or(Color::rgb(0.1, 0.1, 0.15), |s| s.sky_color);
+
+        // ── gather lights ─────────────────────────────────────────────────
+        let ambient = world.get_resource::<AmbientLight>().copied().unwrap_or_default();
+
+        // directional light: first entity with both DirectionalLight + WorldTransform3d
+        let mut dir_color = Color::WHITE;
+        let mut dir_illuminance: f32 = 0.0;
+        let mut dir_direction = Vec3::NEG_Y;
+        let mut dir_enabled: u32 = 0;
+        let mut dir_casts_shadows = false;
+        {
+            let mut dq = world.query::<(&DirectionalLight, &WorldTransform3d)>();
+            if let Some((dl, wt)) = dq.iter(world).next() {
+                dir_color = dl.color;
+                dir_illuminance = dl.illuminance;
+                dir_direction = wt.forward();
+                dir_enabled = 1;
+                dir_casts_shadows = dl.casts_shadows;
+            }
+        }
+
+        // point lights: up to MAX_POINT_LIGHTS closest to camera
+        self.point_light_scratch.clear();
+        {
+            let mut pq = world.query::<(&PointLight, &WorldTransform3d)>();
+            pq.iter(world).for_each(|(pl, wt)| {
+                self.point_light_scratch.push((wt.translation, pl.color, pl.intensity, pl.radius, pl.casts_shadows));
+            });
+        }
+        self.point_light_scratch.sort_unstable_by(|a, b| {
+            let da = (a.0 - cam_pos).length_squared();
+            let db = (b.0 - cam_pos).length_squared();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let max_lights = dev_max_point_lights.min(MAX_CLUSTERED_LIGHTS);
+        self.point_light_scratch.truncate(max_lights);
+
+        // ── compute cascade splits (log-linear blend, λ=0.5) ─────────────
+        // produces 3 split depths in view space separating the 3 cascade slices.
+        let cascade_splits = Self::compute_cascade_splits(SHADOW_NEAR, SHADOW_FAR, NUM_CASCADES as usize, CASCADE_LAMBDA);
+
+        // ── compute per-cascade light-space matrices ──────────────────────
+        let light_spaces = if dir_enabled != 0 {
+            let cam_forward = cam_wt.forward();
+            let cam_up_vec  = cam_wt.up();
+            let cam_right   = cam_wt.right();
+            let (fov_y, near) = match camera.projection {
+                Projection::Perspective { fov_y, near, .. } => (fov_y, near),
+                Projection::Orthographic { .. } => (std::f32::consts::FRAC_PI_3, 0.1),
+            };
+            [
+                Self::cascade_light_space(cam_pos, cam_forward, cam_up_vec, cam_right, fov_y, aspect, dir_direction, near, cascade_splits[0]),
+                Self::cascade_light_space(cam_pos, cam_forward, cam_up_vec, cam_right, fov_y, aspect, dir_direction, cascade_splits[0], cascade_splits[1]),
+                Self::cascade_light_space(cam_pos, cam_forward, cam_up_vec, cam_right, fov_y, aspect, dir_direction, cascade_splits[1], cascade_splits[2]),
+            ]
+        } else {
+            [Mat4::IDENTITY; 3]
+        };
+
+        // frustum + HZB occlusion culling (1-frame pipelined on high tier)
+        self.cull_entities(world, view_proj, cam_pos);
         // ── gather draw list ──────────────────────────────────────────────
 
         // build area visibility from BspLevel PVS if loaded; fall through to VisibleAreas otherwise
