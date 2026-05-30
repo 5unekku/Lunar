@@ -548,6 +548,7 @@ impl QualitySettings {
         if !dev.film_grain     { self.film_grain = false; }
         self.msaa_samples = self.msaa_samples.min(dev.max_msaa);
         self.particle_cap = self.particle_cap.min(dev.max_particles);
+        // soft_shadows and contact_shadows are read directly from DevRenderProfile at render time
         self
     }
 }
@@ -620,6 +621,12 @@ pub struct DevRenderProfile {
     /// maximum point lights in the scene. classic/standard cap at 8; full allows up to 256
     /// using the clustered forward path (requires high tier with compute shaders).
     pub max_point_lights: u32,
+    /// pcss for directional shadows (variable-width penumbra) + pcf for point shadows.
+    /// standard/classic default off; full default on.
+    pub soft_shadows: bool,
+    /// screen-space contact shadow raymarch under objects to fill shadow-map contact gaps.
+    /// adds ~0.1ms at 1080p. standard/classic off; full on.
+    pub contact_shadows: bool,
 }
 
 impl Default for DevRenderProfile {
@@ -650,6 +657,8 @@ impl DevRenderProfile {
             max_particles: 8192,
             point_light_shadows: false,
             max_point_lights: 8,
+            soft_shadows: false,
+            contact_shadows: false,
         }
     }
 
@@ -672,6 +681,8 @@ impl DevRenderProfile {
             max_particles: 32768,
             point_light_shadows: false,
             max_point_lights: 8,
+            soft_shadows: false,
+            contact_shadows: false,
         }
     }
 
@@ -694,6 +705,8 @@ impl DevRenderProfile {
             max_particles: u32::MAX,
             point_light_shadows: true,
             max_point_lights: 256,
+            soft_shadows: true,
+            contact_shadows: true,
         }
     }
 
@@ -702,6 +715,8 @@ impl DevRenderProfile {
 
     #[must_use] pub fn with_point_light_shadows(mut self, v: bool) -> Self { self.point_light_shadows = v; self }
     #[must_use] pub fn with_max_point_lights(mut self, n: u32) -> Self { self.max_point_lights = n; self }
+    #[must_use] pub fn with_soft_shadows(mut self, v: bool) -> Self { self.soft_shadows = v; self }
+    #[must_use] pub fn with_contact_shadows(mut self, v: bool) -> Self { self.contact_shadows = v; self }
     #[must_use] pub fn with_shadows(mut self, v: bool) -> Self { self.shadows = v; self }
     #[must_use] pub fn with_bloom(mut self, v: bool) -> Self { self.bloom = v; self }
     #[must_use] pub fn with_ssao(mut self, v: bool) -> Self { self.ssao = v; self }
@@ -4814,6 +4829,20 @@ impl RenderEngine3d {
         staging[offset + 64..offset + 112].copy_from_slice(unsafe { slice_as_bytes(&normal_packed) });
     }
 
+    /// write 9 L2 SH coefficients to the per-entity staging slot starting at offset 112.
+    /// `coeffs[i] = [R, G, B]`, flag=1.0 marks per-entity probe data present.
+    fn pack_sh_uniforms(staging: &mut [u8], slot: usize, coeffs: &[[f32; 3]; 9]) {
+        let offset = slot * UNIFORM_STRIDE as usize + 112;
+        let mut data = [0f32; 36];
+        for (i, c) in coeffs.iter().enumerate() {
+            data[i * 4]     = c[0];
+            data[i * 4 + 1] = c[1];
+            data[i * 4 + 2] = c[2];
+            data[i * 4 + 3] = if i == 0 { 1.0 } else { 0.0 };  // flag only in [0].w
+        }
+        staging[offset..offset + 144].copy_from_slice(unsafe { slice_as_bytes(&data) });
+    }
+
     fn pack_material_uniforms(
         staging: &mut [u8], slot: usize,
         color: Color, metallic: f32, roughness: f32, flags: u32, has_lightmap: u32,
@@ -5038,6 +5067,8 @@ impl RenderEngine3d {
         let dev_max_cascades     = world.get_resource::<DevRenderProfile>().map(|d| d.max_shadow_cascades as usize).unwrap_or(NUM_CASCADES as usize);
         let dev_point_shadows    = world.get_resource::<DevRenderProfile>().map(|d| d.point_light_shadows).unwrap_or(true);
         let dev_max_point_lights = world.get_resource::<DevRenderProfile>().map(|d| d.max_point_lights as usize).unwrap_or(MAX_CLUSTERED_LIGHTS);
+        let dev_soft_shadows     = world.get_resource::<DevRenderProfile>().map(|d| d.soft_shadows     ).unwrap_or(false);
+        let dev_contact_shadows  = world.get_resource::<DevRenderProfile>().map(|d| d.contact_shadows  ).unwrap_or(false);
 
         // ── gather sky ────────────────────────────────────────────────────
         let sky = world.get_resource::<Sky>().copied();
@@ -5867,9 +5898,20 @@ impl RenderEngine3d {
             }
         }
 
+        let probe_grid   = world.get_resource::<lunar_3d::AmbientProbeGrid>();
+        let irradiance_sh = world.get_resource::<lunar_3d::IrradianceSH>();
+
         for i in 0..self.draw_scratch.len() {
             let (_, _, _, color, metallic, roughness, model, _, mat_flags, lm_id, dir_lm_id) = self.draw_scratch[i];
             Self::pack_mesh_uniforms(&mut self.uniform_staging, ENTITY_SLOT_START + i, model);
+            // write per-entity SH: probe grid takes priority, then global IrradianceSH, else zeros
+            let world_pos = Vec3::new(model.w_axis.x, model.w_axis.y, model.w_axis.z);
+            let sh_coeffs: Option<[[f32; 3]; 9]> =
+                probe_grid.map(|g| g.sample(world_pos))
+                .or_else(|| irradiance_sh.map(|s| s.coefficients));
+            if let Some(coeffs) = sh_coeffs {
+                Self::pack_sh_uniforms(&mut self.uniform_staging, ENTITY_SLOT_START + i, &coeffs);
+            }
             let has_lightmap: u32 = if lm_id != u32::MAX { 1 } else { 0 };
             // bit 1 = has directional lightmap; only set when not in GPU indirect path (dir not atlased)
             let dir_flag: u32 = if dir_lm_id != u32::MAX && !self.has_indirect { 2 } else { 0 };
@@ -6132,7 +6174,14 @@ impl RenderEngine3d {
             d[18] = cam_pos.z;
             d[19] = time.elapsed_seconds();
             d[20] = time.delta_seconds();
-            // d[21..24] = 0 (padding)
+            // d[21] = shading_era (u32, stays 0 = ERA_MODERN)
+            // d[22] = render_flags (u32 packed as f32 bits)
+            //   bit 0: soft_shadows (PCSS directional + soft point)
+            //   bit 1: contact_shadows (screen-space contact shadow pass active)
+            let mut render_flags = 0u32;
+            if dev_soft_shadows    { render_flags |= 1; }
+            if dev_contact_shadows { render_flags |= 2; }
+            d[22] = f32::from_bits(render_flags);
             d
         };
         self.queue.write_buffer(&self.globals_buf, 0, unsafe { slice_as_bytes(&globals_data) });

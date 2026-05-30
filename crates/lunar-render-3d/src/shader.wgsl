@@ -8,10 +8,10 @@ struct Globals {
     view_proj:    mat4x4<f32>,  // 64 bytes
     cam_pos:      vec3<f32>,    // 12 bytes (offset 64)
     elapsed_secs: f32,          //  4 bytes (offset 76)
-    delta_secs:   f32,          //  4 bytes (offset 80)
-    shading_era:  u32,          //  4 bytes (offset 84) — ShadingEra constant above
-    _pad1:        f32,          //  4 bytes
-    _pad2:        f32,          //  4 bytes — total: 96 bytes
+    delta_secs:    f32,           //  4 bytes (offset 80)
+    shading_era:   u32,           //  4 bytes (offset 84)
+    render_flags:  u32,           //  4 bytes (offset 88) — bit 0: soft_shadows, bit 1: contact_shadows
+    _pad2:         f32,           //  4 bytes — total: 96 bytes
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 
@@ -31,11 +31,12 @@ struct MaterialUniforms {
 // group 2: per-instance transforms — storage array, indexed by @builtin(instance_index).
 // padded to 256 bytes to match the UNIFORM_STRIDE staging layout on the CPU.
 struct MeshInstance {
-    model:     mat4x4<f32>,          // 64 bytes — offset   0
-    normal_c0: vec4<f32>,            // 16 bytes — offset  64
-    normal_c1: vec4<f32>,            // 16 bytes — offset  80
-    normal_c2: vec4<f32>,            // 16 bytes — offset  96
-    _pad:      array<vec4<f32>, 9>,  // 144 bytes — offset 112 (total: 256)
+    model:     mat4x4<f32>,              // 64 bytes — offset   0
+    normal_c0: vec4<f32>,                // 16 bytes — offset  64
+    normal_c1: vec4<f32>,                // 16 bytes — offset  80
+    normal_c2: vec4<f32>,                // 16 bytes — offset  96
+    // 9 L2 SH coefficients: .xyz = RGB irradiance, .w = 1.0 when probe data present / 0.0 = fallback
+    sh_coeffs: array<vec4<f32>, 9>,      // 144 bytes — offset 112 (total: 256)
 }
 @group(2) @binding(0) var<storage, read> instances: array<MeshInstance>;
 
@@ -211,6 +212,26 @@ fn pbr_light(
     return (kd * albedo / PI + specular) * irradiance * ndotl;
 }
 
+// ── Poisson disk sample sets ───────────────────────────────────────────────
+
+const POISSON_8: array<vec2<f32>, 8> = array<vec2<f32>, 8>(
+    vec2<f32>(-0.9450, -0.3255), vec2<f32>(-0.4503,  0.8905),
+    vec2<f32>( 0.7490, -0.6596), vec2<f32>( 0.4285,  0.5616),
+    vec2<f32>(-0.7090, -0.7010), vec2<f32>( 0.9490,  0.1565),
+    vec2<f32>(-0.1470,  0.3650), vec2<f32>( 0.1540, -0.8060),
+);
+
+const POISSON_16: array<vec2<f32>, 16> = array<vec2<f32>, 16>(
+    vec2<f32>(-0.9440, -0.3275), vec2<f32>(-0.4515,  0.8890),
+    vec2<f32>( 0.7480, -0.6600), vec2<f32>( 0.4295,  0.5610),
+    vec2<f32>(-0.7095, -0.7005), vec2<f32>( 0.9495,  0.1570),
+    vec2<f32>(-0.1475,  0.3645), vec2<f32>( 0.1545, -0.8055),
+    vec2<f32>(-0.6275, -0.1695), vec2<f32>( 0.3075,  0.9360),
+    vec2<f32>(-0.1830, -0.4975), vec2<f32>( 0.7635,  0.4245),
+    vec2<f32>( 0.4250, -0.3295), vec2<f32>(-0.9325,  0.3615),
+    vec2<f32>( 0.0615,  0.1800), vec2<f32>(-0.3070, -0.9270),
+);
+
 // ── cascade shadow helpers ─────────────────────────────────────────────────
 
 // select cascade index from view-space depth
@@ -246,6 +267,56 @@ fn shadow_factor_5x5(world_pos: vec3<f32>, n: vec3<f32>, view_depth: f32) -> f32
         }
     }
     return shadow / 25.0;
+}
+
+// PCSS: percentage closer soft shadows for directional light.
+// step 1: blocker search (8 taps, textureLoad) → average blocker depth
+// step 2: penumbra width = (receiver - avg_blocker) / avg_blocker * scale
+// step 3: 16-tap PCF with variable kernel radius
+fn shadow_factor_pcss(world_pos: vec3<f32>, n: vec3<f32>, view_depth: f32) -> f32 {
+    let bias = max(0.005 * (1.0 - dot(n, -lights.dir_direction)), 0.001);
+    let idx  = cascade_index(view_depth);
+    let lsp  = cascade_light_space(idx) * vec4<f32>(world_pos, 1.0);
+    var proj = lsp.xyz / lsp.w;
+    proj.x =  proj.x * 0.5 + 0.5;
+    proj.y = -proj.y * 0.5 + 0.5;
+    if proj.z > 1.0 || proj.z < 0.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0 {
+        return 1.0;
+    }
+    let shadow_res = 1024.0;
+    let search_r   = 0.04;
+    let idx32      = i32(idx);
+    var blocker_sum   = 0.0;
+    var blocker_count = 0u;
+    for (var i = 0u; i < 8u; i++) {
+        let tc_uv = proj.xy + POISSON_8[i] * search_r;
+        let tc = vec2<i32>(
+            clamp(i32(tc_uv.x * shadow_res), 0, i32(shadow_res) - 1),
+            clamp(i32(tc_uv.y * shadow_res), 0, i32(shadow_res) - 1),
+        );
+        let depth = textureLoad(shadow_map, tc, idx32, 0);
+        if depth < proj.z - bias {
+            blocker_sum   += depth;
+            blocker_count++;
+        }
+    }
+    if blocker_count == 0u { return 1.0; }
+    let avg_blocker  = blocker_sum / f32(blocker_count);
+    let penumbra_uv  = max((proj.z - avg_blocker) / avg_blocker * 0.15, 1.0 / shadow_res);
+    var shadow = 0.0;
+    for (var i = 0u; i < 16u; i++) {
+        let off = POISSON_16[i] * penumbra_uv;
+        shadow += textureSampleCompare(shadow_map, shadow_sampler, proj.xy + off, idx, proj.z - bias);
+    }
+    return shadow / 16.0;
+}
+
+// dispatch to PCSS or fixed 5×5 PCF based on render_flags bit 0
+fn shadow_factor(world_pos: vec3<f32>, n: vec3<f32>, view_depth: f32) -> f32 {
+    if (globals.render_flags & 1u) != 0u {
+        return shadow_factor_pcss(world_pos, n, view_depth);
+    }
+    return shadow_factor_5x5(world_pos, n, view_depth);
 }
 
 // ── point shadow helpers ───────────────────────────────────────────────────
@@ -317,7 +388,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
         let ndotl = max(dot(n, l), 0.0);
         if ndotl > 0.0 {
             let irradiance = lights.dir_color * (lights.dir_illuminance / 80000.0);
-            let shadow = shadow_factor_5x5(in.world_pos, n, in.view_depth);
+            let shadow = shadow_factor(in.world_pos, n, in.view_depth);
             dir_lo += pbr_light(n, v, l, albedo, metallic, roughness, irradiance, ndotl) * shadow;
         }
     }
@@ -357,31 +428,60 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
             var shadow_fac = 1.0;
             if light.shadow_index != 0xffffffffu {
                 let shadow_dir = in.world_pos - light.position;
-                let luv = point_shadow_layer_uv(shadow_dir, light.shadow_index);
-                let ref_depth = dist / light.radius - 0.01;
-                shadow_fac = textureSampleCompare(
-                    point_shadow_maps, shadow_sampler,
-                    luv.xy, i32(luv.z), ref_depth,
-                );
+                let ref_depth  = dist / light.radius - 0.01;
+                if (globals.render_flags & 1u) != 0u {
+                    // 5-tap jittered PCF for soft point shadows
+                    let jitter_scale = 0.04 * dist;
+                    let offsets = array<vec3<f32>, 5>(
+                        vec3<f32>( 0.00,  0.00,  0.00),
+                        vec3<f32>( jitter_scale,  0.00,  0.00),
+                        vec3<f32>(-jitter_scale,  0.00,  0.00),
+                        vec3<f32>( 0.00,  jitter_scale,  0.00),
+                        vec3<f32>( 0.00, -jitter_scale,  0.00),
+                    );
+                    var point_shadow_sum = 0.0;
+                    for (var si = 0u; si < 5u; si++) {
+                        let jdir = shadow_dir + offsets[si];
+                        let jluv = point_shadow_layer_uv(jdir, light.shadow_index);
+                        point_shadow_sum += textureSampleCompare(point_shadow_maps, shadow_sampler, jluv.xy, i32(jluv.z), ref_depth);
+                    }
+                    shadow_fac = point_shadow_sum / 5.0;
+                } else {
+                    let luv = point_shadow_layer_uv(shadow_dir, light.shadow_index);
+                    shadow_fac = textureSampleCompare(point_shadow_maps, shadow_sampler, luv.xy, i32(luv.z), ref_depth);
+                }
             }
             point_lo += shadow_fac * pbr_light(n, v, l, albedo, metallic, roughness, irradiance, ndotl);
         }
     }
 
-    // ambient — either SH irradiance probe (directional) or flat fallback
+    // ambient — per-entity SH from instance buffer when sh_coeffs[0].w > 0, else global lights.sh
     var ambient: vec3<f32>;
-    if lights.sh_enabled != 0u {
-        // evaluate L2 SH irradiance at the surface normal
-        let nx = n.x; let ny = n.y; let nz = n.z;
-        var sh_irr = lights.sh0.xyz;                                 // L0
-        sh_irr += lights.sh1.xyz * nx;                               // L1_x
-        sh_irr += lights.sh2.xyz * ny;                               // L1_y
-        sh_irr += lights.sh3.xyz * nz;                               // L1_z
-        sh_irr += lights.sh4.xyz * (nx * ny);                        // L2_xy
-        sh_irr += lights.sh5.xyz * (ny * nz);                        // L2_yz
-        sh_irr += lights.sh6.xyz * (3.0 * nz * nz - 1.0);           // L2_0
-        sh_irr += lights.sh7.xyz * (nx * nz);                        // L2_xz
-        sh_irr += lights.sh8.xyz * (nx * nx - ny * ny);              // L2_x2y2
+    let inst_sh = instances[in.instance_id].sh_coeffs;
+    let nx = n.x; let ny = n.y; let nz = n.z;
+    if inst_sh[0].w > 0.0 {
+        // per-entity SH (from AmbientProbeGrid or global IrradianceSH written per-entity)
+        var sh_irr = inst_sh[0].xyz;
+        sh_irr += inst_sh[1].xyz * nx;
+        sh_irr += inst_sh[2].xyz * ny;
+        sh_irr += inst_sh[3].xyz * nz;
+        sh_irr += inst_sh[4].xyz * (nx * ny);
+        sh_irr += inst_sh[5].xyz * (ny * nz);
+        sh_irr += inst_sh[6].xyz * (3.0 * nz * nz - 1.0);
+        sh_irr += inst_sh[7].xyz * (nx * nz);
+        sh_irr += inst_sh[8].xyz * (nx * nx - ny * ny);
+        ambient = max(sh_irr, vec3<f32>(0.0)) * albedo * (1.0 - metallic * 0.9);
+    } else if lights.sh_enabled != 0u {
+        // fallback: global IrradianceSH resource
+        var sh_irr = lights.sh0.xyz;
+        sh_irr += lights.sh1.xyz * nx;
+        sh_irr += lights.sh2.xyz * ny;
+        sh_irr += lights.sh3.xyz * nz;
+        sh_irr += lights.sh4.xyz * (nx * ny);
+        sh_irr += lights.sh5.xyz * (ny * nz);
+        sh_irr += lights.sh6.xyz * (3.0 * nz * nz - 1.0);
+        sh_irr += lights.sh7.xyz * (nx * nz);
+        sh_irr += lights.sh8.xyz * (nx * nx - ny * ny);
         ambient = max(sh_irr, vec3<f32>(0.0)) * albedo * (1.0 - metallic * 0.9);
     } else {
         ambient = lights.ambient_color * lights.ambient_intensity * albedo * (1.0 - metallic * 0.9);

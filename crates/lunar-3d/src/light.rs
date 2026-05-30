@@ -1,5 +1,5 @@
 use bevy_ecs::prelude::{Component, Resource};
-use lunar_math::Color;
+use lunar_math::{Color, Vec3};
 
 /// L2 spherical harmonic ambient irradiance probe.
 ///
@@ -29,6 +29,52 @@ impl Default for IrradianceSH {
         let l0_scale = std::f32::consts::PI * 0.282095;
         c[0] = [0.3 * l0_scale, 0.3 * l0_scale, 0.3 * l0_scale];
         Self { coefficients: c }
+    }
+}
+
+/// 3D grid of L2 spherical harmonic ambient probes.
+///
+/// divides the world into a uniform grid; each cell stores pre-baked SH irradiance.
+/// the renderer looks up each dynamic entity's grid cell and uses those coefficients
+/// for ambient instead of the single global `IrradianceSH`.
+/// falls back to global `IrradianceSH` when not loaded (`pvs_stride == 0` equivalent).
+///
+/// populate offline with `tools/bake-probes/` or set manually for hand-authored lighting.
+#[derive(Resource, Clone)]
+pub struct AmbientProbeGrid {
+    /// world-space corner of the grid (minimum x/y/z).
+    pub origin: Vec3,
+    /// spacing between probe centres in world units.
+    pub cell_size: f32,
+    /// grid cell counts [x, y, z].
+    pub dims: [u32; 3],
+    /// packed SH data: `dims.x * dims.y * dims.z * 9` entries, each `[R, G, B]`.
+    /// order: x varies fastest, then y, then z (row-major C order).
+    pub coefficients: Vec<[f32; 3]>,
+}
+
+impl AmbientProbeGrid {
+    /// look up the 9 L2 SH coefficients for a world position.
+    /// clamps to grid bounds — no extrapolation outside the grid.
+    #[must_use]
+    pub fn sample(&self, pos: Vec3) -> [[f32; 3]; 9] {
+        let rel = pos - self.origin;
+        let cx = ((rel.x / self.cell_size) as i32).clamp(0, self.dims[0] as i32 - 1) as usize;
+        let cy = ((rel.y / self.cell_size) as i32).clamp(0, self.dims[1] as i32 - 1) as usize;
+        let cz = ((rel.z / self.cell_size) as i32).clamp(0, self.dims[2] as i32 - 1) as usize;
+        let base = (cz * self.dims[1] as usize + cy) * self.dims[0] as usize + cx;
+        let base = base * 9;
+        let mut out = [[0.0f32; 3]; 9];
+        for i in 0..9 {
+            out[i] = self.coefficients.get(base + i).copied().unwrap_or([0.0; 3]);
+        }
+        out
+    }
+
+    /// total number of probe cells.
+    #[must_use]
+    pub fn cell_count(&self) -> usize {
+        self.dims[0] as usize * self.dims[1] as usize * self.dims[2] as usize
     }
 }
 
