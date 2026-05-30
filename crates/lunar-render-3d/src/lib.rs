@@ -843,6 +843,8 @@ struct FrameContext {
     dir_color: Color,
     dir_direction: Vec3,
     sky_color: Color,
+    aspect: f32,
+    camera: Camera3d,
 }
 
 /// the 3d rendering engine. owns the wgpu device, queue, and surface.
@@ -6383,7 +6385,7 @@ impl RenderEngine3d {
     /// shadow, motion vectors, composite, taa, fxaa) into the frame encoder, ending at
     /// the swapchain. `view` is the surface view (moved in; not used after).
     fn record_post_processing(&mut self, fc: &FrameContext, world: &World, encoder: &mut wgpu::CommandEncoder, view: wgpu::TextureView) {
-        let &FrameContext { view_proj, view_proj_unjittered, staa_jitter_ndc, cam_pos, cam_wt, dev_bloom, dev_ssao, dev_ssr, dev_fog, dev_fxaa, dev_staa, dev_vignette, dev_chrom_ab, dev_film_grain, dev_contact_shadows, dir_color, dir_direction, sky_color } = fc;
+        let &FrameContext { view_proj, view_proj_unjittered, staa_jitter_ndc, cam_pos, cam_wt, dev_bloom, dev_ssao, dev_ssr, dev_fog, dev_fxaa, dev_staa, dev_vignette, dev_chrom_ab, dev_film_grain, dev_contact_shadows, dir_color, dir_direction, sky_color, .. } = fc;
         // ── bloom passes ─────────────────────────────────────────────────
         if self.bloom_enabled && dev_bloom && !self.bloom_mip_views.is_empty() {
             let n = self.bloom_mip_views.len();
@@ -6884,6 +6886,278 @@ impl RenderEngine3d {
             pass.set_pipeline(&self.fxaa_pipeline);
             pass.set_bind_group(0, &self.fxaa_bg, &[]);
             pass.draw(0..3, 0..1);
+        }
+
+    }
+
+    /// records GTAO (half-res horizon-based AO + bilateral blur) and any planar
+    /// reflection passes into the frame encoder, before the main color pass.
+    fn record_gtao_reflection(&mut self, fc: &FrameContext, world: &mut World, encoder: &mut wgpu::CommandEncoder) {
+        let &FrameContext { cam_pos, cam_wt, aspect, dev_ssao, dev_staa, sky_color, camera, .. } = fc;
+        // ── GTAO passes (mid/high tier, ssao enabled) ────────────────────
+        // taa also needs non-msaa depth for reprojection; share this prepass when either is active
+        if (self.ssao_enabled && dev_ssao) || (self.staa_enabled && dev_staa) {
+            // non-MSAA depth prepass so GTAO/TAA can sample depth without MSAA complication
+            {
+                let mut zpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("[gtao] depth prepass"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.gtao_depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                zpass.set_pipeline(&self.zprepass_nonmsaa_pipeline);
+                zpass.set_bind_group(0, &self.globals_bg, &[]);
+                zpass.set_bind_group(1, &self.material_bg, &[]);
+                zpass.set_bind_group(2, &self.entity_bg, &[]);
+                zpass.set_bind_group(3, &self.lights_bg, &[]);
+                {
+                    let mut last_mesh = u32::MAX;
+                    let mut last_mat = u32::MAX;
+                    let mut group_start = 0usize;
+                    let n = self.draw_scratch.len();
+                    let mut i = 0usize;
+                    while i <= n {
+                        let done = i == n;
+                        let (cur_mesh, cur_mat) = if done { (u32::MAX, u32::MAX) }
+                            else { (self.draw_scratch[i].1, self.draw_scratch[i].2) };
+                        if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start
+                            && let Some(gpu_mesh) = self.mesh_gpu.get(&last_mesh) {
+                                let base = (ENTITY_SLOT_START + group_start) as u32;
+                                zpass.draw_indexed(0..gpu_mesh.index_count, 0, base..base + (i - group_start) as u32);
+                            }
+                        if done { break; }
+                        if cur_mesh != last_mesh || cur_mat != last_mat {
+                            if let Some(gpu_mesh) = self.mesh_gpu.get(&cur_mesh) {
+                                zpass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
+                                zpass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
+                            }
+                            last_mesh = cur_mesh; last_mat = cur_mat; group_start = i;
+                        }
+                        i += 1;
+                    }
+                }
+            }
+
+            // upload GTAO params
+            let (ao_w, ao_h) = (
+                (self.surface_config.width / 2).max(1),
+                (self.surface_config.height / 2).max(1),
+            );
+            let (fov_y, near, far) = match camera.projection {
+                Projection::Perspective { fov_y, near, far } => (fov_y, near, far),
+                Projection::Orthographic { .. } => (std::f32::consts::FRAC_PI_3, 0.1, 1000.0),
+            };
+            let proj = camera.view_proj(cam_wt, aspect);
+            let inv_proj = proj.inverse();
+            let gtao_params: [f32; 40] = {
+                let mut d = [0f32; 40];
+                d[..16].copy_from_slice(&inv_proj.to_cols_array());
+                d[16..32].copy_from_slice(&proj.to_cols_array());
+                d[32] = world.resource::<lunar_core::Time>().elapsed_seconds();
+                d[33] = 1.5; // radius metres
+                d[34] = far;
+                d[35] = if self.render_tier == RenderTier::High { 5.0 } else { 3.0 }; // slice_count
+                d[36] = if self.render_tier == RenderTier::High { 6.0 } else { 4.0 }; // step_count
+                d[37] = ao_w as f32;
+                d[38] = ao_h as f32;
+                d[39] = 0.0;
+                let _ = (fov_y, near);
+                d
+            };
+            self.queue.write_buffer(&self.gtao_params_buf, 0, unsafe { slice_as_bytes(&gtao_params) });
+
+            let run_fullscreen_pass = |encoder: &mut wgpu::CommandEncoder,
+                                       label: &str,
+                                       pipeline: &wgpu::RenderPipeline,
+                                       bg: &wgpu::BindGroup,
+                                       target: &wgpu::TextureView,
+                                       w: u32, h: u32| {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some(label),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::WHITE), store: wgpu::StoreOp::Store },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_viewport(0.0, 0.0, w as f32, h as f32, 0.0, 1.0);
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, bg, &[]);
+                pass.draw(0..3, 0..1);
+            };
+
+            run_fullscreen_pass(&mut *encoder, "[gtao] main", &self.gtao_pipeline, &self.gtao_main_bg, &self.gtao_ao_view_a, ao_w, ao_h);
+            run_fullscreen_pass(&mut *encoder, "[gtao] blur-h", &self.gtao_blur_h_pipeline, &self.gtao_blur_h_bg, &self.gtao_ao_view_b, ao_w, ao_h);
+            run_fullscreen_pass(&mut *encoder, "[gtao] blur-v", &self.gtao_blur_v_pipeline, &self.gtao_blur_v_bg, &self.gtao_ao_view_a, ao_w, ao_h);
+        }
+
+        // ── planar reflection pass ────────────────────────────────────────
+        // find visible PlanarReflector entities (max 1 per frame)
+        {
+            let mut reflector: Option<(f32, u32)> = None;  // (plane_y, resolution_divisor)
+            {
+                let mut rq = world.query::<(&PlanarReflector, &WorldTransform3d, &ComputedVisibility)>();
+                for (refl, wt, vis) in rq.iter(world) {
+                    if !vis.0 { continue; }
+                    if reflector.is_none() {
+                        reflector = Some((refl.plane_y + wt.translation.y, refl.resolution_divisor.max(1)));
+                    }
+                }
+            }
+            if let Some((plane_y, div)) = reflector {
+                let rw = (self.surface_config.width  / div).max(1);
+                let rh = (self.surface_config.height / div).max(1);
+
+                // lazy-create reflection texture
+                let needs_new = self.reflection_tex.is_none()
+                    || self.reflection_tex.as_ref().map(|t| {
+                        let sz = t.size();
+                        sz.width != rw || sz.height != rh
+                    }).unwrap_or(false);
+                if needs_new {
+                    let rt = self.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("[reflection] tex"),
+                        size: wgpu::Extent3d { width: rw, height: rh, depth_or_array_layers: 1 },
+                        mip_level_count: 1, sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: self.hdr_format,
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                        view_formats: &[],
+                    });
+                    self.reflection_view = Some(rt.create_view(&wgpu::TextureViewDescriptor::default()));
+                    self.reflection_tex  = Some(rt);
+                    self.water_bg_dirty  = true;
+                }
+
+                // compute reflected camera: flip position and forward about plane_y
+                let refl_cam_pos = lunar_math::Vec3::new(cam_pos.x, 2.0 * plane_y - cam_pos.y, cam_pos.z);
+                // reflected view: negate Y of forward + up
+                let cam_fwd  = cam_wt.forward();
+                let cam_up   = cam_wt.up();
+                let refl_fwd = lunar_math::Vec3::new(cam_fwd.x, -cam_fwd.y, cam_fwd.z);
+                let refl_up  = lunar_math::Vec3::new(cam_up.x,  -cam_up.y,  cam_up.z);
+                let refl_target = refl_cam_pos + refl_fwd;
+                let refl_view = Mat4::look_at_rh(refl_cam_pos, refl_target, refl_up);
+                let aspect = rw as f32 / rh as f32;
+                let proj_mat = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 500.0);
+                let refl_vp = proj_mat * refl_view;
+
+                // write reflected globals to a dedicated buffer
+                if self.reflection_globals_buf.is_none() {
+                    self.reflection_globals_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("[reflection] globals buf"),
+                        size: GLOBALS_SIZE,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    }));
+                }
+                let refl_vp_cols = refl_vp.to_cols_array();
+                let time = world.resource::<lunar_core::Time>();
+                let mut refl_globals = [0f32; 24];
+                refl_globals[..16].copy_from_slice(&refl_vp_cols);
+                refl_globals[16] = refl_cam_pos.x;
+                refl_globals[17] = refl_cam_pos.y;
+                refl_globals[18] = refl_cam_pos.z;
+                refl_globals[19] = time.elapsed_seconds();
+                refl_globals[20] = time.delta_seconds();
+                let refl_globals_buf = self.reflection_globals_buf.as_ref().unwrap();
+                self.queue.write_buffer(refl_globals_buf, 0, unsafe { slice_as_bytes(&refl_globals) });
+
+                // rebuild reflection_globals_bg if needed
+                if self.reflection_globals_bg.is_none() {
+                    self.reflection_globals_bg = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("[reflection] globals bg"),
+                        layout: &self.globals_bgl,
+                        entries: &[wgpu::BindGroupEntry {
+                            binding: 0, resource: refl_globals_buf.as_entire_binding(),
+                        }],
+                    }));
+                }
+
+                // depth buffer for the reflection pass (simple 1-sample)
+                let refl_depth_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("[reflection] depth"),
+                    size: wgpu::Extent3d { width: rw, height: rh, depth_or_array_layers: 1 },
+                    mip_level_count: 1, sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Depth32Float,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                });
+                let refl_depth_view = refl_depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+                // rebuild reflection_globals_bg when buf is first created
+                if self.reflection_globals_bg.is_none() {
+                    let buf = self.reflection_globals_buf.as_ref().unwrap();
+                    self.reflection_globals_bg = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("[reflection] globals bg"),
+                        layout: &self.globals_bgl,
+                        entries: &[wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() }],
+                    }));
+                }
+
+                if let Some(refl_view) = self.reflection_view.as_ref() {
+                    // render sky + opaque geometry into the reflection texture.
+                    // for this sprint we draw a clear to sky-tinted color as the background.
+                    // full per-entity geometry reflection via opaque_pipeline with reflected
+                    // globals is a future sprint (requires per-entity instance data rebind).
+                    let sky_r = sky_color.r * 0.7;
+                    let sky_g = sky_color.g * 0.8;
+                    let sky_b = sky_color.b * 0.9;
+                    let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("[reflection] pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: refl_view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color { r: sky_r as f64, g: sky_g as f64, b: sky_b as f64, a: 1.0 }),
+                                store: wgpu::StoreOp::Store,
+                            },
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &refl_depth_view,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    // full per-entity rendering with reflected globals is a future sprint.
+                    // for now the reflected background color provides basic water reflection.
+                }
+
+                // rebuild water_bg0 to point at the new reflection texture
+                if self.water_bg_dirty {
+                    let refl_v = self.reflection_view.as_ref().unwrap_or(&self.reflection_fallback_view);
+                    self.water_bg0 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("[water] bg0"),
+                        layout: &self.water_bgl0,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: self.globals_buf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
+                            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(refl_v) },
+                        ],
+                    });
+                    self.water_bg_dirty = false;
+                }
+            }
         }
 
     }
@@ -8444,272 +8718,9 @@ impl RenderEngine3d {
             }
         }
 
-        // ── GTAO passes (mid/high tier, ssao enabled) ────────────────────
-        // taa also needs non-msaa depth for reprojection; share this prepass when either is active
-        if (self.ssao_enabled && dev_ssao) || (self.staa_enabled && dev_staa) {
-            // non-MSAA depth prepass so GTAO/TAA can sample depth without MSAA complication
-            {
-                let mut zpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("[gtao] depth prepass"),
-                    color_attachments: &[],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &self.gtao_depth_view,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }),
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                zpass.set_pipeline(&self.zprepass_nonmsaa_pipeline);
-                zpass.set_bind_group(0, &self.globals_bg, &[]);
-                zpass.set_bind_group(1, &self.material_bg, &[]);
-                zpass.set_bind_group(2, &self.entity_bg, &[]);
-                zpass.set_bind_group(3, &self.lights_bg, &[]);
-                {
-                    let mut last_mesh = u32::MAX;
-                    let mut last_mat = u32::MAX;
-                    let mut group_start = 0usize;
-                    let n = self.draw_scratch.len();
-                    let mut i = 0usize;
-                    while i <= n {
-                        let done = i == n;
-                        let (cur_mesh, cur_mat) = if done { (u32::MAX, u32::MAX) }
-                            else { (self.draw_scratch[i].1, self.draw_scratch[i].2) };
-                        if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start
-                            && let Some(gpu_mesh) = self.mesh_gpu.get(&last_mesh) {
-                                let base = (ENTITY_SLOT_START + group_start) as u32;
-                                zpass.draw_indexed(0..gpu_mesh.index_count, 0, base..base + (i - group_start) as u32);
-                            }
-                        if done { break; }
-                        if cur_mesh != last_mesh || cur_mat != last_mat {
-                            if let Some(gpu_mesh) = self.mesh_gpu.get(&cur_mesh) {
-                                zpass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
-                                zpass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
-                            }
-                            last_mesh = cur_mesh; last_mat = cur_mat; group_start = i;
-                        }
-                        i += 1;
-                    }
-                }
-            }
-
-            // upload GTAO params
-            let (ao_w, ao_h) = (
-                (self.surface_config.width / 2).max(1),
-                (self.surface_config.height / 2).max(1),
-            );
-            let (fov_y, near, far) = match camera.projection {
-                Projection::Perspective { fov_y, near, far } => (fov_y, near, far),
-                Projection::Orthographic { .. } => (std::f32::consts::FRAC_PI_3, 0.1, 1000.0),
-            };
-            let proj = camera.view_proj(cam_wt, aspect);
-            let inv_proj = proj.inverse();
-            let gtao_params: [f32; 40] = {
-                let mut d = [0f32; 40];
-                d[..16].copy_from_slice(&inv_proj.to_cols_array());
-                d[16..32].copy_from_slice(&proj.to_cols_array());
-                d[32] = world.resource::<lunar_core::Time>().elapsed_seconds();
-                d[33] = 1.5; // radius metres
-                d[34] = far;
-                d[35] = if self.render_tier == RenderTier::High { 5.0 } else { 3.0 }; // slice_count
-                d[36] = if self.render_tier == RenderTier::High { 6.0 } else { 4.0 }; // step_count
-                d[37] = ao_w as f32;
-                d[38] = ao_h as f32;
-                d[39] = 0.0;
-                let _ = (fov_y, near);
-                d
-            };
-            self.queue.write_buffer(&self.gtao_params_buf, 0, unsafe { slice_as_bytes(&gtao_params) });
-
-            let run_fullscreen_pass = |encoder: &mut wgpu::CommandEncoder,
-                                       label: &str,
-                                       pipeline: &wgpu::RenderPipeline,
-                                       bg: &wgpu::BindGroup,
-                                       target: &wgpu::TextureView,
-                                       w: u32, h: u32| {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some(label),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: target,
-                        resolve_target: None,
-                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::WHITE), store: wgpu::StoreOp::Store },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_viewport(0.0, 0.0, w as f32, h as f32, 0.0, 1.0);
-                pass.set_pipeline(pipeline);
-                pass.set_bind_group(0, bg, &[]);
-                pass.draw(0..3, 0..1);
-            };
-
-            run_fullscreen_pass(&mut encoder, "[gtao] main", &self.gtao_pipeline, &self.gtao_main_bg, &self.gtao_ao_view_a, ao_w, ao_h);
-            run_fullscreen_pass(&mut encoder, "[gtao] blur-h", &self.gtao_blur_h_pipeline, &self.gtao_blur_h_bg, &self.gtao_ao_view_b, ao_w, ao_h);
-            run_fullscreen_pass(&mut encoder, "[gtao] blur-v", &self.gtao_blur_v_pipeline, &self.gtao_blur_v_bg, &self.gtao_ao_view_a, ao_w, ao_h);
-        }
-
-        // ── planar reflection pass ────────────────────────────────────────
-        // find visible PlanarReflector entities (max 1 per frame)
-        {
-            let mut reflector: Option<(f32, u32)> = None;  // (plane_y, resolution_divisor)
-            {
-                let mut rq = world.query::<(&PlanarReflector, &WorldTransform3d, &ComputedVisibility)>();
-                for (refl, wt, vis) in rq.iter(world) {
-                    if !vis.0 { continue; }
-                    if reflector.is_none() {
-                        reflector = Some((refl.plane_y + wt.translation.y, refl.resolution_divisor.max(1)));
-                    }
-                }
-            }
-            if let Some((plane_y, div)) = reflector {
-                let rw = (self.surface_config.width  / div).max(1);
-                let rh = (self.surface_config.height / div).max(1);
-
-                // lazy-create reflection texture
-                let needs_new = self.reflection_tex.is_none()
-                    || self.reflection_tex.as_ref().map(|t| {
-                        let sz = t.size();
-                        sz.width != rw || sz.height != rh
-                    }).unwrap_or(false);
-                if needs_new {
-                    let rt = self.device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some("[reflection] tex"),
-                        size: wgpu::Extent3d { width: rw, height: rh, depth_or_array_layers: 1 },
-                        mip_level_count: 1, sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: self.hdr_format,
-                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-                        view_formats: &[],
-                    });
-                    self.reflection_view = Some(rt.create_view(&wgpu::TextureViewDescriptor::default()));
-                    self.reflection_tex  = Some(rt);
-                    self.water_bg_dirty  = true;
-                }
-
-                // compute reflected camera: flip position and forward about plane_y
-                let refl_cam_pos = lunar_math::Vec3::new(cam_pos.x, 2.0 * plane_y - cam_pos.y, cam_pos.z);
-                // reflected view: negate Y of forward + up
-                let cam_fwd  = cam_wt.forward();
-                let cam_up   = cam_wt.up();
-                let refl_fwd = lunar_math::Vec3::new(cam_fwd.x, -cam_fwd.y, cam_fwd.z);
-                let refl_up  = lunar_math::Vec3::new(cam_up.x,  -cam_up.y,  cam_up.z);
-                let refl_target = refl_cam_pos + refl_fwd;
-                let refl_view = Mat4::look_at_rh(refl_cam_pos, refl_target, refl_up);
-                let aspect = rw as f32 / rh as f32;
-                let proj_mat = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 500.0);
-                let refl_vp = proj_mat * refl_view;
-
-                // write reflected globals to a dedicated buffer
-                if self.reflection_globals_buf.is_none() {
-                    self.reflection_globals_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("[reflection] globals buf"),
-                        size: GLOBALS_SIZE,
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    }));
-                }
-                let refl_vp_cols = refl_vp.to_cols_array();
-                let time = world.resource::<lunar_core::Time>();
-                let mut refl_globals = [0f32; 24];
-                refl_globals[..16].copy_from_slice(&refl_vp_cols);
-                refl_globals[16] = refl_cam_pos.x;
-                refl_globals[17] = refl_cam_pos.y;
-                refl_globals[18] = refl_cam_pos.z;
-                refl_globals[19] = time.elapsed_seconds();
-                refl_globals[20] = time.delta_seconds();
-                let refl_globals_buf = self.reflection_globals_buf.as_ref().unwrap();
-                self.queue.write_buffer(refl_globals_buf, 0, unsafe { slice_as_bytes(&refl_globals) });
-
-                // rebuild reflection_globals_bg if needed
-                if self.reflection_globals_bg.is_none() {
-                    self.reflection_globals_bg = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("[reflection] globals bg"),
-                        layout: &self.globals_bgl,
-                        entries: &[wgpu::BindGroupEntry {
-                            binding: 0, resource: refl_globals_buf.as_entire_binding(),
-                        }],
-                    }));
-                }
-
-                // depth buffer for the reflection pass (simple 1-sample)
-                let refl_depth_tex = self.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("[reflection] depth"),
-                    size: wgpu::Extent3d { width: rw, height: rh, depth_or_array_layers: 1 },
-                    mip_level_count: 1, sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Depth32Float,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                    view_formats: &[],
-                });
-                let refl_depth_view = refl_depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
-
-                // rebuild reflection_globals_bg when buf is first created
-                if self.reflection_globals_bg.is_none() {
-                    let buf = self.reflection_globals_buf.as_ref().unwrap();
-                    self.reflection_globals_bg = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("[reflection] globals bg"),
-                        layout: &self.globals_bgl,
-                        entries: &[wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() }],
-                    }));
-                }
-
-                if let Some(refl_view) = self.reflection_view.as_ref() {
-                    // render sky + opaque geometry into the reflection texture.
-                    // for this sprint we draw a clear to sky-tinted color as the background.
-                    // full per-entity geometry reflection via opaque_pipeline with reflected
-                    // globals is a future sprint (requires per-entity instance data rebind).
-                    let sky_r = sky_color.r * 0.7;
-                    let sky_g = sky_color.g * 0.8;
-                    let sky_b = sky_color.b * 0.9;
-                    let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("[reflection] pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: refl_view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color { r: sky_r as f64, g: sky_g as f64, b: sky_b as f64, a: 1.0 }),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                            view: &refl_depth_view,
-                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
-                            stencil_ops: None,
-                        }),
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                    // full per-entity rendering with reflected globals is a future sprint.
-                    // for now the reflected background color provides basic water reflection.
-                }
-
-                // rebuild water_bg0 to point at the new reflection texture
-                if self.water_bg_dirty {
-                    let refl_v = self.reflection_view.as_ref().unwrap_or(&self.reflection_fallback_view);
-                    self.water_bg0 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("[water] bg0"),
-                        layout: &self.water_bgl0,
-                        entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: self.globals_buf.as_entire_binding() },
-                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
-                            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
-                            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(refl_v) },
-                        ],
-                    });
-                    self.water_bg_dirty = false;
-                }
-            }
-        }
-
+        // bundle read-only per-frame state once; shared by the pre-color and post passes
+        let fc = FrameContext { view_proj, view_proj_unjittered, staa_jitter_ndc, cam_pos, cam_wt, aspect, camera, dev_bloom, dev_ssao, dev_ssr, dev_fog, dev_fxaa, dev_staa, dev_vignette, dev_chrom_ab, dev_film_grain, dev_contact_shadows, dir_color, dir_direction, sky_color };
+        self.record_gtao_reflection(&fc, world, &mut encoder);
         // ── main color pass → HDR texture ───��─────────────────────────────
         // MSAA resolves into the non-MSAA HDR texture; no MSAA renders direct to HDR.
         // composite pass reads the HDR texture and writes to swapchain.
@@ -9499,8 +9510,6 @@ impl RenderEngine3d {
             }
         }
 
-        // bundle read-only per-frame state, then record the post-processing chain
-        let fc = FrameContext { view_proj, view_proj_unjittered, staa_jitter_ndc, cam_pos, cam_wt, dev_bloom, dev_ssao, dev_ssr, dev_fog, dev_fxaa, dev_staa, dev_vignette, dev_chrom_ab, dev_film_grain, dev_contact_shadows, dir_color, dir_direction, sky_color };
         self.record_post_processing(&fc, world, &mut encoder, view);
         #[cfg(not(target_arch = "wasm32"))]
         self.staging_belt.finish();
