@@ -1768,17 +1768,20 @@ pub enum AssetType {
     Font,
 }
 
-/// watches an asset directory for file changes and logs them.
+/// watches an asset directory for file changes and republishes them to the ECS.
 ///
 /// only available on native targets — `notify` does not support WASM.
-/// event routing into the ECS is a planned feature; currently changes
-/// are logged via [`log::info`] for debugging.
+/// file-change paths are delivered each frame as [`AssetChanged`] messages
+/// (read them with a `MessageReader<AssetChanged>`); changes are also logged.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Resource)]
 pub struct AssetWatcher {
     #[allow(dead_code)]
     watcher: Option<notify::RecommendedWatcher>,
     watched: std::collections::HashMap<String, AssetType>,
+    // receiver side of the notify callback channel; behind a mutex so the resource
+    // stays Sync. drained once per frame by dispatch_asset_changes.
+    changes: std::sync::Mutex<std::sync::mpsc::Receiver<String>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1787,13 +1790,16 @@ impl AssetWatcher {
     #[must_use]
     pub fn new(watch_dir: &str) -> Self {
         use notify::{RecursiveMode, Watcher as _};
-        // TODO: route events into ECS via a channel instead of just logging.
+        // the notify callback runs on its own thread, so it forwards changed paths
+        // through a channel; the ecs side drains them each frame.
+        let (sender, receiver) = std::sync::mpsc::channel::<String>();
         let mut watcher =
-            notify::recommended_watcher(|res: Result<notify::Event, notify::Error>| {
+            notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
                 if let Ok(event) = res {
                     for path in event.paths {
                         if let Some(p) = path.to_str() {
-                            log::info!("asset changed: {p}");
+                            // a send error just means the receiver was dropped (shutdown)
+                            let _ = sender.send(p.to_string());
                         }
                     }
                 }
@@ -1805,6 +1811,7 @@ impl AssetWatcher {
         Self {
             watcher,
             watched: std::collections::HashMap::new(),
+            changes: std::sync::Mutex::new(receiver),
         }
     }
 
@@ -1821,12 +1828,51 @@ impl AssetWatcher {
             .map(std::string::String::as_str)
             .collect()
     }
+
+    /// drain all file-change paths received since the last call.
+    #[must_use]
+    pub fn drain_changes(&self) -> Vec<String> {
+        let mut changed = Vec::new();
+        if let Ok(receiver) = self.changes.lock() {
+            while let Ok(path) = receiver.try_recv() {
+                changed.push(path);
+            }
+        }
+        changed
+    }
 }
 
-/// asset watcher plugin — registers [`AssetWatcher`] as a resource.
+/// message published when a watched asset file changes on disk.
 ///
-/// only available on native targets. add this plugin during development
-/// to get file-change logs for assets in the `assets/` directory.
+/// only emitted on native targets by [`AssetWatcherPlugin`]. read it with a
+/// `MessageReader<AssetChanged>` to trigger hot-reload or cache invalidation.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone)]
+pub struct AssetChanged {
+    /// path of the file that changed, as reported by the os watcher.
+    pub path: String,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl bevy_ecs::message::Message for AssetChanged {}
+
+/// system that drains watcher file-change events and republishes them as
+/// [`AssetChanged`] messages once per frame.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn dispatch_asset_changes(
+    watcher: Res<AssetWatcher>,
+    mut changed_writer: bevy_ecs::message::MessageWriter<AssetChanged>,
+) {
+    for path in watcher.drain_changes() {
+        log::info!("asset changed: {path}");
+        changed_writer.write(AssetChanged { path });
+    }
+}
+
+/// asset watcher plugin — registers [`AssetWatcher`] and emits [`AssetChanged`].
+///
+/// only available on native targets. add this plugin during development to get
+/// file-change events for assets in the `assets/` directory.
 #[cfg(not(target_arch = "wasm32"))]
 pub struct AssetWatcherPlugin;
 
@@ -1842,6 +1888,8 @@ impl GamePlugin for AssetWatcherPlugin {
 
     fn build(&mut self, app: &mut App) {
         app.insert_resource(AssetWatcher::new("assets/"));
+        bevy_ecs::message::MessageRegistry::register_message::<AssetChanged>(app.world_mut());
+        app.add_system(dispatch_asset_changes);
         log::info!("AssetWatcherPlugin: asset watcher registered");
     }
 }
