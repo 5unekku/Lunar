@@ -906,6 +906,10 @@ pub struct AssetServer {
     proc_texture_counter: u32,
     /// mip streaming configuration: auto-generates mip chains on texture load.
     mip_config: MipStreamingConfig,
+    /// per-texture screen-space coverage hints from the renderer (max coverage this frame).
+    /// coverage ≈ object_diameter / camera_distance; larger = closer = needs higher quality.
+    /// cleared at the start of each render frame by the renderer.
+    pub coverage_hints: std::collections::HashMap<u32, f32>,
 }
 
 impl AssetServer {
@@ -925,6 +929,7 @@ impl AssetServer {
             evicted_texture_ids: Vec::new(),
             proc_texture_counter: 0,
             mip_config: MipStreamingConfig::default(),
+            coverage_hints: std::collections::HashMap::new(),
         }
     }
 
@@ -1197,6 +1202,30 @@ impl AssetServer {
     #[must_use]
     pub fn mip_config(&self) -> &MipStreamingConfig {
         &self.mip_config
+    }
+
+    /// report the screen-space coverage of a texture this frame.
+    ///
+    /// coverage ≈ entity_size / camera_distance (larger = close, needs more detail).
+    /// called by the renderer each frame for all visible textured entities.
+    /// the renderer accumulates the max coverage per texture_id.
+    pub fn hint_coverage(&mut self, tex_id: u32, coverage: f32) {
+        let entry = self.coverage_hints.entry(tex_id).or_insert(0.0);
+        if coverage > *entry { *entry = coverage; }
+    }
+
+    /// returns how many mip levels to upload for a texture given its coverage hint.
+    ///
+    /// higher coverage (texture fills screen) = upload all mips (full quality).
+    /// lower coverage (texture is tiny on screen) = upload fewer mips (save VRAM).
+    ///
+    /// `max_mip_levels` is the total number of mip levels available for the texture.
+    #[must_use]
+    pub fn desired_mip_count(&self, tex_id: u32, max_mip_levels: u32) -> u32 {
+        let coverage = self.coverage_hints.get(&tex_id).copied().unwrap_or(1.0);
+        if coverage >= 0.5 || max_mip_levels <= 1 { return max_mip_levels; }
+        if coverage >= 0.1 { return max_mip_levels.saturating_sub(2).max(1); }
+        max_mip_levels.saturating_sub(4).max(1)
     }
 
     /// drain the list of font IDs that became ready since the last drain.
@@ -1631,14 +1660,20 @@ pub struct TextureVramUsage {
 }
 
 impl TextureVramUsage {
-    /// increment usage by the size of a texture with all its mip levels.
-    pub(crate) fn add_texture(&mut self, width: u32, height: u32, mip_count: u32) {
+    /// increment usage by the size of a texture with `mip_count` mip levels.
+    pub fn add_texture(&mut self, width: u32, height: u32, mip_count: u32) {
         // RGBA8 = 4 bytes per pixel. geometric series sum: base × (1 - (1/4)^n) / (1 - 1/4)
         // approximation: base × 4/3 (exact only if mip chain goes to 1×1)
         let base_bytes = (width * height * 4) as u64;
         let mip_factor = if mip_count > 1 { 4.0 / 3.0 } else { 1.0 };
         self.bytes += (base_bytes as f64 * mip_factor) as u64;
     }
+
+    /// increment usage by a raw byte count (for compressed or non-standard textures).
+    pub fn add_bytes(&mut self, bytes: u64) { self.bytes += bytes; }
+
+    /// decrement usage (call when a GPU texture is freed).
+    pub fn remove_bytes(&mut self, bytes: u64) { self.bytes = self.bytes.saturating_sub(bytes); }
 }
 
 /// event emitted when a watched asset file changes.

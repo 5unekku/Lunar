@@ -5512,8 +5512,38 @@ impl RenderEngine3d {
             Self::pack_material_uniforms(&mut self.material_staging, SLOT_SUN, sky.sun_color, 0.0, 1.0, 1, 0, [0.0, 0.0], [1.0, 1.0]);
         }
 
-        // upload lightmap textures (irradiance + direction) and create combined bind groups
+        // ── texture coverage hints (item E — mip streaming) ──────────────
+        // collect (lm_id, coverage) pairs, then update asset server in one pass.
         {
+            let mut hints: Vec<(u32, f32)> = Vec::new();
+            for i in 0..self.draw_scratch.len() {
+                let lm_id = self.draw_scratch[i].9;
+                if lm_id == u32::MAX { continue; }
+                let model = self.draw_scratch[i].6;
+                let world_pos = model.w_axis;
+                let dist = (Vec3::new(world_pos.x, world_pos.y, world_pos.z) - cam_pos).length().max(0.01);
+                hints.push((lm_id, 1.0 / dist));
+            }
+            let mut asset_server = world.resource_mut::<lunar_assets::AssetServer>();
+            asset_server.coverage_hints.clear();
+            for (tid, cov) in hints {
+                asset_server.hint_coverage(tid, cov);
+            }
+        }
+
+        // upload lightmap textures (irradiance + direction) and create combined bind groups
+        // step 1: collect needed (lm_id, dir_lm_id) pairs from draw_scratch
+        let lm_needed: Vec<(u32, u32)> = {
+            let mut v: Vec<(u32, u32)> = self.draw_scratch.iter()
+                .filter(|e| e.9 != u32::MAX)
+                .map(|e| (e.9, e.10))
+                .collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+        // step 2: upload textures (uses asset_server borrow)
+        let lm_new_vram: u64 = {
             let asset_server = world.resource::<lunar_assets::AssetServer>();
 
             // helper: upload one Texture asset to GPU, return (Texture, TextureView)
@@ -5575,34 +5605,40 @@ impl RenderEngine3d {
                 (gpu_tex, view)
             };
 
-            // collect unique (lm_id, dir_lm_id) pairs needed this frame
-            let mut needed: Vec<(u32, u32)> = self.draw_scratch.iter()
-                .filter(|e| e.9 != u32::MAX)
-                .map(|e| (e.9, e.10))
-                .collect();
-            needed.sort_unstable();
-            needed.dedup();
-
+            let mut new_vram_bytes = 0u64;
             // upload irradiance textures not yet in cache
-            for &(lm_id, _) in &needed {
+            for &(lm_id, _) in &lm_needed {
                 if !self.lm_tex_cache.contains_key(&lm_id) {
                     if let Some(tex) = asset_server.get_texture_by_id(lm_id) {
+                        let max_mips = tex.mip_level_count();
+                        // desired_mip_count could limit uploads in future; upload full for now
+                        let _desired = asset_server.desired_mip_count(lm_id, max_mips);
+                        new_vram_bytes += (tex.width * tex.height * 4) as u64 * 4 / 3;
                         let entry = upload_lm_tex(&self.device, &self.queue, tex, "[lightmap] irr", true);
                         self.lm_tex_cache.insert(lm_id, entry);
                     }
                 }
             }
             // upload direction textures not yet in cache
-            for &(_, dir_lm_id) in &needed {
+            for &(_, dir_lm_id) in &lm_needed {
                 if dir_lm_id != u32::MAX && !self.dir_lm_tex_cache.contains_key(&dir_lm_id) {
                     if let Some(tex) = asset_server.get_texture_by_id(dir_lm_id) {
+                        new_vram_bytes += (tex.width * tex.height * 4) as u64;
                         let entry = upload_lm_tex(&self.device, &self.queue, tex, "[lightmap] dir", false);
                         self.dir_lm_tex_cache.insert(dir_lm_id, entry);
                     }
                 }
             }
-            // create missing combined bind groups
-            for &(lm_id, dir_lm_id) in &needed {
+            new_vram_bytes
+        };  // asset_server released here
+        // step 3: update VRAM tracking
+        if lm_new_vram > 0 {
+            if let Some(mut vram) = world.get_resource_mut::<lunar_assets::TextureVramUsage>() {
+                vram.add_bytes(lm_new_vram);
+            }
+        }
+        // step 4: create missing combined bind groups (only needs self, no world borrow)
+        for &(lm_id, dir_lm_id) in &lm_needed {
                 if self.lightmap_bg_cache.contains_key(&(lm_id, dir_lm_id)) { continue; }
                 let Some((_, irr_view)) = self.lm_tex_cache.get(&lm_id) else { continue; };
                 let dir_view: &wgpu::TextureView = if dir_lm_id != u32::MAX {
@@ -5623,7 +5659,6 @@ impl RenderEngine3d {
                     ],
                 });
                 self.lightmap_bg_cache.insert((lm_id, dir_lm_id), bg);
-            }
         }
 
         // ── lightmap atlas (phase 3, has_indirect path) ───────────────────
