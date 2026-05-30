@@ -2,6 +2,8 @@ use bevy_ecs::prelude::Component;
 use lunar_assets::{Asset, Handle};
 use lunar_math::{Vec2, Vec3};
 
+use crate::transform::WorldTransform3d;
+
 /// a vertex in a rigid (non-skinned) 3D mesh.
 ///
 /// # layout
@@ -269,6 +271,14 @@ pub struct MeshImpostor {
     pub half_width: f32,
     pub half_height: f32,
 }
+
+/// stores the world transform from the previous tick for render interpolation.
+///
+/// add this to any entity that moves and needs smooth motion between ticks.
+/// the renderer lerps between `PrevWorldTransform3d` and `WorldTransform3d`
+/// using `Time::interp_alpha()` to produce a unique position every render frame.
+#[derive(Debug, Clone, Copy, Component, Default)]
+pub struct PrevWorldTransform3d(pub WorldTransform3d);
 
 /// component that marks an entity as having a 3D mesh.
 ///

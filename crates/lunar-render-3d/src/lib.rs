@@ -42,8 +42,8 @@ use lunar_3d::{
     Aabb3d, ActiveCamera3d, ActiveViewports, AmbientLight, Camera3d, ComputedVisibility,
     CullSoa, Decal, DirectionalLight, Frustum, IndexBuffer, IrradianceSH, Material3d,
     Mesh3d, MeshData, MeshImpostor, MeshLod, MeshRegistry, ParticleEmitter, PointLight,
-    Projection, ShadowCaster, StaticMesh, SurfaceShader, Vertex3d, Terrain, ViewportAspect, ViewportRect,
-    Water, WorldTransform3d,
+    PrevWorldTransform3d, Projection, ShadowCaster, StaticMesh, SurfaceShader, Vertex3d,
+    Terrain, ViewportAspect, ViewportRect, Water, WorldTransform3d,
 };
 use lunar_3d::primitives::{quad_mesh, sphere_mesh};
 use lunar_bsp::{Area, BspLevel, VisibleAreas};
@@ -5377,6 +5377,10 @@ impl RenderEngine3d {
             .filter(|pv| pv.active)
             .map(|pv| pv.area_ids.clone());
 
+        let interp_alpha = world.get_resource::<lunar_core::Time>()
+            .map(|t| t.interp_alpha())
+            .unwrap_or(1.0);
+
         self.raw_scratch.clear();
         self.impostor_scratch.clear();
         // reserve capacity equal to current peak so steady-state frames never reallocate
@@ -5389,9 +5393,10 @@ impl RenderEngine3d {
                 Entity, &Mesh3d, &Material3d, &WorldTransform3d, &ComputedVisibility,
                 Option<&Aabb3d>, Option<&MeshLod>, Option<&MeshImpostor>,
                 Option<&Area>, Option<&Lightmap>, Option<&DirectionalLightmap>,
+                Option<&PrevWorldTransform3d>,
             )>();
             q.iter(world)
-                .filter(|(entity, _, _, _, vis, aabb, _, _, area, _, _)| {
+                .filter(|(entity, _, _, _, vis, aabb, _, _, area, _, _, _)| {
                     if !vis.0 { return false; }
                     // BSP PVS area culling (takes priority over portal traversal)
                     if let Some(ref visible_areas) = bsp_visible {
@@ -5405,18 +5410,21 @@ impl RenderEngine3d {
                     }
                     aabb.is_none() || self.frustum_visible.contains(entity)
                 })
-                .for_each(|(entity, mesh, mat, wt, _, _, lod, impostor, _, lightmap, dir_lightmap)| {
-                    let dist_sq = (wt.translation - cam_pos).length_squared();
+                .for_each(|(entity, mesh, mat, wt, _, _, lod, impostor, _, lightmap, dir_lightmap, prev_wt)| {
+                    let render_wt = prev_wt
+                        .map(|prev| prev.0.lerp(wt, interp_alpha))
+                        .unwrap_or(*wt);
+                    let dist_sq = (render_wt.translation - cam_pos).length_squared();
 
                     // check if entity should use impostor billboard
                     if let Some(imp) = impostor {
                         if dist_sq >= imp.min_dist_sq {
                             // compute view azimuth angle around Y for atlas selection
-                            let to_entity = Vec3::from(wt.translation) - cam_pos;
+                            let to_entity = Vec3::from(render_wt.translation) - cam_pos;
                             let view_angle = to_entity.z.atan2(to_entity.x);
                             let (u_min, u_max, _, _) = imp.atlas.uv_rect(view_angle);
                             self.impostor_scratch.push((
-                                Vec3::from(wt.translation),
+                                Vec3::from(render_wt.translation),
                                 imp.half_width,
                                 imp.half_height,
                                 imp.atlas.texture.id(),
@@ -5436,7 +5444,7 @@ impl RenderEngine3d {
                         .or_else(|| dir_lightmap.map(|dlm| dlm.irradiance.id()))
                         .unwrap_or(u32::MAX);
                     let dir_lm_id = dir_lightmap.map(|dlm| dlm.direction.id()).unwrap_or(u32::MAX);
-                    self.raw_scratch.push((entity, mesh_id, mat.0.id(), wt.to_matrix(), lm_id, dir_lm_id));
+                    self.raw_scratch.push((entity, mesh_id, mat.0.id(), render_wt.to_matrix(), lm_id, dir_lm_id));
                 });
         }
 

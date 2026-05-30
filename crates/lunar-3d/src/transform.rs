@@ -104,6 +104,17 @@ impl WorldTransform3d {
     pub fn up(self) -> Vec3 {
         self.rotation * Vec3::Y
     }
+
+    /// linearly interpolate toward `other` by `alpha` (0 = self, 1 = other).
+    /// rotation is slerped, position and scale are lerped.
+    #[must_use]
+    pub fn lerp(self, other: &Self, alpha: f32) -> Self {
+        Self {
+            translation: self.translation.lerp(other.translation, alpha),
+            rotation:    self.rotation.slerp(other.rotation, alpha),
+            scale:       self.scale.lerp(other.scale, alpha),
+        }
+    }
 }
 
 impl Default for WorldTransform3d {

@@ -2,6 +2,7 @@ use bevy_ecs::prelude::*;
 use lunar_core::Parent;
 use lunar_math::Mat4;
 
+use crate::mesh::PrevWorldTransform3d;
 use crate::transform::{LocalTransform3d, WorldTransform3d};
 use crate::visibility::{ComputedVisibility, Visibility};
 
@@ -133,6 +134,17 @@ pub fn propagate_transforms_3d(world: &mut World) {
     }
 
     world.insert_resource(scratch);
+}
+
+/// copy current `WorldTransform3d` into `PrevWorldTransform3d` at end of each tick.
+///
+/// run this at `PostUpdate` after all transform propagation so every tick snapshot
+/// is committed before the next tick begins. the renderer uses the prev/cur pair
+/// to lerp by `Time::interp_alpha()` for smooth sub-tick motion.
+pub fn copy_prev_transforms(mut query: Query<(&WorldTransform3d, &mut PrevWorldTransform3d)>) {
+    for (current, mut previous) in &mut query {
+        previous.0 = *current;
+    }
 }
 
 fn depth_of(idx: usize, parent_idx: &[Option<usize>], depths: &mut [u32]) -> u32 {

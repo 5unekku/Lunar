@@ -78,11 +78,11 @@ pub use light::{DirectionalLight, IrradianceSH, PointLight, SpotLight};
 pub use material::{CullMode, Material3d, MaterialData, ShadingModel};
 pub use mesh::{
     ImpostorAtlas, IndexBuffer, Mesh3d, MeshData, MeshImpostor, MeshLod,
-    MeshUsage, SkinWeights, StaticMesh, Vertex3d,
+    MeshUsage, PrevWorldTransform3d, SkinWeights, StaticMesh, Vertex3d,
 };
 pub use mesh_registry::MeshRegistry;
 pub use plugin::Plugin3d;
-pub use systems::{TransformScratch3d, propagate_transforms_3d};
+pub use systems::{TransformScratch3d, copy_prev_transforms, propagate_transforms_3d};
 pub use transform::{LocalTransform3d, WorldTransform3d};
 pub use visibility::{
     Aabb3d, ComputedVisibility, CullSoa, Frustum, RenderLayers, ShadowCaster, ShadowReceiver,
