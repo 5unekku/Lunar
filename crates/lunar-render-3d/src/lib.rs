@@ -98,6 +98,8 @@ const CONTACT_SHADOW_SHADER_SRC: &str     = include_str!("contact_shadow.wgsl");
 const MOTION_VECTOR_SHADER_SRC: &str      = include_str!("motion_vector.wgsl");
 #[cfg(debug_assertions)]
 const DETAIL_SPRITE_SHADER_SRC: &str      = include_str!("detail_sprite.wgsl");
+#[cfg(debug_assertions)]
+const STAA_SHADER_SRC: &str               = include_str!("staa.wgsl");
 
 /// create a shader module from pre-compiled spirv (release) or wgsl (debug).
 /// in release, `source` is the spirv bytes from OUT_DIR; in debug, the wgsl string.
@@ -201,6 +203,9 @@ const GTAO_PARAMS_SIZE: u64 = 160;
 
 /// FXAA params UBO: rcp_frame(vec2) + 2 pads = 16 bytes.
 const FXAA_PARAMS_SIZE: u64 = 16;
+
+/// TAA params UBO: prev_vp(64) + inv_vp(64) + jitter(8) + rcp_frame(8) + blend_alpha(4) + frame_index(4) + pad(8) = 160 bytes.
+const STAA_PARAMS_SIZE: u64 = 160;
 
 /// SSR params UBO: inv_view_proj(64) + proj(64) + view(64) + misc(32) = 224 bytes.
 const SSR_PARAMS_SIZE: u64 = 224;
@@ -418,6 +423,10 @@ pub struct QualitySettings {
     /// enable FXAA post-process AA. recommended on low tier (no MSAA).
     /// mid/high tier uses MSAA instead and leaves this off by default.
     pub fxaa: bool,
+    /// enable selective TAA: stabilizes shimmer and accumulates jitter-based sub-pixel AA.
+    /// only modifies edge-adjacent and shimmering pixels — smooth surfaces pass through unchanged.
+    /// runs on top of MSAA on mid/high tier. requires compute (non-GLES).
+    pub staa: bool,
     /// enable quarter-res screen-space reflections (mid+ tier).
     pub ssr: bool,
     /// enable quarter-res ray-marched volumetric fog (mid+ tier).
@@ -443,6 +452,7 @@ impl QualitySettings {
             film_grain: false,
             particle_cap: 512,
             fxaa: false,
+            staa: false,
             ssr: false,
             volumetric_fog: false,
         }
@@ -467,6 +477,7 @@ impl QualitySettings {
                 base.chromatic_aberration = false;
                 base.film_grain = false;
                 base.fxaa = false;
+                base.staa = false;
                 base.shadow_cascades = 1;
             }
             QualityPreset::Low => {
@@ -476,6 +487,7 @@ impl QualitySettings {
                 base.ssr = false;
                 base.volumetric_fog = false;
                 base.fxaa = true;
+                base.staa = false;
                 base.shadow_cascades = 1;
             }
             QualityPreset::Medium => {
@@ -502,6 +514,7 @@ impl QualitySettings {
                 film_grain: false,
                 particle_cap: 1024,
                 fxaa: true, // no MSAA on low tier — FXAA is the only AA path
+                staa: false,
                 ssr: false,
                 volumetric_fog: false,
             },
@@ -519,6 +532,7 @@ impl QualitySettings {
                 film_grain: false,
                 particle_cap: 8192,
                 fxaa: false, // 4× MSAA is active — FXAA redundant
+                staa: true,   // selective temporal AA on top of MSAA: shimmer + sub-pixel jitter
                 ssr: true,
                 volumetric_fog: true,
             },
@@ -536,6 +550,7 @@ impl QualitySettings {
                 film_grain: true,
                 particle_cap: 32768,
                 fxaa: false, // 4× MSAA active
+                staa: true,
                 ssr: true,
                 volumetric_fog: true,
             },
@@ -555,6 +570,7 @@ impl QualitySettings {
         if !dev.ssr            { self.ssr = false; }
         if !dev.volumetric_fog { self.volumetric_fog = false; }
         if !dev.fxaa           { self.fxaa = false; }
+        if !dev.staa            { self.staa = false; }
         if !dev.vignette       { self.vignette = false; }
         if !dev.chromatic_aberration { self.chromatic_aberration = false; }
         if !dev.film_grain     { self.film_grain = false; }
@@ -613,6 +629,8 @@ pub struct DevRenderProfile {
     pub volumetric_fog: bool,
     /// FXAA post-process AA.
     pub fxaa: bool,
+    /// selective temporal AA. off by default for classic profiles; on for standard/full.
+    pub staa: bool,
     /// screen-space vignette.
     pub vignette: bool,
     /// chromatic aberration.
@@ -661,6 +679,7 @@ impl DevRenderProfile {
             ssr: false,
             volumetric_fog: false,
             fxaa: true,
+            staa: true,
             vignette: false,
             chromatic_aberration: false,
             film_grain: false,
@@ -685,6 +704,7 @@ impl DevRenderProfile {
             ssr: false,
             volumetric_fog: false,
             fxaa: true,
+            staa: true,
             vignette: true,
             chromatic_aberration: false,
             film_grain: false,
@@ -709,6 +729,7 @@ impl DevRenderProfile {
             ssr: true,
             volumetric_fog: true,
             fxaa: true,
+            staa: true,
             vignette: true,
             chromatic_aberration: true,
             film_grain: true,
@@ -735,6 +756,7 @@ impl DevRenderProfile {
     #[must_use] pub fn with_ssr(mut self, v: bool) -> Self { self.ssr = v; self }
     #[must_use] pub fn with_volumetric_fog(mut self, v: bool) -> Self { self.volumetric_fog = v; self }
     #[must_use] pub fn with_fxaa(mut self, v: bool) -> Self { self.fxaa = v; self }
+    #[must_use] pub fn with_staa(mut self, v: bool) -> Self { self.staa = v; self }
     #[must_use] pub fn with_vignette(mut self, v: bool) -> Self { self.vignette = v; self }
     #[must_use] pub fn with_chromatic_aberration(mut self, v: bool) -> Self { self.chromatic_aberration = v; self }
     #[must_use] pub fn with_film_grain(mut self, v: bool) -> Self { self.film_grain = v; self }
@@ -952,13 +974,32 @@ pub struct RenderEngine3d {
 
     // FXAA post-process AA — single pass on LDR composite output (low tier only)
     fxaa_enabled: bool,
-    // intermediate LDR texture — composite writes here when FXAA is active
+    // intermediate LDR texture — composite writes here when FXAA or TAA is active
     fxaa_ldr_texture: wgpu::Texture,
     fxaa_ldr_view: wgpu::TextureView,
     fxaa_bgl: wgpu::BindGroupLayout,
     fxaa_bg: wgpu::BindGroup,
     fxaa_params_buf: wgpu::Buffer,
     fxaa_pipeline: wgpu::RenderPipeline,
+
+    // selective temporal AA (STAA): shimmer suppression + jitter-based sub-pixel AA.
+    // uses two ping-pong history textures to avoid read-write aliasing in the same pass.
+    // staa_bg_even reads history_a, writes to [swapchain, history_b].
+    // staa_bg_odd  reads history_b, writes to [swapchain, history_a].
+    staa_enabled: bool,
+    staa_frame_index: u32,
+    staa_prev_vp: Mat4,              // unjittered view_proj from previous frame
+    staa_history_a_texture: wgpu::Texture,
+    staa_history_a_view: wgpu::TextureView,
+    staa_history_b_texture: wgpu::Texture,
+    staa_history_b_view: wgpu::TextureView,
+    staa_bgl: wgpu::BindGroupLayout,
+    staa_bg_even: wgpu::BindGroup,   // even frames: reads history_a
+    staa_bg_odd: wgpu::BindGroup,    // odd  frames: reads history_b
+    staa_params_buf: wgpu::Buffer,
+    staa_pipeline: wgpu::RenderPipeline,
+    staa_nearest_sampler: wgpu::Sampler,
+    staa_ping: bool,
 
     // SSR — quarter-res screen-space reflections (mid+ tier)
     ssr_enabled: bool,
@@ -2586,6 +2627,160 @@ impl RenderEngine3d {
             multiview_mask: None,
         });
 
+        // ── TAA (selective temporal AA, mid+ tier) ────────────────────────
+        // initialized here, but gtao_depth_tex is only available after the GTAO section below.
+        // the bind groups are rebuilt after gtao_depth_tex is known (see below).
+        // placeholder views and bind groups are set to the fxaa_ldr_view temporarily.
+
+        let staa_enabled = quality.staa && render_tier != RenderTier::LowGles;
+
+        let staa_history_a_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[staa] history A"),
+            size: wgpu::Extent3d { width: config.width, height: config.height, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let staa_history_a_view = staa_history_a_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let staa_history_b_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[staa] history B"),
+            size: wgpu::Extent3d { width: config.width, height: config.height, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let staa_history_b_view = staa_history_b_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let staa_nearest_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("[staa] nearest sampler"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
+
+        let staa_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[staa] params buffer"),
+            size: STAA_PARAMS_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let staa_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[staa] bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(STAA_PARAMS_SIZE),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        // depth texture: Depth32Float bound as unfilterable float
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                    count: None,
+                },
+            ],
+        });
+
+        // bind groups are rebuilt once gtao_depth_tex is known (at the end of GTAO section).
+        // placeholder: use fxaa_ldr_view for depth until the real depth is available.
+        // these are immediately overwritten in the "finalize taa bind groups" block below.
+        let staa_bg_placeholder = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[staa] bg (placeholder)"),
+            layout: &staa_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: staa_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fxaa_ldr_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&fxaa_ldr_view) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&staa_history_a_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&post_sampler) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&staa_nearest_sampler) },
+            ],
+        });
+
+        let taa_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("[staa] shader"),
+            source: shader_source!(STAA_SHADER_SRC, "staa.spv"),
+        });
+
+        let staa_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("[staa] pipeline"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("[staa] pipeline layout"),
+                bind_group_layouts: &[Some(&staa_bgl)],
+                immediate_size: 0,
+            })),
+            vertex: wgpu::VertexState {
+                module: &taa_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &taa_shader,
+                entry_point: Some("fs_main"),
+                targets: &[
+                    Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL }),
+                    Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL }),
+                ],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            cache: pipeline_cache_ref,
+            multiview_mask: None,
+        });
+
         // ── SSR (screen-space reflections, mid+ tier) ─────────────────────
 
         let ssr_enabled = quality.ssr;
@@ -3634,6 +3829,35 @@ impl RenderEngine3d {
             config.width, config.height, config.vsync, render_tier,
         );
 
+        // finalize taa bind groups now that gtao_depth_tex is available
+        // even frame: reads history_a, writes to [swapchain, history_b]
+        let staa_bg_even = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[staa] bg even"),
+            layout: &staa_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: staa_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fxaa_ldr_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&gtao_depth_tex) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&staa_history_a_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&post_sampler) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&staa_nearest_sampler) },
+            ],
+        });
+        // odd frame: reads history_b, writes to [swapchain, history_a]
+        let staa_bg_odd = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[staa] bg odd"),
+            layout: &staa_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: staa_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fxaa_ldr_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&gtao_depth_tex) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&staa_history_b_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&post_sampler) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&staa_nearest_sampler) },
+            ],
+        });
+        drop(staa_bg_placeholder);
+
         // clone before move into struct — wgpu::Device is Arc-backed, clone is cheap
         #[cfg(not(target_arch = "wasm32"))]
         let device_for_belt = device.clone();
@@ -3749,6 +3973,20 @@ impl RenderEngine3d {
             fxaa_bg,
             fxaa_params_buf,
             fxaa_pipeline,
+            staa_enabled,
+            staa_frame_index: 0,
+            staa_prev_vp: Mat4::IDENTITY,
+            staa_history_a_texture,
+            staa_history_a_view,
+            staa_history_b_texture,
+            staa_history_b_view,
+            staa_bgl,
+            staa_bg_even,
+            staa_bg_odd,
+            staa_params_buf,
+            staa_pipeline,
+            staa_nearest_sampler,
+            staa_ping: false,
             ssr_enabled,
             ssr_texture,
             ssr_view,
@@ -3844,7 +4082,7 @@ impl RenderEngine3d {
             uniform_staging,
             point_light_scratch: Vec::new(),
 
-            render_graph: Self::build_render_graph(render_tier, bloom_enabled, ssr_enabled, fog_enabled, fxaa_enabled, ssao_enabled),
+            render_graph: Self::build_render_graph(render_tier, bloom_enabled, ssr_enabled, fog_enabled, fxaa_enabled, ssao_enabled, staa_enabled),
 
             has_indirect,
             indirect_buf: None,
@@ -3942,6 +4180,7 @@ impl RenderEngine3d {
         fog: bool,
         fxaa: bool,
         ssao: bool,
+        staa: bool,
     ) -> render_graph::RenderGraph {
         let mut g = render_graph::RenderGraph::new();
         let shadow   = g.texture("shadow_map");
@@ -3960,7 +4199,8 @@ impl RenderEngine3d {
         if tier != RenderTier::LowGles {
             g.add_pass("zprepass", vec![],                      vec![depth]);
         }
-        if ssao {
+        if ssao || staa {
+            // taa needs non-msaa depth for reprojection; share the gtao depth prepass
             g.add_pass("gtao",     vec![depth],                 vec![ao]);
         }
         if tier == RenderTier::High {
@@ -3985,7 +4225,10 @@ impl RenderEngine3d {
             r
         };
         g.add_pass("composite", composite_reads, vec![ldr]);
-        if fxaa {
+        if staa {
+            // taa and fxaa are mutually exclusive; taa replaces fxaa on mid/high tier
+            g.add_pass("staa", vec![ldr, depth], vec![swapchain]);
+        } else if fxaa {
             g.add_pass("fxaa", vec![ldr], vec![swapchain]);
         } else {
             g.add_pass("present", vec![ldr], vec![swapchain]);
@@ -5557,7 +5800,7 @@ fn cs_lod_select(@builtin(global_invocation_id) gid: vec3<u32>) {
             ],
         });
 
-        // rebuild fxaa ldr texture and bind group at the new resolution
+        // rebuild fxaa/taa ldr texture and bind groups at the new resolution
         let fxaa_ldr_texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("[fxaa] ldr texture"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -5578,6 +5821,63 @@ fn cs_lod_select(@builtin(global_invocation_id) gid: vec3<u32>) {
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
             ],
         });
+
+        // rebuild taa history textures and bind groups at the new resolution
+        let fmt = self.surface_config.format;
+        let staa_history_a_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[staa] history A"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: fmt,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let staa_history_a_view = staa_history_a_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let staa_history_b_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[staa] history B"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: fmt,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let staa_history_b_view = staa_history_b_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        self.staa_bg_even = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[staa] bg even"),
+            layout: &self.staa_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.staa_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fxaa_ldr_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.gtao_depth_view) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&staa_history_a_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&self.staa_nearest_sampler) },
+            ],
+        });
+        self.staa_bg_odd = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[staa] bg odd"),
+            layout: &self.staa_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.staa_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&fxaa_ldr_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.gtao_depth_view) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&staa_history_b_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&self.staa_nearest_sampler) },
+            ],
+        });
+        // reset: force cold start on next frame so stale history doesn't bleed through
+        self.staa_frame_index = 0;
+        self.staa_ping = false;
+
+        self.staa_history_a_texture = staa_history_a_texture;
+        self.staa_history_a_view    = staa_history_a_view;
+        self.staa_history_b_texture = staa_history_b_texture;
+        self.staa_history_b_view    = staa_history_b_view;
+
         self.fxaa_ldr_view = fxaa_ldr_view;
         self.fxaa_ldr_texture = fxaa_ldr_texture;
     }
@@ -5620,7 +5920,39 @@ fn cs_lod_select(@builtin(global_invocation_id) gid: vec3<u32>) {
             world.resource::<ViewportAspect>().0
         };
 
-        let view_proj = camera.view_proj(cam_wt, aspect);
+        // unjittered vp — used for taa prev_vp storage and as the shadow/other-pass matrix
+        let view_proj_unjittered = camera.view_proj(cam_wt, aspect);
+
+        // when taa is active, jitter the projection matrix using Halton(2,3) 8-point sequence.
+        // this sub-pixel shift (≤0.5px) is applied via the projection matrix column 2 so the
+        // jitter is depth-independent (constant screen-space offset for all vertices).
+        // the jitter makes each frame sample a different sub-pixel position; TAA then accumulates
+        // these samples to achieve effective temporal super-sampling on edge-adjacent pixels.
+        let (view_proj, staa_jitter_ndc) = if self.staa_enabled {
+            // Halton low-discrepancy sequence: base 2 for x, base 3 for y.
+            // use frame_index+1 so index 0 maps to a non-zero offset (avoids identity jitter).
+            let idx = (self.staa_frame_index % 8 + 1) as u64;
+            fn halton(mut i: u64, base: u64) -> f32 {
+                let (mut f, mut r) = (1.0f64, 0.0f64);
+                while i > 0 { f /= base as f64; r += f * (i % base) as f64; i /= base; }
+                r as f32
+            }
+            // NDC jitter: ≤0.5px in screen space (NDC = 2/width per pixel)
+            let jx = (halton(idx, 2) - 0.5) * 2.0 / win_w as f32;
+            let jy = (halton(idx, 3) - 0.5) * 2.0 / win_h as f32;
+
+            // modify the projection column 2 (z-axis.xy) to add a constant NDC offset.
+            // P[2][0] += Δx shifts NDC.x by -Δx for all depths (clip.w cancels out).
+            let view_mat = Camera3d::view_matrix(cam_wt);
+            let mut jittered_proj = camera.projection.matrix(aspect);
+            jittered_proj.z_axis.x -= jx;
+            jittered_proj.z_axis.y -= jy;
+            // jitter in UV space = NDC jitter / 2 (NDC spans [-1,1], UV spans [0,1])
+            (jittered_proj * view_mat, Vec2::new(jx * 0.5, jy * 0.5))
+        } else {
+            (view_proj_unjittered, Vec2::ZERO)
+        };
+
         let cam_pos = cam_wt.translation;
 
         // ── read dev render profile (dev's feature ceiling) ───────────────
@@ -5632,6 +5964,7 @@ fn cs_lod_select(@builtin(global_invocation_id) gid: vec3<u32>) {
         let dev_ssr              = world.get_resource::<DevRenderProfile>().map(|d| d.ssr              ).unwrap_or(true);
         let dev_fog              = world.get_resource::<DevRenderProfile>().map(|d| d.volumetric_fog   ).unwrap_or(true);
         let dev_fxaa             = world.get_resource::<DevRenderProfile>().map(|d| d.fxaa             ).unwrap_or(true);
+        let dev_staa              = world.get_resource::<DevRenderProfile>().map(|d| d.staa              ).unwrap_or(true);
         let dev_vignette         = world.get_resource::<DevRenderProfile>().map(|d| d.vignette         ).unwrap_or(true);
         let dev_chrom_ab         = world.get_resource::<DevRenderProfile>().map(|d| d.chromatic_aberration).unwrap_or(true);
         let dev_film_grain       = world.get_resource::<DevRenderProfile>().map(|d| d.film_grain       ).unwrap_or(true);
@@ -7582,8 +7915,9 @@ fn cs_lod_select(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         // ── GTAO passes (mid/high tier, ssao enabled) ────────────────────
-        if self.ssao_enabled && dev_ssao {
-            // non-MSAA depth prepass so GTAO can sample depth without MSAA complication
+        // taa also needs non-msaa depth for reprojection; share this prepass when either is active
+        if (self.ssao_enabled && dev_ssao) || (self.staa_enabled && dev_staa) {
+            // non-MSAA depth prepass so GTAO/TAA can sample depth without MSAA complication
             {
                 let mut zpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("[gtao] depth prepass"),
@@ -9026,10 +9360,10 @@ fn cs_lod_select(@builtin(global_invocation_id) gid: vec3<u32>) {
             ];
             self.queue.write_buffer(&self.composite_params_buf, 0, unsafe { slice_as_bytes(&composite_data) });
 
-            // when fxaa is enabled, composite writes to the intermediate ldr texture;
-            // the fxaa pass then reads it and outputs to swapchain. this avoids running
-            // fxaa on a non-filterable msaa resolve target.
-            let composite_target = if self.fxaa_enabled && dev_fxaa { &self.fxaa_ldr_view } else { &view };
+            // fxaa and taa both need composite output in a sampleable intermediate texture.
+            // taa takes priority over fxaa (they're mutually exclusive on mid/high tier).
+            let use_intermediate = (self.staa_enabled && dev_staa) || (self.fxaa_enabled && dev_fxaa);
+            let composite_target = if use_intermediate { &self.fxaa_ldr_view } else { &view };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("[composite] pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -9051,8 +9385,68 @@ fn cs_lod_select(@builtin(global_invocation_id) gid: vec3<u32>) {
             pass.draw(0..3, 0..1);
         }
 
+        // ── TAA pass → swapchain + history ───────────────────────────────────
+        if self.staa_enabled && dev_staa {
+            let w  = self.surface_config.width;
+            let h  = self.surface_config.height;
+
+            // pack params: prev_vp(64) + inv_vp(64) + jitter(8) + rcp_frame(8) + blend_alpha(4) + frame_index(4) + pad(8)
+            let inv_vp = view_proj.inverse();
+            let mut taa_data = [0u8; STAA_PARAMS_SIZE as usize];
+            taa_data[0..64].copy_from_slice(bytemuck::cast_slice(&self.staa_prev_vp.to_cols_array()));
+            taa_data[64..128].copy_from_slice(bytemuck::cast_slice(&inv_vp.to_cols_array()));
+            taa_data[128..132].copy_from_slice(bytemuck::cast_slice(&[staa_jitter_ndc.x]));
+            taa_data[132..136].copy_from_slice(bytemuck::cast_slice(&[staa_jitter_ndc.y]));
+            taa_data[136..140].copy_from_slice(bytemuck::cast_slice(&[1.0_f32 / w as f32]));
+            taa_data[140..144].copy_from_slice(bytemuck::cast_slice(&[1.0_f32 / h as f32]));
+            taa_data[144..148].copy_from_slice(bytemuck::cast_slice(&[0.1_f32]));  // blend_alpha
+            taa_data[148..152].copy_from_slice(&self.staa_frame_index.to_le_bytes());
+            self.queue.write_buffer(&self.staa_params_buf, 0, &taa_data);
+
+            // ping-pong: even frame writes to history_b (reads from history_a via bg_even)
+            //            odd  frame writes to history_a (reads from history_b via bg_odd)
+            let (bg, write_a, write_b) = if !self.staa_ping {
+                (&self.staa_bg_even, false, true)
+            } else {
+                (&self.staa_bg_odd, true, false)
+            };
+            let history_write_view = if write_b { &self.staa_history_b_view } else { &self.staa_history_a_view };
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("[staa] pass"),
+                color_attachments: &[
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                        depth_slice: None,
+                    }),
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: history_write_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                        depth_slice: None,
+                    }),
+                ],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.staa_pipeline);
+            pass.set_bind_group(0, bg, &[]);
+            pass.draw(0..3, 0..1);
+            drop(pass);
+
+            // advance taa state for next frame
+            self.staa_prev_vp    = view_proj_unjittered;
+            self.staa_frame_index = self.staa_frame_index.wrapping_add(1);
+            self.staa_ping       = !self.staa_ping;
+            let _ = (write_a, write_b);
+        }
+
         // ── FXAA pass → swapchain ─────────────────────────────────────────
-        if self.fxaa_enabled && dev_fxaa {
+        if self.fxaa_enabled && dev_fxaa && !(self.staa_enabled && dev_staa) {
             let w = self.surface_config.width;
             let h = self.surface_config.height;
             let fxaa_data: [f32; 4] = [1.0 / w as f32, 1.0 / h as f32, 0.0, 0.0];
