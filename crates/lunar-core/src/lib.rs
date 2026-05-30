@@ -48,7 +48,7 @@ mod window;
 mod world_manifest;
 
 /// app builder and time resource
-pub use app::{App, GamePlugin, Time};
+pub use app::{App, GamePlugin, Time, TickRateConfig};
 /// command registry for console commands
 pub use command::{Command, CommandRegistry};
 /// engine wrapper around `bevy_ecs` world and schedule

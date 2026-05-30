@@ -10,9 +10,18 @@ use bevy_ecs::schedule::{IntoScheduleConfigs, ScheduleLabel};
 use bevy_ecs::system::ScheduleSystem;
 
 use crate::engine::Engine;
-use crate::game_loop::GameLoop;
+use crate::game_loop::{GameLoop, TickRate};
 use crate::schedule::{StageOrder, UpdateStage};
 use crate::state::EngineState;
+
+/// runtime-switchable logic tick rate.
+///
+/// write `rate` to change the tick rate at any time (e.g. from a settings menu).
+/// the game loop detects the change each frame and calls `GameLoop::set_tick_rate`.
+#[derive(Resource, Clone, Copy, PartialEq, Eq)]
+pub struct TickRateConfig {
+    pub rate: TickRate,
+}
 
 /// time resource updated each frame
 ///
@@ -33,6 +42,9 @@ pub struct Time {
     scale: f32,
     /// total logic tick count since engine start
     frame_count: u64,
+    /// render interpolation alpha: how far we are between the last tick and the next.
+    /// 0.0 = just ticked, 1.0 = about to tick. use for lerping render-side transforms.
+    interp_alpha: f32,
 }
 
 impl Time {
@@ -46,6 +58,7 @@ impl Time {
             elapsed_seconds: 0.0,
             scale: 1.0,
             frame_count: 0,
+            interp_alpha: 0.0,
         }
     }
 
@@ -112,6 +125,18 @@ impl Time {
     /// update the wall-clock render delta — called once per render frame, not per tick.
     pub fn set_real_delta(&mut self, real_delta: f32) {
         self.real_delta_seconds = real_delta;
+    }
+
+    /// render interpolation alpha: 0.0 = just ticked, 1.0 = about to tick.
+    /// use this to lerp entity transforms on the render side for smooth motion.
+    #[must_use]
+    pub const fn interp_alpha(&self) -> f32 {
+        self.interp_alpha
+    }
+
+    /// set the interpolation alpha — called by the game loop once per render frame.
+    pub fn set_interp_alpha(&mut self, alpha: f32) {
+        self.interp_alpha = alpha;
     }
 }
 
@@ -328,14 +353,27 @@ impl App {
             self.startup_run = true;
         }
 
-        let fixed_delta = tick_rate.delta_seconds();
+        // insert TickRateConfig so game code can change tick rate at runtime
+        self.engine.world_mut().insert_resource(TickRateConfig { rate: tick_rate });
+
+        let mut fixed_delta = tick_rate.delta_seconds();
         let mut game_loop = GameLoop::new(frame_cap, tick_rate);
 
         while game_loop.is_running() {
+            // check if game code changed the tick rate via TickRateConfig
+            if let Some(cfg) = self.engine.world().get_resource::<TickRateConfig>() {
+                if cfg.rate != game_loop.tick_rate() {
+                    game_loop.set_tick_rate(cfg.rate);
+                    fixed_delta = cfg.rate.delta_seconds();
+                }
+            }
+
             let (ticks, frame_delta) = game_loop.tick();
+            let alpha = game_loop.interpolation_alpha();
 
             if let Some(mut time) = self.engine.world_mut().get_resource_mut::<Time>() {
                 time.set_real_delta(frame_delta);
+                time.set_interp_alpha(alpha);
             }
 
             for _ in 0..ticks {

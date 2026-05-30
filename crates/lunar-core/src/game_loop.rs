@@ -156,6 +156,16 @@ impl GameLoop {
         (ticks.min(5), frame_delta)
     }
 
+    /// how far we are between the last tick and the next, in [0, 1].
+    ///
+    /// 0 = just ticked, 1 = accumulator has reached the next tick interval.
+    /// use this to lerp render-side entity transforms for smooth motion at any frame rate.
+    #[must_use]
+    pub fn interpolation_alpha(&self) -> f32 {
+        let interval = self.tick_rate.interval().as_secs_f32();
+        (self.accumulator.as_secs_f32() / interval).clamp(0.0, 1.0)
+    }
+
     /// apply render frame rate limiting.
     ///
     /// uses a hybrid sleep + spin-wait: sleep for all but the last 1ms,
