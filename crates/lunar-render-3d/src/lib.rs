@@ -91,7 +91,13 @@ const DECAL_SHADER_SRC: &str           = include_str!("decal.wgsl");
 #[cfg(debug_assertions)]
 const WATER_SHADER_SRC: &str           = include_str!("water.wgsl");
 #[cfg(debug_assertions)]
-const TERRAIN_SHADER_SRC: &str         = include_str!("terrain.wgsl");
+const TERRAIN_SHADER_SRC: &str            = include_str!("terrain.wgsl");
+#[cfg(debug_assertions)]
+const CONTACT_SHADOW_SHADER_SRC: &str     = include_str!("contact_shadow.wgsl");
+#[cfg(debug_assertions)]
+const MOTION_VECTOR_SHADER_SRC: &str      = include_str!("motion_vector.wgsl");
+#[cfg(debug_assertions)]
+const DETAIL_SPRITE_SHADER_SRC: &str      = include_str!("detail_sprite.wgsl");
 
 /// create a shader module from pre-compiled spirv (release) or wgsl (debug).
 /// in release, `source` is the spirv bytes from OUT_DIR; in debug, the wgsl string.
@@ -207,6 +213,12 @@ const ATMOS_PARAMS_SIZE: u64 = 64;
 
 /// particle sim params UBO: delta_time(4)+gravity(4)+alive_count(4)+pad(4) = 16 bytes.
 const PARTICLE_SIM_PARAMS_SIZE: u64 = 16;
+
+/// contact shadow params UBO: inv_proj(64)+light_dir_vs(12)+step_count(4)+step_size(4)+w(4)+h(4)+pad(4) = 96 bytes.
+const CONTACT_SHADOW_PARAMS_SIZE: u64 = 96;
+
+/// motion vector params UBO: inv_view_proj(64)+prev_view_proj(64)+screen_wh(8)+pad(8) = 144 bytes.
+const MOTION_VECTOR_PARAMS_SIZE: u64 = 144;
 
 /// one particle in the GPU storage buffer: position(12)+life(4)+vel(12)+maxlife(4)+col_s(16)+col_e(16)+size_s(4)+size_e(4)+pad×2 = 80 bytes.
 const PARTICLE_STRIDE: u64 = 80;
@@ -1163,6 +1175,52 @@ pub struct RenderEngine3d {
     // 1-frame pipeline state for hzb occlusion readback
     hzb_staging_pending: bool,
     hzb_pending_entity_count: usize,
+
+    // ── contact shadows ──────────────────────────────────────────────────
+    contact_shadow_tex:           Option<wgpu::Texture>,
+    contact_shadow_view:          Option<wgpu::TextureView>,
+    contact_shadow_bgl:           Option<wgpu::BindGroupLayout>,
+    contact_shadow_pipeline:      Option<wgpu::RenderPipeline>,
+    contact_shadow_params_buf:    Option<wgpu::Buffer>,
+    // 1×1 zero R8Unorm fallback for when contact shadows are disabled
+    contact_shadow_fallback_tex:  wgpu::Texture,
+    contact_shadow_fallback_view: wgpu::TextureView,
+    // set true when contact_shadow_tex is first created to trigger composite_bg rebuild
+    composite_bg_dirty: bool,
+
+    // ── motion vectors ────────────────────────────────────────────────────
+    motion_vec_tex:      Option<wgpu::Texture>,
+    motion_vec_view:     Option<wgpu::TextureView>,
+    motion_vec_bgl:      Option<wgpu::BindGroupLayout>,
+    motion_vec_pipeline: Option<wgpu::RenderPipeline>,
+    motion_vec_params_buf: Option<wgpu::Buffer>,
+    /// view_proj from the previous frame for motion vector reprojection
+    prev_view_proj: Mat4,
+
+    // ── planar reflections ────────────────────────────────────────────────
+    reflection_tex:      Option<wgpu::Texture>,
+    reflection_view:     Option<wgpu::TextureView>,
+    reflection_globals_buf: Option<wgpu::Buffer>,
+    reflection_globals_bg:  Option<wgpu::BindGroup>,
+
+    // ── detail sprites ────────────────────────────────────────────────────
+    detail_sprite_bgl:              Option<wgpu::BindGroupLayout>,
+    detail_sprite_pipeline:         Option<wgpu::RenderPipeline>,
+    detail_sprite_compute_bgl:      Option<wgpu::BindGroupLayout>,
+    detail_sprite_compute_pipeline: Option<wgpu::ComputePipeline>,
+    // per-entity instance buffers: entity_id → (instance_buf, instance_count)
+    detail_sprite_instance_bufs: HashMap<u64, (wgpu::Buffer, u32)>,
+
+    // ── gpu lod selection ─────────────────────────────────────────────────
+    lod_select_bgl:           Option<wgpu::BindGroupLayout>,
+    lod_select_pipeline:      Option<wgpu::ComputePipeline>,
+    lod_params_buf:           Option<wgpu::Buffer>,
+    lod_indices_buf:          Option<wgpu::Buffer>,
+    lod_indices_staging:      Option<wgpu::Buffer>,
+    gpu_lod_indices:          HashMap<bevy_ecs::entity::Entity, u32>,
+    lod_staging_pending:      bool,
+    lod_pending_entity_count: usize,
+    lod_staging_ready:        Arc<AtomicBool>,
 }
 
 // wasm is single-threaded; wgpu's WebGPU backend uses RefCell instead of Mutex,
@@ -2341,15 +2399,48 @@ impl RenderEngine3d {
                     },
                     count: None,
                 },
-                // binding 6: sampler (was 4)
+                // binding 6: sampler
                 wgpu::BindGroupLayoutEntry {
                     binding: 6,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                // binding 7: contact_shadow_tex (R8Unorm; 1×1 zero fallback when disabled)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
+
+        // 1×1 zero R8Unorm texture — fallback contact shadow when pass is disabled
+        let contact_shadow_fallback_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[contact shadow] fallback tex"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        {
+            let fallback_data = [0u8; 4];
+            queue.write_texture(
+                contact_shadow_fallback_tex.as_image_copy(),
+                &fallback_data[..1],
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(1), rows_per_image: Some(1) },
+                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            );
+        }
+        let contact_shadow_fallback_view = contact_shadow_fallback_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
         let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[composite] shader"),
@@ -3321,6 +3412,7 @@ impl RenderEngine3d {
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&ssr_view) },
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&fog_view) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&post_sampler) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&contact_shadow_fallback_view) },
             ],
         });
 
@@ -3770,6 +3862,43 @@ impl RenderEngine3d {
             hzb_pending_entity_count: 0,
             cull_staging_ready: Arc::new(AtomicBool::new(false)),
             hzb_staging_ready: Arc::new(AtomicBool::new(false)),
+
+            contact_shadow_tex: None,
+            contact_shadow_view: None,
+            contact_shadow_bgl: None,
+            contact_shadow_pipeline: None,
+            contact_shadow_params_buf: None,
+            contact_shadow_fallback_tex,
+            contact_shadow_fallback_view,
+            composite_bg_dirty: false,
+
+            motion_vec_tex: None,
+            motion_vec_view: None,
+            motion_vec_bgl: None,
+            motion_vec_pipeline: None,
+            motion_vec_params_buf: None,
+            prev_view_proj: Mat4::IDENTITY,
+
+            reflection_tex: None,
+            reflection_view: None,
+            reflection_globals_buf: None,
+            reflection_globals_bg: None,
+
+            detail_sprite_bgl: None,
+            detail_sprite_pipeline: None,
+            detail_sprite_compute_bgl: None,
+            detail_sprite_compute_pipeline: None,
+            detail_sprite_instance_bufs: HashMap::new(),
+
+            lod_select_bgl: None,
+            lod_select_pipeline: None,
+            lod_params_buf: None,
+            lod_indices_buf: None,
+            lod_indices_staging: None,
+            gpu_lod_indices: HashMap::new(),
+            lod_staging_pending: false,
+            lod_pending_entity_count: 0,
+            lod_staging_ready: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -4328,6 +4457,285 @@ impl RenderEngine3d {
             mapped_at_creation: false,
         }));
         self.hzb_occ_flags.resize(cap, 0);
+    }
+
+    fn ensure_contact_shadow_resources(&mut self, width: u32, height: u32, inv_proj: &Mat4) {
+        let qw = (width  / 2).max(1);
+        let qh = (height / 2).max(1);
+        let needs_tex = self.contact_shadow_tex.is_none();
+        if needs_tex {
+            let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("[contact shadow] tex"),
+                size: wgpu::Extent3d { width: qw, height: qh, depth_or_array_layers: 1 },
+                mip_level_count: 1, sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            self.contact_shadow_view = Some(tex.create_view(&wgpu::TextureViewDescriptor::default()));
+            self.contact_shadow_tex  = Some(tex);
+            self.composite_bg_dirty  = true;
+        }
+
+        if self.contact_shadow_bgl.is_none() {
+            let sampler_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+                binding, visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            };
+            let tex_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+                binding, visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            };
+            let uniform_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+                binding, visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(CONTACT_SHADOW_PARAMS_SIZE),
+                },
+                count: None,
+            };
+            let bgl = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("[contact shadow] bgl"),
+                entries: &[uniform_entry(0), tex_entry(1), sampler_entry(2)],
+            });
+            let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("[contact shadow] layout"),
+                bind_group_layouts: &[Some(&bgl)],
+                immediate_size: 0,
+            });
+            let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("[contact shadow] shader"),
+                source: shader_source!(CONTACT_SHADOW_SHADER_SRC, "contact_shadow.spv"),
+            });
+            self.contact_shadow_pipeline = Some(self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("[contact shadow] pipeline"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader, entry_point: Some("vs_main"),
+                    buffers: &[], compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader, entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::R8Unorm,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                cache: None,
+                multiview_mask: None,
+            }));
+            self.contact_shadow_bgl = Some(bgl);
+            let params_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("[contact shadow] params"), size: CONTACT_SHADOW_PARAMS_SIZE,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.contact_shadow_params_buf = Some(params_buf);
+        }
+
+        // upload params: inv_proj(64) + light_dir_vs(12) + step_count(4) + step_size(4) + w(4) + h(4) + pad(4) = 96
+        let mut data = [0f32; 24];
+        let inv_proj_cols = inv_proj.to_cols_array();
+        data[..16].copy_from_slice(&inv_proj_cols);
+        data[16] = 0.0;  // light_dir_vs.x (placeholder — set each frame)
+        data[17] = -1.0; // light_dir_vs.y (pointing down as default)
+        data[18] = 0.0;  // light_dir_vs.z
+        data[19] = f32::from_bits(8u32); // step_count
+        data[20] = 0.08; // step_size
+        data[21] = width  as f32;
+        data[22] = height as f32;
+        if let Some(buf) = self.contact_shadow_params_buf.as_ref() {
+            self.queue.write_buffer(buf, 0, unsafe { slice_as_bytes(&data) });
+        }
+    }
+
+    fn ensure_motion_vector_resources(&mut self, width: u32, height: u32) {
+        if self.motion_vec_tex.is_none() {
+            let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("[motion vec] tex"),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1, sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rg16Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            self.motion_vec_view = Some(tex.create_view(&wgpu::TextureViewDescriptor::default()));
+            self.motion_vec_tex  = Some(tex);
+        }
+
+        if self.motion_vec_bgl.is_none() {
+            let bgl = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("[motion vec] bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: wgpu::BufferSize::new(MOTION_VECTOR_PARAMS_SIZE),
+                        }, count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Depth,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        }, count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2, visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        count: None,
+                    },
+                ],
+            });
+            let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("[motion vec] layout"),
+                bind_group_layouts: &[Some(&bgl)],
+                immediate_size: 0,
+            });
+            let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("[motion vec] shader"),
+                source: shader_source!(MOTION_VECTOR_SHADER_SRC, "motion_vector.spv"),
+            });
+            self.motion_vec_pipeline = Some(self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("[motion vec] pipeline"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader, entry_point: Some("vs_main"),
+                    buffers: &[], compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader, entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rg16Float,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                cache: None,
+                multiview_mask: None,
+            }));
+            self.motion_vec_bgl = Some(bgl);
+            let params_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("[motion vec] params"), size: MOTION_VECTOR_PARAMS_SIZE,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.motion_vec_params_buf = Some(params_buf);
+        }
+    }
+
+    fn ensure_lod_select_resources(&mut self, entity_count: usize) {
+        if entity_count == 0 { return; }
+        let cap = entity_count.next_power_of_two().max(256);
+
+        let needs_rebuild = self.lod_indices_buf.is_none() || cap > self.cull_entity_capacity;
+        if needs_rebuild {
+            self.lod_indices_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("[lod] indices buf"),
+                size: (cap * 4) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.lod_indices_staging = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("[lod] indices staging"),
+                size: (cap * 4) as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }));
+        }
+
+        if self.lod_select_bgl.is_none() {
+            let uniform_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+                binding, visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false, min_binding_size: None,
+                }, count: None,
+            };
+            let storage_ro = |binding: u32| wgpu::BindGroupLayoutEntry {
+                binding, visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false, min_binding_size: None,
+                }, count: None,
+            };
+            let storage_rw = |binding: u32| wgpu::BindGroupLayoutEntry {
+                binding, visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false, min_binding_size: None,
+                }, count: None,
+            };
+            let bgl = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("[lod select] bgl"),
+                entries: &[uniform_entry(0), storage_ro(1), storage_rw(2)],
+            });
+            let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("[lod select] layout"),
+                bind_group_layouts: &[Some(&bgl)],
+                immediate_size: 0,
+            });
+            // inline WGSL for LOD selection compute (avoids a separate file)
+            let lod_wgsl = "
+struct LodParams { cam_pos: vec3<f32>, entity_count: u32, thresholds: vec4<f32> }
+@group(0) @binding(0) var<uniform>             params:      LodParams;
+@group(0) @binding(1) var<storage, read>       aabbs:       array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read_write> lod_indices: array<u32>;
+@compute @workgroup_size(64)
+fn cs_lod_select(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if i >= params.entity_count { return; }
+    let centre = aabbs[i * 2u].xyz;
+    let d = centre - params.cam_pos;
+    let dist_sq = dot(d, d);
+    let t = params.thresholds;
+    var lod: u32 = 4u;
+    if      dist_sq <= t.x { lod = 0u; }
+    else if dist_sq <= t.y { lod = 1u; }
+    else if dist_sq <= t.z { lod = 2u; }
+    else if dist_sq <= t.w { lod = 3u; }
+    lod_indices[i] = lod;
+}";
+            let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("[lod select] shader"),
+                source: wgpu::ShaderSource::Wgsl(lod_wgsl.into()),
+            });
+            self.lod_select_pipeline = Some(self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("[lod select] pipeline"),
+                layout: Some(&layout),
+                module: &shader,
+                entry_point: Some("cs_lod_select"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            }));
+            self.lod_select_bgl = Some(bgl);
+            self.lod_params_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("[lod] params"), size: 32,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
     }
 
     /// load the 3d pipeline cache from disk if available (Vulkan/DX12 only).
@@ -5146,6 +5554,30 @@ impl RenderEngine3d {
                 (soa.entities.len(), frustum.planes)
             };
 
+            // read previous frame's LOD staging result (1-frame pipelined, same as cull)
+            if self.lod_staging_pending && entity_count > 0 {
+                if self.lod_staging_ready.load(Ordering::Acquire) {
+                    let prev_count = self.lod_pending_entity_count;
+                    if let Some(staging) = self.lod_indices_staging.as_ref() {
+                        {
+                            let slice = staging.slice(0..(prev_count * 4) as u64);
+                            let data = slice.get_mapped_range();
+                            let indices: &[u32] = bytemuck::cast_slice(&data);
+                            let soa = world.resource::<CullSoa>();
+                            self.gpu_lod_indices.clear();
+                            for (i, &entity) in soa.entities.iter().take(prev_count).enumerate() {
+                                if i < indices.len() {
+                                    self.gpu_lod_indices.insert(entity, indices[i]);
+                                }
+                            }
+                        }
+                        staging.unmap();
+                    }
+                    self.lod_staging_ready.store(false, Ordering::Release);
+                    self.lod_staging_pending = false;
+                }
+            }
+
             // read previous frame's staging result — non-blocking, uses AtomicBool set by map_async callback
             if self.cull_staging_pending && entity_count > 0 {
                 let _ = self.device.poll(wgpu::PollType::Poll); // fire any completed callbacks
@@ -5214,6 +5646,9 @@ impl RenderEngine3d {
                 }
                 frustum_data[24] = f32::from_bits(entity_count as u32);
 
+                // ensure LOD buffers before borrowing aabb_buf (borrow checker requirement)
+                self.ensure_lod_select_resources(entity_count);
+
                 let aabb_buf = self.cull_aabb_buf.as_ref().unwrap();
                 let frustum_buf = self.cull_frustum_buf.as_ref().unwrap();
                 let flags_buf = self.cull_flags_buf.as_ref().unwrap();
@@ -5243,6 +5678,48 @@ impl RenderEngine3d {
                     cpass.set_bind_group(0, &bg, &[]);
                     cpass.dispatch_workgroups((entity_count as u32 + 63) / 64, 1, 1);
                 }
+                // also dispatch LOD selection in the same encoder (reuses aabb_buf)
+                if let (Some(lod_pipeline), Some(lod_bgl), Some(lod_params_buf), Some(lod_buf)) = (
+                    self.lod_select_pipeline.as_ref(),
+                    self.lod_select_bgl.as_ref(),
+                    self.lod_params_buf.as_ref(),
+                    self.lod_indices_buf.as_ref(),
+                ) {
+                    let mut lod_params_data = [0u32; 8];
+                    lod_params_data[0] = cam_pos.x.to_bits();
+                    lod_params_data[1] = cam_pos.y.to_bits();
+                    lod_params_data[2] = cam_pos.z.to_bits();
+                    lod_params_data[3] = entity_count as u32;
+                    // squared distance thresholds: [15²=225, 50²=2500, 150²=22500, 400²=160000]
+                    lod_params_data[4] = 225.0f32.to_bits();
+                    lod_params_data[5] = 2500.0f32.to_bits();
+                    lod_params_data[6] = 22500.0f32.to_bits();
+                    lod_params_data[7] = 160000.0f32.to_bits();
+                    self.queue.write_buffer(lod_params_buf, 0, bytemuck::cast_slice(&lod_params_data));
+
+                    let lod_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("[lod select] bg"),
+                        layout: lod_bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: lod_params_buf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 1, resource: aabb_buf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 2, resource: lod_buf.as_entire_binding() },
+                        ],
+                    });
+                    {
+                        let mut lpass = cull_enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("[lod select] pass"),
+                            timestamp_writes: None,
+                        });
+                        lpass.set_pipeline(lod_pipeline);
+                        lpass.set_bind_group(0, &lod_bg, &[]);
+                        lpass.dispatch_workgroups((entity_count as u32 + 63) / 64, 1, 1);
+                    }
+                    if let Some(lod_staging) = self.lod_indices_staging.as_ref() {
+                        cull_enc.copy_buffer_to_buffer(lod_buf, 0, lod_staging, 0, (entity_count * 4) as u64);
+                    }
+                }
+
                 cull_enc.copy_buffer_to_buffer(flags_buf, 0, staging_buf, 0, (entity_count * 4) as u64);
                 self.queue.submit([cull_enc.finish()]);
                 // register map_async for next frame — callback fires when GPU finishes, no CPU stall
@@ -5253,6 +5730,17 @@ impl RenderEngine3d {
                 });
                 self.cull_staging_pending = true;
                 self.cull_pending_entity_count = entity_count;
+
+                // register LOD staging map_async for next frame
+                if let Some(lod_staging) = self.lod_indices_staging.as_ref() {
+                    let lod_ready = self.lod_staging_ready.clone();
+                    lod_ready.store(false, Ordering::Release);
+                    lod_staging.slice(0..(entity_count * 4) as u64).map_async(wgpu::MapMode::Read, move |result| {
+                        if result.is_ok() { lod_ready.store(true, Ordering::Release); }
+                    });
+                    self.lod_staging_pending = true;
+                    self.lod_pending_entity_count = entity_count;
+                }
             }
         } else {
             let frustum = *world.resource::<Frustum>();
@@ -5466,11 +5954,15 @@ impl RenderEngine3d {
                         }
                     }
 
-                    // normal mesh draw (with LOD selection)
-                    let mesh_id = lod
-                        .and_then(|l| l.select(dist_sq))
-                        .unwrap_or(mesh.0)
-                        .id();
+                    // normal mesh draw — GPU LOD index (1-frame pipelined) or CPU dist fallback
+                    let mesh_id = if let Some(&gpu_lod) = self.gpu_lod_indices.get(&entity) {
+                        lod.and_then(|l| {
+                            if gpu_lod == 0 { None }
+                            else { l.levels.get((gpu_lod - 1) as usize).map(|(_, h)| *h) }
+                        }).unwrap_or(mesh.0)
+                    } else {
+                        lod.and_then(|l| l.select(dist_sq)).unwrap_or(mesh.0)
+                    }.id();
                     let lm_id = lightmap.map(|lm| lm.texture.id())
                         .or_else(|| dir_lightmap.map(|dlm| dlm.irradiance.id()))
                         .unwrap_or(u32::MAX);
@@ -7885,6 +8377,133 @@ impl RenderEngine3d {
             pass.draw(0..3, 0..1);
         }
 
+        // ── contact shadow pass (before composite) ───────────────────────
+        if dev_contact_shadows {
+            let width  = self.surface_config.width;
+            let height = self.surface_config.height;
+            let inv_proj = view_proj.inverse();
+            self.ensure_contact_shadow_resources(width, height, &inv_proj);
+
+            // update light_dir_vs in params (view-space directional light direction)
+            let light_dir_vs_raw = (cam_wt.rotation.inverse() * dir_direction).normalize();
+            if let Some(params_buf) = self.contact_shadow_params_buf.as_ref() {
+                let light_dir_data: [f32; 3] = [light_dir_vs_raw.x, light_dir_vs_raw.y, light_dir_vs_raw.z];
+                self.queue.write_buffer(params_buf, 64, unsafe { slice_as_bytes(&light_dir_data) });
+            }
+
+            if let (Some(pipeline), Some(bgl), Some(params_buf), Some(cs_view), Some(depth_view)) = (
+                self.contact_shadow_pipeline.as_ref(),
+                self.contact_shadow_bgl.as_ref(),
+                self.contact_shadow_params_buf.as_ref(),
+                self.contact_shadow_view.as_ref(),
+                Some(&self.gtao_depth_view),
+            ) {
+                let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("[contact shadow] bg"),
+                    layout: bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: params_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(depth_view) },
+                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                    ],
+                });
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("[contact shadow] pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: cs_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.draw(0..3, 0..1);
+            }
+
+            // rebuild composite_bg if contact_shadow_tex was just created
+            if self.composite_bg_dirty {
+                let cs_view_ref = self.contact_shadow_view.as_ref()
+                    .unwrap_or(&self.contact_shadow_fallback_view);
+                self.composite_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("[composite] bg"),
+                    layout: &self.composite_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: self.composite_params_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
+                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(self.bloom_mip_views.first().unwrap_or(&self.hdr_view)) },
+                        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.gtao_ao_view_a) },
+                        wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&self.ssr_view) },
+                        wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&self.fog_view) },
+                        wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                        wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(cs_view_ref) },
+                    ],
+                });
+                self.composite_bg_dirty = false;
+            }
+        }
+
+        // ── motion vector pass (after main color, before composite) ─────
+        {
+            let width  = self.surface_config.width;
+            let height = self.surface_config.height;
+            self.ensure_motion_vector_resources(width, height);
+            let inv_vp = view_proj.inverse();
+            let inv_vp_cols  = inv_vp.to_cols_array();
+            let prev_vp_cols = self.prev_view_proj.to_cols_array();
+            if let Some(params_buf) = self.motion_vec_params_buf.as_ref() {
+                let mut mv_data = [0u8; MOTION_VECTOR_PARAMS_SIZE as usize];
+                mv_data[0..64].copy_from_slice(unsafe { slice_as_bytes(&inv_vp_cols) });
+                mv_data[64..128].copy_from_slice(unsafe { slice_as_bytes(&prev_vp_cols) });
+                mv_data[128..132].copy_from_slice(&(width as f32).to_le_bytes());
+                mv_data[132..136].copy_from_slice(&(height as f32).to_le_bytes());
+                self.queue.write_buffer(params_buf, 0, &mv_data);
+            }
+            if let (Some(pipeline), Some(bgl), Some(params_buf), Some(mv_view)) = (
+                self.motion_vec_pipeline.as_ref(),
+                self.motion_vec_bgl.as_ref(),
+                self.motion_vec_params_buf.as_ref(),
+                self.motion_vec_view.as_ref(),
+            ) {
+                let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("[motion vec] bg"),
+                    layout: bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: params_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.gtao_depth_view) },
+                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                    ],
+                });
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("[motion vec] pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: mv_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            self.prev_view_proj = view_proj;
+        }
+
         // ── composite pass → swapchain ────────────────────────────────────
         {
             let time = world.resource::<lunar_core::Time>();
@@ -7905,6 +8524,7 @@ impl RenderEngine3d {
                     if self.ssao_enabled && dev_ssao && q.ssao { f |= 16; }
                     if self.ssr_enabled && dev_ssr && q.ssr { f |= 32; }
                     if self.fog_enabled && dev_fog && q.volumetric_fog { f |= 64; }
+                    if dev_contact_shadows && self.contact_shadow_tex.is_some() { f |= 128; }
                     bloom_s = 0.04_f32;
                     vig_s   = if dev_vignette && q.vignette { 0.3 } else { 0.0 };
                     vig_r   = 0.3_f32;
@@ -7913,6 +8533,7 @@ impl RenderEngine3d {
                 } else {
                     bloom_s = 0.04; vig_s = 0.0; vig_r = 0.0; ca_s = 0.0; grain_s = 0.0;
                     if self.bloom_enabled && dev_bloom { f |= 1; }
+                    if dev_contact_shadows && self.contact_shadow_tex.is_some() { f |= 128; }
                 }
                 (bloom_s, vig_s, vig_r, ca_s, grain_s, f)
             };

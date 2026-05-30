@@ -18,16 +18,18 @@ struct CompositeParams {
     //   bit 4 = GTAO AO
     //   bit 5 = SSR
     //   bit 6 = volumetric fog
+    //   bit 7 = contact shadows
     flags: u32,
     _pad: f32,
 }
-@group(0) @binding(0) var<uniform> params:   CompositeParams;
-@group(0) @binding(1) var hdr_tex:   texture_2d<f32>;
-@group(0) @binding(2) var bloom_tex: texture_2d<f32>;
-@group(0) @binding(3) var ao_tex:    texture_2d<f32>;
-@group(0) @binding(4) var ssr_tex:   texture_2d<f32>;  // rgba16f: (color*alpha, alpha)
-@group(0) @binding(5) var fog_tex:   texture_2d<f32>;  // rgba16f: (in-scatter, 1-transmittance)
-@group(0) @binding(6) var smp:       sampler;
+@group(0) @binding(0) var<uniform> params:              CompositeParams;
+@group(0) @binding(1) var hdr_tex:              texture_2d<f32>;
+@group(0) @binding(2) var bloom_tex:            texture_2d<f32>;
+@group(0) @binding(3) var ao_tex:               texture_2d<f32>;
+@group(0) @binding(4) var ssr_tex:              texture_2d<f32>;
+@group(0) @binding(5) var fog_tex:              texture_2d<f32>;
+@group(0) @binding(6) var smp:                  sampler;
+@group(0) @binding(7) var contact_shadow_tex:   texture_2d<f32>;
 
 struct VertOut {
     @builtin(position) clip_pos: vec4<f32>,
@@ -81,6 +83,12 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
         hdr_color = vec3<f32>(r, g, b);
     } else {
         hdr_color = textureSample(hdr_tex, smp, uv).rgb;
+    }
+
+    // contact shadows: darken HDR where screen-space ray march detects occlusion
+    if (params.flags & 128u) != 0u {
+        let cs = textureSample(contact_shadow_tex, smp, uv).r;
+        hdr_color *= 1.0 - cs * 0.8;
     }
 
     // GTAO ambient occlusion (before tonemap, in HDR space)
