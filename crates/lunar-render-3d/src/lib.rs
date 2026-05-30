@@ -109,7 +109,21 @@ macro_rules! shader_source {
 
 const SKY_RADIUS: f32 = 900.0;
 const SUN_Y: f32 = 895.0;
-const VERTEX_STRIDE: u64 = std::mem::size_of::<Vertex3d>() as u64;
+
+// quantized gpu vertex: 32 bytes (vs cpu Vertex3d 60 bytes).
+// normals/tangents snorm8×4, uvs unorm16×2, position stays f32.
+// the upload path converts Vertex3d → GpuVertex3d at upload time.
+#[repr(C)]
+struct GpuVertex3d {
+    position:    [f32; 3],  // 12 bytes
+    normal:      [i8; 4],   // 4 bytes — snorm8×4, w=0
+    tangent:     [i8; 4],   // 4 bytes — snorm8×4, w=handedness (±127)
+    uv:          [u16; 2],  // 4 bytes — unorm16×2
+    uv_lightmap: [u16; 2],  // 4 bytes — unorm16×2
+    color:       [u8; 4],   // 4 bytes
+}
+
+const VERTEX_STRIDE: u64 = std::mem::size_of::<GpuVertex3d>() as u64;
 
 /// shadow map resolution per cascade.
 const SHADOW_MAP_SIZE: u32 = 1024;
@@ -1670,12 +1684,12 @@ impl RenderEngine3d {
             array_stride: VERTEX_STRIDE,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0,  shader_location: 0 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 12, shader_location: 1 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 24, shader_location: 2 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 40, shader_location: 3 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 48, shader_location: 4 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Unorm8x4,  offset: 56, shader_location: 5 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3,  offset: 0,  shader_location: 0 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Snorm8x4,   offset: 12, shader_location: 1 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Snorm8x4,   offset: 16, shader_location: 2 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Unorm16x2,  offset: 20, shader_location: 3 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Unorm16x2,  offset: 24, shader_location: 4 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Unorm8x4,   offset: 28, shader_location: 5 },
             ],
         }];
 
@@ -3029,11 +3043,11 @@ impl RenderEngine3d {
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![
                         0 => Float32x3, // position
-                        1 => Float32x3, // normal
-                        2 => Float32x4, // color
-                        3 => Float32x2, // uv0
-                        4 => Float32x2, // uv1
-                        5 => Uint32,    // tint
+                        1 => Snorm8x4,  // normal (ignored by terrain shader)
+                        2 => Snorm8x4,  // tangent (ignored)
+                        3 => Unorm16x2, // uv (ignored)
+                        4 => Unorm16x2, // uv_lightmap (ignored)
+                        5 => Unorm8x4,  // color (ignored)
                     ],
                 }],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -3801,7 +3815,7 @@ impl RenderEngine3d {
     /// append a mesh to the mega vertex/index buffers (all indices converted to u32).
     /// records base_vertex and first_index for the mesh in mega_mesh_entries.
     fn append_to_mega_buffers(&mut self, mesh_id: u32, data: &MeshData) {
-        let vertex_bytes = (data.vertices.len() * std::mem::size_of::<Vertex3d>()) as u64;
+        let vertex_bytes = data.vertices.len() as u64 * VERTEX_STRIDE;
         let index_bytes = (data.indices.len() * 4) as u64; // always u32 in mega-IBO
 
         // lazy init mega-buffers
@@ -3854,16 +3868,26 @@ impl RenderEngine3d {
             self.mega_ibuf = Some(new_buf);
         }
 
-        let base_vertex = (self.mega_vbuf_bytes / std::mem::size_of::<Vertex3d>() as u64) as u32;
+        let base_vertex = (self.mega_vbuf_bytes / VERTEX_STRIDE) as u32;
         let first_index = (self.mega_ibuf_bytes / 4) as u32;
         let index_count = data.indices.len() as u32;
         let _ = index_count; // stored in mega_mesh_entries below
 
-        // upload vertices
+        // upload vertices (quantized)
+        let qn = |f: f32| -> i8 { (f * 127.0).round().clamp(-127.0, 127.0) as i8 };
+        let qu = |f: f32| -> u16 { (f.clamp(0.0, 1.0) * 65535.0).round() as u16 };
+        let gpu_verts: Vec<GpuVertex3d> = data.vertices.iter().map(|v| GpuVertex3d {
+            position:    [v.position.x, v.position.y, v.position.z],
+            normal:      [qn(v.normal.x), qn(v.normal.y), qn(v.normal.z), 0],
+            tangent:     [qn(v.tangent[0]), qn(v.tangent[1]), qn(v.tangent[2]), qn(v.tangent[3])],
+            uv:          [qu(v.uv.x), qu(v.uv.y)],
+            uv_lightmap: [qu(v.uv_lightmap.x), qu(v.uv_lightmap.y)],
+            color:       v.color,
+        }).collect();
         self.queue.write_buffer(
             self.mega_vbuf.as_ref().unwrap(),
             self.mega_vbuf_bytes,
-            unsafe { std::slice::from_raw_parts(data.vertices.as_ptr() as *const u8, vertex_bytes as usize) },
+            unsafe { slice_as_bytes(&gpu_verts) },
         );
         self.mega_vbuf_bytes += vertex_bytes;
 
@@ -4498,7 +4522,17 @@ impl RenderEngine3d {
     }
 
     fn upload_mesh_data(device: &wgpu::Device, queue: &wgpu::Queue, data: &MeshData) -> GpuMesh {
-        let vdata = unsafe { slice_as_bytes(&data.vertices) };
+        let qn = |f: f32| -> i8 { (f * 127.0).round().clamp(-127.0, 127.0) as i8 };
+        let qu = |f: f32| -> u16 { (f.clamp(0.0, 1.0) * 65535.0).round() as u16 };
+        let gpu_verts: Vec<GpuVertex3d> = data.vertices.iter().map(|v| GpuVertex3d {
+            position:    [v.position.x, v.position.y, v.position.z],
+            normal:      [qn(v.normal.x), qn(v.normal.y), qn(v.normal.z), 0],
+            tangent:     [qn(v.tangent[0]), qn(v.tangent[1]), qn(v.tangent[2]), qn(v.tangent[3])],
+            uv:          [qu(v.uv.x), qu(v.uv.y)],
+            uv_lightmap: [qu(v.uv_lightmap.x), qu(v.uv_lightmap.y)],
+            color:       v.color,
+        }).collect();
+        let vdata = unsafe { slice_as_bytes(&gpu_verts) };
         let vbuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("[mesh] vbuf"),
             size: vdata.len() as u64,

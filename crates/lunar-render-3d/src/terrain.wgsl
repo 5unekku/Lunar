@@ -57,12 +57,12 @@ fn sample_height(uv: vec2<f32>) -> f32 {
 
 @vertex
 fn vs_main(
-    @location(0) position: vec3<f32>,
-    @location(1) _normal:  vec3<f32>,
-    @location(2) _color:   vec4<f32>,
-    @location(3) _uv0:     vec2<f32>,
-    @location(4) _uv1:     vec2<f32>,
-    @location(5) _tint:    u32,
+    @location(0) position:  vec3<f32>,
+    @location(1) _normal:   vec4<f32>,  // snorm8×4 — unused
+    @location(2) _tangent:  vec4<f32>,  // snorm8×4 — unused
+    @location(3) _uv:       vec2<f32>,  // unorm16×2 — unused
+    @location(4) _uv_lm:    vec2<f32>,  // unorm16×2 — unused
+    @location(5) _color:    vec4<f32>,  // unorm8×4 — unused
 ) -> VertOut {
     // position.xz are in [0, ring_resolution] grid coordinates.
     // map to world space: ring_origin + position * lod_cell_size.

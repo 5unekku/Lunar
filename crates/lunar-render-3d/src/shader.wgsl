@@ -125,11 +125,11 @@ struct ClusterParamsF {
 
 struct VertIn {
     @location(0) position:    vec3<f32>,
-    @location(1) normal:      vec3<f32>,
-    @location(2) tangent:     vec4<f32>,
-    @location(3) uv:          vec2<f32>,
-    @location(4) uv_lightmap: vec2<f32>,
-    @location(5) color:       vec4<f32>,
+    @location(1) normal:      vec4<f32>,  // snorm8×4 — hardware normalises to [-1,1]; use .xyz
+    @location(2) tangent:     vec4<f32>,  // snorm8×4 — .xyz = tangent, .w = handedness
+    @location(3) uv:          vec2<f32>,  // unorm16×2
+    @location(4) uv_lightmap: vec2<f32>,  // unorm16×2
+    @location(5) color:       vec4<f32>,  // unorm8×4
 }
 
 struct VertOut {
@@ -156,7 +156,7 @@ fn vs_main(in: VertIn, @builtin(instance_index) instance_id: u32) -> VertOut {
     var out: VertOut;
     out.clip_pos     = view_pos4;
     out.world_pos    = world_pos4.xyz;
-    out.world_normal = normalize(normal_mat * in.normal);
+    out.world_normal = normalize(normal_mat * in.normal.xyz);
     out.uv           = in.uv;
     out.color        = in.color;
     // view_depth is positive distance from the camera (clip_w ≈ view_z in RH perspective)
