@@ -54,12 +54,6 @@ this file tracks what's done, what's next, and the reasoning behind decisions.
 - no allocations in the render hot path; use pre-allocated scratch resources that clear each frame
 - profile before optimising; the scratch resource pattern handles the known bottlenecks
 
-## open items
-
-these are known gaps not yet addressed:
-
-- **asset eviction → bind group cleanup** (`lunar-render`): `remove_texture` correctly drops from both `textures` and `material_bgs`, but `AssetServer` never currently evicts assets. wiring is needed once eviction is implemented so gpu resources are freed alongside cpu handles.
-
 ## next
 
 ### far term (post-v1)
