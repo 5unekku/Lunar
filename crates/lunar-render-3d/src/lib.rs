@@ -6205,6 +6205,161 @@ impl RenderEngine3d {
 
     }
 
+    /// build the per-frame draw list: BSP/portal area visibility, then a world
+    /// query filtered by visibility + frustum, written into draw_scratch /
+    /// raw_scratch / impostor_scratch (with prev-transform interpolation).
+    fn gather_draw_list(&mut self, world: &mut World, cam_pos: Vec3) {
+        // ── gather draw list ──────────────────────────────────────────────
+
+        // build area visibility from BspLevel PVS if loaded; fall through to VisibleAreas otherwise
+        let bsp_visible: Option<HashSet<u32>> = world
+            .get_resource::<BspLevel>()
+            .filter(|level| level.is_loaded())
+            .map(|level| {
+                let leaf = level.camera_leaf(cam_pos);
+                let visible_leaves = level.visible_leaves(leaf);
+                let area_map = level.area_map();
+                let mut areas = HashSet::new();
+                for leaf_idx in &visible_leaves {
+                    if let Ok(pos) = area_map.binary_search_by_key(&(*leaf_idx as u32), |&(li, _)| li) {
+                        areas.insert(area_map[pos].1);
+                    }
+                }
+                areas
+            });
+
+        // write visible areas back so game code (AI LOS queries etc.) reads a correct set
+        if let Some(ref areas) = bsp_visible
+            && let Some(mut vis_areas) = world.get_resource_mut::<VisibleAreas>() {
+                vis_areas.area_ids.clear();
+                vis_areas.area_ids.extend(areas.iter().copied());
+                vis_areas.active = true;
+            }
+
+        // snapshot portal visible areas before the mutable query borrow
+        let portal_visible_snap: Option<HashSet<u32>> = world
+            .get_resource::<VisibleAreas>()
+            .filter(|pv| pv.active)
+            .map(|pv| pv.area_ids.clone());
+
+        let interp_alpha = world.get_resource::<lunar_core::Time>()
+            .map(|t| t.interp_alpha())
+            .unwrap_or(1.0);
+
+        self.raw_scratch.clear();
+        self.impostor_scratch.clear();
+        // reserve capacity equal to current peak so steady-state frames never reallocate
+        let prev_raw = self.raw_scratch.capacity();
+        if prev_raw == 0 { self.raw_scratch.reserve(64); }
+        let prev_draw = self.draw_scratch.capacity();
+        if prev_draw == 0 { self.draw_scratch.reserve(64); }
+        {
+            let mut q = world.query::<(
+                Entity, &Mesh3d, &Material3d, &WorldTransform3d, &ComputedVisibility,
+                Option<&Aabb3d>, Option<&MeshLod>, Option<&MeshImpostor>,
+                Option<&Area>, Option<&Lightmap>, Option<&DirectionalLightmap>,
+                Option<&PrevWorldTransform3d>,
+            )>();
+            q.iter(world)
+                .filter(|(entity, _, _, _, vis, aabb, _, _, area, _, _, _)| {
+                    if !vis.0 { return false; }
+                    // BSP PVS area culling (takes priority over portal traversal)
+                    if let Some(ref visible_areas) = bsp_visible {
+                        if let Some(a) = area
+                            && !visible_areas.contains(&a.0) { return false; }
+                    } else if let Some(ref pv) = portal_visible_snap
+                        && let Some(a) = area
+                            && !pv.contains(&a.0) { return false; }
+                    aabb.is_none() || self.frustum_visible.contains(entity)
+                })
+                .for_each(|(entity, mesh, mat, wt, _, _, lod, impostor, _, lightmap, dir_lightmap, prev_wt)| {
+                    let render_wt = prev_wt
+                        .map(|prev| prev.0.lerp(wt, interp_alpha))
+                        .unwrap_or(*wt);
+                    let dist_sq = (render_wt.translation - cam_pos).length_squared();
+
+                    // check if entity should use impostor billboard
+                    if let Some(imp) = impostor
+                        && dist_sq >= imp.min_dist_sq {
+                            // compute view azimuth angle around Y for atlas selection
+                            let to_entity = Vec3::from(render_wt.translation) - cam_pos;
+                            let view_angle = to_entity.z.atan2(to_entity.x);
+                            let (u_min, u_max, _, _) = imp.atlas.uv_rect(view_angle);
+                            self.impostor_scratch.push((
+                                Vec3::from(render_wt.translation),
+                                imp.half_width,
+                                imp.half_height,
+                                imp.atlas.texture.id(),
+                                u_min,
+                                u_max,
+                            ));
+                            return; // skip mesh draw
+                        }
+
+                    // normal mesh draw — GPU LOD index (1-frame pipelined) or CPU dist fallback
+                    let mesh_id = if let Some(&gpu_lod) = self.gpu_lod_indices.get(&entity) {
+                        lod.and_then(|l| {
+                            if gpu_lod == 0 { None }
+                            else { l.levels.get((gpu_lod - 1) as usize).map(|(_, h)| *h) }
+                        }).unwrap_or(mesh.0)
+                    } else {
+                        lod.and_then(|l| l.select(dist_sq)).unwrap_or(mesh.0)
+                    }.id();
+                    let lm_id = lightmap.map(|lm| lm.texture.id())
+                        .or_else(|| dir_lightmap.map(|dlm| dlm.irradiance.id()))
+                        .unwrap_or(u32::MAX);
+                    let dir_lm_id = dir_lightmap.map(|dlm| dlm.direction.id()).unwrap_or(u32::MAX);
+                    self.raw_scratch.push((entity, mesh_id, mat.0.id(), render_wt.to_matrix(), lm_id, dir_lm_id));
+                });
+        }
+
+        // collect static entities and assign stable slot ids
+        {
+            let mut q = world.query::<(Entity, &StaticMesh)>();
+            let static_entities: HashSet<Entity> = q.iter(world).map(|(e, _)| e).collect();
+            // remove slots for entities that are no longer in the world
+            self.static_entity_slots.retain(|e, _| static_entities.contains(e));
+            // assign slots to new static entities (append after existing)
+            let mut next_slot = self.static_entity_slots.values().copied().max().map(|m| m + 1).unwrap_or(0);
+            for entity in &static_entities {
+                if !self.static_entity_slots.contains_key(entity) {
+                    self.static_entity_slots.insert(*entity, next_slot);
+                    next_slot += 1;
+                }
+            }
+            self.static_entity_count = next_slot;
+        }
+
+        self.draw_scratch.clear();
+        {
+            let registry = world.resource::<MeshRegistry>();
+            for &(entity, mesh_id, mat_id, model, lm_id, dir_lm_id) in &self.raw_scratch {
+                let (color, metallic, roughness, alpha, mat_flags) = registry
+                    .get_material(lunar_assets::Handle::new(mat_id, 0))
+                    .map(|m| {
+                        let mut color = m.base_color;
+                        color.a = m.alpha;
+                        let flags = if m.shading == lunar_3d::ShadingModel::Unlit { 1u32 } else { 0u32 };
+                        (color, m.metallic, m.roughness, m.alpha, flags)
+                    })
+                    .unwrap_or((Color::WHITE, 0.0, 0.5, 1.0, 0u32));
+                self.draw_scratch.push((entity, mesh_id, mat_id, color, metallic, roughness, model, alpha, mat_flags, lm_id, dir_lm_id));
+            }
+        }
+        // sort opaque entities by (mesh_id, mat_id, lm_id, dir_lm_id) so consecutive entities
+        // can share VBO/IBO and bind groups, batched into a single draw_indexed call.
+        // transparents are sorted separately by depth after this.
+        self.draw_scratch.sort_unstable_by_key(|&(_, mesh_id, mat_id, _, _, _, _, alpha, _, lm_id, dir_lm_id)| {
+            let transparent = if alpha < 1.0 { 1u8 } else { 0u8 };
+            (transparent, mesh_id, mat_id, lm_id, dir_lm_id)
+        });
+
+    }
+
+    // a few loops below index multiple parallel arrays by the same counter, or use a
+    // sentinel final iteration for batch flushing — clearer as indexed loops than as
+    // iterator adapters, so the range-loop/counter lints are intentionally allowed.
+    #[allow(clippy::needless_range_loop, clippy::explicit_counter_loop)]
     fn render_frame(&mut self, world: &mut World) -> u32 {
         // ── gather camera — copy immediately so world borrows end here ────
         let cam_entity = {
@@ -6361,151 +6516,7 @@ impl RenderEngine3d {
 
         // frustum + HZB occlusion culling (1-frame pipelined on high tier)
         self.cull_entities(world, view_proj, cam_pos);
-        // ── gather draw list ──────────────────────────────────────────────
-
-        // build area visibility from BspLevel PVS if loaded; fall through to VisibleAreas otherwise
-        let bsp_visible: Option<HashSet<u32>> = world
-            .get_resource::<BspLevel>()
-            .filter(|level| level.is_loaded())
-            .map(|level| {
-                let leaf = level.camera_leaf(cam_pos);
-                let visible_leaves = level.visible_leaves(leaf);
-                let area_map = level.area_map();
-                let mut areas = HashSet::new();
-                for leaf_idx in &visible_leaves {
-                    if let Ok(pos) = area_map.binary_search_by_key(&(*leaf_idx as u32), |&(li, _)| li) {
-                        areas.insert(area_map[pos].1);
-                    }
-                }
-                areas
-            });
-
-        // write visible areas back so game code (AI LOS queries etc.) reads a correct set
-        if let Some(ref areas) = bsp_visible
-            && let Some(mut vis_areas) = world.get_resource_mut::<VisibleAreas>() {
-                vis_areas.area_ids.clear();
-                vis_areas.area_ids.extend(areas.iter().copied());
-                vis_areas.active = true;
-            }
-
-        // snapshot portal visible areas before the mutable query borrow
-        let portal_visible_snap: Option<HashSet<u32>> = world
-            .get_resource::<VisibleAreas>()
-            .filter(|pv| pv.active)
-            .map(|pv| pv.area_ids.clone());
-
-        let interp_alpha = world.get_resource::<lunar_core::Time>()
-            .map(|t| t.interp_alpha())
-            .unwrap_or(1.0);
-
-        self.raw_scratch.clear();
-        self.impostor_scratch.clear();
-        // reserve capacity equal to current peak so steady-state frames never reallocate
-        let prev_raw = self.raw_scratch.capacity();
-        if prev_raw == 0 { self.raw_scratch.reserve(64); }
-        let prev_draw = self.draw_scratch.capacity();
-        if prev_draw == 0 { self.draw_scratch.reserve(64); }
-        {
-            let mut q = world.query::<(
-                Entity, &Mesh3d, &Material3d, &WorldTransform3d, &ComputedVisibility,
-                Option<&Aabb3d>, Option<&MeshLod>, Option<&MeshImpostor>,
-                Option<&Area>, Option<&Lightmap>, Option<&DirectionalLightmap>,
-                Option<&PrevWorldTransform3d>,
-            )>();
-            q.iter(world)
-                .filter(|(entity, _, _, _, vis, aabb, _, _, area, _, _, _)| {
-                    if !vis.0 { return false; }
-                    // BSP PVS area culling (takes priority over portal traversal)
-                    if let Some(ref visible_areas) = bsp_visible {
-                        if let Some(a) = area
-                            && !visible_areas.contains(&a.0) { return false; }
-                    } else if let Some(ref pv) = portal_visible_snap
-                        && let Some(a) = area
-                            && !pv.contains(&a.0) { return false; }
-                    aabb.is_none() || self.frustum_visible.contains(entity)
-                })
-                .for_each(|(entity, mesh, mat, wt, _, _, lod, impostor, _, lightmap, dir_lightmap, prev_wt)| {
-                    let render_wt = prev_wt
-                        .map(|prev| prev.0.lerp(wt, interp_alpha))
-                        .unwrap_or(*wt);
-                    let dist_sq = (render_wt.translation - cam_pos).length_squared();
-
-                    // check if entity should use impostor billboard
-                    if let Some(imp) = impostor
-                        && dist_sq >= imp.min_dist_sq {
-                            // compute view azimuth angle around Y for atlas selection
-                            let to_entity = Vec3::from(render_wt.translation) - cam_pos;
-                            let view_angle = to_entity.z.atan2(to_entity.x);
-                            let (u_min, u_max, _, _) = imp.atlas.uv_rect(view_angle);
-                            self.impostor_scratch.push((
-                                Vec3::from(render_wt.translation),
-                                imp.half_width,
-                                imp.half_height,
-                                imp.atlas.texture.id(),
-                                u_min,
-                                u_max,
-                            ));
-                            return; // skip mesh draw
-                        }
-
-                    // normal mesh draw — GPU LOD index (1-frame pipelined) or CPU dist fallback
-                    let mesh_id = if let Some(&gpu_lod) = self.gpu_lod_indices.get(&entity) {
-                        lod.and_then(|l| {
-                            if gpu_lod == 0 { None }
-                            else { l.levels.get((gpu_lod - 1) as usize).map(|(_, h)| *h) }
-                        }).unwrap_or(mesh.0)
-                    } else {
-                        lod.and_then(|l| l.select(dist_sq)).unwrap_or(mesh.0)
-                    }.id();
-                    let lm_id = lightmap.map(|lm| lm.texture.id())
-                        .or_else(|| dir_lightmap.map(|dlm| dlm.irradiance.id()))
-                        .unwrap_or(u32::MAX);
-                    let dir_lm_id = dir_lightmap.map(|dlm| dlm.direction.id()).unwrap_or(u32::MAX);
-                    self.raw_scratch.push((entity, mesh_id, mat.0.id(), render_wt.to_matrix(), lm_id, dir_lm_id));
-                });
-        }
-
-        // collect static entities and assign stable slot ids
-        {
-            let mut q = world.query::<(Entity, &StaticMesh)>();
-            let static_entities: HashSet<Entity> = q.iter(world).map(|(e, _)| e).collect();
-            // remove slots for entities that are no longer in the world
-            self.static_entity_slots.retain(|e, _| static_entities.contains(e));
-            // assign slots to new static entities (append after existing)
-            let mut next_slot = self.static_entity_slots.values().copied().max().map(|m| m + 1).unwrap_or(0);
-            for entity in &static_entities {
-                if !self.static_entity_slots.contains_key(entity) {
-                    self.static_entity_slots.insert(*entity, next_slot);
-                    next_slot += 1;
-                }
-            }
-            self.static_entity_count = next_slot;
-        }
-
-        self.draw_scratch.clear();
-        {
-            let registry = world.resource::<MeshRegistry>();
-            for &(entity, mesh_id, mat_id, model, lm_id, dir_lm_id) in &self.raw_scratch {
-                let (color, metallic, roughness, alpha, mat_flags) = registry
-                    .get_material(lunar_assets::Handle::new(mat_id, 0))
-                    .map(|m| {
-                        let mut color = m.base_color;
-                        color.a = m.alpha;
-                        let flags = if m.shading == lunar_3d::ShadingModel::Unlit { 1u32 } else { 0u32 };
-                        (color, m.metallic, m.roughness, m.alpha, flags)
-                    })
-                    .unwrap_or((Color::WHITE, 0.0, 0.5, 1.0, 0u32));
-                self.draw_scratch.push((entity, mesh_id, mat_id, color, metallic, roughness, model, alpha, mat_flags, lm_id, dir_lm_id));
-            }
-        }
-        // sort opaque entities by (mesh_id, mat_id, lm_id, dir_lm_id) so consecutive entities
-        // can share VBO/IBO and bind groups, batched into a single draw_indexed call.
-        // transparents are sorted separately by depth after this.
-        self.draw_scratch.sort_unstable_by_key(|&(_, mesh_id, mat_id, _, _, _, _, alpha, _, lm_id, dir_lm_id)| {
-            let transparent = if alpha < 1.0 { 1u8 } else { 0u8 };
-            (transparent, mesh_id, mat_id, lm_id, dir_lm_id)
-        });
-
+        self.gather_draw_list(world, cam_pos);
         // ── upload missing meshes ─────────────────────────────────────────
         let mut mesh_evict_ids: Vec<u32> = Vec::new();
         for i in 0..self.draw_scratch.len() {
@@ -6816,7 +6827,7 @@ impl RenderEngine3d {
                 }
                 if !entries.is_empty() {
                     // shelf packer: sort by height desc, place left-to-right
-                    entries.sort_unstable_by(|a, b| b.3.len().cmp(&a.3.len()));
+                    entries.sort_unstable_by_key(|e| std::cmp::Reverse(e.3.len()));
                     let atlas_dim = ATLAS_SIZE;
                     let mut atlas_pixels = vec![0u8; (atlas_dim * atlas_dim * 4) as usize];
                     let mut cursor_x: u32 = 0;
