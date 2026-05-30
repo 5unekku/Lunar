@@ -376,11 +376,18 @@ impl App {
                 time.set_interp_alpha(alpha);
             }
 
-            for _ in 0..ticks {
+            for i in 0..ticks {
                 if let Some(mut time) = self.engine.world_mut().get_resource_mut::<Time>() {
                     time.advance(fixed_delta);
                 }
-                self.engine.run_stages();
+                // only render on the last tick — rendering blocks on vsync so doing it
+                // on every tick causes a spiral-of-death and double-renders that make
+                // mouse rotation stutter (camera rotation is shown twice at the same angle).
+                if i + 1 < ticks {
+                    self.engine.run_stages_no_render();
+                } else {
+                    self.engine.run_stages();
+                }
             }
 
             if let Some(state) = self.engine.world().get_resource::<EngineState>()

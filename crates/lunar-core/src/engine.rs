@@ -115,6 +115,24 @@ impl Engine {
             }
         }
     }
+
+    /// run all stages except Render (index 3).
+    ///
+    /// used for non-final ticks in a multi-tick frame so the render pass
+    /// (which blocks on vsync) only fires once per display frame, preventing
+    /// the spiral-of-death and avoiding the camera-rotation stutter that occurs
+    /// when two renders back-to-back both show the same rotation.
+    pub fn run_stages_no_render(&mut self) {
+        const STAGE_COUNT: usize = 5;
+        const RENDER_IDX: usize = 3;
+        for i in 0..STAGE_COUNT {
+            if i == RENDER_IDX { continue; }
+            self.stage_schedules[i].run(&mut self.world);
+            if i < STAGE_COUNT - 1 {
+                self.world.flush();
+            }
+        }
+    }
 }
 
 impl Default for Engine {
