@@ -1305,7 +1305,7 @@ impl RenderEngine3d {
             &wgpu::DeviceDescriptor {
                 label: Some("lunar-render-3d device"),
                 required_features,
-                required_limits: wgpu::Limits::default(),
+                required_limits: wgpu::Limits { max_bind_groups: 8, ..wgpu::Limits::default() },
                 memory_hints: wgpu::MemoryHints::Performance,
                 trace: wgpu::Trace::default(),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
@@ -1401,7 +1401,7 @@ impl RenderEngine3d {
             label: Some("[mesh] bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
@@ -1799,6 +1799,12 @@ impl RenderEngine3d {
             immediate_size: 0,
         });
 
+        let zprepass_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("3d z-prepass pipeline layout"),
+            bind_group_layouts: &[Some(&globals_bgl), Some(&material_bgl), Some(&mesh_bgl)],
+            immediate_size: 0,
+        });
+
         let shadow_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("3d shadow pipeline layout"),
             bind_group_layouts: &[Some(&shadow_globals_bgl), Some(&mesh_bgl)],
@@ -1901,7 +1907,7 @@ impl RenderEngine3d {
         // on mid/high tier this runs before the opaque pass to eliminate overdraw.
         let zprepass_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("3d z-prepass pipeline"),
-            layout: Some(&pipeline_layout),
+            layout: Some(&zprepass_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
@@ -2892,7 +2898,7 @@ impl RenderEngine3d {
             fragment: Some(wgpu::FragmentState {
                 module: &ssr_shader, entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba16Float,
+                    format: hdr_format,
                     blend: None, write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -2987,7 +2993,7 @@ impl RenderEngine3d {
             fragment: Some(wgpu::FragmentState {
                 module: &fog_shader, entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba16Float,
+                    format: hdr_format,
                     blend: None, write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -3146,7 +3152,7 @@ impl RenderEngine3d {
             size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
             mip_level_count: 1, sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
+            format: hdr_format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
@@ -3460,7 +3466,7 @@ impl RenderEngine3d {
         // reuses same vertex format as z-prepass but with no multisample
         let zprepass_nonmsaa_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("3d z-prepass (gtao depth, non-MSAA) pipeline"),
-            layout: Some(&pipeline_layout),
+            layout: Some(&zprepass_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
@@ -5928,7 +5934,13 @@ fn cs_lod_select(@builtin(global_invocation_id) gid: vec3<u32>) {
         // jitter is depth-independent (constant screen-space offset for all vertices).
         // the jitter makes each frame sample a different sub-pixel position; TAA then accumulates
         // these samples to achieve effective temporal super-sampling on edge-adjacent pixels.
-        let (view_proj, staa_jitter_ndc) = if self.staa_enabled {
+        // jitter is only useful when there is stable history to accumulate against.
+        // during camera movement the history is being reprojected anyway and any
+        // remaining jitter in the output frame just oscillates visibly as stutter.
+        // compare to previous unjittered vp: any difference means the camera moved.
+        let camera_stationary = self.staa_prev_vp == view_proj_unjittered;
+
+        let (view_proj, staa_jitter_ndc) = if self.staa_enabled && camera_stationary {
             // Halton low-discrepancy sequence: base 2 for x, base 3 for y.
             // use frame_index+1 so index 0 maps to a non-zero offset (avoids identity jitter).
             let idx = (self.staa_frame_index % 8 + 1) as u64;
@@ -9289,7 +9301,7 @@ fn cs_lod_select(@builtin(global_invocation_id) gid: vec3<u32>) {
                     entries: &[
                         wgpu::BindGroupEntry { binding: 0, resource: params_buf.as_entire_binding() },
                         wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.gtao_depth_view) },
-                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.staa_nearest_sampler) },
                     ],
                 });
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
