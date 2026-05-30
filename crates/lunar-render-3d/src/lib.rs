@@ -5788,7 +5788,10 @@ impl RenderEngine3d {
         self.fog_view = fog_view;
         self.fog_texture = fog_texture;
 
-        // rebuild water bg0 with the new hdr_view (for refraction sampling)
+        // rebuild water bg0 with the new hdr_view (for refraction sampling).
+        // binding 3 is the planar reflection texture (1×1 fallback when disabled) — must be
+        // included or the bind group won't match water_bgl0's 4-entry layout.
+        let refl_v = self.reflection_view.as_ref().unwrap_or(&self.reflection_fallback_view);
         self.water_bg0 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("[water] bg0"),
             layout: &self.water_bgl0,
@@ -5796,11 +5799,15 @@ impl RenderEngine3d {
                 wgpu::BindGroupEntry { binding: 0, resource: self.globals_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(refl_v) },
             ],
         });
 
-        // rebuild composite bind group (binding 4=ssr, 5=fog, 6=sampler)
+        // rebuild composite bind group (binding 4=ssr, 5=fog, 6=sampler, 7=contact shadow).
+        // binding 7 is the contact-shadow texture (1×1 fallback when disabled) — must be
+        // included or the bind group won't match composite_bgl's 8-entry layout.
         let bloom_view = self.bloom_mip_views.first().unwrap_or(&self.hdr_view);
+        let cs_view_ref = self.contact_shadow_view.as_ref().unwrap_or(&self.contact_shadow_fallback_view);
         self.composite_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("[composite] bg"),
             layout: &self.composite_bgl,
@@ -5812,6 +5819,7 @@ impl RenderEngine3d {
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&self.ssr_view) },
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&self.fog_view) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(cs_view_ref) },
             ],
         });
 
