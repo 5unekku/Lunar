@@ -334,6 +334,9 @@ pub struct QualitySettings {
     pub preset: QualityPreset,
     /// shadow map resolution per cascade side (pixels).
     pub shadow_res: u32,
+    /// shadow map resolution per point light cube face (pixels). lower than shadow_res is fine.
+    /// user-selectable: 256 / 512 / 1024. default 512.
+    pub point_shadow_res: u32,
     /// number of shadow cascades (1 on Low, 3 on Mid/High).
     pub shadow_cascades: u32,
     /// msaa sample count: 1 = off, 4 = 4× (applied on Mid/High).
@@ -369,6 +372,7 @@ impl QualitySettings {
         Self {
             preset: QualityPreset::Minimum,
             shadow_res: 512,
+            point_shadow_res: 256,
             shadow_cascades: 1,
             msaa_samples: 1,
             bloom: false,
@@ -427,6 +431,7 @@ impl QualitySettings {
             RenderTier::LowGles => Self {
                 preset: QualityPreset::Low,
                 shadow_res: 512,
+                point_shadow_res: 256,
                 shadow_cascades: 1,
                 msaa_samples: 1,
                 bloom: false,
@@ -443,6 +448,7 @@ impl QualitySettings {
             RenderTier::Mid => Self {
                 preset: QualityPreset::Medium,
                 shadow_res: 1024,
+                point_shadow_res: 512,
                 shadow_cascades: 3,
                 msaa_samples: 4,
                 bloom: true,
@@ -459,6 +465,7 @@ impl QualitySettings {
             RenderTier::High => Self {
                 preset: QualityPreset::High,
                 shadow_res: 2048,
+                point_shadow_res: 512,
                 shadow_cascades: 3,
                 msaa_samples: 4,
                 bloom: true,
@@ -1365,12 +1372,13 @@ impl RenderEngine3d {
         });
 
         // point light shadow maps: 4 lights × 6 faces = 24 layers
+        let point_shadow_map_size = quality_early.point_shadow_res;
         let point_shadow_layers = (MAX_POINT_SHADOW_LIGHTS * 6) as u32;
         let point_shadow_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("[point shadow] depth array"),
             size: wgpu::Extent3d {
-                width:  SHADOW_MAP_SIZE,
-                height: SHADOW_MAP_SIZE,
+                width:  point_shadow_map_size,
+                height: point_shadow_map_size,
                 depth_or_array_layers: point_shadow_layers,
             },
             mip_level_count: 1,
