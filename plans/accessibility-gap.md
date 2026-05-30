@@ -190,8 +190,8 @@ at higher entity counts:
 - parallel ECS execution: game logic systems run concurrently on multiple cores.
 
 note: GPU instancing is **not yet implemented** — the draw loop still issues one
-draw call per entity. this is a known gap tracked in `plans/bsp-lightmap-wiring.md`
-under item A. the accessibility-gap.md previously listed this incorrectly.
+draw call per entity. this remains a known gap (GPU instancing); the draw loop
+should batch entities sharing a mesh + material into a single instanced draw.
 
 ---
 
