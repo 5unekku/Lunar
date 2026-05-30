@@ -77,8 +77,8 @@ pub use particles::ParticleEmitter;
 pub use light::{AmbientProbeGrid, DirectionalLight, IrradianceSH, PointLight, SpotLight};
 pub use material::{CullMode, Material3d, MaterialData, ShadingModel};
 pub use mesh::{
-    ImpostorAtlas, IndexBuffer, Mesh3d, MeshData, MeshImpostor, MeshLod,
-    MeshUsage, PrevWorldTransform3d, SkinWeights, StaticMesh, Vertex3d,
+    DetailDensity, ImpostorAtlas, IndexBuffer, Mesh3d, MeshData, MeshImpostor, MeshLod,
+    MeshUsage, PlanarReflector, PrevWorldTransform3d, SkinWeights, StaticMesh, Vertex3d,
 };
 pub use mesh_registry::MeshRegistry;
 pub use plugin::Plugin3d;

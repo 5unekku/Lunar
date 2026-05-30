@@ -40,10 +40,10 @@ use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use bevy_ecs::prelude::*;
 use lunar_3d::{
     Aabb3d, ActiveCamera3d, ActiveViewports, AmbientLight, Camera3d, ComputedVisibility,
-    CullSoa, Decal, DirectionalLight, Frustum, IndexBuffer, IrradianceSH, Material3d,
-    Mesh3d, MeshData, MeshImpostor, MeshLod, MeshRegistry, ParticleEmitter, PointLight,
-    PrevWorldTransform3d, Projection, ShadowCaster, StaticMesh, SurfaceShader, Vertex3d,
-    Terrain, ViewportAspect, ViewportRect, Water, WorldTransform3d,
+    CullSoa, Decal, DetailDensity, DirectionalLight, Frustum, IndexBuffer, IrradianceSH,
+    Material3d, Mesh3d, MeshData, MeshImpostor, MeshLod, MeshRegistry, ParticleEmitter,
+    PlanarReflector, PointLight, PrevWorldTransform3d, Projection, ShadowCaster, StaticMesh,
+    SurfaceShader, Vertex3d, Terrain, ViewportAspect, ViewportRect, Water, WorldTransform3d,
 };
 use lunar_3d::primitives::{quad_mesh, sphere_mesh};
 use lunar_bsp::{Area, BspLevel, VisibleAreas};
@@ -822,6 +822,7 @@ pub struct RenderEngine3d {
     // group 0: view-global (camera view-proj + time)
     globals_buf: wgpu::Buffer,
     globals_bg: wgpu::BindGroup,
+    globals_bgl: wgpu::BindGroupLayout,
 
     // group 1: material (base_color — dynamic UBO, one slot per draw call)
     material_bgl: wgpu::BindGroupLayout,
@@ -1198,18 +1199,24 @@ pub struct RenderEngine3d {
     prev_view_proj: Mat4,
 
     // ── planar reflections ────────────────────────────────────────────────
-    reflection_tex:      Option<wgpu::Texture>,
-    reflection_view:     Option<wgpu::TextureView>,
-    reflection_globals_buf: Option<wgpu::Buffer>,
-    reflection_globals_bg:  Option<wgpu::BindGroup>,
+    reflection_tex:           Option<wgpu::Texture>,
+    reflection_view:          Option<wgpu::TextureView>,
+    reflection_globals_buf:   Option<wgpu::Buffer>,
+    reflection_globals_bg:    Option<wgpu::BindGroup>,
+    // 1×1 Rgba16Float fallback for water_bg0 binding 3 when no reflection is active
+    reflection_fallback_tex:  wgpu::Texture,
+    reflection_fallback_view: wgpu::TextureView,
+    // set true when reflection_tex is first created to trigger water_bg0 rebuild
+    water_bg_dirty: bool,
 
     // ── detail sprites ────────────────────────────────────────────────────
     detail_sprite_bgl:              Option<wgpu::BindGroupLayout>,
     detail_sprite_pipeline:         Option<wgpu::RenderPipeline>,
     detail_sprite_compute_bgl:      Option<wgpu::BindGroupLayout>,
     detail_sprite_compute_pipeline: Option<wgpu::ComputePipeline>,
-    // per-entity instance buffers: entity_id → (instance_buf, instance_count)
-    detail_sprite_instance_bufs: HashMap<u64, (wgpu::Buffer, u32)>,
+    // per-entity detail sprite buffers: entity_bits → (instances_buf, count_buf, draw_buf)
+    // instances_buf: array<SpriteInstance>, count_buf: atomic<u32>, draw_buf: DrawIndirect
+    detail_sprite_instance_bufs: HashMap<u64, (wgpu::Buffer, wgpu::Buffer, wgpu::Buffer)>,
 
     // ── gpu lod selection ─────────────────────────────────────────────────
     lod_select_bgl:           Option<wgpu::BindGroupLayout>,
@@ -2914,6 +2921,15 @@ impl RenderEngine3d {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                // binding 3: reflection_tex (planar reflection; 1×1 fallback when disabled)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    }, count: None,
+                },
             ],
         });
 
@@ -2929,6 +2945,18 @@ impl RenderEngine3d {
             }],
         });
 
+        // 1×1 black Rgba16Float fallback — used as reflection_tex when planar reflections are off
+        let reflection_fallback_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[reflection] fallback tex"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let reflection_fallback_view = reflection_fallback_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
         let water_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("[water] bg0"),
             layout: &water_bgl0,
@@ -2936,6 +2964,7 @@ impl RenderEngine3d {
                 wgpu::BindGroupEntry { binding: 0, resource: globals_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&hdr_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&post_sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&reflection_fallback_view) },
             ],
         });
 
@@ -3621,6 +3650,7 @@ impl RenderEngine3d {
             depth_view,
             globals_buf,
             globals_bg,
+            globals_bgl,
             material_bgl,
             material_buf,
             material_bg,
@@ -3883,6 +3913,9 @@ impl RenderEngine3d {
             reflection_view: None,
             reflection_globals_buf: None,
             reflection_globals_bg: None,
+            reflection_fallback_tex,
+            reflection_fallback_view,
+            water_bg_dirty: false,
 
             detail_sprite_bgl: None,
             detail_sprite_pipeline: None,
@@ -4643,6 +4676,136 @@ impl RenderEngine3d {
             });
             self.motion_vec_params_buf = Some(params_buf);
         }
+    }
+
+    fn ensure_detail_sprite_resources(&mut self) {
+        if self.detail_sprite_bgl.is_some() { return; }
+
+        let storage_ro = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding, visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false, min_binding_size: None,
+            }, count: None,
+        };
+        let storage_rw = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding, visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false, min_binding_size: None,
+            }, count: None,
+        };
+        let tex_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding, visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2, multisampled: false,
+            }, count: None,
+        };
+        let smp_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding, visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        };
+        let uniform_entry_compute = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding, visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false, min_binding_size: None,
+            }, count: None,
+        };
+
+        let compute_bgl = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[detail sprite] compute bgl"),
+            entries: &[uniform_entry_compute(0), tex_entry(1), smp_entry(2), storage_rw(3), storage_rw(4)],
+        });
+        let compute_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[detail sprite] compute layout"),
+            bind_group_layouts: &[Some(&compute_bgl)],
+            immediate_size: 0,
+        });
+        let compute_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("[detail sprite] compute shader"),
+            source: shader_source!(DETAIL_SPRITE_SHADER_SRC, "detail_sprite_compute.spv"),
+        });
+        self.detail_sprite_compute_pipeline = Some(self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("[detail sprite] compute pipeline"),
+            layout: Some(&compute_layout),
+            module: &compute_shader,
+            entry_point: Some("cs_generate_instances"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        }));
+        self.detail_sprite_compute_bgl = Some(compute_bgl);
+
+        // render pipeline — binds globals + texture atlas + instance buffer
+        let render_bgl_0 = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[detail sprite] render bgl0"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(GLOBALS_SIZE),
+                    }, count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2, multisampled: false,
+                    }, count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                storage_ro(3),
+            ],
+        });
+        let render_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[detail sprite] render layout"),
+            bind_group_layouts: &[Some(&render_bgl_0)],
+            immediate_size: 0,
+        });
+        let render_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("[detail sprite] render shader"),
+            source: shader_source!(DETAIL_SPRITE_SHADER_SRC, "detail_sprite_render.spv"),
+        });
+        self.detail_sprite_pipeline = Some(self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("[detail sprite] pipeline"),
+            layout: Some(&render_layout),
+            vertex: wgpu::VertexState {
+                module: &render_shader, entry_point: Some("vs_sprite"),
+                buffers: &[], compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &render_shader, entry_point: Some("fs_sprite"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.hdr_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState { count: self.msaa_samples, ..Default::default() },
+            cache: None,
+            multiview_mask: None,
+        }));
+        self.detail_sprite_bgl = Some(render_bgl_0);
     }
 
     fn ensure_lod_select_resources(&mut self, entity_count: usize) {
@@ -7529,6 +7692,161 @@ fn cs_lod_select(@builtin(global_invocation_id) gid: vec3<u32>) {
             run_fullscreen_pass(&mut encoder, "[gtao] blur-v", &self.gtao_blur_v_pipeline, &self.gtao_blur_v_bg, &self.gtao_ao_view_a, ao_w, ao_h);
         }
 
+        // ── planar reflection pass ────────────────────────────────────────
+        // find visible PlanarReflector entities (max 1 per frame)
+        {
+            let mut reflector: Option<(f32, u32)> = None;  // (plane_y, resolution_divisor)
+            {
+                let mut rq = world.query::<(&PlanarReflector, &WorldTransform3d, &ComputedVisibility)>();
+                for (refl, wt, vis) in rq.iter(world) {
+                    if !vis.0 { continue; }
+                    if reflector.is_none() {
+                        reflector = Some((refl.plane_y + wt.translation.y, refl.resolution_divisor.max(1)));
+                    }
+                }
+            }
+            if let Some((plane_y, div)) = reflector {
+                let rw = (self.surface_config.width  / div).max(1);
+                let rh = (self.surface_config.height / div).max(1);
+
+                // lazy-create reflection texture
+                let needs_new = self.reflection_tex.is_none()
+                    || self.reflection_tex.as_ref().map(|t| {
+                        let sz = t.size();
+                        sz.width != rw || sz.height != rh
+                    }).unwrap_or(false);
+                if needs_new {
+                    let rt = self.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("[reflection] tex"),
+                        size: wgpu::Extent3d { width: rw, height: rh, depth_or_array_layers: 1 },
+                        mip_level_count: 1, sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: self.hdr_format,
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                        view_formats: &[],
+                    });
+                    self.reflection_view = Some(rt.create_view(&wgpu::TextureViewDescriptor::default()));
+                    self.reflection_tex  = Some(rt);
+                    self.water_bg_dirty  = true;
+                }
+
+                // compute reflected camera: flip position and forward about plane_y
+                let refl_cam_pos = lunar_math::Vec3::new(cam_pos.x, 2.0 * plane_y - cam_pos.y, cam_pos.z);
+                // reflected view: negate Y of forward + up
+                let cam_fwd  = cam_wt.forward();
+                let cam_up   = cam_wt.up();
+                let refl_fwd = lunar_math::Vec3::new(cam_fwd.x, -cam_fwd.y, cam_fwd.z);
+                let refl_up  = lunar_math::Vec3::new(cam_up.x,  -cam_up.y,  cam_up.z);
+                let refl_target = refl_cam_pos + refl_fwd;
+                let refl_view = Mat4::look_at_rh(refl_cam_pos, refl_target, refl_up);
+                let aspect = rw as f32 / rh as f32;
+                let proj_mat = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 500.0);
+                let refl_vp = proj_mat * refl_view;
+
+                // write reflected globals to a dedicated buffer
+                if self.reflection_globals_buf.is_none() {
+                    self.reflection_globals_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("[reflection] globals buf"),
+                        size: GLOBALS_SIZE,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    }));
+                }
+                let refl_vp_cols = refl_vp.to_cols_array();
+                let time = world.resource::<lunar_core::Time>();
+                let mut refl_globals = [0f32; 24];
+                refl_globals[..16].copy_from_slice(&refl_vp_cols);
+                refl_globals[16] = refl_cam_pos.x;
+                refl_globals[17] = refl_cam_pos.y;
+                refl_globals[18] = refl_cam_pos.z;
+                refl_globals[19] = time.elapsed_seconds();
+                refl_globals[20] = time.delta_seconds();
+                let refl_globals_buf = self.reflection_globals_buf.as_ref().unwrap();
+                self.queue.write_buffer(refl_globals_buf, 0, unsafe { slice_as_bytes(&refl_globals) });
+
+                // rebuild reflection_globals_bg if needed
+                if self.reflection_globals_bg.is_none() {
+                    self.reflection_globals_bg = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("[reflection] globals bg"),
+                        layout: &self.globals_bgl,
+                        entries: &[wgpu::BindGroupEntry {
+                            binding: 0, resource: refl_globals_buf.as_entire_binding(),
+                        }],
+                    }));
+                }
+
+                // depth buffer for the reflection pass (simple 1-sample)
+                let refl_depth_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("[reflection] depth"),
+                    size: wgpu::Extent3d { width: rw, height: rh, depth_or_array_layers: 1 },
+                    mip_level_count: 1, sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Depth32Float,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                });
+                let refl_depth_view = refl_depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+                // rebuild reflection_globals_bg when buf is first created
+                if self.reflection_globals_bg.is_none() {
+                    let buf = self.reflection_globals_buf.as_ref().unwrap();
+                    self.reflection_globals_bg = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("[reflection] globals bg"),
+                        layout: &self.globals_bgl,
+                        entries: &[wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() }],
+                    }));
+                }
+
+                if let Some(refl_view) = self.reflection_view.as_ref() {
+                    // render sky + opaque geometry into the reflection texture.
+                    // for this sprint we draw a clear to sky-tinted color as the background.
+                    // full per-entity geometry reflection via opaque_pipeline with reflected
+                    // globals is a future sprint (requires per-entity instance data rebind).
+                    let sky_r = sky_color.r * 0.7;
+                    let sky_g = sky_color.g * 0.8;
+                    let sky_b = sky_color.b * 0.9;
+                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("[reflection] pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: refl_view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color { r: sky_r as f64, g: sky_g as f64, b: sky_b as f64, a: 1.0 }),
+                                store: wgpu::StoreOp::Store,
+                            },
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &refl_depth_view,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    // full per-entity rendering with reflected globals is a future sprint.
+                    // for now the reflected background color provides basic water reflection.
+                }
+
+                // rebuild water_bg0 to point at the new reflection texture
+                if self.water_bg_dirty {
+                    let refl_v = self.reflection_view.as_ref().unwrap_or(&self.reflection_fallback_view);
+                    self.water_bg0 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("[water] bg0"),
+                        layout: &self.water_bgl0,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: self.globals_buf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
+                            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(refl_v) },
+                        ],
+                    });
+                    self.water_bg_dirty = false;
+                }
+            }
+        }
+
         // ── main color pass → HDR texture ───��─────────────────────────────
         // MSAA resolves into the non-MSAA HDR texture; no MSAA renders direct to HDR.
         // composite pass reads the HDR texture and writes to swapchain.
@@ -8155,6 +8473,166 @@ fn cs_lod_select(@builtin(global_invocation_id) gid: vec3<u32>) {
                     cpu.lifetime -= delta;
                     if cpu.lifetime <= 0.0 {
                         cpu.alive = false;
+                    }
+                }
+            }
+        }
+
+        // ── detail sprite pass ────────────────────────────────────────────
+        // gpu-driven billboarded ground cover — compute generates instances, render draws them.
+        {
+            let mut detail_query = world.query::<(bevy_ecs::entity::Entity, &DetailDensity, &WorldTransform3d, &ComputedVisibility)>();
+            let detail_entities: Vec<(bevy_ecs::entity::Entity, DetailDensity, f32)> = detail_query
+                .iter(world)
+                .filter(|(_, _, _, vis)| vis.0)
+                .map(|(e, dd, wt, _)| (e, dd.clone(), wt.translation.y))
+                .collect();
+
+            if !detail_entities.is_empty() {
+                self.ensure_detail_sprite_resources();
+                let asset_server = world.resource::<lunar_assets::AssetServer>();
+                const MAX_SPRITES: u32 = 4096;
+                const INSTANCE_STRIDE: u64 = 32; // SpriteInstance = 8 × f32 = 32 bytes
+
+                for (entity, dd, _base_y) in &detail_entities {
+                    let entity_key = entity.to_bits();
+
+                    // create per-entity buffers if needed
+                    if !self.detail_sprite_instance_bufs.contains_key(&entity_key) {
+                        let inst_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("[detail sprite] instance buf"),
+                            size: MAX_SPRITES as u64 * INSTANCE_STRIDE,
+                            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        });
+                        let count_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("[detail sprite] count buf"),
+                            size: 4,
+                            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        });
+                        // draw indirect: [vertex_count=4, instance_count, first_vertex=0, first_instance=0]
+                        let draw_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("[detail sprite] draw buf"),
+                            size: 16,
+                            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        });
+                        self.detail_sprite_instance_bufs.insert(entity_key, (inst_buf, count_buf, draw_buf));
+                    }
+
+                    let (inst_buf, count_buf, draw_buf) = self.detail_sprite_instance_bufs.get(&entity_key).unwrap();
+
+                    // reset count and draw_buf each frame
+                    self.queue.write_buffer(count_buf, 0, &0u32.to_le_bytes());
+                    // draw_buf: vertex_count=4 (strip quad), instance_count=0 (filled by copy), first_vertex=0, first_instance=0
+                    let draw_init: [u32; 4] = [4, 0, 0, 0];
+                    self.queue.write_buffer(draw_buf, 0, bytemuck::cast_slice(&draw_init));
+
+                    // write compute params
+                    let grid_step = dd.grid_step.max(0.1);
+                    let grid_count_x = ((dd.world_size.x / grid_step).ceil() as u32).min(256);
+                    let grid_count_z = ((dd.world_size.y / grid_step).ceil() as u32).min(256);
+
+                    let compute_params: [f32; 12] = [
+                        cam_pos.x, cam_pos.y, cam_pos.z, dd.max_dist,
+                        dd.world_origin.x, dd.world_origin.y, dd.world_size.x, dd.world_size.y,
+                        grid_step, dd.density_scale, dd.size_range[0], dd.size_range[1],
+                    ];
+                    // additional u32 fields: variant_count + pad
+                    let compute_params_tail: [u32; 2] = [dd.variant_count, 0];
+
+                    // build a temp uniform buffer for compute params (48 bytes)
+                    let params_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("[detail sprite] compute params"),
+                        size: 64,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    self.queue.write_buffer(&params_buf, 0, unsafe { slice_as_bytes(&compute_params) });
+                    self.queue.write_buffer(&params_buf, 48, bytemuck::cast_slice(&compute_params_tail));
+
+                    // get density map GPU texture view — fallback to 1x1 when not uploaded yet
+                    let density_view: Option<&wgpu::TextureView> =
+                        self.surface_tex_cache.get(&dd.density_map.id()).map(|(_, v)| v);
+
+                    if let (Some(compute_bgl), Some(compute_pipeline)) = (
+                        self.detail_sprite_compute_bgl.as_ref(),
+                        self.detail_sprite_compute_pipeline.as_ref(),
+                    ) {
+                        // use contact shadow fallback view as density map fallback (1x1 R8)
+                        let density_tex_view = density_view.unwrap_or(&self.contact_shadow_fallback_view);
+
+                        let compute_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("[detail sprite] compute bg"),
+                            layout: compute_bgl,
+                            entries: &[
+                                wgpu::BindGroupEntry { binding: 0, resource: params_buf.as_entire_binding() },
+                                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(density_tex_view) },
+                                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                                wgpu::BindGroupEntry { binding: 3, resource: inst_buf.as_entire_binding() },
+                                wgpu::BindGroupEntry { binding: 4, resource: count_buf.as_entire_binding() },
+                            ],
+                        });
+
+                        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("[detail sprite] compute"),
+                            timestamp_writes: None,
+                        });
+                        cpass.set_pipeline(compute_pipeline);
+                        cpass.set_bind_group(0, &compute_bg, &[]);
+                        cpass.dispatch_workgroups((grid_count_x + 7) / 8, (grid_count_z + 7) / 8, 1);
+                    }
+
+                    // copy instance count → draw_buf instance_count field
+                    encoder.copy_buffer_to_buffer(count_buf, 0, draw_buf, 4, 4);
+
+                    // render the sprites
+                    if let (Some(render_bgl), Some(render_pipeline)) = (
+                        self.detail_sprite_bgl.as_ref(),
+                        self.detail_sprite_pipeline.as_ref(),
+                    ) {
+                        // use surface_tex_cache for atlas lookup, fallback to 1x1 when not uploaded yet
+                        let atlas_view = self.surface_tex_cache.get(&dd.texture.id())
+                            .map(|(_, v)| v as &wgpu::TextureView)
+                            .unwrap_or(&self.contact_shadow_fallback_view);
+
+                        let render_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("[detail sprite] render bg"),
+                            layout: render_bgl,
+                            entries: &[
+                                wgpu::BindGroupEntry { binding: 0, resource: self.globals_buf.as_entire_binding() },
+                                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(atlas_view) },
+                                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                                wgpu::BindGroupEntry { binding: 3, resource: inst_buf.as_entire_binding() },
+                            ],
+                        });
+
+                        let (color_target, resolve_target) = match &self.msaa_color_view {
+                            Some(msaa) => (msaa as &wgpu::TextureView, Some(&self.hdr_view as &wgpu::TextureView)),
+                            None => (&self.hdr_view as &wgpu::TextureView, None),
+                        };
+                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("[detail sprite] render"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: color_target,
+                                resolve_target,
+                                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                                depth_slice: None,
+                            })],
+                            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                                view: &self.depth_view,
+                                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Discard }),
+                                stencil_ops: None,
+                            }),
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+                        rpass.set_pipeline(render_pipeline);
+                        rpass.set_bind_group(0, &render_bg, &[]);
+                        rpass.draw_indirect(draw_buf, 0);
+                        draw_calls += 1;
                     }
                 }
             }

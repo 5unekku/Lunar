@@ -35,10 +35,11 @@ struct WaterParams {
     _pad0: f32, _pad1: f32, _pad2: f32,
 }
 
-@group(0) @binding(0) var<uniform> globals:  Globals;
-@group(0) @binding(1) var          hdr_tex:  texture_2d<f32>; // HDR buffer for refraction
-@group(0) @binding(2) var          lin_smp:  sampler;
-@group(1) @binding(0) var<uniform> water:    WaterParams;
+@group(0) @binding(0) var<uniform> globals:       Globals;
+@group(0) @binding(1) var          hdr_tex:       texture_2d<f32>; // HDR buffer for refraction
+@group(0) @binding(2) var          lin_smp:       sampler;
+@group(0) @binding(3) var          reflection_tex: texture_2d<f32>; // planar reflection (or 1x1 fallback)
+@group(1) @binding(0) var<uniform> water:          WaterParams;
 
 struct VertOut {
     @builtin(position) clip_pos:   vec4<f32>,
@@ -138,9 +139,13 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     let depth_t = clamp(abs(in.world_pos.y) * 0.1, 0.0, 1.0);
     let water_tint = mix(water.water_color.rgb, water.deep_color.rgb, depth_t);
 
-    // fresnel blend: refraction when looking straight down, reflection tint at glancing angles
+    // reflection: sample planar reflection tex at approximate screen UV
+    // blend planar reflection with refraction using fresnel: glancing angle → reflection
+    let reflect_color = textureSample(reflection_tex, lin_smp, clamp(screen_uv, vec2(0.001), vec2(0.999))).rgb;
+
     let f = fresnel(n, v, water.fresnel_power);
-    let surface_color = mix(refract_color * water_tint, water_tint, f);
+    // at glancing angles (high f): show reflection; at nadir (low f): show refraction
+    let surface_color = mix(refract_color * water_tint, reflect_color, f * 0.7);
 
     // alpha: translucent at nadir, opaque at horizon
     let alpha = mix(0.5, 0.95, f) * water.water_color.a;

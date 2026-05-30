@@ -74,7 +74,7 @@ pub use lunar_2d::{
 #[cfg(feature = "3d")]
 pub use lunar_3d::{
     // core transforms / camera / mesh / material / lights
-    ActiveCamera3d, AmbientLight, AmbientProbeGrid, Camera3d, CullMode, DirectionalLight, IndexBuffer, IrradianceSH,
+    ActiveCamera3d, AmbientLight, AmbientProbeGrid, Camera3d, CullMode, DetailDensity, DirectionalLight, IndexBuffer, IrradianceSH,
     LocalTransform3d, Material3d, MaterialData, Mesh3d, MeshData, MeshUsage, Plugin3d, StaticMesh,
     PointLight, Projection, ShadingModel, SkinWeights, SpotLight, Vertex3d, WorldTransform3d,
     propagate_transforms_3d,
@@ -98,7 +98,7 @@ pub use lunar_3d::{
     // primitives
     primitives,
     // mesh registry
-    MeshRegistry,
+    MeshRegistry, PlanarReflector,
 };
 // lunar-render-3d types — only available when the 3d feature is enabled
 #[cfg(feature = "3d")]

@@ -1,5 +1,5 @@
 use bevy_ecs::prelude::Component;
-use lunar_assets::{Asset, Handle};
+use lunar_assets::{Asset, Handle, Texture};
 use lunar_math::{Vec2, Vec3};
 
 use crate::transform::WorldTransform3d;
@@ -270,6 +270,57 @@ pub struct MeshImpostor {
     /// world-space half-extents of the impostor billboard quad (matches the object's visual size)
     pub half_width: f32,
     pub half_height: f32,
+}
+
+/// planar reflection surface.
+///
+/// attach to an entity alongside [`Water`](crate::water::Water) or any flat reflective geometry.
+/// the renderer renders the scene from a camera mirrored about the reflection plane
+/// and provides the result as `reflection_tex` to the water/surface shader.
+///
+/// limited to 2 active planes per frame (largest screen-area wins). the reflected camera
+/// uses a simple Y-mirror; oblique clipping prevents underwater geometry from appearing.
+#[derive(Debug, Clone, Copy, Component)]
+pub struct PlanarReflector {
+    /// world-space Y coordinate of the reflection plane (horizontal reflectors only).
+    pub plane_y: f32,
+    /// render resolution divisor: 1 = full-res, 2 = half-res (default).
+    pub resolution_divisor: u32,
+    /// max render distance for the reflected scene (clip objects beyond this).
+    pub clip_dist: f32,
+}
+
+impl Default for PlanarReflector {
+    fn default() -> Self {
+        Self { plane_y: 0.0, resolution_divisor: 2, clip_dist: 300.0 }
+    }
+}
+
+/// GPU-driven ground cover sprites.
+///
+/// attach to a large flat entity (e.g. terrain, ground plane) to populate it
+/// with billboarded grass/pebble/flower sprites driven by a density map.
+/// a compute pass generates instance data each frame; one instanced draw per entity.
+#[derive(Debug, Clone, Component)]
+pub struct DetailDensity {
+    /// sprite atlas texture (horizontal strip of variants).
+    pub texture: Handle<Texture>,
+    /// density map: R channel = sprites per m², 0-1 normalized to density_scale.
+    pub density_map: Handle<Texture>,
+    /// world-space XZ origin of the density map region.
+    pub world_origin: Vec2,
+    /// XZ extent of the density map in world units.
+    pub world_size: Vec2,
+    /// max distance at which sprites render.
+    pub max_dist: f32,
+    /// sprite half-height range [min, max] in world units.
+    pub size_range: [f32; 2],
+    /// number of sprite variants in the atlas (horizontal strip).
+    pub variant_count: u32,
+    /// maximum sprites per m² at full density.
+    pub density_scale: f32,
+    /// grid cell spacing in world units (default 0.5).
+    pub grid_step: f32,
 }
 
 /// stores the world transform from the previous tick for render interpolation.
