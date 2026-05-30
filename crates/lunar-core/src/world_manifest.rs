@@ -949,7 +949,7 @@ mod tests {
             components: HashMap::new(),
         };
 
-        entity.set_component(&builtin_components::LAYER, &1);
+        entity.set_component(builtin_components::LAYER, &1);
         assert!(entity.has_component(builtin_components::LAYER));
         assert_eq!(
             entity.get_component::<i32>(builtin_components::LAYER),

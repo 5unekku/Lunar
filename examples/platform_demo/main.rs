@@ -8,7 +8,7 @@
 //! controls:
 //!   WASD        — move
 //!   mouse       — look
-//!   - / =       — decrease / increase FOV by 5°
+//!   minus / equals — decrease / increase FOV by 5°
 //!   Escape      — quit
 //!   F11 / F     — toggle fullscreen
 

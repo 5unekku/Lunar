@@ -390,11 +390,10 @@ fn halton2(i: u32) -> (f32, f32) {
 fn ray_blocked(origin: Vec3, direction: Vec3, tris: &[BakeTri]) -> bool {
     const T_MAX: f32 = 100.0;
     for tri in tris {
-        if let Some(t) = moller_trumbore(origin, direction, tri.p0, tri.p1, tri.p2) {
-            if t > 1e-4 && t < T_MAX {
+        if let Some(t) = moller_trumbore(origin, direction, tri.p0, tri.p1, tri.p2)
+            && t > 1e-4 && t < T_MAX {
                 return true;
             }
-        }
     }
     false
 }

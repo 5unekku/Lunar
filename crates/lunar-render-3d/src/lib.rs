@@ -1142,6 +1142,7 @@ pub struct RenderEngine3d {
     impostor_scratch: Vec<(Vec3, f32, f32, u32, f32, f32)>,
     // (entity, mesh_id, mat_id, base_color, metallic, roughness, model, alpha, mat_flags, lm_id, dir_lm_id)
     // sorted by (alpha_bit, mesh_id, mat_id, lm_id, dir_lm_id) for batching
+    #[allow(clippy::type_complexity)]
     draw_scratch: Vec<(Entity, u32, u32, Color, f32, f32, Mat4, f32, u32, u32, u32)>,
     uniform_staging: Vec<u8>,
     point_light_scratch: Vec<(Vec3, Color, f32, f32, bool)>,  // (pos, color, intensity, radius, casts_shadows)
@@ -4710,7 +4711,7 @@ impl RenderEngine3d {
         let cap = entity_count.next_power_of_two().max(256);
         let needs = self.hzb_occ_buf
             .as_ref()
-            .map_or(true, |b| b.size() < (cap * 4) as u64);
+            .is_none_or(|b| b.size() < (cap * 4) as u64);
         if !needs { return; }
 
         self.hzb_occ_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -5645,6 +5646,7 @@ impl RenderEngine3d {
         staging[offset..offset + 144].copy_from_slice(unsafe { slice_as_bytes(&data) });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn pack_material_uniforms(
         staging: &mut [u8], slot: usize,
         color: Color, metallic: f32, roughness: f32, flags: u32, has_lightmap: u32,
@@ -5895,8 +5897,8 @@ impl RenderEngine3d {
             };
 
             // read previous frame's LOD staging result (1-frame pipelined, same as cull)
-            if self.lod_staging_pending && entity_count > 0 {
-                if self.lod_staging_ready.load(Ordering::Acquire) {
+            if self.lod_staging_pending && entity_count > 0
+                && self.lod_staging_ready.load(Ordering::Acquire) {
                     let prev_count = self.lod_pending_entity_count;
                     if let Some(staging) = self.lod_indices_staging.as_ref() {
                         {
@@ -5916,7 +5918,6 @@ impl RenderEngine3d {
                     self.lod_staging_ready.store(false, Ordering::Release);
                     self.lod_staging_pending = false;
                 }
-            }
 
             // read previous frame's staging result — non-blocking, uses AtomicBool set by map_async callback
             if self.cull_staging_pending && entity_count > 0 {
@@ -6016,7 +6017,7 @@ impl RenderEngine3d {
                     });
                     cpass.set_pipeline(self.cull_pipeline.as_ref().unwrap());
                     cpass.set_bind_group(0, &bg, &[]);
-                    cpass.dispatch_workgroups((entity_count as u32 + 63) / 64, 1, 1);
+                    cpass.dispatch_workgroups((entity_count as u32).div_ceil(64), 1, 1);
                 }
                 // also dispatch LOD selection in the same encoder (reuses aabb_buf)
                 if let (Some(lod_pipeline), Some(lod_bgl), Some(lod_params_buf), Some(lod_buf)) = (
@@ -6053,7 +6054,7 @@ impl RenderEngine3d {
                         });
                         lpass.set_pipeline(lod_pipeline);
                         lpass.set_bind_group(0, &lod_bg, &[]);
-                        lpass.dispatch_workgroups((entity_count as u32 + 63) / 64, 1, 1);
+                        lpass.dispatch_workgroups((entity_count as u32).div_ceil(64), 1, 1);
                     }
                     if let Some(lod_staging) = self.lod_indices_staging.as_ref() {
                         cull_enc.copy_buffer_to_buffer(lod_buf, 0, lod_staging, 0, (entity_count * 4) as u64);
@@ -6187,7 +6188,7 @@ impl RenderEngine3d {
                         });
                         cpass.set_pipeline(self.hzb_cull_pipeline.as_ref().unwrap());
                         cpass.set_bind_group(0, &hzb_cull_bg, &[]);
-                        cpass.dispatch_workgroups((entity_count as u32 + 63) / 64, 1, 1);
+                        cpass.dispatch_workgroups((entity_count as u32).div_ceil(64), 1, 1);
                     }
                     hzb_enc.copy_buffer_to_buffer(occ_buf, 0, occ_staging, 0, (entity_count * 4) as u64);
                     self.queue.submit([hzb_enc.finish()]);
@@ -6380,13 +6381,12 @@ impl RenderEngine3d {
             });
 
         // write visible areas back so game code (AI LOS queries etc.) reads a correct set
-        if let Some(ref areas) = bsp_visible {
-            if let Some(mut vis_areas) = world.get_resource_mut::<VisibleAreas>() {
+        if let Some(ref areas) = bsp_visible
+            && let Some(mut vis_areas) = world.get_resource_mut::<VisibleAreas>() {
                 vis_areas.area_ids.clear();
                 vis_areas.area_ids.extend(areas.iter().copied());
                 vis_areas.active = true;
             }
-        }
 
         // snapshot portal visible areas before the mutable query borrow
         let portal_visible_snap: Option<HashSet<u32>> = world
@@ -6417,14 +6417,11 @@ impl RenderEngine3d {
                     if !vis.0 { return false; }
                     // BSP PVS area culling (takes priority over portal traversal)
                     if let Some(ref visible_areas) = bsp_visible {
-                        if let Some(a) = area {
-                            if !visible_areas.contains(&a.0) { return false; }
-                        }
-                    } else if let Some(ref pv) = portal_visible_snap {
-                        if let Some(a) = area {
-                            if !pv.contains(&a.0) { return false; }
-                        }
-                    }
+                        if let Some(a) = area
+                            && !visible_areas.contains(&a.0) { return false; }
+                    } else if let Some(ref pv) = portal_visible_snap
+                        && let Some(a) = area
+                            && !pv.contains(&a.0) { return false; }
                     aabb.is_none() || self.frustum_visible.contains(entity)
                 })
                 .for_each(|(entity, mesh, mat, wt, _, _, lod, impostor, _, lightmap, dir_lightmap, prev_wt)| {
@@ -6434,8 +6431,8 @@ impl RenderEngine3d {
                     let dist_sq = (render_wt.translation - cam_pos).length_squared();
 
                     // check if entity should use impostor billboard
-                    if let Some(imp) = impostor {
-                        if dist_sq >= imp.min_dist_sq {
+                    if let Some(imp) = impostor
+                        && dist_sq >= imp.min_dist_sq {
                             // compute view azimuth angle around Y for atlas selection
                             let to_entity = Vec3::from(render_wt.translation) - cam_pos;
                             let view_angle = to_entity.z.atan2(to_entity.x);
@@ -6450,7 +6447,6 @@ impl RenderEngine3d {
                             ));
                             return; // skip mesh draw
                         }
-                    }
 
                     // normal mesh draw — GPU LOD index (1-frame pipelined) or CPU dist fallback
                     let mesh_id = if let Some(&gpu_lod) = self.gpu_lod_indices.get(&entity) {
@@ -6681,16 +6677,16 @@ impl RenderEngine3d {
                         },
                         // BC1: 8 bytes per 4×4 block (0.5 bytes/texel)
                         lunar_assets::TextureCompression::Bc1 =>
-                            (wgpu::TextureFormat::Bc1RgbaUnormSrgb, Box::new(|w| ((w + 3) / 4) * 8)),
+                            (wgpu::TextureFormat::Bc1RgbaUnormSrgb, Box::new(|w| w.div_ceil(4) * 8)),
                         // BC3/BC5/BC6H/BC7: 16 bytes per 4×4 block (1 byte/texel)
                         lunar_assets::TextureCompression::Bc3 =>
-                            (wgpu::TextureFormat::Bc3RgbaUnorm, Box::new(|w| ((w + 3) / 4) * 16)),
+                            (wgpu::TextureFormat::Bc3RgbaUnorm, Box::new(|w| w.div_ceil(4) * 16)),
                         lunar_assets::TextureCompression::Bc5 =>
-                            (wgpu::TextureFormat::Bc5RgUnorm, Box::new(|w| ((w + 3) / 4) * 16)),
+                            (wgpu::TextureFormat::Bc5RgUnorm, Box::new(|w| w.div_ceil(4) * 16)),
                         lunar_assets::TextureCompression::Bc6h =>
-                            (wgpu::TextureFormat::Bc6hRgbFloat, Box::new(|w| ((w + 3) / 4) * 16)),
+                            (wgpu::TextureFormat::Bc6hRgbFloat, Box::new(|w| w.div_ceil(4) * 16)),
                         lunar_assets::TextureCompression::Bc7 =>
-                            (wgpu::TextureFormat::Bc7RgbaUnorm, Box::new(|w| ((w + 3) / 4) * 16)),
+                            (wgpu::TextureFormat::Bc7RgbaUnorm, Box::new(|w| w.div_ceil(4) * 16)),
                     };
                 let gpu_tex = device.create_texture(&wgpu::TextureDescriptor {
                     label: Some(label),
@@ -6708,7 +6704,7 @@ impl RenderEngine3d {
                     wgpu::TexelCopyBufferLayout {
                         offset: 0,
                         bytes_per_row: Some(bpr_fn(tex.width)),
-                        rows_per_image: Some((tex.height + 3) / 4),
+                        rows_per_image: Some(tex.height.div_ceil(4)),
                     },
                     wgpu::Extent3d { width: tex.width, height: tex.height, depth_or_array_layers: 1 },
                 );
@@ -6726,7 +6722,7 @@ impl RenderEngine3d {
                         wgpu::TexelCopyBufferLayout {
                             offset: 0,
                             bytes_per_row: Some(bpr_fn(mip_w)),
-                            rows_per_image: Some((mip_h + 3) / 4),
+                            rows_per_image: Some(mip_h.div_ceil(4)),
                         },
                         wgpu::Extent3d { width: mip_w, height: mip_h, depth_or_array_layers: 1 },
                     );
@@ -6739,8 +6735,8 @@ impl RenderEngine3d {
             let mut evict_ids: Vec<u32> = Vec::new();
             // upload irradiance textures not yet in cache
             for &(lm_id, _) in &lm_needed {
-                if !self.lm_tex_cache.contains_key(&lm_id) {
-                    if let Some(tex) = asset_server.get_texture_by_id(lm_id) {
+                if !self.lm_tex_cache.contains_key(&lm_id)
+                    && let Some(tex) = asset_server.get_texture_by_id(lm_id) {
                         let max_mips = tex.mip_level_count();
                         // desired_mip_count could limit uploads in future; upload full for now
                         let _desired = asset_server.desired_mip_count(lm_id, max_mips);
@@ -6749,27 +6745,24 @@ impl RenderEngine3d {
                         self.lm_tex_cache.insert(lm_id, entry);
                         evict_ids.push(lm_id);
                     }
-                }
             }
             // upload direction textures not yet in cache
             for &(_, dir_lm_id) in &lm_needed {
-                if dir_lm_id != u32::MAX && !self.dir_lm_tex_cache.contains_key(&dir_lm_id) {
-                    if let Some(tex) = asset_server.get_texture_by_id(dir_lm_id) {
+                if dir_lm_id != u32::MAX && !self.dir_lm_tex_cache.contains_key(&dir_lm_id)
+                    && let Some(tex) = asset_server.get_texture_by_id(dir_lm_id) {
                         new_vram_bytes += (tex.width * tex.height * 4) as u64;
                         let entry = upload_lm_tex(&self.device, &self.queue, tex, "[lightmap] dir", false);
                         self.dir_lm_tex_cache.insert(dir_lm_id, entry);
                         evict_ids.push(dir_lm_id);
                     }
-                }
             }
             (new_vram_bytes, evict_ids)
         };  // asset_server released here
         // step 3: update VRAM tracking
-        if lm_new_vram > 0 {
-            if let Some(mut vram) = world.get_resource_mut::<lunar_assets::TextureVramUsage>() {
+        if lm_new_vram > 0
+            && let Some(mut vram) = world.get_resource_mut::<lunar_assets::TextureVramUsage>() {
                 vram.add_bytes(lm_new_vram);
             }
-        }
         // step 3b: evict cpu-side pixel data for newly uploaded lightmap textures
         if !lm_evict_ids.is_empty() {
             let mut asset_server = world.resource_mut::<lunar_assets::AssetServer>();
@@ -6816,11 +6809,10 @@ impl RenderEngine3d {
                 // gather (lm_id, width, height, pixels-as-rgba8) for each
                 let mut entries: Vec<(u32, u32, u32, Vec<u8>)> = Vec::new();
                 for &lm_id in &current_ids {
-                    if let Some(tex) = asset_server.get_texture_by_id(lm_id) {
-                        if let lunar_assets::TextureCompression::None = tex.compression {
+                    if let Some(tex) = asset_server.get_texture_by_id(lm_id)
+                        && let lunar_assets::TextureCompression::None = tex.compression {
                             entries.push((lm_id, tex.width, tex.height, tex.pixels.to_vec()));
                         }
-                    }
                 }
                 if !entries.is_empty() {
                     // shelf packer: sort by height desc, place left-to-right
@@ -7051,25 +7043,25 @@ impl RenderEngine3d {
             for &(_, slot, tex_ids, packed_stages) in &self.surface_scratch {
                 // upload any new textures
                 for &tid in &tex_ids {
-                    if tid != u32::MAX && !self.surface_tex_cache.contains_key(&tid) {
-                        if let Some(tex) = asset_server.get_texture_by_id(tid) {
+                    if tid != u32::MAX && !self.surface_tex_cache.contains_key(&tid)
+                        && let Some(tex) = asset_server.get_texture_by_id(tid) {
                             let (gpu_fmt, bpr) = match tex.compression {
                                 lunar_assets::TextureCompression::None =>
                                     (wgpu::TextureFormat::Rgba8UnormSrgb, tex.width * 4),
                                 lunar_assets::TextureCompression::Bc1 =>
-                                    (wgpu::TextureFormat::Bc1RgbaUnormSrgb, ((tex.width + 3) / 4) * 8),
+                                    (wgpu::TextureFormat::Bc1RgbaUnormSrgb, tex.width.div_ceil(4) * 8),
                                 lunar_assets::TextureCompression::Bc3 =>
-                                    (wgpu::TextureFormat::Bc3RgbaUnorm, ((tex.width + 3) / 4) * 16),
+                                    (wgpu::TextureFormat::Bc3RgbaUnorm, tex.width.div_ceil(4) * 16),
                                 lunar_assets::TextureCompression::Bc5 =>
-                                    (wgpu::TextureFormat::Bc5RgUnorm, ((tex.width + 3) / 4) * 16),
+                                    (wgpu::TextureFormat::Bc5RgUnorm, tex.width.div_ceil(4) * 16),
                                 lunar_assets::TextureCompression::Bc6h =>
-                                    (wgpu::TextureFormat::Bc6hRgbFloat, ((tex.width + 3) / 4) * 16),
+                                    (wgpu::TextureFormat::Bc6hRgbFloat, tex.width.div_ceil(4) * 16),
                                 lunar_assets::TextureCompression::Bc7 =>
-                                    (wgpu::TextureFormat::Bc7RgbaUnorm, ((tex.width + 3) / 4) * 16),
+                                    (wgpu::TextureFormat::Bc7RgbaUnorm, tex.width.div_ceil(4) * 16),
                             };
                             let rows_per_image = match tex.compression {
                                 lunar_assets::TextureCompression::None => tex.height,
-                                _ => (tex.height + 3) / 4,
+                                _ => tex.height.div_ceil(4),
                             };
                             let gpu_tex = self.device.create_texture(&wgpu::TextureDescriptor {
                                 label: Some("[surface] tex"),
@@ -7087,7 +7079,6 @@ impl RenderEngine3d {
                             self.surface_tex_cache.insert(tid, (gpu_tex, view));
                             evict_ids.push(tid);
                         }
-                    }
                 }
                 // upload stage params for this entity
                 let slot_offset = (slot - (ENTITY_SLOT_START + self.draw_scratch.len())) * UNIFORM_STRIDE as usize;
@@ -7108,9 +7099,8 @@ impl RenderEngine3d {
                 // create/update BG if texture combination changed
                 if !self.surface_bg_cache.contains_key(&tex_ids) {
                     let get_view = |tid: u32| -> &wgpu::TextureView {
-                        if tid != u32::MAX {
-                            if let Some((_, v)) = self.surface_tex_cache.get(&tid) { return v; }
-                        }
+                        if tid != u32::MAX
+                            && let Some((_, v)) = self.surface_tex_cache.get(&tid) { return v; }
                         &self.surface_fallback_view
                     };
                     let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -7305,14 +7295,13 @@ impl RenderEngine3d {
                     (self.draw_scratch[i].1, self.draw_scratch[i].2, self.draw_scratch[i].9, self.draw_scratch[i].10)
                 };
                 let group_changed = cur_mesh != last_mesh || cur_mat != last_mat || cur_lm != last_lm || cur_dir_lm != last_dir_lm;
-                if group_changed && i > group_start {
-                    if let Some(gpu_mesh) = self.mesh_gpu.get(&last_mesh) {
+                if group_changed && i > group_start
+                    && let Some(gpu_mesh) = self.mesh_gpu.get(&last_mesh) {
                         let base = (ENTITY_SLOT_START + group_start) as u32;
                         let count = (i - group_start) as u32;
                         // DrawIndexedIndirect: index_count, instance_count, first_index, base_vertex, first_instance
                         self.indirect_args.extend_from_slice(&[gpu_mesh.index_count, count, 0, 0u32, base]);
                     }
-                }
                 if transparent_or_end { break; }
                 if group_changed { last_mesh = cur_mesh; last_mat = cur_mat; last_lm = cur_lm; last_dir_lm = cur_dir_lm; group_start = i; }
                 i += 1;
@@ -7413,7 +7402,7 @@ impl RenderEngine3d {
                     });
                     cpass.set_pipeline(self.cull_indirect_pipeline.as_ref().unwrap());
                     cpass.set_bind_group(0, &bg, &[]);
-                    cpass.dispatch_workgroups((entity_count as u32 + 63) / 64, 1, 1);
+                    cpass.dispatch_workgroups((entity_count as u32).div_ceil(64), 1, 1);
                 }
                 self.queue.submit([late_enc.finish()]);
             }
@@ -7522,12 +7511,11 @@ impl RenderEngine3d {
                         for si in 0..=sn {
                             let cur_mesh = if si == sn { u32::MAX } else { self.draw_scratch[si].1 };
                             if cur_mesh != last_mesh {
-                                if si > last_gs {
-                                    if let Some(gpu) = self.mesh_gpu.get(&last_mesh) {
+                                if si > last_gs
+                                    && let Some(gpu) = self.mesh_gpu.get(&last_mesh) {
                                         let base = (ENTITY_SLOT_START + last_gs) as u32;
                                         pt_pass.draw_indexed(0..gpu.index_count, 0, base..base + (si - last_gs) as u32);
                                     }
-                                }
                                 if si < sn {
                                     if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
                                         pt_pass.set_vertex_buffer(0, gpu.vbuf.slice(..));
@@ -7669,12 +7657,11 @@ impl RenderEngine3d {
                         while i <= n {
                             let done = i == n;
                             let (cur_mesh, cur_mat) = if done { (u32::MAX, u32::MAX) } else { (s_draw[i].1, s_draw[i].2) };
-                            if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start {
-                                if let Some(gpu) = s_mesh_gpu.get(&last_mesh) {
+                            if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start
+                                && let Some(gpu) = s_mesh_gpu.get(&last_mesh) {
                                     let base = (ENTITY_SLOT_START + group_start) as u32;
                                     zpass.draw_indexed(0..gpu.index_count, 0, base..base + (i - group_start) as u32);
                                 }
-                            }
                             if done { break; }
                             if cur_mesh != last_mesh || cur_mat != last_mat {
                                 if let Some(gpu) = s_mesh_gpu.get(&cur_mesh) {
@@ -7705,12 +7692,11 @@ impl RenderEngine3d {
                         for idx in 0..=sn {
                             let done = idx == sn;
                             let cur_mesh = if done { u32::MAX } else { shadow_list[idx].0 };
-                            if cur_mesh != last_mesh && idx > gs_idx {
-                                if let Some(gpu) = s_mesh_gpu.get(&last_mesh) {
+                            if cur_mesh != last_mesh && idx > gs_idx
+                                && let Some(gpu) = s_mesh_gpu.get(&last_mesh) {
                                     let base = (ENTITY_SLOT_START + gs_slot) as u32;
                                     spass.draw_indexed(0..gpu.index_count, 0, base..base + (idx - gs_idx) as u32);
                                 }
-                            }
                             if done { break; }
                             if cur_mesh != last_mesh {
                                 if let Some(gpu) = s_mesh_gpu.get(&cur_mesh) {
@@ -7850,12 +7836,11 @@ impl RenderEngine3d {
                     let done = i == n;
                     let (cur_mesh, cur_mat) = if done { (u32::MAX, u32::MAX) }
                         else { (self.draw_scratch[i].1, self.draw_scratch[i].2) };
-                    if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start {
-                        if let Some(gpu_mesh) = self.mesh_gpu.get(&last_mesh) {
+                    if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start
+                        && let Some(gpu_mesh) = self.mesh_gpu.get(&last_mesh) {
                             let base = (ENTITY_SLOT_START + group_start) as u32;
                             hzb_zpass.draw_indexed(0..gpu_mesh.index_count, 0, base..base + (i - group_start) as u32);
                         }
-                    }
                     if done { break; }
                     if cur_mesh != last_mesh || cur_mat != last_mat {
                         if let Some(gpu_mesh) = self.mesh_gpu.get(&cur_mesh) {
@@ -7885,8 +7870,8 @@ impl RenderEngine3d {
                 });
                 cpass.set_pipeline(self.hzb_copy_pipeline.as_ref().unwrap());
                 cpass.set_bind_group(0, &copy_bg, &[]);
-                let wg_x = (self.hzb_width + 7) / 8;
-                let wg_y = (self.hzb_height + 7) / 8;
+                let wg_x = self.hzb_width.div_ceil(8);
+                let wg_y = self.hzb_height.div_ceil(8);
                 cpass.dispatch_workgroups(wg_x, wg_y, 1);
             }
 
@@ -7912,7 +7897,7 @@ impl RenderEngine3d {
                 });
                 cpass.set_pipeline(ds_pipeline);
                 cpass.set_bind_group(0, &ds_bg, &[]);
-                cpass.dispatch_workgroups((mip_w + 7) / 8, (mip_h + 7) / 8, 1);
+                cpass.dispatch_workgroups(mip_w.div_ceil(8), mip_h.div_ceil(8), 1);
             }
         }
 
@@ -7951,12 +7936,11 @@ impl RenderEngine3d {
                         let done = i == n;
                         let (cur_mesh, cur_mat) = if done { (u32::MAX, u32::MAX) }
                             else { (self.draw_scratch[i].1, self.draw_scratch[i].2) };
-                        if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start {
-                            if let Some(gpu_mesh) = self.mesh_gpu.get(&last_mesh) {
+                        if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start
+                            && let Some(gpu_mesh) = self.mesh_gpu.get(&last_mesh) {
                                 let base = (ENTITY_SLOT_START + group_start) as u32;
                                 zpass.draw_indexed(0..gpu_mesh.index_count, 0, base..base + (i - group_start) as u32);
                             }
-                        }
                         if done { break; }
                         if cur_mesh != last_mesh || cur_mat != last_mat {
                             if let Some(gpu_mesh) = self.mesh_gpu.get(&cur_mesh) {
@@ -8205,7 +8189,7 @@ impl RenderEngine3d {
                 let mut benc = self.device.create_render_bundle_encoder(
                     &wgpu::RenderBundleEncoderDescriptor {
                         label: Some("[static] bundle encoder"),
-                        color_formats: &[Some(self.hdr_format.into())],
+                        color_formats: &[Some(self.hdr_format)],
                         depth_stencil: Some(wgpu::RenderBundleDepthStencil {
                             format: wgpu::TextureFormat::Depth32Float,
                             depth_read_only: false,
@@ -8239,8 +8223,8 @@ impl RenderEngine3d {
                         }
                     }
                     if j == sn { break; }
-                    if grp_changed {
-                        if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
+                    if grp_changed
+                        && let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
                             let lm_bg = if cur_lm != u32::MAX {
                                 self.lightmap_bg_cache.get(&(cur_lm, cur_dir_lm)).unwrap_or(&self.lightmap_fallback_bg)
                             } else {
@@ -8252,7 +8236,6 @@ impl RenderEngine3d {
                             last_mesh = cur_mesh; last_mat = cur_mat; last_lm = cur_lm; last_dir_lm = cur_dir_lm;
                             group_start_j = j;
                         }
-                    }
                     j += 1;
                 }
                 self.static_bundle = Some(benc.finish(&wgpu::RenderBundleDescriptor {
@@ -8916,7 +8899,7 @@ impl RenderEngine3d {
                         });
                         cpass.set_pipeline(compute_pipeline);
                         cpass.set_bind_group(0, &compute_bg, &[]);
-                        cpass.dispatch_workgroups((grid_count_x + 7) / 8, (grid_count_z + 7) / 8, 1);
+                        cpass.dispatch_workgroups(grid_count_x.div_ceil(8), grid_count_z.div_ceil(8), 1);
                     }
 
                     // copy instance count → draw_buf instance_count field
@@ -9644,8 +9627,8 @@ fn render_3d_system(world: &mut World) {
     const OVER_THRESHOLD: u32  = 180;
     const UNDER_THRESHOLD: u32 = 600;
     let auto = world.get_resource::<AutoQuality>().cloned();
-    if let Some(auto) = auto {
-        if auto.enabled {
+    if let Some(auto) = auto
+        && auto.enabled {
             let (over_f, under_f) = (engine.auto_quality_over_frames, engine.auto_quality_under_frames);
             let current = world.resource::<QualitySettings>().preset;
             let tier = engine.tier();
@@ -9663,7 +9646,6 @@ fn render_3d_system(world: &mut World) {
                 engine.auto_quality_under_frames = 0;
             }
         }
-    }
 
     world.insert_resource(engine);
     if let Some(mut info) = world.get_resource_mut::<RenderInfo3d>() {

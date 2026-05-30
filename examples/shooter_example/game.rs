@@ -258,6 +258,7 @@ fn enemy_spawner(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render(
     game_state: Res<GameState>,
     score: Res<Score>,

@@ -29,7 +29,7 @@
 //! ```
 
 use bevy_ecs::prelude::*;
-use lunar_math::{Quat, Vec3};
+use lunar_math::Vec3;
 
 use lunar_3d::collision::{ColliderShape3d, CollisionWorld3d};
 use lunar_3d::LocalTransform3d;
@@ -230,7 +230,7 @@ mod tests {
     use bevy_ecs::system::IntoSystem;
     use lunar_3d::collision::{Collider3d, build_collision_world_3d};
     use lunar_3d::WorldTransform3d;
-    use lunar_math::Vec3;
+    use lunar_math::{Quat, Vec3};
 
     fn setup_world() -> World {
         let mut world = World::new();

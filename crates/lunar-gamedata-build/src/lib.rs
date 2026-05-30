@@ -63,7 +63,7 @@ pub fn compile_toml(source: &str) -> Result<Vec<u8>, String> {
     let mut string_index: HashMap<String, u32> = HashMap::new();
     let mut tables: HashMap<String, DataTable> = HashMap::new();
 
-    let mut intern = |s: &str, strings: &mut Vec<String>, index: &mut HashMap<String, u32>| -> u32 {
+    let intern = |s: &str, strings: &mut Vec<String>, index: &mut HashMap<String, u32>| -> u32 {
         if let Some(&id) = index.get(s) {
             return id;
         }
@@ -83,7 +83,7 @@ pub fn compile_toml(source: &str) -> Result<Vec<u8>, String> {
         };
 
         // check first element to see if it's a table (array-of-tables)
-        let is_table_array = records_toml.first().map_or(false, |v| v.is_table());
+        let is_table_array = records_toml.first().is_some_and(|v| v.is_table());
         if !is_table_array {
             continue;
         }

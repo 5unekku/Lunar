@@ -121,11 +121,10 @@ impl TileMap {
 
     /// set the tile id at (col, row). out-of-bounds is silently ignored.
     pub fn set(&mut self, col: usize, row: usize, tile_id: Option<u32>) {
-        if let Some(row_vec) = self.tiles.get_mut(row) {
-            if let Some(cell) = row_vec.get_mut(col) {
+        if let Some(row_vec) = self.tiles.get_mut(row)
+            && let Some(cell) = row_vec.get_mut(col) {
                 *cell = tile_id;
             }
-        }
     }
 
     /// convert a world-space position to (col, row) tile coordinates.

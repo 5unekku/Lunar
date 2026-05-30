@@ -65,8 +65,8 @@ impl AmbientProbeGrid {
         let base = (cz * self.dims[1] as usize + cy) * self.dims[0] as usize + cx;
         let base = base * 9;
         let mut out = [[0.0f32; 3]; 9];
-        for i in 0..9 {
-            out[i] = self.coefficients.get(base + i).copied().unwrap_or([0.0; 3]);
+        for (i, slot) in out.iter_mut().enumerate() {
+            *slot = self.coefficients.get(base + i).copied().unwrap_or([0.0; 3]);
         }
         out
     }

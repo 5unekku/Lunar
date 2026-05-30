@@ -177,11 +177,6 @@ fn look_rotation(forward: Vec3, up: Vec3) -> Quat {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunar_3d::WorldTransform3d;
-
-    fn make_world_transform(pos: Vec3) -> WorldTransform3d {
-        WorldTransform3d { translation: pos, rotation: Quat::IDENTITY, scale: Vec3::ONE }
-    }
 
     #[test]
     fn arm_direction_yaw_zero_points_positive_z() {

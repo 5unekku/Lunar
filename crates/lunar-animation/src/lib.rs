@@ -83,7 +83,9 @@ impl AnimationClip {
         self
     }
 
-    fn total_duration(&self) -> f32 {
+    /// total duration of the clip in seconds (sum of all frame durations).
+    #[must_use]
+    pub fn total_duration(&self) -> f32 {
         self.cached_duration
     }
 }

@@ -50,16 +50,12 @@ impl Ord for HeapEntry {
 pub use lunar_pathfinding_rt::NavGrid;
 
 /// options for flow field baking.
+#[derive(Default)]
 pub struct FlowFieldOptions {
     /// allow diagonal movement (8-directional).
     pub diagonal: bool,
 }
 
-impl Default for FlowFieldOptions {
-    fn default() -> Self {
-        Self { diagonal: false }
-    }
-}
 
 /// precomputed flow field for a single goal position.
 ///

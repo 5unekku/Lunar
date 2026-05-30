@@ -50,13 +50,12 @@ impl MeshRegistry {
 
     /// free cpu vertex and index data for a gpu_only mesh after GPU upload.
     pub fn evict_cpu_data(&mut self, handle: Handle<MeshData>) {
-        if let Some(mesh) = self.meshes.get_mut(&handle.id()) {
-            if mesh.gpu_only {
+        if let Some(mesh) = self.meshes.get_mut(&handle.id())
+            && mesh.gpu_only {
                 mesh.vertices = Vec::new();
                 mesh.indices = crate::mesh::IndexBuffer::U32(Vec::new());
                 mesh.skin = None;
             }
-        }
     }
 
     /// store a [`MaterialData`] and return a handle to it.

@@ -36,7 +36,7 @@ pub fn compute_pvs(
         return PvsResult { data: vec![], stride: 0 };
     }
 
-    let stride = (leaf_count + 63) / 64;
+    let stride = leaf_count.div_ceil(64);
     let total_words = leaf_count * stride;
 
     // compute pvs in parallel: each row (camera leaf) as an independent unit
@@ -130,9 +130,8 @@ fn random_point_in_aabb(rng: &mut Lcg, aabb: ([f32; 3], [f32; 3])) -> Vec3 {
 
 fn ray_hits_any(origin: Vec3, dir: Vec3, max_dist: f32, triangles: &[[Vec3; 3]]) -> bool {
     for tri in triangles {
-        if let Some(t) = ray_triangle(origin, dir, tri[0], tri[1], tri[2]) {
-            if t < max_dist - 1e-4 { return true; }
-        }
+        if let Some(t) = ray_triangle(origin, dir, tri[0], tri[1], tri[2])
+            && t < max_dist - 1e-4 { return true; }
     }
     false
 }

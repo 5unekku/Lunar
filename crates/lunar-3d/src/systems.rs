@@ -11,6 +11,7 @@ use crate::visibility::{ComputedVisibility, Visibility};
 /// allocated once as a resource, cleared and refilled every frame.
 /// uses parallel Vecs keyed by snapshot index; entity→index lookup is a binary search.
 #[derive(Resource, Default)]
+#[allow(clippy::type_complexity)]
 pub struct TransformScratch3d {
     // (entity, local_transform_if_any, visibility_if_any, parent_entity)
     snapshot: Vec<(Entity, Option<LocalTransform3d>, Option<Visibility>, Option<Entity>)>,

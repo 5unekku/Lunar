@@ -378,6 +378,7 @@ pub fn ui_interaction_system(
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 /// draws four border rects around a panel area.
+#[allow(clippy::too_many_arguments)]
 fn draw_border(
     queue: &mut RenderQueue,
     position: Vec2,

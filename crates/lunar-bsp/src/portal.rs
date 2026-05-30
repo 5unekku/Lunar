@@ -95,6 +95,7 @@ impl Default for PortalCulling {
 ///
 /// runs each render frame. camera must have `WorldTransform3d` and be in an area
 /// (either from the `CameraArea` resource or from the nearest portal).
+#[allow(clippy::too_many_arguments)]
 pub fn cull_portals(
     camera_q: Query<(&WorldTransform3d,), With<lunar_3d::Camera3d>>,
     active_cam: Res<ActiveCamera3d>,

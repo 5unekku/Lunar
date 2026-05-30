@@ -361,12 +361,11 @@ impl App {
 
         while game_loop.is_running() {
             // check if game code changed the tick rate via TickRateConfig
-            if let Some(cfg) = self.engine.world().get_resource::<TickRateConfig>() {
-                if cfg.rate != game_loop.tick_rate() {
+            if let Some(cfg) = self.engine.world().get_resource::<TickRateConfig>()
+                && cfg.rate != game_loop.tick_rate() {
                     game_loop.set_tick_rate(cfg.rate);
                     fixed_delta = cfg.rate.delta_seconds();
                 }
-            }
 
             let (ticks, frame_delta) = game_loop.tick();
             let alpha = game_loop.interpolation_alpha();

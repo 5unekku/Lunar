@@ -761,7 +761,7 @@ impl TextureLoaderTrait for BctexLoader {
             7 => (TextureCompression::Bc7,  16u32),
             _ => return Err(format!("bctex: unknown format byte {format_byte}")),
         };
-        let base_size = ((width + 3) / 4) * ((height + 3) / 4) * block_bytes;
+        let base_size = width.div_ceil(4) * height.div_ceil(4) * block_bytes;
         let mut offset = 16usize;
         let pixels = bytes[offset..offset + base_size as usize].to_vec();
         offset += base_size as usize;
@@ -771,7 +771,7 @@ impl TextureLoaderTrait for BctexLoader {
         for _ in 1..mip_count {
             mip_w = (mip_w / 2).max(1);
             mip_h = (mip_h / 2).max(1);
-            let mip_size = (((mip_w + 3) / 4) * ((mip_h + 3) / 4) * block_bytes) as usize;
+            let mip_size = (mip_w.div_ceil(4) * mip_h.div_ceil(4) * block_bytes) as usize;
             if offset + mip_size > bytes.len() { break; }
             mips.push(bytes[offset..offset + mip_size].to_vec());
             offset += mip_size;
