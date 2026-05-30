@@ -68,7 +68,7 @@ Game code depends only on `lunar`. The rest are internal or opt-in.
 | crate | purpose |
 |-------|---------|
 | `lunar-assets` | handle-based asset server, async loading, hot-reload, mip streaming |
-| `lunar-image` | custom `.mi` image format (planar + zstd) |
+| `lunar-image` | custom `.li` image format (LIF: planar + zstd) |
 | `lunar-atlas` | texture atlas packer |
 | `lunar-gamedata` (+ `-build`) | baked binary game-data tables (zero runtime parsing) |
 | `lunar-bsp` (+ `-build`) | BVH / BSP visibility, portal culling |

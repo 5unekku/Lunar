@@ -1,4 +1,4 @@
-# Lunar Image Format (`.mi` / MRIF - Lunar Image Format)
+# Lunar Image Format (LIF)
 
 ## Purpose
 
@@ -39,7 +39,7 @@ All multi-byte fields are **little-endian**.
 ```
 Offset  Size  Field           Type    Description
 ------  ----  --------------  ----------------------------------
-0       4     Magic           [u8;4]  b'MRIF' = 0x4D, 0x52, 0x49, 0x46
+0       4     Magic           [u8;4]  b'LIF' = 0x4C, 0x49, 0x46, 0x00
 4       2     Version         u16     Format version (currently 1)
 6       2     Flags           u16     Bit flags (see below)
 8       4     Width           u32     Image width in pixels
@@ -229,7 +229,7 @@ pub enum DecodeError {
     #[error("file too short for header")]
     TruncatedHeader,
 
-    #[error("invalid magic bytes: expected 'MRIF', got {0:?}")]
+    #[error("invalid magic bytes: expected 'LIF', got {0:?}")]
     InvalidMagic([u8; 4]),
 
     #[error("unsupported format version: {0}")]
@@ -275,8 +275,8 @@ crates/lunar-image/
 ├── src/
 │   ├── lib.rs          # Public API, re-exports
 │   ├── format.rs       # Constants, header parsing, chunk types
-│   ├── encode.rs       # Encoder: RGBA -> .mi bytes
-│   ├── decode.rs       # Decoder: .mi bytes -> RGBA
+│   ├── encode.rs       # Encoder: RGBA -> .li bytes
+│   ├── decode.rs       # Decoder: .li bytes -> RGBA
 │   ├── simd.rs         # SIMD detection + post-processing
 │   └── error.rs        # Error types
 └── tests/
@@ -286,7 +286,7 @@ crates/lunar-image/
 ## Public API
 
 ```rust
-use engine_image::{encode, decode, Image, EncodeOptions, DecodeError, EncodeError};
+use lunar_image::{encode, decode, Image, EncodeOptions, DecodeError, EncodeError};
 
 /// A decoded image in RGBA format.
 pub struct Image {
@@ -318,7 +318,7 @@ impl Image {
     pub fn set_pixel(&mut self, x: u32, y: u32, rgba: [u8; 4]);
 }
 
-/// Encode RGBA pixels to .mi format bytes.
+/// Encode RGBA pixels to .li format bytes.
 ///
 /// # Arguments
 /// * `width` - Image width in pixels
@@ -326,7 +326,7 @@ impl Image {
 /// * `rgba` - Pixel data, 4 bytes per pixel (R, G, B, A), row-major order
 ///
 /// # Returns
-/// Encoded .mi file bytes
+/// Encoded .li file bytes
 pub fn encode(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, EncodeError>;
 
 /// Encode with options.
@@ -337,10 +337,10 @@ pub fn encode_with_opts(
     opts: EncodeOptions,
 ) -> Result<Vec<u8>, EncodeError>;
 
-/// Decode .mi format bytes to an RGBA image.
+/// Decode .li format bytes to an RGBA image.
 ///
 /// # Arguments
-/// * `data` - .mi file bytes
+/// * `data` - .li file bytes
 ///
 /// # Returns
 /// Decoded image with raw RGBA pixels
@@ -404,7 +404,7 @@ image = "0.25"  # For test roundtrip with real files
 ## Integration with lunar-assets
 
 ```rust
-// In lunar-assets, register the .mi loader
+// In lunar-assets, register the .li loader
 let mut loaders = AssetLoaders::new();
 loaders.register("mi", EixLoader);
 
@@ -415,7 +415,7 @@ impl AssetLoader for MiLoader {
     type Output = TextureData;
 
     fn load(&self, bytes: &[u8]) -> Result<TextureData, Box<dyn Error>> {
-        let image = engine_image::decode(bytes)?;
+        let image = lunar_image::decode(bytes)?;
         Ok(TextureData {
             width: image.width,
             height: image.height,

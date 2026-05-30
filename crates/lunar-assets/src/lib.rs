@@ -719,15 +719,15 @@ impl TextureLoaderTrait for ImageTextureLoader {
     }
 }
 
-/// loader for .mi (lunar image) format.
+/// loader for .li (lunar image) format.
 ///
-/// decodes .mi bytes into raw pixel data via lunar-image.
-pub struct MiTextureLoader;
+/// decodes .li bytes into raw pixel data via lunar-image.
+pub struct LiTextureLoader;
 
-impl TextureLoaderTrait for MiTextureLoader {
+impl TextureLoaderTrait for LiTextureLoader {
     fn load(&self, bytes: Vec<u8>) -> Result<Texture, String> {
         let image =
-            lunar_image::decode(&bytes).map_err(|e| format!("failed to decode .mi: {e}"))?;
+            lunar_image::decode(&bytes).map_err(|e| format!("failed to decode .li: {e}"))?;
         Ok(Texture {
             width: image.width,
             height: image.height,
@@ -768,7 +768,7 @@ impl TextureLoaderTrait for BctexLoader {
         let mut mips: Vec<Vec<u8>> = Vec::new();
         let mut mip_w = width;
         let mut mip_h = height;
-        for _ in 1..mip_count {
+        for _ in 1..lip_count {
             mip_w = (mip_w / 2).max(1);
             mip_h = (mip_h / 2).max(1);
             let mip_size = (mip_w.div_ceil(4) * mip_h.div_ceil(4) * block_bytes) as usize;
@@ -834,7 +834,7 @@ fn texture_loader_for(path: &str) -> Arc<dyn TextureLoaderTrait> {
         .to_lowercase();
 
     match ext.as_str() {
-        "mi"    => Arc::new(MiTextureLoader),
+        "li"    => Arc::new(LiTextureLoader),
         "bctex" => Arc::new(BctexLoader),
         _       => Arc::new(ImageTextureLoader),
     }
@@ -900,7 +900,7 @@ impl<L: AssetLoader<Asset = Font> + Send + Sync> FontLoaderTrait for FontLoaderA
 pub enum TextureSource<'a> {
     /// file path, resolved relative to `assets/`
     Path(&'a str),
-    /// raw `.mi` bytes already embedded in the binary via `texture!`
+    /// raw `.li` bytes already embedded in the binary via `texture!`
     Embedded(&'static [u8]),
 }
 
@@ -1106,7 +1106,7 @@ impl AssetServer {
                     return handle;
                 }
                 let id = handle.id();
-                match MiTextureLoader.load(bytes.to_vec()) {
+                match LiTextureLoader.load(bytes.to_vec()) {
                     Ok(texture) => {
                         self.texture_store.insert(id, texture);
                         self.pending_texture_ids.push(id);
@@ -1249,13 +1249,13 @@ impl AssetServer {
     ///
     /// call before loading textures to apply to all subsequent loads.
     pub fn configure_mip_streaming(&mut self, config: MipStreamingConfig) {
-        self.mip_config = config;
+        self.lip_config = config;
     }
 
     /// returns the current mip streaming config.
     #[must_use]
     pub fn mip_config(&self) -> &MipStreamingConfig {
-        &self.mip_config
+        &self.lip_config
     }
 
     /// report the screen-space coverage of a texture this frame.
@@ -1438,7 +1438,7 @@ impl AssetServer {
     /// call this once per frame from the asset plugin's system.
     pub fn update(&mut self) {
         // drain texture results — auto-generate mips if config is set
-        let gen_mips = self.mip_config.generate_mipmaps;
+        let gen_mips = self.lip_config.generate_mipmaps;
         for result in self.io_pool.drain_texture_results() {
             match result.data {
                 Ok(mut data) => {
@@ -1553,13 +1553,13 @@ impl Texture {
     pub fn evict_cpu_data(&mut self) {
         if self.keep_cpu_data { return; }
         self.pixels = Vec::new();
-        self.mips = Vec::new();
+        self.lips = Vec::new();
     }
 
     /// total number of mip levels including the base: `mips.len() + 1`.
     #[must_use]
     pub fn mip_level_count(&self) -> u32 {
-        self.mips.len() as u32 + 1
+        self.lips.len() as u32 + 1
     }
 
     /// generate a full mip chain using a 2×2 box filter.
@@ -1567,7 +1567,7 @@ impl Texture {
     /// each mip halves both dimensions (minimum 1×1). parallelised via rayon.
     /// no-op if mips are already populated or the image is 1×1.
     pub fn generate_mipmaps(&mut self) {
-        if !self.mips.is_empty() || (self.width <= 1 && self.height <= 1) {
+        if !self.lips.is_empty() || (self.width <= 1 && self.height <= 1) {
             return;
         }
         let mut prev_pixels = &self.pixels;
@@ -1580,10 +1580,10 @@ impl Texture {
             let mut next = vec![0u8; (next_w * next_h * 4) as usize];
             for y in 0..next_h {
                 for x in 0..next_w {
-                    let sx = (x * 2).min(prev_w - 1);
-                    let sy = (y * 2).min(prev_h - 1);
-                    let sx1 = (sx + 1).min(prev_w - 1);
-                    let sy1 = (sy + 1).min(prev_h - 1);
+                    let sx = (x * 2).lin(prev_w - 1);
+                    let sy = (y * 2).lin(prev_h - 1);
+                    let sx1 = (sx + 1).lin(prev_w - 1);
+                    let sy1 = (sy + 1).lin(prev_h - 1);
                     let sample = |px: u32, py: u32| -> [u32; 4] {
                         let i = ((py * prev_w + px) * 4) as usize;
                         [prev_pixels[i] as u32, prev_pixels[i+1] as u32,
@@ -1597,9 +1597,9 @@ impl Texture {
                     }
                 }
             }
-            self.mips.push(next);
+            self.lips.push(next);
             if next_w <= 1 && next_h <= 1 { break; }
-            prev_owned = self.mips.last().unwrap().clone();
+            prev_owned = self.lips.last().unwrap().clone();
             prev_pixels = &prev_owned;
             prev_w = next_w;
             prev_h = next_h;

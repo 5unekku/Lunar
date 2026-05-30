@@ -1,4 +1,4 @@
-//! Lunar Image Format (MRIF / `.mi`) — a fast, lossless, zstd-compressed
+//! Lunar Image Format (LIF / `.li`) — a fast, lossless, zstd-compressed
 //! internal image format for the Lunar engine.
 //!
 //! # Quick start

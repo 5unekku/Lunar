@@ -6,7 +6,7 @@ use crate::simd;
 /// a decoded image in RGBA format.
 ///
 /// contains the image dimensions and raw pixel data (RGBA8 order).
-/// use [`decode`] to load a .mi file into this type.
+/// use [`decode`] to load a .li file into this type.
 #[derive(Debug, Clone)]
 pub struct Image {
     /// image width in pixels.

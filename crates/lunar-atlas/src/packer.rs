@@ -19,7 +19,7 @@ pub struct SourceImage {
 /// result of packing an atlas.
 #[derive(Debug, Clone)]
 pub struct PackedAtlas {
-    /// the packed image (ready to encode as .mi)
+    /// the packed image (ready to encode as .li)
     pub image: Image,
     /// the manifest describing region layout
     pub manifest: AtlasManifest,

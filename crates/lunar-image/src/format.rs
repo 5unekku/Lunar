@@ -1,10 +1,10 @@
-//! Lunar Image Format (MRIF) binary layout constants.
+//! Lunar Image Format (LIF) binary layout constants.
 //!
-//! the .mi file format consists of a 16-byte header followed by one or more
+//! the .li file format consists of a 16-byte header followed by one or more
 //! compressed chunks. each chunk has a 16-byte header and compressed payload.
 
-/// magic bytes identifying a .mi file: `b'MRIF'`.
-pub const MAGIC: [u8; 4] = *b"MRIF";
+/// magic bytes identifying a .li file: `b"LIF\0"`.
+pub const MAGIC: [u8; 4] = *b"LIF\0";
 
 /// current format version. only version 1 is supported.
 pub const VERSION: u16 = 1;
@@ -65,7 +65,7 @@ pub const FLAG_ALL_KNOWN: u16 = FLAG_HAS_ALPHA
     | FLAG_PLANAR
     | FLAG_FILTERED;
 
-/// parsed header from a .mi file.
+/// parsed header from a .li file.
 ///
 /// contains the format version, feature flags, and image dimensions.
 #[derive(Debug)]

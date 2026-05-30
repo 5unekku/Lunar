@@ -24,11 +24,11 @@ use syn::{DeriveInput, parse_macro_input};
 
 // ── texture! ──────────────────────────────────────────────────────────────────
 
-/// embed a texture at compile time, converting the source image to `.mi` on demand.
+/// embed a texture at compile time, converting the source image to `.li` on demand.
 ///
 /// resolves webp/png/jpg/bmp files from the `assets/` directory, validates that
 /// the file's actual format matches its extension (or detects format for bare names),
-/// converts to `.mi` (zstd-compressed RGBA) if the cache is stale, and expands to
+/// converts to `.li` (zstd-compressed RGBA) if the cache is stale, and expands to
 /// `include_bytes!` so the compiler folds the data directly into the binary.
 ///
 /// # path resolution
@@ -205,7 +205,7 @@ fn convert_to_mi(
         .map_err(|e| syn::Error::new(span, format!("failed to decode image: {e}")))?;
     let rgba = img.to_rgba8();
     let mi = lunar_image::encode(rgba.width(), rgba.height(), &rgba)
-        .map_err(|e| syn::Error::new(span, format!("failed to encode .mi: {e}")))?;
+        .map_err(|e| syn::Error::new(span, format!("failed to encode .li: {e}")))?;
     std::fs::write(dest, mi)
         .map_err(|e| syn::Error::new(span, format!("failed to write cache: {e}")))?;
     Ok(())

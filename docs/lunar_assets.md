@@ -114,9 +114,9 @@ through a channel for the main thread to collect each frame.
 
 ### MiLoader
 
-loader for lunar image format (`.mi`) files.
+loader for lunar image format (`.li`) files.
 
-decodes .mi bytes into [`RawTextureData`] which the render
+decodes .li bytes into [`RawTextureData`] which the render
 system can upload to a GPU texture.
 
 # example
@@ -129,9 +129,9 @@ let data = loader.load(&file_bytes)?;
 
 ### MiTextureLoader
 
-loader for .mi (lunar image) format.
+loader for .li (lunar image) format.
 
-decodes .mi bytes into raw pixel data via lunar-image.
+decodes .li bytes into raw pixel data via lunar-image.
 
 ### OggSoundLoader
 
@@ -141,7 +141,7 @@ uses rodio to decode ogg files into sound buffers.
 
 ### RawTextureData
 
-raw texture data from .mi files (kept for backward compat).
+raw texture data from .li files (kept for backward compat).
 
 ### Sound
 

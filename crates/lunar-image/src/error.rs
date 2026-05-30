@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-/// errors that can occur when decoding a .mi image.
+/// errors that can occur when decoding a .li image.
 ///
 /// covers header validation, chunk parsing, and decompression failures.
 #[derive(Debug, Error)]
@@ -8,7 +8,7 @@ pub enum DecodeError {
     #[error("file too short for header")]
     TruncatedHeader,
 
-    #[error("invalid magic bytes: expected 'MRIF', got {0:?}")]
+    #[error("invalid magic bytes: expected LIF, got {0:?}")]
     InvalidMagic([u8; 4]),
 
     #[error("unsupported format version: {0}")]
@@ -33,7 +33,7 @@ pub enum DecodeError {
     TruncatedChunk,
 }
 
-/// errors that can occur when encoding a .mi image.
+/// errors that can occur when encoding a .li image.
 ///
 /// covers dimension validation, pixel buffer validation, and compression failures.
 #[derive(Debug, Error)]

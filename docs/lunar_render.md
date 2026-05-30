@@ -23,7 +23,7 @@ use engine_render::atlas::TextureAtlas;
 use engine_atlas::{AtlasManifest, AtlasRegion};
 
 // load atlas texture via asset server
-let atlas_texture = asset_server.load_texture("sprites_atlas.mi");
+let atlas_texture = asset_server.load_texture("sprites_atlas.li");
 let manifest = AtlasManifest::from_bytes(&manifest_bytes)?;
 
 let texture_atlas = TextureAtlas::new(atlas_texture, manifest);
@@ -215,7 +215,7 @@ use engine_render::atlas::TextureAtlas;
 use engine_atlas::{AtlasManifest, AtlasRegion};
 
 // load atlas texture via asset server
-let atlas_texture = asset_server.load_texture("sprites_atlas.mi");
+let atlas_texture = asset_server.load_texture("sprites_atlas.li");
 let manifest = AtlasManifest::from_bytes(&manifest_bytes)?;
 
 let texture_atlas = TextureAtlas::new(atlas_texture, manifest);

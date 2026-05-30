@@ -3,7 +3,7 @@ use crate::filter;
 use crate::format::{self, ChunkType};
 use crate::simd;
 
-/// options for encoding an image to .mi format.
+/// options for encoding an image to .li format.
 #[derive(Debug, Clone)]
 pub struct EncodeOptions {
     /// zstd compression level (1-22).
