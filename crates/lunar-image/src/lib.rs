@@ -16,6 +16,7 @@
 mod decode;
 mod encode;
 mod error;
+mod filter;
 mod format;
 mod simd;
 

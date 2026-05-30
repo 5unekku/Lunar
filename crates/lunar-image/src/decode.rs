@@ -1,4 +1,5 @@
 use crate::error::DecodeError;
+use crate::filter;
 use crate::format::{self, ChunkType, Header};
 use crate::simd;
 
@@ -134,18 +135,41 @@ pub fn decode(data: &[u8]) -> Result<Image, DecodeError> {
                 }
                 let decompressed = zstd::decode_all(std::io::Cursor::new(compressed))
                     .map_err(DecodeError::ZstdError)?;
-                if decompressed.len() != expected_bytes {
-                    return Err(DecodeError::SizeMismatch {
-                        expected: expected_bytes,
-                        actual: decompressed.len(),
-                    });
-                }
+
+                // undo the per-row delta filter first, if present, recovering the raw
+                // planar buffer. filtered data carries one extra byte per plane row.
+                let planar = if header.flags & format::FLAG_FILTERED != 0 {
+                    let width = header.width as usize;
+                    let height = header.height as usize;
+                    let expected_filtered = expected_bytes + filter::overhead_bytes(height, 4);
+                    if decompressed.len() != expected_filtered {
+                        return Err(DecodeError::SizeMismatch {
+                            expected: expected_filtered,
+                            actual: decompressed.len(),
+                        });
+                    }
+                    filter::unfilter_planes(&decompressed, width, height, 4).ok_or(
+                        DecodeError::SizeMismatch {
+                            expected: expected_bytes,
+                            actual: decompressed.len(),
+                        },
+                    )?
+                } else {
+                    if decompressed.len() != expected_bytes {
+                        return Err(DecodeError::SizeMismatch {
+                            expected: expected_bytes,
+                            actual: decompressed.len(),
+                        });
+                    }
+                    decompressed
+                };
+
                 // reinterleave if planar flag is set (all files encoded since v1.1)
                 let rgba = if header.flags & format::FLAG_PLANAR != 0 {
                     let n_pixels = header.width as usize * header.height as usize;
-                    simd::reinterleave_rgba(&decompressed, n_pixels)
+                    simd::reinterleave_rgba(&planar, n_pixels)
                 } else {
-                    decompressed
+                    planar
                 };
                 pixels = Some(rgba);
             }

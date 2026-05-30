@@ -1,4 +1,5 @@
 use crate::error::EncodeError;
+use crate::filter;
 use crate::format::{self, ChunkType};
 use crate::simd;
 
@@ -59,7 +60,26 @@ pub fn encode_with_opts(
         });
     }
 
-    let mut out = Vec::with_capacity(expected_bytes / 2);
+    // deinterleave then compress — channels separate means zstd sees coherent data
+    let planar = simd::deinterleave_rgba(rgba);
+    let unfiltered = zstd::encode_all(planar.as_slice(), opts.compression_level)
+        .map_err(EncodeError::ZstdError)?;
+
+    // also try a per-row delta filter on the planes and keep whichever compresses
+    // smaller, so filtering can never make a file larger. encode is build-time, so
+    // the extra zstd pass costs nothing at runtime.
+    let (pixel_data, pixel_uncompressed_size, filtered) = if width > 0 && height > 0 {
+        let filtered_planar = filter::filter_planes(&planar, width as usize, height as usize, 4);
+        let filtered_compressed = zstd::encode_all(filtered_planar.as_slice(), opts.compression_level)
+            .map_err(EncodeError::ZstdError)?;
+        if filtered_compressed.len() < unfiltered.len() {
+            (filtered_compressed, filtered_planar.len(), true)
+        } else {
+            (unfiltered, expected_bytes, false)
+        }
+    } else {
+        (unfiltered, expected_bytes, false)
+    };
 
     let mut flags = format::FLAG_PLANAR;
     if opts.has_alpha {
@@ -71,22 +91,21 @@ pub fn encode_with_opts(
     if opts.metadata.is_some() {
         flags |= format::FLAG_HAS_METADATA;
     }
+    if filtered {
+        flags |= format::FLAG_FILTERED;
+    }
 
+    let mut out = Vec::with_capacity(expected_bytes / 2);
     format::write_header(&mut out, width, height, flags);
-
-    // deinterleave then compress — channels separate means zstd sees coherent data
-    let planar = simd::deinterleave_rgba(rgba);
-    let compressed = zstd::encode_all(planar.as_slice(), opts.compression_level)
-        .map_err(EncodeError::ZstdError)?;
 
     format::ChunkHeader::write(
         &mut out,
         ChunkType::PixelData,
-        u32::try_from(expected_bytes).unwrap_or(u32::MAX),
-        u32::try_from(compressed.len()).unwrap_or(u32::MAX),
+        u32::try_from(pixel_uncompressed_size).unwrap_or(u32::MAX),
+        u32::try_from(pixel_data.len()).unwrap_or(u32::MAX),
         0,
     );
-    out.extend_from_slice(&compressed);
+    out.extend_from_slice(&pixel_data);
 
     if let Some(meta) = &opts.metadata {
         let meta_bytes = meta.as_bytes();

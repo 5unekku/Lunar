@@ -53,9 +53,17 @@ pub const FLAG_PREMULTIPLIED: u16 = 1 << 3;
 /// flag bit: pixel data is stored as planar channels (RRRR...GGGG...BBBB...AAAA...)
 /// rather than interleaved RGBA. planar layout compresses significantly better.
 pub const FLAG_PLANAR: u16 = 1 << 4;
+/// flag bit: each plane row is delta-filtered (png-style predictor) before zstd.
+/// implies [`FLAG_PLANAR`]. set only when filtering compresses smaller than not,
+/// so it is always safe for the decoder to honour. see `filter.rs`.
+pub const FLAG_FILTERED: u16 = 1 << 5;
 /// mask of all known flag bits.
-pub const FLAG_ALL_KNOWN: u16 =
-    FLAG_HAS_ALPHA | FLAG_HAS_METADATA | FLAG_HAS_ICC | FLAG_PREMULTIPLIED | FLAG_PLANAR;
+pub const FLAG_ALL_KNOWN: u16 = FLAG_HAS_ALPHA
+    | FLAG_HAS_METADATA
+    | FLAG_HAS_ICC
+    | FLAG_PREMULTIPLIED
+    | FLAG_PLANAR
+    | FLAG_FILTERED;
 
 /// parsed header from a .mi file.
 ///

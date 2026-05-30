@@ -82,6 +82,51 @@ fn roundtrip_alpha() {
 }
 
 #[test]
+fn roundtrip_gradient_uses_filter() {
+    // a smooth gradient is the delta filter's best case: the encoder should pick the
+    // filtered path, and decode must reverse it to the exact original pixels.
+    let (width, height) = (128u32, 128u32);
+    let mut pixels = vec![0u8; (width * height * 4) as usize];
+    for y in 0..height {
+        for x in 0..width {
+            let i = ((y * width + x) * 4) as usize;
+            pixels[i] = x as u8;
+            pixels[i + 1] = y as u8;
+            pixels[i + 2] = ((x + y) / 2) as u8;
+            pixels[i + 3] = 255;
+        }
+    }
+
+    let bytes = encode(width, height, &pixels).unwrap();
+    let image = decode(&bytes).unwrap();
+    assert_eq!(image.pixels, pixels);
+    // the gradient compresses far below raw size once filtered
+    assert!(bytes.len() < pixels.len() / 50, "gradient did not compress well: {} bytes", bytes.len());
+}
+
+#[test]
+fn roundtrip_photo_like() {
+    // gradient plus deterministic noise — exercises the filter on high-entropy content
+    let (width, height) = (96u32, 72u32);
+    let mut pixels = vec![0u8; (width * height * 4) as usize];
+    let mut state = 0x9e37_79b9u32;
+    for y in 0..height {
+        for x in 0..width {
+            let i = ((y * width + x) * 4) as usize;
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let noise = ((state >> 27) as u8) & 0x0f;
+            pixels[i] = (x as u8).wrapping_add(noise);
+            pixels[i + 1] = (y as u8).wrapping_add(noise);
+            pixels[i + 2] = ((x + y) / 2) as u8;
+            pixels[i + 3] = 255;
+        }
+    }
+
+    let image = decode(&encode(width, height, &pixels).unwrap()).unwrap();
+    assert_eq!(image.pixels, pixels);
+}
+
+#[test]
 fn error_bad_magic() {
     let bad = b"XXXX\x01\x00\x00\x00\x10\x00\x10\x00";
     let result = decode(bad);
