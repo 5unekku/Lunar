@@ -247,84 +247,16 @@ offline. alternatively, game code can populate `AmbientProbeGrid` manually
 
 ---
 
-## item E — TAA (temporal anti-aliasing) + motion vectors
+## item E — custom anti-aliasing (TBD)
 
-### what and why
+replacing FXAA with a higher-quality AA solution. TAA was considered but
+rejected — the temporal blend blurs the full frame even at low weights, and
+thin geometry (fences, wires, powerlines) becomes wispy or flickers as the
+Halton jitter shifts sub-pixel coverage between frames. approach TBD.
 
-FXAA blurs subpixel detail and misses shimmering on thin geometry and
-specular highlights. TAA uses the history of previous frames — each frame
-is rendered with a sub-pixel jitter in the projection matrix, the current
-frame is reprojected into the previous frame's space using a per-pixel motion
-vector, and the two are blended. over time, the jittered samples accumulate
-to a higher-resolution result with no blurring of sharp edges.
-
-benefits:
-- better AA quality than FXAA (no blurring, no missed edges)
-- effectively free supersampling of specular highlights and thin geometry
-- enables future temporal upscaling (render at half-res, TAA reconstructs full-res)
-
-this is the most complex item in the sprint — it requires new infrastructure
-(history buffer, motion vector pass) and careful handling of ghost rejection.
-
-### prerequisites
-
-**motion vectors:** per-pixel screen-space vectors encoding where each pixel
-was in the previous frame. for static geometry: compute from current and
-previous view-projection matrices (no extra data needed). for dynamic objects:
-need the previous model matrix — `PrevWorldTransform3d` from sprint 7 provides
-this. the motion vector is `prev_clip(world_pos) - cur_clip(world_pos)`.
-
-### implementation
-
-**history buffer:** a color texture (same format as HDR buffer) storing the
-previous frame's resolved color. double-buffered: ping-pong between two
-textures each frame.
-
-**jitter sequence:** Halton(2,3) sequence, 8-frame period. applied to the
-projection matrix x and y translation: `proj[2][0] += jitter.x / screen_w`.
-the jitter shifts by a sub-pixel amount that varies each frame.
-
-**`motion_vector.wgsl` (new pass):**
-runs after the z-prepass, before the main color pass (or as part of it).
-for each fragment:
-- if the entity has `PrevWorldTransform3d`: compute `prev_clip_pos` using
-  prev_model_matrix and `globals.prev_view_proj` (a new globals field)
-- otherwise: compute from static reprojection (prev_view_proj * inv_view_proj * clip_pos)
-- output `motion_vec = cur_ndc.xy - prev_ndc.xy` to a `Rg16Float` texture
-
-**`taa.wgsl` (new post pass, replaces or precedes FXAA):**
-- input: current HDR frame (jittered), history buffer, motion vector texture, depth
-- for each pixel:
-  - sample history at `uv - motion_vec` (reproject to where this pixel was)
-  - neighborhood AABB clamp: clamp history color to the AABB of 3×3 neighbors
-    in the current frame — reject history that's too far from current (disocclusion)
-  - blend: `output = lerp(history, current, 0.1)` — 90% history, 10% new sample
-  - velocity-based blend weight: near-zero velocity = more history (up to 0.95);
-    fast motion = less history (down to 0.5) to avoid ghosting
-- write to current history buffer and output buffer
-
-**globals update:** add `prev_view_proj: mat4x4<f32>` to the globals UBO.
-updated from the previous frame's view_proj before uploading.
-
-**DevRenderProfile:** `taa: bool` (default true for mid/high tier). when true,
-FXAA is disabled (TAA handles AA). when false, FXAA remains.
-
-**jitter interaction with other passes:** shadow passes must NOT use the
-jittered projection. the jitter is only applied to the main color pass and
-motion vector pass. everything else uses the unjittered proj.
-
-### files
-- `crates/lunar-render-3d/src/motion_vector.wgsl` (new)
-- `crates/lunar-render-3d/src/taa.wgsl` (new)
-- `crates/lunar-render-3d/src/lib.rs` (history buffers, jitter, prev_view_proj,
-  motion vector pass, TAA pass, DevRenderProfile flag)
-- `crates/lunar-render-3d/src/shader.wgsl` (jitter applied to globals.view_proj
-  when TAA enabled; motion vector output in VertOut)
-
-### win
-- AA quality: TAA >> FXAA for specular, thin lines, foliage
-- no performance cost relative to FXAA (similar pass budget)
-- lays groundwork for temporal upscaling (render at 75% res, TAA rebuilds full)
+motion vectors (`PrevWorldTransform3d` from sprint 7 already provides prev
+model matrices) are a likely prerequisite regardless of final approach and
+may be implemented as a standalone item before E is finalized.
 
 ---
 
@@ -459,9 +391,8 @@ no separate LOD meshes needed.
 2. **B (contact shadows)** — 2-3 hours, standalone shader change
 3. **C (soft shadows)** — shader work only, high visual payoff
 4. **D (ambient probe grid)** — medium, no shader changes needed
-5. **E (TAA + motion vectors)** — most complex; do after D since TAA interacts
-   with all lighting passes and needs them stable first
-6. **F (planar reflections)** — full render pass, do after TAA is stable
+5. **E (custom AA)** — TBD; motion vector pass can be done independently first
+6. **F (planar reflections)** — full render pass; doesn't depend on E
 7. **G (detail sprites)** — standalone new system, do last or in parallel with F
 
 ---
@@ -471,8 +402,7 @@ no separate LOD meshes needed.
 **visibility buffer / nanite-style** — requires a full architecture change
 (geometry pass writing triangle IDs, compute shading pass). sprint 9+ at earliest.
 
-**taa-based upscaling** — natural follow-up once TAA is in. one extra resolve
-step. sprint 9.
+**temporal upscaling** — natural follow-up once the AA approach is settled. sprint 9+.
 
 **skeletal animation GPU skinning** — depends on state of animation system.
 if bone matrix computation is CPU-bound, a compute skinning pass would help.
