@@ -739,6 +739,47 @@ impl TextureLoaderTrait for MiTextureLoader {
     }
 }
 
+/// loader for `.bctex` files — BC-compressed textures from the compress-textures tool.
+///
+/// binary layout: magic `BCTX` (4 bytes), version u8, format u8, mip_count u16,
+/// width u32, height u32, then raw BC block data for base + each mip level.
+pub struct BctexLoader;
+
+impl TextureLoaderTrait for BctexLoader {
+    fn load(&self, bytes: Vec<u8>) -> Result<Texture, String> {
+        if bytes.len() < 16 { return Err("bctex: too short".into()); }
+        if &bytes[0..4] != b"BCTX" { return Err("bctex: bad magic".into()); }
+        let format_byte = bytes[5];
+        let mip_count = u16::from_le_bytes([bytes[6], bytes[7]]) as u32;
+        let width  = u32::from_le_bytes([bytes[8],  bytes[9],  bytes[10], bytes[11]]);
+        let height = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
+        let (compression, block_bytes) = match format_byte {
+            1 => (TextureCompression::Bc1,  8u32),
+            3 => (TextureCompression::Bc3,  16u32),
+            5 => (TextureCompression::Bc5,  16u32),
+            6 => (TextureCompression::Bc6h, 16u32),
+            7 => (TextureCompression::Bc7,  16u32),
+            _ => return Err(format!("bctex: unknown format byte {format_byte}")),
+        };
+        let base_size = ((width + 3) / 4) * ((height + 3) / 4) * block_bytes;
+        let mut offset = 16usize;
+        let pixels = bytes[offset..offset + base_size as usize].to_vec();
+        offset += base_size as usize;
+        let mut mips: Vec<Vec<u8>> = Vec::new();
+        let mut mip_w = width;
+        let mut mip_h = height;
+        for _ in 1..mip_count {
+            mip_w = (mip_w / 2).max(1);
+            mip_h = (mip_h / 2).max(1);
+            let mip_size = (((mip_w + 3) / 4) * ((mip_h + 3) / 4) * block_bytes) as usize;
+            if offset + mip_size > bytes.len() { break; }
+            mips.push(bytes[offset..offset + mip_size].to_vec());
+            offset += mip_size;
+        }
+        Ok(Texture { width, height, pixels, mips, compression, keep_cpu_data: false })
+    }
+}
+
 /// audio loader for FLAC, OGG Vorbis, and WAV.
 ///
 /// stores compressed bytes as-is; decoding happens in the audio plugin at playback
@@ -793,8 +834,9 @@ fn texture_loader_for(path: &str) -> Arc<dyn TextureLoaderTrait> {
         .to_lowercase();
 
     match ext.as_str() {
-        "mi" => Arc::new(MiTextureLoader),
-        _ => Arc::new(ImageTextureLoader),
+        "mi"    => Arc::new(MiTextureLoader),
+        "bctex" => Arc::new(BctexLoader),
+        _       => Arc::new(ImageTextureLoader),
     }
 }
 
@@ -1467,10 +1509,16 @@ pub enum TextureCompression {
     /// raw RGBA8 (or sRGB) data — the default.
     #[default]
     None,
-    /// BC3 / DXT5: 4 bytes/block-texel, RGBA, good for diffuse + alpha maps.
+    /// BC1 / DXT1: 0.5 bytes/block-texel, RGB no alpha, 8:1 compression for albedo.
+    Bc1,
+    /// BC3 / DXT5: 1 byte/block-texel, RGBA, good for diffuse + alpha maps.
     Bc3,
-    /// BC5 / RGTC2: 2 bytes/block-texel, two-channel (RG), for normal maps.
+    /// BC5 / RGTC2: 1 byte/block-texel, two-channel (RG), for normal maps.
     Bc5,
+    /// BC6H: 1 byte/block-texel, signed float RGB, for HDR lightmaps.
+    Bc6h,
+    /// BC7: 1 byte/block-texel, high-quality RGBA general purpose.
+    Bc7,
 }
 
 pub struct Texture {

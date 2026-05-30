@@ -5612,10 +5612,18 @@ impl RenderEngine3d {
                         } else {
                             (wgpu::TextureFormat::Rgba8Unorm, Box::new(|w| w * 4))
                         },
+                        // BC1: 8 bytes per 4×4 block (0.5 bytes/texel)
+                        lunar_assets::TextureCompression::Bc1 =>
+                            (wgpu::TextureFormat::Bc1RgbaUnormSrgb, Box::new(|w| ((w + 3) / 4) * 8)),
+                        // BC3/BC5/BC6H/BC7: 16 bytes per 4×4 block (1 byte/texel)
                         lunar_assets::TextureCompression::Bc3 =>
                             (wgpu::TextureFormat::Bc3RgbaUnorm, Box::new(|w| ((w + 3) / 4) * 16)),
                         lunar_assets::TextureCompression::Bc5 =>
                             (wgpu::TextureFormat::Bc5RgUnorm, Box::new(|w| ((w + 3) / 4) * 16)),
+                        lunar_assets::TextureCompression::Bc6h =>
+                            (wgpu::TextureFormat::Bc6hRgbFloat, Box::new(|w| ((w + 3) / 4) * 16)),
+                        lunar_assets::TextureCompression::Bc7 =>
+                            (wgpu::TextureFormat::Bc7RgbaUnorm, Box::new(|w| ((w + 3) / 4) * 16)),
                     };
                 let gpu_tex = device.create_texture(&wgpu::TextureDescriptor {
                     label: Some(label),
@@ -5967,23 +5975,39 @@ impl RenderEngine3d {
                 for &tid in &tex_ids {
                     if tid != u32::MAX && !self.surface_tex_cache.contains_key(&tid) {
                         if let Some(tex) = asset_server.get_texture_by_id(tid) {
-                            if let lunar_assets::TextureCompression::None = tex.compression {
-                                let gpu_tex = self.device.create_texture(&wgpu::TextureDescriptor {
-                                    label: Some("[surface] tex"),
-                                    size: wgpu::Extent3d { width: tex.width, height: tex.height, depth_or_array_layers: 1 },
-                                    mip_level_count: tex.mip_level_count(),
-                                    sample_count: 1, dimension: wgpu::TextureDimension::D2,
-                                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                                    view_formats: &[],
-                                });
-                                self.queue.write_texture(gpu_tex.as_image_copy(), &tex.pixels,
-                                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(tex.width * 4), rows_per_image: Some(tex.height) },
-                                    wgpu::Extent3d { width: tex.width, height: tex.height, depth_or_array_layers: 1 });
-                                let view = gpu_tex.create_view(&Default::default());
-                                self.surface_tex_cache.insert(tid, (gpu_tex, view));
-                                evict_ids.push(tid);
-                            }
+                            let (gpu_fmt, bpr) = match tex.compression {
+                                lunar_assets::TextureCompression::None =>
+                                    (wgpu::TextureFormat::Rgba8UnormSrgb, tex.width * 4),
+                                lunar_assets::TextureCompression::Bc1 =>
+                                    (wgpu::TextureFormat::Bc1RgbaUnormSrgb, ((tex.width + 3) / 4) * 8),
+                                lunar_assets::TextureCompression::Bc3 =>
+                                    (wgpu::TextureFormat::Bc3RgbaUnorm, ((tex.width + 3) / 4) * 16),
+                                lunar_assets::TextureCompression::Bc5 =>
+                                    (wgpu::TextureFormat::Bc5RgUnorm, ((tex.width + 3) / 4) * 16),
+                                lunar_assets::TextureCompression::Bc6h =>
+                                    (wgpu::TextureFormat::Bc6hRgbFloat, ((tex.width + 3) / 4) * 16),
+                                lunar_assets::TextureCompression::Bc7 =>
+                                    (wgpu::TextureFormat::Bc7RgbaUnorm, ((tex.width + 3) / 4) * 16),
+                            };
+                            let rows_per_image = match tex.compression {
+                                lunar_assets::TextureCompression::None => tex.height,
+                                _ => (tex.height + 3) / 4,
+                            };
+                            let gpu_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                                label: Some("[surface] tex"),
+                                size: wgpu::Extent3d { width: tex.width, height: tex.height, depth_or_array_layers: 1 },
+                                mip_level_count: tex.mip_level_count(),
+                                sample_count: 1, dimension: wgpu::TextureDimension::D2,
+                                format: gpu_fmt,
+                                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                                view_formats: &[],
+                            });
+                            self.queue.write_texture(gpu_tex.as_image_copy(), &tex.pixels,
+                                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(rows_per_image) },
+                                wgpu::Extent3d { width: tex.width, height: tex.height, depth_or_array_layers: 1 });
+                            let view = gpu_tex.create_view(&Default::default());
+                            self.surface_tex_cache.insert(tid, (gpu_tex, view));
+                            evict_ids.push(tid);
                         }
                     }
                 }

@@ -1,0 +1,16 @@
+[workspace]
+
+[package]
+name = "compress-textures"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "compress-textures"
+path = "src/main.rs"
+
+[dependencies]
+image     = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image_dds = { version = "0.7", features = ["encode"] }
+rayon     = "1"
+glob      = "0.3"
