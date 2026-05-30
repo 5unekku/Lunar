@@ -7805,7 +7805,7 @@ fn cs_lod_select(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let sky_r = sky_color.r * 0.7;
                     let sky_g = sky_color.g * 0.8;
                     let sky_b = sky_color.b * 0.9;
-                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("[reflection] pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view: refl_view,
@@ -8490,7 +8490,6 @@ fn cs_lod_select(@builtin(global_invocation_id) gid: vec3<u32>) {
 
             if !detail_entities.is_empty() {
                 self.ensure_detail_sprite_resources();
-                let asset_server = world.resource::<lunar_assets::AssetServer>();
                 const MAX_SPRITES: u32 = 4096;
                 const INSTANCE_STRIDE: u64 = 32; // SpriteInstance = 8 × f32 = 32 bytes
 
