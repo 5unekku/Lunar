@@ -51,27 +51,61 @@ use lunar_core::{App, GamePlugin, UpdateStage};
 use lunar_lightmap::{DirectionalLightmap, Lightmap};
 use lunar_math::{Color, Mat3, Mat4, Vec2, Vec3};
 
+// dev builds keep wgsl for live shader errors; release uses pre-compiled spirv (build.rs)
+#[cfg(debug_assertions)]
 const SHADER_SRC: &str                 = include_str!("shader.wgsl");
+#[cfg(debug_assertions)]
 const CULL_SHADER_SRC: &str            = include_str!("cull.wgsl");
+#[cfg(debug_assertions)]
 const CULL_INDIRECT_SHADER_SRC: &str   = include_str!("cull_indirect.wgsl");
+#[cfg(debug_assertions)]
 const HZB_SHADER_SRC: &str             = include_str!("hzb.wgsl");
+#[cfg(debug_assertions)]
 const SHADOW_SHADER_SRC: &str          = include_str!("shadow.wgsl");
+#[cfg(debug_assertions)]
 const POINT_SHADOW_SHADER_SRC: &str    = include_str!("point_shadow.wgsl");
+#[cfg(debug_assertions)]
 const CLUSTER_SHADER_SRC: &str         = include_str!("cluster.wgsl");
+#[cfg(debug_assertions)]
 const SURFACE_SHADER_SRC: &str         = include_str!("surface.wgsl");
-const BLOOM_SHADER_SRC: &str = include_str!("bloom.wgsl");
-const COMPOSITE_SHADER_SRC: &str = include_str!("composite.wgsl");
-const GTAO_SHADER_SRC: &str = include_str!("gtao.wgsl");
-
-const FXAA_SHADER_SRC:          &str = include_str!("fxaa.wgsl");
-const SSR_SHADER_SRC:           &str = include_str!("ssr.wgsl");
-const FOG_SHADER_SRC:           &str = include_str!("volumetric_fog.wgsl");
-const ATMOS_SHADER_SRC:         &str = include_str!("atmos.wgsl");
-const PARTICLE_SIM_SHADER_SRC:    &str = include_str!("particle_sim.wgsl");
+#[cfg(debug_assertions)]
+const BLOOM_SHADER_SRC: &str           = include_str!("bloom.wgsl");
+#[cfg(debug_assertions)]
+const COMPOSITE_SHADER_SRC: &str       = include_str!("composite.wgsl");
+#[cfg(debug_assertions)]
+const GTAO_SHADER_SRC: &str            = include_str!("gtao.wgsl");
+#[cfg(debug_assertions)]
+const FXAA_SHADER_SRC: &str            = include_str!("fxaa.wgsl");
+#[cfg(debug_assertions)]
+const SSR_SHADER_SRC: &str             = include_str!("ssr.wgsl");
+#[cfg(debug_assertions)]
+const FOG_SHADER_SRC: &str             = include_str!("volumetric_fog.wgsl");
+#[cfg(debug_assertions)]
+const ATMOS_SHADER_SRC: &str           = include_str!("atmos.wgsl");
+#[cfg(debug_assertions)]
+const PARTICLE_SIM_SHADER_SRC: &str    = include_str!("particle_sim.wgsl");
+#[cfg(debug_assertions)]
 const PARTICLE_RENDER_SHADER_SRC: &str = include_str!("particle_render.wgsl");
-const DECAL_SHADER_SRC:           &str = include_str!("decal.wgsl");
-const WATER_SHADER_SRC:           &str = include_str!("water.wgsl");
-const TERRAIN_SHADER_SRC:         &str = include_str!("terrain.wgsl");
+#[cfg(debug_assertions)]
+const DECAL_SHADER_SRC: &str           = include_str!("decal.wgsl");
+#[cfg(debug_assertions)]
+const WATER_SHADER_SRC: &str           = include_str!("water.wgsl");
+#[cfg(debug_assertions)]
+const TERRAIN_SHADER_SRC: &str         = include_str!("terrain.wgsl");
+
+/// create a shader module from pre-compiled spirv (release) or wgsl (debug).
+/// in release, `source` is the spirv bytes from OUT_DIR; in debug, the wgsl string.
+macro_rules! shader_source {
+    ($wgsl_src:ident, $spv_file:literal) => {{
+        #[cfg(debug_assertions)]
+        let src = wgpu::ShaderSource::Wgsl($wgsl_src.into());
+        #[cfg(not(debug_assertions))]
+        let src = wgpu::ShaderSource::SpirV(std::borrow::Cow::Borrowed(
+            bytemuck::cast_slice::<u8, u32>(include_bytes!(concat!(env!("OUT_DIR"), "/", $spv_file)))
+        ));
+        src
+    }};
+}
 
 const SKY_RADIUS: f32 = 900.0;
 const SUN_Y: f32 = 895.0;
@@ -1494,12 +1528,12 @@ impl RenderEngine3d {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("3d PBR shader"),
-            source: wgpu::ShaderSource::Wgsl(SHADER_SRC.into()),
+            source: shader_source!(SHADER_SRC, "shader.spv"),
         });
 
         let shadow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("3d shadow shader"),
-            source: wgpu::ShaderSource::Wgsl(SHADOW_SHADER_SRC.into()),
+            source: shader_source!(SHADOW_SHADER_SRC, "shadow.spv"),
         });
 
         // group 4: irradiance tex (b0) + dir tex (b1) + sampler (b2), bound per draw group
@@ -1910,7 +1944,7 @@ impl RenderEngine3d {
         });
         let surface_shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[surface] shader"),
-            source: wgpu::ShaderSource::Wgsl(SURFACE_SHADER_SRC.into()),
+            source: shader_source!(SURFACE_SHADER_SRC, "surface.spv"),
         });
         let surface_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("[surface] pipeline layout"),
@@ -1957,7 +1991,7 @@ impl RenderEngine3d {
         // point shadow pipeline: writes linear depth, uses point_shadow.wgsl
         let point_shadow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[point shadow] shader"),
-            source: wgpu::ShaderSource::Wgsl(POINT_SHADOW_SHADER_SRC.into()),
+            source: shader_source!(POINT_SHADOW_SHADER_SRC, "point_shadow.spv"),
         });
         let point_shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("[point shadow] pipeline layout"),
@@ -2000,7 +2034,7 @@ impl RenderEngine3d {
         // cluster light assignment compute pipeline
         let cluster_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[cluster] shader"),
-            source: wgpu::ShaderSource::Wgsl(CLUSTER_SHADER_SRC.into()),
+            source: shader_source!(CLUSTER_SHADER_SRC, "cluster.spv"),
         });
         let cluster_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("[cluster] pipeline layout"),
@@ -2124,7 +2158,7 @@ impl RenderEngine3d {
 
         let bloom_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[bloom] shader"),
-            source: wgpu::ShaderSource::Wgsl(BLOOM_SHADER_SRC.into()),
+            source: shader_source!(BLOOM_SHADER_SRC, "bloom.spv"),
         });
 
         let bloom_downsample_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -2286,7 +2320,7 @@ impl RenderEngine3d {
 
         let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[composite] shader"),
-            source: wgpu::ShaderSource::Wgsl(COMPOSITE_SHADER_SRC.into()),
+            source: shader_source!(COMPOSITE_SHADER_SRC, "composite.spv"),
         });
 
         let composite_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -2386,7 +2420,7 @@ impl RenderEngine3d {
 
         let fxaa_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[fxaa] shader"),
-            source: wgpu::ShaderSource::Wgsl(FXAA_SHADER_SRC.into()),
+            source: shader_source!(FXAA_SHADER_SRC, "fxaa.spv"),
         });
 
         let fxaa_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -2515,7 +2549,7 @@ impl RenderEngine3d {
 
         let ssr_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[ssr] shader"),
-            source: wgpu::ShaderSource::Wgsl(SSR_SHADER_SRC.into()),
+            source: shader_source!(SSR_SHADER_SRC, "ssr.spv"),
         });
         let ssr_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("[ssr] pipeline layout"),
@@ -2610,7 +2644,7 @@ impl RenderEngine3d {
 
         let fog_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[fog] shader"),
-            source: wgpu::ShaderSource::Wgsl(FOG_SHADER_SRC.into()),
+            source: shader_source!(FOG_SHADER_SRC, "volumetric_fog.spv"),
         });
         let fog_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("[fog] pipeline layout"),
@@ -2691,7 +2725,7 @@ impl RenderEngine3d {
 
         let atmos_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[atmos] shader"),
-            source: wgpu::ShaderSource::Wgsl(ATMOS_SHADER_SRC.into()),
+            source: shader_source!(ATMOS_SHADER_SRC, "atmos.spv"),
         });
         let atmos_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("[atmos] pipeline layout"),
@@ -2789,7 +2823,7 @@ impl RenderEngine3d {
 
         let water_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[water] shader"),
-            source: wgpu::ShaderSource::Wgsl(WATER_SHADER_SRC.into()),
+            source: shader_source!(WATER_SHADER_SRC, "water.spv"),
         });
         let water_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("[water] pipeline layout"),
@@ -2880,7 +2914,7 @@ impl RenderEngine3d {
 
         let decal_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[decal] shader"),
-            source: wgpu::ShaderSource::Wgsl(DECAL_SHADER_SRC.into()),
+            source: shader_source!(DECAL_SHADER_SRC, "decal.spv"),
         });
         let decal_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("[decal] pipeline layout"),
@@ -2981,7 +3015,7 @@ impl RenderEngine3d {
 
         let terrain_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[terrain] shader"),
-            source: wgpu::ShaderSource::Wgsl(TERRAIN_SHADER_SRC.into()),
+            source: shader_source!(TERRAIN_SHADER_SRC, "terrain.spv"),
         });
 
         let terrain_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -3169,7 +3203,7 @@ impl RenderEngine3d {
 
         let gtao_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[gtao] shader"),
-            source: wgpu::ShaderSource::Wgsl(GTAO_SHADER_SRC.into()),
+            source: shader_source!(GTAO_SHADER_SRC, "gtao.spv"),
         });
 
         let gtao_ao_format = wgpu::TextureFormat::Rg16Float;
@@ -3376,7 +3410,7 @@ impl RenderEngine3d {
 
         let particle_sim_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[particles] sim shader"),
-            source: wgpu::ShaderSource::Wgsl(PARTICLE_SIM_SHADER_SRC.into()),
+            source: shader_source!(PARTICLE_SIM_SHADER_SRC, "particle_sim.spv"),
         });
         let particle_sim_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("[particles] sim pipeline layout"),
@@ -3394,7 +3428,7 @@ impl RenderEngine3d {
 
         let particle_render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[particles] render shader"),
-            source: wgpu::ShaderSource::Wgsl(PARTICLE_RENDER_SHADER_SRC.into()),
+            source: shader_source!(PARTICLE_RENDER_SHADER_SRC, "particle_render.spv"),
         });
         let particle_render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("[particles] render pipeline layout"),
@@ -3923,7 +3957,7 @@ impl RenderEngine3d {
                 });
                 let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("[cull] shader"),
-                    source: wgpu::ShaderSource::Wgsl(CULL_SHADER_SRC.into()),
+                    source: shader_source!(CULL_SHADER_SRC, "cull.spv"),
                 });
                 self.cull_pipeline = Some(self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                     label: Some("[cull] pipeline"),
@@ -3978,7 +4012,7 @@ impl RenderEngine3d {
                     });
                     let indirect_module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
                         label: Some("[cull indirect] shader"),
-                        source: wgpu::ShaderSource::Wgsl(CULL_INDIRECT_SHADER_SRC.into()),
+                        source: shader_source!(CULL_INDIRECT_SHADER_SRC, "cull_indirect.spv"),
                     });
                     self.cull_indirect_pipeline = Some(self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                         label: Some("[cull indirect] pipeline"),
@@ -4130,7 +4164,7 @@ impl RenderEngine3d {
         });
         let hzb_module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[hzb] shader"),
-            source: wgpu::ShaderSource::Wgsl(HZB_SHADER_SRC.into()),
+            source: shader_source!(HZB_SHADER_SRC, "hzb.spv"),
         });
         let copy_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("[hzb] copy layout"),

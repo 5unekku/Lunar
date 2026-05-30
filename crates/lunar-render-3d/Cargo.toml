@@ -9,6 +9,11 @@ readme.workspace = true
 categories.workspace = true
 keywords.workspace = true
 
+[build-dependencies]
+naga     = { version = "29.0.3", features = ["wgsl-in", "spv-out"] }
+glob     = "0.3"
+bytemuck = "1"
+
 [dependencies]
 lunar-3d       = { path = "../lunar-3d" }
 lunar-assets   = { path = "../lunar-assets" }
@@ -17,7 +22,7 @@ lunar-core     = { path = "../lunar-core" }
 lunar-lightmap = { path = "../lunar-lightmap" }
 lunar-math     = { path = "../lunar-math" }
 bevy_ecs    = { workspace = true }
-wgpu        = { workspace = true, features = ["wgsl"] }
+wgpu        = { workspace = true, features = ["wgsl", "spirv"] }
 log         = { workspace = true }
 bytemuck    = { workspace = true }
 

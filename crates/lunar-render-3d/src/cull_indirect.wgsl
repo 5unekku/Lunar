@@ -16,7 +16,9 @@ struct AabbEntry {
 struct CullParams {
     planes:       array<vec4<f32>, 6>,
     entity_count: u32,
-    _pad:         array<u32, 3>,
+    _pad0:        u32,
+    _pad1:        u32,
+    _pad2:        u32,
 }
 
 // per-entity draw params uploaded by CPU each frame (mega-buffer offsets + entity slot)
