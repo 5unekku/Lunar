@@ -16,6 +16,10 @@ pub fn deinterleave_rgba(rgba: &[u8]) -> Vec<u8> {
     let mut out = vec![0u8; rgba.len()];
 
     #[cfg(target_arch = "aarch64")]
+    // SAFETY: NEON is part of the mandatory AArch64 baseline, so the
+    // `target_feature(enable = "neon")` precondition always holds on this target
+    // (no runtime detection needed). `out` is allocated to `rgba.len()` bytes and
+    // `n == rgba.len() / 4`, satisfying `deinterleave_neon`'s buffer-size contract.
     unsafe {
         deinterleave_neon(rgba, &mut out, n);
         return out;
@@ -36,6 +40,10 @@ pub fn reinterleave_rgba(planar: &[u8], n_pixels: usize) -> Vec<u8> {
     let mut out = vec![0u8; planar.len()];
 
     #[cfg(target_arch = "aarch64")]
+    // SAFETY: NEON is part of the mandatory AArch64 baseline, so the
+    // `target_feature(enable = "neon")` precondition always holds on this target.
+    // `out` and `planar` are both `n_pixels * 4` bytes (the assert above guarantees
+    // `planar.len()`), satisfying `reinterleave_neon`'s buffer-size contract.
     unsafe {
         reinterleave_neon(planar, &mut out, n_pixels);
         return out;
@@ -72,6 +80,11 @@ fn reinterleave_scalar(planar: &[u8], out: &mut [u8], n: usize) {
 
 /// neon deinterleave using vld4q_u8 — loads 64 bytes and splits into 4 x 16-byte
 /// channel registers in a single instruction.
+///
+/// # Safety
+/// caller must ensure `rgba.len() >= n * 4` and `out.len() >= n * 4`; the four
+/// output planes are written at offsets `0, n, 2n, 3n`. must run on an aarch64
+/// target with NEON (always true: NEON is baseline on AArch64).
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 unsafe fn deinterleave_neon(rgba: &[u8], out: &mut [u8], n: usize) {
@@ -103,6 +116,11 @@ unsafe fn deinterleave_neon(rgba: &[u8], out: &mut [u8], n: usize) {
 
 /// neon reinterleave using vst4q_u8 — interleaves 4 x 16-byte channel registers
 /// into 64 bytes of RGBA in a single instruction.
+///
+/// # Safety
+/// caller must ensure `planar.len() >= n * 4` (four input planes at offsets
+/// `0, n, 2n, 3n`) and `out.len() >= n * 4`. must run on an aarch64 target with
+/// NEON (always true: NEON is baseline on AArch64).
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 unsafe fn reinterleave_neon(planar: &[u8], out: &mut [u8], n: usize) {

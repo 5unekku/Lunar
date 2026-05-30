@@ -67,13 +67,18 @@ impl TimelineTrack {
     }
 
     fn advance(&mut self, playhead: f32) -> impl Iterator<Item = (Entity, &TimelineAction)> {
-        let mut fired = Vec::new();
-        while self.next_key < self.keys.len() && self.keys[self.next_key].time <= playhead {
-            fired.push((self.target, &self.keys[self.next_key].action as *const _));
-            self.next_key += 1;
+        // find the contiguous run of keys at or before the playhead, advance the
+        // cursor, then borrow that slice. computing the range up front means the
+        // `&mut self` write to `next_key` is finished before we hand out `&self.keys`
+        // references, so this needs no unsafe and allocates nothing.
+        let start = self.next_key;
+        let mut end = start;
+        while end < self.keys.len() && self.keys[end].time <= playhead {
+            end += 1;
         }
-        // safety: keys vec is not modified during iteration
-        fired.into_iter().map(|(entity, action_ptr)| (entity, unsafe { &*action_ptr }))
+        self.next_key = end;
+        let target = self.target;
+        self.keys[start..end].iter().map(move |key| (target, &key.action))
     }
 }
 
