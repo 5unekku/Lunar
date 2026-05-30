@@ -1,0 +1,15 @@
+[workspace]
+
+[package]
+name = "gen-lods"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "gen-lods"
+path = "src/main.rs"
+
+[dependencies]
+meshopt  = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+glob     = "0.3"
