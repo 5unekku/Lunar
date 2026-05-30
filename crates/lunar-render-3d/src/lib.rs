@@ -7974,6 +7974,406 @@ impl RenderEngine3d {
         draw_calls
     }
 
+    /// records all shadow passes: point-light cube shadows, then the directional
+    /// cascade + z-prepass recording (parallel on native, sequential on wasm).
+    // face_dirs / shadow_list indexed loops (one uses a sentinel final iteration) read clearer
+    // as indexed loops than iterator adapters; the range-loop lint is intentionally allowed.
+    #[allow(clippy::needless_range_loop)]
+    fn record_shadows(&mut self, world: &mut World, encoder: &mut wgpu::CommandEncoder, dir_direction: Vec3, dir_enabled: u32, dir_casts_shadows: bool) {
+        let dev_shadows          = world.get_resource::<DevRenderProfile>().map(|d| d.shadows         ).unwrap_or(true);
+        let dev_max_cascades     = world.get_resource::<DevRenderProfile>().map(|d| d.max_shadow_cascades as usize).unwrap_or(NUM_CASCADES as usize);
+        let dev_point_shadows    = world.get_resource::<DevRenderProfile>().map(|d| d.point_light_shadows).unwrap_or(true);
+
+        // ── collect shadow casters ────────────────────────────────────────
+        // shadow_list: (mesh_id, draw_scratch_index) for all visible shadow casters.
+        // using entity lookup so every caster gets its own correct transform.
+        // sorted by mesh_id so consecutive shadow draws can share VBO/IBO.
+        let shadow_list: Vec<(u32, usize)> = {
+            let shadow_entities: HashSet<Entity> = {
+                let mut q = world.query::<(Entity, &ComputedVisibility, &ShadowCaster)>();
+                q.iter(world).filter(|(_, vis, _)| vis.0).map(|(e, _, _)| e).collect()
+            };
+            let mut list: Vec<(u32, usize)> = self.draw_scratch.iter().enumerate()
+                .filter(|(_, entry)| shadow_entities.contains(&entry.0))
+                .map(|(i, entry)| (entry.1, i))
+                .collect();
+            list.sort_unstable_by_key(|&(mesh_id, _)| mesh_id);
+            list
+        };
+
+        // ── dirty-flag shadow cascade invalidation ────────────────────────
+        // cascades are re-rendered only when something relevant changed.
+        // triggers: light direction changed, draw list size changed (entity added/removed),
+        // or any shadow-casting entity's mesh_id changed (proxy for transform change).
+        {
+            let dir_changed = (dir_direction - self.shadow_last_dir).length_squared() > 1e-6;
+            let draw_changed = shadow_list.len() != self.shadow_last_draw_count;
+            if dir_changed || draw_changed {
+                self.shadow_cascade_dirty = [true; 3];
+                self.shadow_last_dir = dir_direction;
+                self.shadow_last_draw_count = shadow_list.len();
+            }
+        }
+
+        // ── point light shadow pass ──────────────────────────────────────
+        // for each light with casts_shadows=true (up to MAX_POINT_SHADOW_LIGHTS),
+        // render scene into the appropriate 6 face layers of point_shadow_tex.
+        if dev_point_shadows {
+            // dirty detection: re-render all faces when any light position changes or draw count changes
+            let pt_draw_count = self.draw_scratch.len();
+            if pt_draw_count != self.point_shadow_last_draw_count {
+                for dirty in &mut self.point_shadow_dirty { *dirty = [true; 6]; }
+                self.point_shadow_last_draw_count = pt_draw_count;
+            }
+            let mut pt_shadow_idx = 0usize;
+            for (light_i, &(light_pos, _, _, light_radius, casts)) in self.point_light_scratch.iter().enumerate() {
+                if !casts || pt_shadow_idx >= MAX_POINT_SHADOW_LIGHTS { break; }
+                let _ = light_i;
+                let lp = Vec3::from(light_pos);
+                let last_pos = self.point_shadow_last_positions[pt_shadow_idx];
+                if (lp - last_pos).length_squared() > 1e-6 {
+                    self.point_shadow_dirty[pt_shadow_idx] = [true; 6];
+                    self.point_shadow_last_positions[pt_shadow_idx] = lp;
+                }
+                // face directions: +X,-X,+Y,-Y,+Z,-Z with their respective up vectors
+                let face_dirs: [(Vec3, Vec3); 6] = [
+                    (Vec3::X,       -Vec3::Y),
+                    (-Vec3::X,      -Vec3::Y),
+                    (Vec3::Y,        Vec3::Z),
+                    (-Vec3::Y,      -Vec3::Z),
+                    (Vec3::Z,       -Vec3::Y),
+                    (-Vec3::Z,      -Vec3::Y),
+                ];
+                let near = 0.05f32;
+                let far = light_radius;
+                for face in 0..6usize {
+                    if !self.point_shadow_dirty[pt_shadow_idx][face] { continue; }
+                    let layer = pt_shadow_idx * 6 + face;
+                    let (dir, up) = face_dirs[face];
+                    let view = Mat4::look_at_rh(Vec3::from(lp), Vec3::from(lp) + dir, up);
+                    let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, near, far);
+                    let face_vp = proj * view;
+                    // upload face VP + light pos + radius to the per-face slot
+                    let slot_offset = (layer as u64) * UNIFORM_STRIDE;
+                    let mut slot_data = [0u8; UNIFORM_STRIDE as usize];
+                    slot_data[..64].copy_from_slice(bytemuck::cast_slice(&face_vp.to_cols_array()));
+                    slot_data[64..76].copy_from_slice(bytemuck::cast_slice(&[lp.x, lp.y, lp.z]));
+                    slot_data[76..80].copy_from_slice(bytemuck::cast_slice(&[light_radius]));
+                    self.queue.write_buffer(&self.point_shadow_globals_buf, slot_offset, &slot_data[..80]);
+                    // render shadow casters into this face layer
+                    {
+                        let mut pt_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("[point shadow] face pass"),
+                            color_attachments: &[],
+                            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                                view: &self.point_shadow_face_views[layer],
+                                depth_ops: Some(wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(1.0),
+                                    store: wgpu::StoreOp::Store,
+                                }),
+                                stencil_ops: None,
+                            }),
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+                        pt_pass.set_pipeline(&self.point_shadow_pipeline);
+                        pt_pass.set_bind_group(0, &self.point_shadow_globals_bg, &[layer as u32 * UNIFORM_STRIDE as u32]);
+                        pt_pass.set_bind_group(1, &self.entity_bg, &[]);
+                        let mut last_mesh = u32::MAX;
+                        let mut last_gs = 0usize;
+                        let sn = self.draw_scratch.len();
+                        for si in 0..=sn {
+                            let cur_mesh = if si == sn { u32::MAX } else { self.draw_scratch[si].1 };
+                            if cur_mesh != last_mesh {
+                                if si > last_gs
+                                    && let Some(gpu) = self.mesh_gpu.get(&last_mesh) {
+                                        let base = (ENTITY_SLOT_START + last_gs) as u32;
+                                        pt_pass.draw_indexed(0..gpu.index_count, 0, base..base + (si - last_gs) as u32);
+                                    }
+                                if si < sn {
+                                    if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
+                                        pt_pass.set_vertex_buffer(0, gpu.vbuf.slice(..));
+                                        pt_pass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+                                    }
+                                    last_mesh = cur_mesh;
+                                    last_gs = si;
+                                }
+                            }
+                        }
+                    }
+                    self.point_shadow_dirty[pt_shadow_idx][face] = false;
+                }
+                pt_shadow_idx += 1;
+            }
+            // clear layers for unused shadow slots
+            for unused in pt_shadow_idx..MAX_POINT_SHADOW_LIGHTS {
+                for face in 0..6usize {
+                    let layer = unused * 6 + face;
+                    let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("[point shadow] clear unused"),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &self.point_shadow_face_views[layer],
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                }
+            }
+        }
+
+        // ── shadow + z-prepass: parallel command recording ───────────────
+        // each shadow cascade and the z-prepass get their own CommandEncoder recorded
+        // in parallel on a Rayon thread pool. shadow cascades and z-prepass have no
+        // read/write conflicts with each other (each writes to a disjoint texture).
+        // submitted in order before the main encoder so the opaque pass can use them.
+        //
+        // SAFETY: closures share a read-only &RenderEngine3d (no writes to self state
+        // in the parallel section). each closure writes to a disjoint CommandEncoder.
+        {
+            // rebuild at most 1 dirty cascade per frame (prioritise cascade 0 — nearest/highest detail).
+            // remaining dirty cascades stay dirty and are rebuilt on subsequent frames, spreading
+            // the spike across frames. a stale cascade 2 (far, low detail) is imperceptible for 1-2 frames.
+            let all_dirty: Vec<usize> = (0..NUM_CASCADES as usize)
+                .filter(|&c| dir_enabled != 0 && dir_casts_shadows && dev_shadows && c < dev_max_cascades && self.shadow_cascade_dirty[c])
+                .collect();
+            let dirty_cascades: Vec<usize> = all_dirty.into_iter().take(1).collect();
+            for &c in &dirty_cascades { self.shadow_cascade_dirty[c] = false; }
+
+            // clear skipped cascades on the main encoder (no content change, just clear)
+            for cascade in 0..NUM_CASCADES as usize {
+                if !dirty_cascades.contains(&cascade) {
+                    let label = format!("[shadow] cascade-{cascade}");
+                    let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some(label.as_str()),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &self.shadow_cascade_views[cascade],
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                }
+            }
+
+            // record dirty shadow cascades + z-prepass in parallel (native only)
+            #[cfg(not(target_arch = "wasm32"))]
+            let parallel_cmds = {
+                use rayon::prelude::*;
+                // total parallel tasks: dirty cascades + 1 if z-prepass needed
+                let needs_zprepass = self.render_tier != RenderTier::LowGles;
+                let _task_count = dirty_cascades.len() + if needs_zprepass { 1 } else { 0 };
+                let mut tasks: Vec<usize> = dirty_cascades.clone(); // cascade indices
+                if needs_zprepass { tasks.push(usize::MAX); } // sentinel for z-prepass
+
+                // extract the read-only references needed by all recording closures.
+                // all wgpu pipeline/buffer types are Send+Sync on native, so the
+                // move closures are Send and rayon can dispatch them across threads.
+                let device        = &self.device;
+                let shad_pl       = &self.shadow_pipeline;
+                let shad_gbg      = &self.shadow_globals_bg;
+                let ent_bg        = &self.entity_bg;
+                let casc_views    = &self.shadow_cascade_views;
+                let mesh_gpu      = &self.mesh_gpu;
+                let zpr_pl        = &self.zprepass_pipeline;
+                let glob_bg       = &self.globals_bg;
+                let lights_bg_ref = &self.lights_bg;
+                let mat_bg        = &self.material_bg;
+                let depth_vw      = &self.depth_view;
+                let draw_ref      = &self.draw_scratch;
+                tasks.par_iter().map(move |&task| {
+                    // shadow_list is owned locally and shared by reference across tasks
+                    let s_device     = device;
+                    let s_shad_pl    = shad_pl;
+                    let s_shad_gbg   = shad_gbg;
+                    let s_ent_bg     = ent_bg;
+                    let s_casc       = casc_views;
+                    let s_mesh_gpu   = mesh_gpu;
+                    let s_zpr_pl     = zpr_pl;
+                    let s_glob_bg    = glob_bg;
+                    let s_lights     = lights_bg_ref;
+                    let s_mat_bg     = mat_bg;
+                    let s_depth      = depth_vw;
+                    let s_draw       = draw_ref;
+                    let label = if task == usize::MAX { "[z-prepass]".to_string() } else { format!("[shadow] cascade-{task}") };
+                    let mut enc = s_device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(&label) });
+                    if task == usize::MAX {
+                        let mut zpass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("[z-prepass]"),
+                            color_attachments: &[],
+                            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                                view: s_depth,
+                                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                                stencil_ops: None,
+                            }),
+                            timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                        });
+                        zpass.set_pipeline(s_zpr_pl);
+                        zpass.set_bind_group(0, s_glob_bg, &[]);
+                        zpass.set_bind_group(1, s_mat_bg, &[]);
+                        zpass.set_bind_group(2, s_ent_bg, &[]);
+                        zpass.set_bind_group(3, s_lights, &[]);
+                        let n = s_draw.len();
+                        let mut last_mesh = u32::MAX; let mut last_mat = u32::MAX; let mut group_start = 0usize;
+                        let mut i = 0usize;
+                        while i <= n {
+                            let done = i == n;
+                            let (cur_mesh, cur_mat) = if done { (u32::MAX, u32::MAX) } else { (s_draw[i].1, s_draw[i].2) };
+                            if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start
+                                && let Some(gpu) = s_mesh_gpu.get(&last_mesh) {
+                                    let base = (ENTITY_SLOT_START + group_start) as u32;
+                                    zpass.draw_indexed(0..gpu.index_count, 0, base..base + (i - group_start) as u32);
+                                }
+                            if done { break; }
+                            if cur_mesh != last_mesh || cur_mat != last_mat {
+                                if let Some(gpu) = s_mesh_gpu.get(&cur_mesh) {
+                                    zpass.set_vertex_buffer(0, gpu.vbuf.slice(..));
+                                    zpass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+                                }
+                                last_mesh = cur_mesh; last_mat = cur_mat; group_start = i;
+                            }
+                            i += 1;
+                        }
+                    } else {
+                        let cascade = task;
+                        let mut spass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some(&label),
+                            color_attachments: &[],
+                            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                                view: &s_casc[cascade],
+                                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                                stencil_ops: None,
+                            }),
+                            timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                        });
+                        spass.set_pipeline(s_shad_pl);
+                        spass.set_bind_group(0, s_shad_gbg, &[Self::slot_offset(cascade)]);
+                        spass.set_bind_group(1, s_ent_bg, &[]);
+                        let mut last_mesh = u32::MAX; let mut gs_slot = 0usize; let mut gs_idx = 0usize;
+                        let sn = shadow_list.len();
+                        for idx in 0..=sn {
+                            let done = idx == sn;
+                            let cur_mesh = if done { u32::MAX } else { shadow_list[idx].0 };
+                            if cur_mesh != last_mesh && idx > gs_idx
+                                && let Some(gpu) = s_mesh_gpu.get(&last_mesh) {
+                                    let base = (ENTITY_SLOT_START + gs_slot) as u32;
+                                    spass.draw_indexed(0..gpu.index_count, 0, base..base + (idx - gs_idx) as u32);
+                                }
+                            if done { break; }
+                            if cur_mesh != last_mesh {
+                                if let Some(gpu) = s_mesh_gpu.get(&cur_mesh) {
+                                    spass.set_vertex_buffer(0, gpu.vbuf.slice(..));
+                                    spass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+                                }
+                                last_mesh = cur_mesh; gs_slot = shadow_list[idx].1; gs_idx = idx;
+                            }
+                        }
+                    }
+                    enc.finish()
+                }).collect::<Vec<_>>()
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if !parallel_cmds.is_empty() {
+                    self.queue.submit(parallel_cmds);
+                }
+            }
+
+            // WASM: sequential shadow + z-prepass on the main encoder
+            #[cfg(target_arch = "wasm32")]
+            {
+                for &cascade in &dirty_cascades {
+                    let label = format!("[shadow] cascade-{cascade}");
+                    let mut sp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some(label.as_str()),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &self.shadow_cascade_views[cascade],
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                    });
+                    sp.set_pipeline(&self.shadow_pipeline);
+                    sp.set_bind_group(0, &self.shadow_globals_bg, &[Self::slot_offset(cascade)]);
+                    sp.set_bind_group(1, &self.entity_bg, &[]);
+                    let mut last_mesh = u32::MAX; let mut gs_slot = 0usize; let mut gs_idx = 0usize;
+                    let sn = shadow_list.len();
+                    for idx in 0..=sn {
+                        let done = idx == sn;
+                        let cur_mesh = if done { u32::MAX } else { shadow_list[idx].0 };
+                        if cur_mesh != last_mesh && idx > gs_idx {
+                            if let Some(gpu) = self.mesh_gpu.get(&last_mesh) {
+                                let base = (ENTITY_SLOT_START + gs_slot) as u32;
+                                sp.draw_indexed(0..gpu.index_count, 0, base..base + (idx - gs_idx) as u32);
+                            }
+                        }
+                        if done { break; }
+                        if cur_mesh != last_mesh {
+                            if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
+                                sp.set_vertex_buffer(0, gpu.vbuf.slice(..));
+                                sp.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+                            }
+                            last_mesh = cur_mesh; gs_slot = shadow_list[idx].1; gs_idx = idx;
+                        }
+                    }
+                }
+                if self.render_tier != RenderTier::LowGles {
+                    let mut zpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("[z-prepass]"),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &self.depth_view,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                    });
+                    zpass.set_pipeline(&self.zprepass_pipeline);
+                    zpass.set_bind_group(0, &self.globals_bg, &[]);
+                    zpass.set_bind_group(1, &self.material_bg, &[]);
+                    zpass.set_bind_group(2, &self.entity_bg, &[]);
+                    zpass.set_bind_group(3, &self.lights_bg, &[]);
+                    let n = self.draw_scratch.len();
+                    let mut last_mesh = u32::MAX; let mut last_mat = u32::MAX; let mut group_start = 0usize;
+                    let mut i = 0usize;
+                    while i <= n {
+                        let done = i == n;
+                        let (cur_mesh, cur_mat) = if done { (u32::MAX, u32::MAX) } else { (self.draw_scratch[i].1, self.draw_scratch[i].2) };
+                        if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start {
+                            if let Some(gpu) = self.mesh_gpu.get(&last_mesh) {
+                                let base = (ENTITY_SLOT_START + group_start) as u32;
+                                zpass.draw_indexed(0..gpu.index_count, 0, base..base + (i - group_start) as u32);
+                            }
+                        }
+                        if done { break; }
+                        if cur_mesh != last_mesh || cur_mat != last_mat {
+                            if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
+                                zpass.set_vertex_buffer(0, gpu.vbuf.slice(..));
+                                zpass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+                            }
+                            last_mesh = cur_mesh; last_mat = cur_mat; group_start = i;
+                        }
+                        i += 1;
+                    }
+                }
+            }
+        }
+    }
+
     // a few loops below index multiple parallel arrays by the same counter, or use a
     // sentinel final iteration for batch flushing — clearer as indexed loops than as
     // iterator adapters, so the range-loop/counter lints are intentionally allowed.
@@ -8054,7 +8454,6 @@ impl RenderEngine3d {
         // ── read dev render profile (dev's feature ceiling) ───────────────
         // all pass gates below AND with this so disabled features are never executed
         // regardless of user quality settings or hardware tier.
-        let dev_shadows          = world.get_resource::<DevRenderProfile>().map(|d| d.shadows         ).unwrap_or(true);
         let dev_bloom            = world.get_resource::<DevRenderProfile>().map(|d| d.bloom            ).unwrap_or(true);
         let dev_ssao             = world.get_resource::<DevRenderProfile>().map(|d| d.ssao             ).unwrap_or(true);
         let dev_ssr              = world.get_resource::<DevRenderProfile>().map(|d| d.ssr              ).unwrap_or(true);
@@ -8064,7 +8463,6 @@ impl RenderEngine3d {
         let dev_vignette         = world.get_resource::<DevRenderProfile>().map(|d| d.vignette         ).unwrap_or(true);
         let dev_chrom_ab         = world.get_resource::<DevRenderProfile>().map(|d| d.chromatic_aberration).unwrap_or(true);
         let dev_film_grain       = world.get_resource::<DevRenderProfile>().map(|d| d.film_grain       ).unwrap_or(true);
-        let dev_max_cascades     = world.get_resource::<DevRenderProfile>().map(|d| d.max_shadow_cascades as usize).unwrap_or(NUM_CASCADES as usize);
         let dev_point_shadows    = world.get_resource::<DevRenderProfile>().map(|d| d.point_light_shadows).unwrap_or(true);
         let dev_max_point_lights = world.get_resource::<DevRenderProfile>().map(|d| d.max_point_lights as usize).unwrap_or(MAX_CLUSTERED_LIGHTS);
         let dev_soft_shadows     = world.get_resource::<DevRenderProfile>().map(|d| d.soft_shadows     ).unwrap_or(false);
@@ -9037,395 +9435,7 @@ impl RenderEngine3d {
             }
         }
 
-        // ── collect shadow casters ────────────────────────────────────────
-        let mut draw_calls: u32 = 0;
-        // shadow_list: (mesh_id, draw_scratch_index) for all visible shadow casters.
-        // using entity lookup so every caster gets its own correct transform.
-        // sorted by mesh_id so consecutive shadow draws can share VBO/IBO.
-        let shadow_list: Vec<(u32, usize)> = {
-            let shadow_entities: HashSet<Entity> = {
-                let mut q = world.query::<(Entity, &ComputedVisibility, &ShadowCaster)>();
-                q.iter(world).filter(|(_, vis, _)| vis.0).map(|(e, _, _)| e).collect()
-            };
-            let mut list: Vec<(u32, usize)> = self.draw_scratch.iter().enumerate()
-                .filter(|(_, entry)| shadow_entities.contains(&entry.0))
-                .map(|(i, entry)| (entry.1, i))
-                .collect();
-            list.sort_unstable_by_key(|&(mesh_id, _)| mesh_id);
-            list
-        };
-
-        // ── dirty-flag shadow cascade invalidation ────────────────────────
-        // cascades are re-rendered only when something relevant changed.
-        // triggers: light direction changed, draw list size changed (entity added/removed),
-        // or any shadow-casting entity's mesh_id changed (proxy for transform change).
-        {
-            let dir_changed = (dir_direction - self.shadow_last_dir).length_squared() > 1e-6;
-            let draw_changed = shadow_list.len() != self.shadow_last_draw_count;
-            if dir_changed || draw_changed {
-                self.shadow_cascade_dirty = [true; 3];
-                self.shadow_last_dir = dir_direction;
-                self.shadow_last_draw_count = shadow_list.len();
-            }
-        }
-
-        // ── point light shadow pass ──────────────────────────────────────
-        // for each light with casts_shadows=true (up to MAX_POINT_SHADOW_LIGHTS),
-        // render scene into the appropriate 6 face layers of point_shadow_tex.
-        if dev_point_shadows {
-            // dirty detection: re-render all faces when any light position changes or draw count changes
-            let pt_draw_count = self.draw_scratch.len();
-            if pt_draw_count != self.point_shadow_last_draw_count {
-                for dirty in &mut self.point_shadow_dirty { *dirty = [true; 6]; }
-                self.point_shadow_last_draw_count = pt_draw_count;
-            }
-            let mut pt_shadow_idx = 0usize;
-            for (light_i, &(light_pos, _, _, light_radius, casts)) in self.point_light_scratch.iter().enumerate() {
-                if !casts || pt_shadow_idx >= MAX_POINT_SHADOW_LIGHTS { break; }
-                let _ = light_i;
-                let lp = Vec3::from(light_pos);
-                let last_pos = self.point_shadow_last_positions[pt_shadow_idx];
-                if (lp - last_pos).length_squared() > 1e-6 {
-                    self.point_shadow_dirty[pt_shadow_idx] = [true; 6];
-                    self.point_shadow_last_positions[pt_shadow_idx] = lp;
-                }
-                // face directions: +X,-X,+Y,-Y,+Z,-Z with their respective up vectors
-                let face_dirs: [(Vec3, Vec3); 6] = [
-                    (Vec3::X,       -Vec3::Y),
-                    (-Vec3::X,      -Vec3::Y),
-                    (Vec3::Y,        Vec3::Z),
-                    (-Vec3::Y,      -Vec3::Z),
-                    (Vec3::Z,       -Vec3::Y),
-                    (-Vec3::Z,      -Vec3::Y),
-                ];
-                let near = 0.05f32;
-                let far = light_radius;
-                for face in 0..6usize {
-                    if !self.point_shadow_dirty[pt_shadow_idx][face] { continue; }
-                    let layer = pt_shadow_idx * 6 + face;
-                    let (dir, up) = face_dirs[face];
-                    let view = Mat4::look_at_rh(Vec3::from(lp), Vec3::from(lp) + dir, up);
-                    let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, near, far);
-                    let face_vp = proj * view;
-                    // upload face VP + light pos + radius to the per-face slot
-                    let slot_offset = (layer as u64) * UNIFORM_STRIDE;
-                    let mut slot_data = [0u8; UNIFORM_STRIDE as usize];
-                    slot_data[..64].copy_from_slice(bytemuck::cast_slice(&face_vp.to_cols_array()));
-                    slot_data[64..76].copy_from_slice(bytemuck::cast_slice(&[lp.x, lp.y, lp.z]));
-                    slot_data[76..80].copy_from_slice(bytemuck::cast_slice(&[light_radius]));
-                    self.queue.write_buffer(&self.point_shadow_globals_buf, slot_offset, &slot_data[..80]);
-                    // render shadow casters into this face layer
-                    {
-                        let mut pt_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("[point shadow] face pass"),
-                            color_attachments: &[],
-                            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                                view: &self.point_shadow_face_views[layer],
-                                depth_ops: Some(wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(1.0),
-                                    store: wgpu::StoreOp::Store,
-                                }),
-                                stencil_ops: None,
-                            }),
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                            multiview_mask: None,
-                        });
-                        pt_pass.set_pipeline(&self.point_shadow_pipeline);
-                        pt_pass.set_bind_group(0, &self.point_shadow_globals_bg, &[layer as u32 * UNIFORM_STRIDE as u32]);
-                        pt_pass.set_bind_group(1, &self.entity_bg, &[]);
-                        let mut last_mesh = u32::MAX;
-                        let mut last_gs = 0usize;
-                        let sn = self.draw_scratch.len();
-                        for si in 0..=sn {
-                            let cur_mesh = if si == sn { u32::MAX } else { self.draw_scratch[si].1 };
-                            if cur_mesh != last_mesh {
-                                if si > last_gs
-                                    && let Some(gpu) = self.mesh_gpu.get(&last_mesh) {
-                                        let base = (ENTITY_SLOT_START + last_gs) as u32;
-                                        pt_pass.draw_indexed(0..gpu.index_count, 0, base..base + (si - last_gs) as u32);
-                                    }
-                                if si < sn {
-                                    if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
-                                        pt_pass.set_vertex_buffer(0, gpu.vbuf.slice(..));
-                                        pt_pass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
-                                    }
-                                    last_mesh = cur_mesh;
-                                    last_gs = si;
-                                }
-                            }
-                        }
-                    }
-                    self.point_shadow_dirty[pt_shadow_idx][face] = false;
-                }
-                pt_shadow_idx += 1;
-            }
-            // clear layers for unused shadow slots
-            for unused in pt_shadow_idx..MAX_POINT_SHADOW_LIGHTS {
-                for face in 0..6usize {
-                    let layer = unused * 6 + face;
-                    let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("[point shadow] clear unused"),
-                        color_attachments: &[],
-                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                            view: &self.point_shadow_face_views[layer],
-                            depth_ops: Some(wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(1.0),
-                                store: wgpu::StoreOp::Store,
-                            }),
-                            stencil_ops: None,
-                        }),
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                }
-            }
-        }
-
-        // ── shadow + z-prepass: parallel command recording ───────────────
-        // each shadow cascade and the z-prepass get their own CommandEncoder recorded
-        // in parallel on a Rayon thread pool. shadow cascades and z-prepass have no
-        // read/write conflicts with each other (each writes to a disjoint texture).
-        // submitted in order before the main encoder so the opaque pass can use them.
-        //
-        // SAFETY: closures share a read-only &RenderEngine3d (no writes to self state
-        // in the parallel section). each closure writes to a disjoint CommandEncoder.
-        {
-            // rebuild at most 1 dirty cascade per frame (prioritise cascade 0 — nearest/highest detail).
-            // remaining dirty cascades stay dirty and are rebuilt on subsequent frames, spreading
-            // the spike across frames. a stale cascade 2 (far, low detail) is imperceptible for 1-2 frames.
-            let all_dirty: Vec<usize> = (0..NUM_CASCADES as usize)
-                .filter(|&c| dir_enabled != 0 && dir_casts_shadows && dev_shadows && c < dev_max_cascades && self.shadow_cascade_dirty[c])
-                .collect();
-            let dirty_cascades: Vec<usize> = all_dirty.into_iter().take(1).collect();
-            for &c in &dirty_cascades { self.shadow_cascade_dirty[c] = false; }
-
-            // clear skipped cascades on the main encoder (no content change, just clear)
-            for cascade in 0..NUM_CASCADES as usize {
-                if !dirty_cascades.contains(&cascade) {
-                    let label = format!("[shadow] cascade-{cascade}");
-                    let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some(label.as_str()),
-                        color_attachments: &[],
-                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                            view: &self.shadow_cascade_views[cascade],
-                            depth_ops: Some(wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(1.0),
-                                store: wgpu::StoreOp::Store,
-                            }),
-                            stencil_ops: None,
-                        }),
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                }
-            }
-
-            // record dirty shadow cascades + z-prepass in parallel (native only)
-            #[cfg(not(target_arch = "wasm32"))]
-            let parallel_cmds = {
-                use rayon::prelude::*;
-                // total parallel tasks: dirty cascades + 1 if z-prepass needed
-                let needs_zprepass = self.render_tier != RenderTier::LowGles;
-                let _task_count = dirty_cascades.len() + if needs_zprepass { 1 } else { 0 };
-                let mut tasks: Vec<usize> = dirty_cascades.clone(); // cascade indices
-                if needs_zprepass { tasks.push(usize::MAX); } // sentinel for z-prepass
-
-                // extract the read-only references needed by all recording closures.
-                // all wgpu pipeline/buffer types are Send+Sync on native, so the
-                // move closures are Send and rayon can dispatch them across threads.
-                let device        = &self.device;
-                let shad_pl       = &self.shadow_pipeline;
-                let shad_gbg      = &self.shadow_globals_bg;
-                let ent_bg        = &self.entity_bg;
-                let casc_views    = &self.shadow_cascade_views;
-                let mesh_gpu      = &self.mesh_gpu;
-                let zpr_pl        = &self.zprepass_pipeline;
-                let glob_bg       = &self.globals_bg;
-                let lights_bg_ref = &self.lights_bg;
-                let mat_bg        = &self.material_bg;
-                let depth_vw      = &self.depth_view;
-                let draw_ref      = &self.draw_scratch;
-                tasks.par_iter().map(move |&task| {
-                    // shadow_list is owned locally and shared by reference across tasks
-                    let s_device     = device;
-                    let s_shad_pl    = shad_pl;
-                    let s_shad_gbg   = shad_gbg;
-                    let s_ent_bg     = ent_bg;
-                    let s_casc       = casc_views;
-                    let s_mesh_gpu   = mesh_gpu;
-                    let s_zpr_pl     = zpr_pl;
-                    let s_glob_bg    = glob_bg;
-                    let s_lights     = lights_bg_ref;
-                    let s_mat_bg     = mat_bg;
-                    let s_depth      = depth_vw;
-                    let s_draw       = draw_ref;
-                    let label = if task == usize::MAX { "[z-prepass]".to_string() } else { format!("[shadow] cascade-{task}") };
-                    let mut enc = s_device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(&label) });
-                    if task == usize::MAX {
-                        let mut zpass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("[z-prepass]"),
-                            color_attachments: &[],
-                            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                                view: s_depth,
-                                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
-                                stencil_ops: None,
-                            }),
-                            timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
-                        });
-                        zpass.set_pipeline(s_zpr_pl);
-                        zpass.set_bind_group(0, s_glob_bg, &[]);
-                        zpass.set_bind_group(1, s_mat_bg, &[]);
-                        zpass.set_bind_group(2, s_ent_bg, &[]);
-                        zpass.set_bind_group(3, s_lights, &[]);
-                        let n = s_draw.len();
-                        let mut last_mesh = u32::MAX; let mut last_mat = u32::MAX; let mut group_start = 0usize;
-                        let mut i = 0usize;
-                        while i <= n {
-                            let done = i == n;
-                            let (cur_mesh, cur_mat) = if done { (u32::MAX, u32::MAX) } else { (s_draw[i].1, s_draw[i].2) };
-                            if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start
-                                && let Some(gpu) = s_mesh_gpu.get(&last_mesh) {
-                                    let base = (ENTITY_SLOT_START + group_start) as u32;
-                                    zpass.draw_indexed(0..gpu.index_count, 0, base..base + (i - group_start) as u32);
-                                }
-                            if done { break; }
-                            if cur_mesh != last_mesh || cur_mat != last_mat {
-                                if let Some(gpu) = s_mesh_gpu.get(&cur_mesh) {
-                                    zpass.set_vertex_buffer(0, gpu.vbuf.slice(..));
-                                    zpass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
-                                }
-                                last_mesh = cur_mesh; last_mat = cur_mat; group_start = i;
-                            }
-                            i += 1;
-                        }
-                    } else {
-                        let cascade = task;
-                        let mut spass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some(&label),
-                            color_attachments: &[],
-                            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                                view: &s_casc[cascade],
-                                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
-                                stencil_ops: None,
-                            }),
-                            timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
-                        });
-                        spass.set_pipeline(s_shad_pl);
-                        spass.set_bind_group(0, s_shad_gbg, &[Self::slot_offset(cascade)]);
-                        spass.set_bind_group(1, s_ent_bg, &[]);
-                        let mut last_mesh = u32::MAX; let mut gs_slot = 0usize; let mut gs_idx = 0usize;
-                        let sn = shadow_list.len();
-                        for idx in 0..=sn {
-                            let done = idx == sn;
-                            let cur_mesh = if done { u32::MAX } else { shadow_list[idx].0 };
-                            if cur_mesh != last_mesh && idx > gs_idx
-                                && let Some(gpu) = s_mesh_gpu.get(&last_mesh) {
-                                    let base = (ENTITY_SLOT_START + gs_slot) as u32;
-                                    spass.draw_indexed(0..gpu.index_count, 0, base..base + (idx - gs_idx) as u32);
-                                }
-                            if done { break; }
-                            if cur_mesh != last_mesh {
-                                if let Some(gpu) = s_mesh_gpu.get(&cur_mesh) {
-                                    spass.set_vertex_buffer(0, gpu.vbuf.slice(..));
-                                    spass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
-                                }
-                                last_mesh = cur_mesh; gs_slot = shadow_list[idx].1; gs_idx = idx;
-                            }
-                        }
-                    }
-                    enc.finish()
-                }).collect::<Vec<_>>()
-            };
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                if !parallel_cmds.is_empty() {
-                    self.queue.submit(parallel_cmds);
-                }
-            }
-
-            // WASM: sequential shadow + z-prepass on the main encoder
-            #[cfg(target_arch = "wasm32")]
-            {
-                for &cascade in &dirty_cascades {
-                    let label = format!("[shadow] cascade-{cascade}");
-                    let mut sp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some(label.as_str()),
-                        color_attachments: &[],
-                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                            view: &self.shadow_cascade_views[cascade],
-                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
-                            stencil_ops: None,
-                        }),
-                        timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
-                    });
-                    sp.set_pipeline(&self.shadow_pipeline);
-                    sp.set_bind_group(0, &self.shadow_globals_bg, &[Self::slot_offset(cascade)]);
-                    sp.set_bind_group(1, &self.entity_bg, &[]);
-                    let mut last_mesh = u32::MAX; let mut gs_slot = 0usize; let mut gs_idx = 0usize;
-                    let sn = shadow_list.len();
-                    for idx in 0..=sn {
-                        let done = idx == sn;
-                        let cur_mesh = if done { u32::MAX } else { shadow_list[idx].0 };
-                        if cur_mesh != last_mesh && idx > gs_idx {
-                            if let Some(gpu) = self.mesh_gpu.get(&last_mesh) {
-                                let base = (ENTITY_SLOT_START + gs_slot) as u32;
-                                sp.draw_indexed(0..gpu.index_count, 0, base..base + (idx - gs_idx) as u32);
-                            }
-                        }
-                        if done { break; }
-                        if cur_mesh != last_mesh {
-                            if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
-                                sp.set_vertex_buffer(0, gpu.vbuf.slice(..));
-                                sp.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
-                            }
-                            last_mesh = cur_mesh; gs_slot = shadow_list[idx].1; gs_idx = idx;
-                        }
-                    }
-                }
-                if self.render_tier != RenderTier::LowGles {
-                    let mut zpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("[z-prepass]"),
-                        color_attachments: &[],
-                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                            view: &self.depth_view,
-                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
-                            stencil_ops: None,
-                        }),
-                        timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
-                    });
-                    zpass.set_pipeline(&self.zprepass_pipeline);
-                    zpass.set_bind_group(0, &self.globals_bg, &[]);
-                    zpass.set_bind_group(1, &self.material_bg, &[]);
-                    zpass.set_bind_group(2, &self.entity_bg, &[]);
-                    zpass.set_bind_group(3, &self.lights_bg, &[]);
-                    let n = self.draw_scratch.len();
-                    let mut last_mesh = u32::MAX; let mut last_mat = u32::MAX; let mut group_start = 0usize;
-                    let mut i = 0usize;
-                    while i <= n {
-                        let done = i == n;
-                        let (cur_mesh, cur_mat) = if done { (u32::MAX, u32::MAX) } else { (self.draw_scratch[i].1, self.draw_scratch[i].2) };
-                        if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start {
-                            if let Some(gpu) = self.mesh_gpu.get(&last_mesh) {
-                                let base = (ENTITY_SLOT_START + group_start) as u32;
-                                zpass.draw_indexed(0..gpu.index_count, 0, base..base + (i - group_start) as u32);
-                            }
-                        }
-                        if done { break; }
-                        if cur_mesh != last_mesh || cur_mat != last_mat {
-                            if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
-                                zpass.set_vertex_buffer(0, gpu.vbuf.slice(..));
-                                zpass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
-                            }
-                            last_mesh = cur_mesh; last_mat = cur_mat; group_start = i;
-                        }
-                        i += 1;
-                    }
-                }
-            }
-        }
+        self.record_shadows(world, &mut encoder, dir_direction, dir_enabled, dir_casts_shadows);
 
         // ── HZB build (high tier only) ───────────────────────────────────
         // builds a hierarchical min-depth buffer from the z-prepass result.
@@ -9533,7 +9543,7 @@ impl RenderEngine3d {
         // bundle read-only per-frame state once; shared by the pre-color and post passes
         let fc = FrameContext { view_proj, view_proj_unjittered, staa_jitter_ndc, cam_pos, cam_wt, aspect, camera, sky, dir_illuminance, dir_enabled, vp_x, vp_y, vp_w, vp_h, dev_bloom, dev_ssao, dev_ssr, dev_fog, dev_fxaa, dev_staa, dev_vignette, dev_chrom_ab, dev_film_grain, dev_contact_shadows, dir_color, dir_direction, sky_color };
         self.record_gtao_reflection(&fc, world, &mut encoder);
-        draw_calls += self.record_scene_passes(&fc, world, &mut encoder);
+        let draw_calls = self.record_scene_passes(&fc, world, &mut encoder);
         self.record_post_processing(&fc, world, &mut encoder, view);
         #[cfg(not(target_arch = "wasm32"))]
         self.staging_belt.finish();
