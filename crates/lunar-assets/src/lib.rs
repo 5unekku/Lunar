@@ -396,11 +396,16 @@ impl<T: Asset> AssetStore<T> {
             .get(id as usize)
             .and_then(|e| e.as_ref())
             .and_then(|entry| {
-                if entry.state == LoadState::Loaded {
-                    entry.data.as_ref()
-                } else {
-                    None
-                }
+                if entry.state == LoadState::Loaded { entry.data.as_ref() } else { None }
+            })
+    }
+
+    fn get_by_id_mut(&mut self, id: u32) -> Option<&mut T> {
+        self.entries
+            .get_mut(id as usize)
+            .and_then(|e| e.as_mut())
+            .and_then(|entry| {
+                if entry.state == LoadState::Loaded { entry.data.as_mut() } else { None }
             })
     }
 
@@ -709,6 +714,7 @@ impl TextureLoaderTrait for ImageTextureLoader {
             pixels: rgba.into_raw(),
             mips: Vec::new(),
             compression: TextureCompression::None,
+            keep_cpu_data: false,
         })
     }
 }
@@ -728,6 +734,7 @@ impl TextureLoaderTrait for MiTextureLoader {
             pixels: image.pixels,
             mips: Vec::new(),
             compression: TextureCompression::None,
+            keep_cpu_data: false,
         })
     }
 }
@@ -1191,6 +1198,11 @@ impl AssetServer {
         self.texture_store.get_by_id(id)
     }
 
+    /// mutable access to a texture by id. used after GPU upload to call `evict_cpu_data`.
+    pub fn get_texture_by_id_mut(&mut self, id: u32) -> Option<&mut Texture> {
+        self.texture_store.get_by_id_mut(id)
+    }
+
     /// configure mip streaming: set whether newly loaded textures auto-generate mip chains.
     ///
     /// call before loading textures to apply to all subsequent loads.
@@ -1289,7 +1301,7 @@ impl AssetServer {
         let id = handle.id();
         self.texture_store.insert(
             id,
-            Texture { width, height, pixels, mips: Vec::new(), compression: TextureCompression::None },
+            Texture { width, height, pixels, mips: Vec::new(), compression: TextureCompression::None, keep_cpu_data: false },
         );
         self.pending_texture_ids.push(id);
         handle
@@ -1467,20 +1479,33 @@ pub struct Texture {
     /// pixel data for the base mip level.
     /// for `TextureCompression::None`: RGBA8 linear bytes, `width * height * 4` bytes.
     /// for compressed formats: raw block data, `ceil(w/4) * ceil(h/4) * block_bytes`.
+    /// empty after `evict_cpu_data()` is called (unless `keep_cpu_data` is set).
     pub pixels: Vec<u8>,
     /// pre-generated mip levels, each half the previous resolution.
     /// index 0 = mip 1 (half-res), index 1 = mip 2 (quarter-res), etc.
     /// empty = no mip chain; GPU texture created as single mip.
+    /// empty after `evict_cpu_data()` is called (unless `keep_cpu_data` is set).
     pub mips: Vec<Vec<u8>>,
     /// compression format; defaults to `None` (uncompressed RGBA8).
     pub compression: TextureCompression,
+    /// when true, `evict_cpu_data()` is a no-op. set for textures the baker or
+    /// collision system needs to re-read after GPU upload.
+    pub keep_cpu_data: bool,
 }
 
 impl Texture {
     /// create a texture with no mip chain (single mip level, base image only).
     #[must_use]
     pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Self {
-        Self { width, height, pixels, mips: Vec::new(), compression: TextureCompression::None }
+        Self { width, height, pixels, mips: Vec::new(), compression: TextureCompression::None, keep_cpu_data: false }
+    }
+
+    /// free pixel and mip data from RAM, keeping only metadata.
+    /// no-op if `keep_cpu_data` is set.
+    pub fn evict_cpu_data(&mut self) {
+        if self.keep_cpu_data { return; }
+        self.pixels = Vec::new();
+        self.mips = Vec::new();
     }
 
     /// total number of mip levels including the base: `mips.len() + 1`.

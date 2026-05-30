@@ -5551,7 +5551,7 @@ impl RenderEngine3d {
             v
         };
         // step 2: upload textures (uses asset_server borrow)
-        let lm_new_vram: u64 = {
+        let (lm_new_vram, lm_evict_ids): (u64, Vec<u32>) = {
             let asset_server = world.resource::<lunar_assets::AssetServer>();
 
             // helper: upload one Texture asset to GPU, return (Texture, TextureView)
@@ -5614,6 +5614,7 @@ impl RenderEngine3d {
             };
 
             let mut new_vram_bytes = 0u64;
+            let mut evict_ids: Vec<u32> = Vec::new();
             // upload irradiance textures not yet in cache
             for &(lm_id, _) in &lm_needed {
                 if !self.lm_tex_cache.contains_key(&lm_id) {
@@ -5624,6 +5625,7 @@ impl RenderEngine3d {
                         new_vram_bytes += (tex.width * tex.height * 4) as u64 * 4 / 3;
                         let entry = upload_lm_tex(&self.device, &self.queue, tex, "[lightmap] irr", true);
                         self.lm_tex_cache.insert(lm_id, entry);
+                        evict_ids.push(lm_id);
                     }
                 }
             }
@@ -5634,15 +5636,25 @@ impl RenderEngine3d {
                         new_vram_bytes += (tex.width * tex.height * 4) as u64;
                         let entry = upload_lm_tex(&self.device, &self.queue, tex, "[lightmap] dir", false);
                         self.dir_lm_tex_cache.insert(dir_lm_id, entry);
+                        evict_ids.push(dir_lm_id);
                     }
                 }
             }
-            new_vram_bytes
+            (new_vram_bytes, evict_ids)
         };  // asset_server released here
         // step 3: update VRAM tracking
         if lm_new_vram > 0 {
             if let Some(mut vram) = world.get_resource_mut::<lunar_assets::TextureVramUsage>() {
                 vram.add_bytes(lm_new_vram);
+            }
+        }
+        // step 3b: evict cpu-side pixel data for newly uploaded lightmap textures
+        if !lm_evict_ids.is_empty() {
+            let mut asset_server = world.resource_mut::<lunar_assets::AssetServer>();
+            for id in lm_evict_ids {
+                if let Some(tex) = asset_server.get_texture_by_id_mut(id) {
+                    tex.evict_cpu_data();
+                }
             }
         }
         // step 4: create missing combined bind groups (only needs self, no world borrow)
@@ -5900,8 +5912,9 @@ impl RenderEngine3d {
         }
 
         // ── upload surface shader textures + stage params ─────────────────
-        {
+        let surface_evict_ids: Vec<u32> = {
             let asset_server = world.resource::<lunar_assets::AssetServer>();
+            let mut evict_ids: Vec<u32> = Vec::new();
             for &(_, slot, tex_ids, packed_stages) in &self.surface_scratch {
                 // upload any new textures
                 for &tid in &tex_ids {
@@ -5922,6 +5935,7 @@ impl RenderEngine3d {
                                     wgpu::Extent3d { width: tex.width, height: tex.height, depth_or_array_layers: 1 });
                                 let view = gpu_tex.create_view(&Default::default());
                                 self.surface_tex_cache.insert(tid, (gpu_tex, view));
+                                evict_ids.push(tid);
                             }
                         }
                     }
@@ -5965,6 +5979,16 @@ impl RenderEngine3d {
                         ],
                     });
                     self.surface_bg_cache.insert(tex_ids, bg);
+                }
+            }
+            evict_ids
+        };
+        // evict cpu-side data for newly uploaded surface textures
+        if !surface_evict_ids.is_empty() {
+            let mut asset_server = world.resource_mut::<lunar_assets::AssetServer>();
+            for id in surface_evict_ids {
+                if let Some(tex) = asset_server.get_texture_by_id_mut(id) {
+                    tex.evict_cpu_data();
                 }
             }
         }
