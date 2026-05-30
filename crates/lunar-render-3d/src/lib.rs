@@ -42,7 +42,7 @@ use lunar_3d::{
     Aabb3d, ActiveCamera3d, ActiveViewports, AmbientLight, Camera3d, ComputedVisibility,
     CullSoa, Decal, DirectionalLight, Frustum, IndexBuffer, IrradianceSH, Material3d,
     Mesh3d, MeshData, MeshImpostor, MeshLod, MeshRegistry, ParticleEmitter, PointLight,
-    Projection, ShadowCaster, StaticMesh, Vertex3d, Terrain, ViewportAspect, ViewportRect,
+    Projection, ShadowCaster, StaticMesh, SurfaceShader, Vertex3d, Terrain, ViewportAspect, ViewportRect,
     Water, WorldTransform3d,
 };
 use lunar_3d::primitives::{quad_mesh, sphere_mesh};
@@ -58,6 +58,7 @@ const HZB_SHADER_SRC: &str             = include_str!("hzb.wgsl");
 const SHADOW_SHADER_SRC: &str          = include_str!("shadow.wgsl");
 const POINT_SHADOW_SHADER_SRC: &str    = include_str!("point_shadow.wgsl");
 const CLUSTER_SHADER_SRC: &str         = include_str!("cluster.wgsl");
+const SURFACE_SHADER_SRC: &str         = include_str!("surface.wgsl");
 const BLOOM_SHADER_SRC: &str = include_str!("bloom.wgsl");
 const COMPOSITE_SHADER_SRC: &str = include_str!("composite.wgsl");
 const GTAO_SHADER_SRC: &str = include_str!("gtao.wgsl");
@@ -183,6 +184,19 @@ const SLOT_DOME: usize = 0;
 const SLOT_SUN: usize = 1;
 /// first slot index used for scene entities.
 const ENTITY_SLOT_START: usize = 2;
+
+/// surface stage data packed for the GPU (matches StageData in surface.wgsl, 32 bytes).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SurfaceStagePacked {
+    uv_offset: [f32; 2],
+    uv_scale:  f32,
+    blend:     u32,
+    alpha:     f32,
+    use_lm_uv: u32,
+    enabled:   u32,
+    _pad:      u32,
+}
 
 // ── gpu types ──────────────────────────────────────────────────────────────
 
@@ -783,6 +797,18 @@ pub struct RenderEngine3d {
     cluster_indices_buf: wgpu::Buffer,        // u32 × NUM_CLUSTERS × MAX_PER_CLUSTER
     cluster_bg_compute: wgpu::BindGroup,      // group 0 for compute pass
     cluster_bg_render: wgpu::BindGroup,       // group 5 for render passes
+
+    // q3-style multi-stage surface shader (Item C)
+    surface_bgl: wgpu::BindGroupLayout,
+    surface_pipeline: wgpu::RenderPipeline,
+    surface_fallback_tex: wgpu::Texture,
+    surface_fallback_view: wgpu::TextureView,
+    surface_sampler: wgpu::Sampler,
+    surface_params_buf: wgpu::Buffer,           // UNIFORM_STRIDE per entity, up to 64 surface entities
+    surface_tex_cache: HashMap<u32, (wgpu::Texture, wgpu::TextureView)>,
+    surface_bg_cache: HashMap<[u32; 4], wgpu::BindGroup>,
+    // (entity, instance_slot, [tex_id; 4], packed stages × 4)
+    surface_scratch: Vec<(bevy_ecs::entity::Entity, usize, [u32; 4], [SurfaceStagePacked; 4])>,
 
     mesh_gpu: HashMap<u32, GpuMesh>,
     dome_mesh: GpuMesh,
@@ -1827,6 +1853,97 @@ impl RenderEngine3d {
                 wgpu::BindGroupEntry { binding: 2, resource: cluster_counts_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: cluster_indices_buf.as_entire_binding() },
             ],
+        });
+
+        // ── surface shader pipeline (group 2 = stage params + 4 textures + sampler) ──
+        let surface_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("[surface] stage bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: true, min_binding_size: wgpu::BufferSize::new(128) }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+            ],
+        });
+        let surface_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("[surface] sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            ..Default::default()
+        });
+        let surface_fallback_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[surface] fallback 1x1"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(surface_fallback_tex.as_image_copy(), &[255u8, 255, 255, 255],
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 });
+        let surface_fallback_view = surface_fallback_tex.create_view(&Default::default());
+        let surface_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[surface] stage params"),
+            size: 64 * UNIFORM_STRIDE,  // up to 64 surface entities per frame
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let surface_shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("[surface] shader"),
+            source: wgpu::ShaderSource::Wgsl(SURFACE_SHADER_SRC.into()),
+        });
+        let surface_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[surface] pipeline layout"),
+            bind_group_layouts: &[Some(&globals_bgl), Some(&mesh_bgl), Some(&surface_bgl)],
+            immediate_size: 0,
+        });
+        let surface_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("[surface] pipeline"),
+            layout: Some(&surface_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &surface_shader_module,
+                entry_point: Some("vs_surface"),
+                buffers: vertex_buffers,
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &surface_shader_module,
+                entry_point: Some("fs_surface"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: hdr_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState { count: msaa_samples, ..Default::default() },
+            cache: pipeline_cache_ref,
+            multiview_mask: None,
         });
 
         // point shadow pipeline: writes linear depth, uses point_shadow.wgsl
@@ -3381,6 +3498,15 @@ impl RenderEngine3d {
             cluster_indices_buf,
             cluster_bg_compute,
             cluster_bg_render,
+            surface_bgl,
+            surface_pipeline,
+            surface_fallback_tex,
+            surface_fallback_view,
+            surface_sampler,
+            surface_params_buf,
+            surface_tex_cache: HashMap::new(),
+            surface_bg_cache: HashMap::new(),
+            surface_scratch: Vec::new(),
             mesh_gpu: HashMap::new(),
             dome_mesh,
             sun_mesh,
@@ -5294,8 +5420,63 @@ impl RenderEngine3d {
             }
         }
 
+        // ── surface shader gather ─────────────────────────────────────────
+        self.surface_scratch.clear();
+        {
+            let elapsed = world.resource::<lunar_core::Time>().elapsed_seconds();
+            let mut sq = world.query::<(Entity, &Mesh3d, &SurfaceShader, &WorldTransform3d, &ComputedVisibility)>();
+            let surface_slot_base = ENTITY_SLOT_START + self.draw_scratch.len();
+            let mut surface_idx = 0usize;
+            for (entity, mesh, surf, wt, vis) in sq.iter(world) {
+                if !vis.0 || surface_idx >= 64 { break; }
+                let slot = surface_slot_base + surface_idx;
+                // evaluate UV transforms
+                let mut packed = [SurfaceStagePacked {
+                    uv_offset: [0.0, 0.0], uv_scale: 1.0, blend: 0, alpha: 1.0,
+                    use_lm_uv: 0, enabled: 0, _pad: 0,
+                }; 4];
+                let mut tex_ids = [u32::MAX; 4];
+                for (si, stage) in surf.stages.iter().enumerate().take(4) {
+                    let blend_u32 = match stage.blend {
+                        lunar_3d::BlendMode::Opaque    => 0u32,
+                        lunar_3d::BlendMode::Add       => 1u32,
+                        lunar_3d::BlendMode::Multiply  => 2u32,
+                        lunar_3d::BlendMode::AlphaBlend => 3u32,
+                    };
+                    let alpha = match stage.alpha_gen {
+                        lunar_3d::AlphaGen::Identity => 1.0f32,
+                        lunar_3d::AlphaGen::Const(a) => a,
+                    };
+                    let use_lm_uv = (stage.tc_gen == lunar_3d::TcGen::Lightmap) as u32;
+                    // scroll: accumulate scroll * elapsed, then add rotation-derived offset
+                    let scroll_x = stage.uv_transform.scroll.x * elapsed;
+                    let scroll_y = stage.uv_transform.scroll.y * elapsed;
+                    packed[si] = SurfaceStagePacked {
+                        uv_offset: [scroll_x, scroll_y],
+                        uv_scale: stage.uv_transform.scale,
+                        blend: blend_u32, alpha, use_lm_uv,
+                        enabled: 1, _pad: 0,
+                    };
+                    tex_ids[si] = stage.texture.id();
+                    // ensure mesh is uploaded
+                    let mesh_id = mesh.0.id();
+                    if !self.mesh_gpu.contains_key(&mesh_id) {
+                        let registry = world.resource::<MeshRegistry>();
+                        if let Some(data) = registry.get_mesh(lunar_assets::Handle::new(mesh_id, 0)) {
+                            let gpu = Self::upload_mesh_data(&self.device, &self.queue, data);
+                            self.mesh_gpu.insert(mesh_id, gpu);
+                        }
+                    }
+                }
+                // upload transform to entity instances buffer
+                Self::pack_mesh_uniforms(&mut self.uniform_staging, slot, wt.to_matrix());
+                self.surface_scratch.push((entity, slot, tex_ids, packed));
+                surface_idx += 1;
+            }
+        }
+
         // ── grow buffers if needed ────────────────────────────────────────
-        let needed = ENTITY_SLOT_START + self.draw_scratch.len();
+        let needed = ENTITY_SLOT_START + self.draw_scratch.len() + self.surface_scratch.len();
         if needed > self.entity_capacity {
             self.entity_capacity = needed.next_power_of_two().max(INITIAL_ENTITY_CAPACITY);
             self.entity_buf = Self::make_entity_buf(&self.device, self.entity_capacity);
@@ -5672,6 +5853,76 @@ impl RenderEngine3d {
                 }
                 self.queue.write_buffer(&self.cluster_counts_buf, 0, bytemuck::cast_slice(&counts));
                 self.queue.write_buffer(&self.cluster_indices_buf, 0, bytemuck::cast_slice(&indices));
+            }
+        }
+
+        // ── upload surface shader textures + stage params ─────────────────
+        {
+            let asset_server = world.resource::<lunar_assets::AssetServer>();
+            for &(_, slot, tex_ids, packed_stages) in &self.surface_scratch {
+                // upload any new textures
+                for &tid in &tex_ids {
+                    if tid != u32::MAX && !self.surface_tex_cache.contains_key(&tid) {
+                        if let Some(tex) = asset_server.get_texture_by_id(tid) {
+                            if let lunar_assets::TextureCompression::None = tex.compression {
+                                let gpu_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                                    label: Some("[surface] tex"),
+                                    size: wgpu::Extent3d { width: tex.width, height: tex.height, depth_or_array_layers: 1 },
+                                    mip_level_count: tex.mip_level_count(),
+                                    sample_count: 1, dimension: wgpu::TextureDimension::D2,
+                                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                                    view_formats: &[],
+                                });
+                                self.queue.write_texture(gpu_tex.as_image_copy(), &tex.pixels,
+                                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(tex.width * 4), rows_per_image: Some(tex.height) },
+                                    wgpu::Extent3d { width: tex.width, height: tex.height, depth_or_array_layers: 1 });
+                                let view = gpu_tex.create_view(&Default::default());
+                                self.surface_tex_cache.insert(tid, (gpu_tex, view));
+                            }
+                        }
+                    }
+                }
+                // upload stage params for this entity
+                let slot_offset = (slot - (ENTITY_SLOT_START + self.draw_scratch.len())) * UNIFORM_STRIDE as usize;
+                if slot_offset + 128 <= 64 * UNIFORM_STRIDE as usize {
+                    let mut stage_data = [0u8; 128];
+                    for (i, &stage) in packed_stages.iter().enumerate() {
+                        let off = i * 32;
+                        stage_data[off..off + 8].copy_from_slice(bytemuck::cast_slice(&stage.uv_offset));
+                        stage_data[off + 8..off + 12].copy_from_slice(bytemuck::cast_slice(&[stage.uv_scale]));
+                        stage_data[off + 12..off + 16].copy_from_slice(bytemuck::cast_slice(&[stage.blend]));
+                        stage_data[off + 16..off + 20].copy_from_slice(bytemuck::cast_slice(&[stage.alpha]));
+                        stage_data[off + 20..off + 24].copy_from_slice(bytemuck::cast_slice(&[stage.use_lm_uv]));
+                        stage_data[off + 24..off + 28].copy_from_slice(bytemuck::cast_slice(&[stage.enabled]));
+                        stage_data[off + 28..off + 32].copy_from_slice(bytemuck::cast_slice(&[stage._pad]));
+                    }
+                    self.queue.write_buffer(&self.surface_params_buf, slot_offset as u64, &stage_data);
+                }
+                // create/update BG if texture combination changed
+                if !self.surface_bg_cache.contains_key(&tex_ids) {
+                    let get_view = |tid: u32| -> &wgpu::TextureView {
+                        if tid != u32::MAX {
+                            if let Some((_, v)) = self.surface_tex_cache.get(&tid) { return v; }
+                        }
+                        &self.surface_fallback_view
+                    };
+                    let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("[surface] stage bg"),
+                        layout: &self.surface_bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: &self.surface_params_buf, offset: 0, size: wgpu::BufferSize::new(128),
+                            })},
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(get_view(tex_ids[0])) },
+                            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(get_view(tex_ids[1])) },
+                            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(get_view(tex_ids[2])) },
+                            wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(get_view(tex_ids[3])) },
+                            wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&self.surface_sampler) },
+                        ],
+                    });
+                    self.surface_bg_cache.insert(tex_ids, bg);
+                }
             }
         }
 
@@ -6799,6 +7050,43 @@ impl RenderEngine3d {
                     pass.draw_indexed(0..gpu_mesh.index_count, 0, base..base + 1);
                     draw_calls += 1;
                 }
+            }
+        }
+
+        // ── surface shader pass (q3-style multi-stage surfaces) ─────────
+        if !self.surface_scratch.is_empty() {
+            let (color_target, resolve_target) = match &self.msaa_color_view {
+                Some(msaa) => (msaa as &wgpu::TextureView, Some(&self.hdr_view as &wgpu::TextureView)),
+                None => (&self.hdr_view as &wgpu::TextureView, None),
+            };
+            let mut surf_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("[surface] pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: color_target, resolve_target,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+            });
+            surf_pass.set_pipeline(&self.surface_pipeline);
+            surf_pass.set_bind_group(0, &self.globals_bg, &[]);
+            surf_pass.set_bind_group(1, &self.entity_bg, &[]);
+            let draw_base_slot = ENTITY_SLOT_START + self.draw_scratch.len();
+            for &(entity, slot, tex_ids, _) in &self.surface_scratch {
+                let Some(bg) = self.surface_bg_cache.get(&tex_ids) else { continue; };
+                let surf_offset = ((slot - draw_base_slot) as u64 * UNIFORM_STRIDE) as u32;
+                let Some(mesh_comp) = world.get::<Mesh3d>(entity) else { continue; };
+                let mesh_id = mesh_comp.0.id();
+                let Some(gpu) = self.mesh_gpu.get(&mesh_id) else { continue; };
+                surf_pass.set_bind_group(2, bg, &[surf_offset]);
+                surf_pass.set_vertex_buffer(0, gpu.vbuf.slice(..));
+                surf_pass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+                surf_pass.draw_indexed(0..gpu.index_count, 0, slot as u32..slot as u32 + 1);
             }
         }
 

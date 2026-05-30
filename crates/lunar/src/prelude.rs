@@ -78,6 +78,8 @@ pub use lunar_3d::{
     LocalTransform3d, Material3d, MaterialData, Mesh3d, MeshData, MeshUsage, Plugin3d, StaticMesh,
     PointLight, Projection, ShadingModel, SkinWeights, SpotLight, Vertex3d, WorldTransform3d,
     propagate_transforms_3d,
+    // surface shaders (q3-style multi-stage animated surfaces)
+    AlphaGen, BlendMode, SurfaceShader, SurfaceStage, TcGen, UvTransform,
     // bundles
     Camera3dBundle, DirectionalLightBundle, Mesh3dBundle, PointLightBundle, ShadowMesh3dBundle,
     SpotLightBundle,

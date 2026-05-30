@@ -33,6 +33,7 @@
 //! ```
 
 pub mod animation;
+pub mod surface_shader;
 pub mod bundles;
 pub mod collision;
 pub mod decals;
@@ -70,6 +71,7 @@ pub use collision::{
 pub use decals::Decal;
 pub use fog::{Fog, FogFalloff};
 pub use terrain::Terrain;
+pub use surface_shader::{AlphaGen, BlendMode, SurfaceShader, SurfaceStage, TcGen, UvTransform};
 pub use water::Water;
 pub use particles::ParticleEmitter;
 pub use light::{DirectionalLight, IrradianceSH, PointLight, SpotLight};
