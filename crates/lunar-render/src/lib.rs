@@ -362,8 +362,11 @@ pub struct RenderConfig {
     pub height: u32,
     /// vsync enabled
     pub vsync: bool,
-    /// target frame cap (0 = uncapped)
+    /// target frame cap (0 = uncapped/vsync-limited)
     pub frame_cap: u32,
+    /// fixed logic tick rate — independent of render frame rate.
+    /// `time.delta_seconds()` in game systems always equals `1 / tick_hz`.
+    pub tick_rate: lunar_core::TickRate,
 }
 
 impl Default for RenderConfig {
@@ -373,6 +376,7 @@ impl Default for RenderConfig {
             height: 720,
             vsync: true,
             frame_cap: 0,
+            tick_rate: lunar_core::TickRate::Hz60,
         }
     }
 }

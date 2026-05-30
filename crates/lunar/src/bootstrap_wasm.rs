@@ -69,7 +69,7 @@ pub async fn bootstrap_wasm<Plugin: lunar_core::GamePlugin + Default + 'static>(
     *g.borrow_mut() = Some(Closure::new({
         let app = app.clone();
         move || {
-            app.borrow_mut().tick();
+            app.borrow_mut().tick(config.tick_rate.delta_seconds());
             web_sys::window()
                 .unwrap()
                 .request_animation_frame(f.borrow().as_ref().unwrap().as_ref().unchecked_ref())

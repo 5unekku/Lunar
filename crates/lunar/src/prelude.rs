@@ -60,7 +60,7 @@ pub use lunar_math::{
 };
 
 // lunar-core types
-pub use lunar_core::{App, GamePlugin, Time, UpdateStage, WindowSettings};
+pub use lunar_core::{App, GamePlugin, Time, TickRate, UpdateStage, WindowSettings};
 pub use lunar_core::pool::Pool;
 
 // lunar-2d types — only available when the 2d feature is enabled

@@ -5,9 +5,6 @@
 
 use std::collections::VecDeque;
 
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Instant;
-
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::{IntoScheduleConfigs, ScheduleLabel};
 use bevy_ecs::system::ScheduleSystem;
@@ -22,21 +19,20 @@ use crate::state::EngineState;
 /// provides delta time for framerate-independent movement and elapsed time.
 #[derive(Resource)]
 pub struct Time {
-    /// time since last frame in seconds (scaled)
+    /// fixed logic delta in seconds (scaled by time_scale).
+    /// always exactly 1/tick_hz — use this for all game logic and physics.
     delta_seconds: f32,
-    /// time since last frame in seconds (unscaled)
+    /// fixed logic delta in seconds (unscaled).
     raw_delta_seconds: f32,
-    /// total elapsed time since engine start in seconds
+    /// wall-clock seconds since the last render frame (unscaled).
+    /// use this for animation blending and rendering interpolation only.
+    real_delta_seconds: f32,
+    /// total simulated time in seconds (sum of fixed deltas, scaled)
     elapsed_seconds: f32,
     /// time multiplier (1.0 = normal, 0.5 = half speed, 2.0 = double speed)
     scale: f32,
-    /// total frame count since engine start
+    /// total logic tick count since engine start
     frame_count: u64,
-    /// timestamp of the last frame in milliseconds
-    #[cfg(not(target_arch = "wasm32"))]
-    last_frame: Instant,
-    #[cfg(target_arch = "wasm32")]
-    last_frame: f64,
 }
 
 impl Time {
@@ -46,16 +42,10 @@ impl Time {
         Self {
             delta_seconds: 0.0,
             raw_delta_seconds: 0.0,
+            real_delta_seconds: 0.0,
             elapsed_seconds: 0.0,
             scale: 1.0,
             frame_count: 0,
-            #[cfg(not(target_arch = "wasm32"))]
-            last_frame: Instant::now(),
-            #[cfg(target_arch = "wasm32")]
-            last_frame: web_sys::window()
-                .and_then(|w| w.performance())
-                .map(|p| p.now())
-                .unwrap_or(0.0),
         }
     }
 
@@ -66,65 +56,62 @@ impl Time {
     }
 
     /// get raw delta time in seconds (unscaled)
+    /// unscaled fixed tick delta — same value as `delta_seconds / time_scale`
     #[must_use]
     pub const fn raw_delta_seconds(&self) -> f32 {
         self.raw_delta_seconds
     }
 
-    /// get total elapsed time in seconds
+    /// wall-clock seconds since the last render frame.
+    /// use only for rendering/animation interpolation — NOT for game logic.
+    #[must_use]
+    pub const fn real_delta_seconds(&self) -> f32 {
+        self.real_delta_seconds
+    }
+
+    /// total simulated time in seconds (sum of fixed deltas, scaled)
     #[must_use]
     pub const fn elapsed_seconds(&self) -> f32 {
         self.elapsed_seconds
     }
 
-    /// get the time scale multiplier
+    /// current time scale multiplier
     #[must_use]
     pub const fn time_scale(&self) -> f32 {
         self.scale
     }
 
-    /// set the time scale multiplier
-    pub const fn set_time_scale(&mut self, scale: f32) {
+    /// set the time scale multiplier (0.0+ range; 0 = frozen)
+    pub fn set_time_scale(&mut self, scale: f32) {
         self.scale = scale.max(0.0);
     }
 
-    /// get the total frame count
+    /// total logic tick count since engine start
     #[must_use]
     pub const fn frame_count(&self) -> u64 {
         self.frame_count
     }
 
-    /// set delta directly — for unit tests only, do not call from game code
+    /// set delta directly — for unit tests only
     pub fn set_delta_seconds(&mut self, delta: f32) {
         self.delta_seconds = delta;
         self.raw_delta_seconds = delta;
     }
 
-    /// update the time resource, called once per frame
-    pub fn tick(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        let delta = {
-            let now = Instant::now();
-            let d = (now - self.last_frame).as_secs_f32();
-            self.last_frame = now;
-            d
-        };
-
-        #[cfg(target_arch = "wasm32")]
-        let delta = {
-            let now = web_sys::window()
-                .and_then(|w| w.performance())
-                .map(|p| p.now())
-                .unwrap_or(0.0);
-            let d = ((now - self.last_frame) / 1000.0) as f32;
-            self.last_frame = now;
-            d
-        };
-
-        self.raw_delta_seconds = delta;
-        self.delta_seconds = delta * self.scale;
+    /// advance by one logic tick using the fixed delta from the tick rate.
+    ///
+    /// `fixed_delta` must be `tick_rate.delta_seconds()`. never pass wall-clock
+    /// time here — the whole point is that this is always exactly 1/tick_hz.
+    pub fn advance(&mut self, fixed_delta: f32) {
+        self.raw_delta_seconds = fixed_delta;
+        self.delta_seconds = fixed_delta * self.scale;
         self.elapsed_seconds += self.delta_seconds;
         self.frame_count += 1;
+    }
+
+    /// update the wall-clock render delta — called once per render frame, not per tick.
+    pub fn set_real_delta(&mut self, real_delta: f32) {
+        self.real_delta_seconds = real_delta;
     }
 }
 
@@ -316,50 +303,44 @@ impl App {
         &mut self.engine
     }
 
-    /// start the game loop with the given frame cap (0 = uncapped)
-    pub fn run(&mut self, frame_cap: u32) {
-        self.run_with_events(frame_cap, |_| {});
+    /// start the game loop. `frame_cap` = 0 means uncapped/vsync. `tick_rate` is
+    /// the fixed logic rate, independent of render rate.
+    pub fn run(&mut self, frame_cap: u32, tick_rate: crate::game_loop::TickRate) {
+        self.run_with_events(frame_cap, tick_rate, |_| {});
     }
 
     /// start the game loop with per-frame event processing.
     ///
-    /// the callback runs each frame AFTER the ECS tick and frame cap sleep, so
-    /// input polled here is consumed by the NEXT frame's Input stage. this is
-    /// the late-input pattern: events captured immediately after vsync/sleep
-    /// reflect the most recent device state before the next simulation step.
-    ///
-    /// the first frame runs with empty input (the callback has not yet fired).
-    ///
-    /// # example
-    /// ```ignore
-    /// use lunar_input::{InputPlugin, process_events, init_sdl};
-    /// let mut event_pump = init_sdl();
-    /// app.add_plugin(InputPlugin);
-    /// app.run_with_events(60, |world| {
-    ///     process_events(&mut event_pump, world);
-    /// });
-    /// ```
-    pub fn run_with_events<F>(&mut self, frame_cap: u32, mut process_events: F)
+    /// `time.delta_seconds()` inside systems is always exactly `1 / tick_hz`.
+    /// `time.real_delta_seconds()` is wall-clock render frame time for interpolation.
+    pub fn run_with_events<F>(
+        &mut self,
+        frame_cap: u32,
+        tick_rate: crate::game_loop::TickRate,
+        mut process_events: F,
+    )
     where
         F: FnMut(&mut World),
     {
-        // build all pending plugins before starting
         self.build_plugins();
-
-        // run startup systems once before the main loop
         if !self.startup_run {
             self.engine.run_startup();
             self.startup_run = true;
         }
 
-        let mut game_loop = GameLoop::new(frame_cap);
+        let fixed_delta = tick_rate.delta_seconds();
+        let mut game_loop = GameLoop::new(frame_cap, tick_rate);
 
         while game_loop.is_running() {
-            let ticks = game_loop.tick();
+            let (ticks, frame_delta) = game_loop.tick();
+
+            if let Some(mut time) = self.engine.world_mut().get_resource_mut::<Time>() {
+                time.set_real_delta(frame_delta);
+            }
 
             for _ in 0..ticks {
                 if let Some(mut time) = self.engine.world_mut().get_resource_mut::<Time>() {
-                    time.tick();
+                    time.advance(fixed_delta);
                 }
                 self.engine.run_stages();
             }
@@ -370,20 +351,14 @@ impl App {
                 break;
             }
 
-            // apply frame cap / vsync wait BEFORE polling input so we capture
-            // the most recent device state right after the GPU finishes the frame.
             game_loop.apply_frame_cap();
-
-            // poll native events after the frame completes — input captured here
-            // is consumed by the next frame's Input stage (PostUpdate already
-            // cleared edge-triggered state, so the fresh events land cleanly).
             process_events(self.engine.world_mut());
         }
     }
 
-    /// run a single frame tick (for use with external game loops like requestAnimationFrame).
-    /// handles plugin build and startup on the first call, so the caller doesn't have to.
-    pub fn tick(&mut self) {
+    /// run a single frame tick (for external loops like requestAnimationFrame).
+    /// `fixed_delta` should be `tick_rate.delta_seconds()` for your chosen rate.
+    pub fn tick(&mut self, fixed_delta: f32) {
         if !self.pending_plugins.is_empty() {
             self.build_plugins();
         }
@@ -392,7 +367,7 @@ impl App {
             self.startup_run = true;
         }
         if let Some(mut time) = self.engine.world_mut().get_resource_mut::<Time>() {
-            time.tick();
+            time.advance(fixed_delta);
         }
         self.engine.run_stages();
     }

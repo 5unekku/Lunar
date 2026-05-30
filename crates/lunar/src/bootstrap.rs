@@ -92,7 +92,7 @@ pub fn bootstrap<Plugin: lunar_core::GamePlugin + Default + 'static>(
     let mut last_window_w = config.width;
     let mut last_window_h = config.height;
 
-    app.run_with_events(config.frame_cap, |world| {
+    app.run_with_events(config.frame_cap, config.tick_rate, |world| {
         process_events(&mut event_pump, &mut sdl_gamepad, world);
 
         // handle fullscreen toggle via action map

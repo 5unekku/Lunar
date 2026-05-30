@@ -723,7 +723,10 @@ pub struct RenderConfig3d {
     pub width: u32,
     pub height: u32,
     pub vsync: bool,
+    /// target render frame cap (0 = uncapped/vsync-limited)
     pub frame_cap: u32,
+    /// fixed logic tick rate — independent of render frame rate
+    pub tick_rate: lunar_core::TickRate,
     pub title: String,
 }
 
@@ -734,6 +737,7 @@ impl Default for RenderConfig3d {
             height: 720,
             vsync: true,
             frame_cap: 0,
+            tick_rate: lunar_core::TickRate::Hz60,
             title: "Lunar".to_string(),
         }
     }

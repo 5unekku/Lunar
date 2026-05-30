@@ -117,7 +117,7 @@ macro_rules! lunar_app {
             let mut last_window_w = config.width;
             let mut last_window_h = config.height;
 
-            app.run_with_events(config.frame_cap, |world| {
+            app.run_with_events(config.frame_cap, config.tick_rate, |world| {
                 $crate::lunar_input::process_events(&mut event_pump, world);
 
                 // handle fullscreen toggle via action
