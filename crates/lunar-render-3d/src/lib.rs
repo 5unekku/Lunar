@@ -822,6 +822,29 @@ impl Default for RenderInfo3d {
 
 // ── render engine ──────────────────────────────────────────────────────────
 
+/// read-only per-frame state shared across the render passes. built once near the
+/// end of render_frame and passed to extracted `record_*` pass methods. all Copy.
+struct FrameContext {
+    view_proj: Mat4,
+    view_proj_unjittered: Mat4,
+    staa_jitter_ndc: Vec2,
+    cam_pos: Vec3,
+    cam_wt: WorldTransform3d,
+    dev_bloom: bool,
+    dev_ssao: bool,
+    dev_ssr: bool,
+    dev_fog: bool,
+    dev_fxaa: bool,
+    dev_staa: bool,
+    dev_vignette: bool,
+    dev_chrom_ab: bool,
+    dev_film_grain: bool,
+    dev_contact_shadows: bool,
+    dir_color: Color,
+    dir_direction: Vec3,
+    sky_color: Color,
+}
+
 /// the 3d rendering engine. owns the wgpu device, queue, and surface.
 ///
 /// inserted as a resource by [`RenderPlugin3d`]. game code should not
@@ -6356,6 +6379,515 @@ impl RenderEngine3d {
 
     }
 
+    /// records the post-processing chain (bloom, atmospheric sky, ssr, fog, contact
+    /// shadow, motion vectors, composite, taa, fxaa) into the frame encoder, ending at
+    /// the swapchain. `view` is the surface view (moved in; not used after).
+    fn record_post_processing(&mut self, fc: &FrameContext, world: &World, encoder: &mut wgpu::CommandEncoder, view: wgpu::TextureView) {
+        let &FrameContext { view_proj, view_proj_unjittered, staa_jitter_ndc, cam_pos, cam_wt, dev_bloom, dev_ssao, dev_ssr, dev_fog, dev_fxaa, dev_staa, dev_vignette, dev_chrom_ab, dev_film_grain, dev_contact_shadows, dir_color, dir_direction, sky_color } = fc;
+        // ── bloom passes ─────────────────────────────────────────────────
+        if self.bloom_enabled && dev_bloom && !self.bloom_mip_views.is_empty() {
+            let n = self.bloom_mip_views.len();
+
+            // upload bloom params for all steps (downsample + upsample)
+            let bloom_threshold = 1.0_f32;
+            let filter_radius = 1.0_f32;
+            let total_steps = n + n.saturating_sub(1);
+            for i in 0..total_steps.min(MAX_BLOOM_MIPS) {
+                let (src_w, src_h) = if i < n {
+                    // downsample: src is HDR (step 0) or previous mip
+                    if i == 0 { (self.surface_config.width, self.surface_config.height) }
+                    else { self.bloom_mip_sizes[i - 1] }
+                } else {
+                    // upsample: src is the mip being read (larger index)
+                    let up_step = i - n;
+                    self.bloom_mip_sizes[n - 1 - up_step]
+                };
+                let threshold = if i == 0 { bloom_threshold } else { 0.0 };
+                let params: [f32; 4] = [
+                    1.0 / src_w as f32,
+                    1.0 / src_h as f32,
+                    filter_radius,
+                    threshold,
+                ];
+                self.queue.write_buffer(
+                    &self.bloom_params_buf,
+                    (i * UNIFORM_STRIDE as usize) as u64,
+                    unsafe { slice_as_bytes(&params) },
+                );
+            }
+
+            // downsample: HDR → mip0 → mip1 → ... → mip(n-1)
+            for i in 0..n {
+                let (dst_w, dst_h) = self.bloom_mip_sizes[i];
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("[bloom] downsample"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.bloom_mip_views[i],
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_viewport(0.0, 0.0, dst_w as f32, dst_h as f32, 0.0, 1.0);
+                pass.set_pipeline(&self.bloom_downsample_pipeline);
+                pass.set_bind_group(0, &self.bloom_downsample_bgs[i], &[]);
+                pass.draw(0..3, 0..1);
+            }
+
+            // upsample: mip(n-1) → mip(n-2) → ... → mip0 (additive blend)
+            for i in 0..self.bloom_upsample_bgs.len() {
+                let dst_idx = n - 2 - i;
+                let (dst_w, dst_h) = self.bloom_mip_sizes[dst_idx];
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("[bloom] upsample"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.bloom_mip_views[dst_idx],
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_viewport(0.0, 0.0, dst_w as f32, dst_h as f32, 0.0, 1.0);
+                pass.set_pipeline(&self.bloom_upsample_pipeline);
+                pass.set_bind_group(0, &self.bloom_upsample_bgs[i], &[]);
+                pass.draw(0..3, 0..1);
+            }
+        }
+
+        // ── atmospheric scattering sky pass ──────────────────────────────
+        // runs after the main color pass; alpha-blends sky only onto depth==1.0 pixels
+        if let Some(atmos) = world.get_resource::<AtmosphericScattering>().copied() {
+            // sun direction: dir_direction points from scene toward the light source
+            let sun_dir = (-dir_direction).normalize();
+            let mut atmos_data = [0u8; ATMOS_PARAMS_SIZE as usize];
+            let sun_dir_arr: [f32; 3] = [sun_dir.x, sun_dir.y, sun_dir.z];
+            atmos_data[0..12].copy_from_slice(unsafe { slice_as_bytes(&sun_dir_arr) });
+            atmos_data[12..16].copy_from_slice(&atmos.sun_intensity.to_le_bytes());
+            atmos_data[16..28].copy_from_slice(unsafe { slice_as_bytes(&atmos.rayleigh_scatter) });
+            atmos_data[28..32].copy_from_slice(&atmos.mie_scatter.to_le_bytes());
+            atmos_data[32..36].copy_from_slice(&atmos.rayleigh_scale.to_le_bytes());
+            atmos_data[36..40].copy_from_slice(&atmos.mie_scale.to_le_bytes());
+            atmos_data[40..44].copy_from_slice(&atmos.mie_anisotropy.to_le_bytes());
+            atmos_data[44..48].copy_from_slice(&6_371_000.0_f32.to_le_bytes());
+            atmos_data[48..52].copy_from_slice(&6_471_000.0_f32.to_le_bytes());
+            atmos_data[52..56].copy_from_slice(&atmos.exposure.to_le_bytes());
+            self.queue.write_buffer(&self.atmos_params_buf, 0, &atmos_data);
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("[atmos] sky pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.hdr_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.atmos_pipeline);
+            pass.set_bind_group(0, &self.atmos_bg0, &[]);
+            pass.set_bind_group(1, &self.atmos_bg1, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        // ── SSR pass (mid+ tier) ─────────────────────────────────────────
+        if self.ssr_enabled && dev_ssr {
+            let width  = self.surface_config.width as f32;
+            let height = self.surface_config.height as f32;
+            let inv_vp   = view_proj.inverse();
+            let view_mat = Mat4::look_at_rh(cam_pos, cam_pos + cam_wt.forward(), cam_wt.up());
+            let inv_vp_cols  = inv_vp.to_cols_array();
+            let vp_cols      = view_proj.to_cols_array();
+            let view_cols    = view_mat.to_cols_array();
+            let mut ssr_data = [0u8; SSR_PARAMS_SIZE as usize];
+            ssr_data[0..64].copy_from_slice(unsafe { slice_as_bytes(&inv_vp_cols) });
+            ssr_data[64..128].copy_from_slice(unsafe { slice_as_bytes(&vp_cols) });
+            ssr_data[128..192].copy_from_slice(unsafe { slice_as_bytes(&view_cols) });
+            // screen_size(vec2) + max_steps(u32) + thickness + stride + fade_start + 2 pads
+            let max_steps: u32 = 32;
+            ssr_data[192..196].copy_from_slice(&width.to_le_bytes());
+            ssr_data[196..200].copy_from_slice(&height.to_le_bytes());
+            ssr_data[200..204].copy_from_slice(&max_steps.to_le_bytes());
+            ssr_data[204..208].copy_from_slice(&0.5_f32.to_le_bytes()); // thickness
+            ssr_data[208..212].copy_from_slice(&1.0_f32.to_le_bytes()); // stride
+            ssr_data[212..216].copy_from_slice(&0.1_f32.to_le_bytes()); // fade_start
+            self.queue.write_buffer(&self.ssr_params_buf, 0, &ssr_data);
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("[ssr] pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.ssr_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.ssr_pipeline);
+            pass.set_bind_group(0, &self.ssr_bg0, &[]);
+            pass.set_bind_group(1, &self.ssr_bg1, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        // ── volumetric fog pass (mid+ tier) ──────────────────────────────
+        if self.fog_enabled && dev_fog {
+            let width  = self.surface_config.width as f32;
+            let height = self.surface_config.height as f32;
+            let inv_vp      = view_proj.inverse();
+            let inv_vp_cols = inv_vp.to_cols_array();
+            // write fog params: inv_view_proj(64) + rest(64) = 128 bytes
+            let mut fog_data = [0u8; FOG_PARAMS_SIZE as usize];
+            fog_data[0..64].copy_from_slice(unsafe { slice_as_bytes(&inv_vp_cols) });
+            // rest 64 bytes: dir_direction(12)+step_count(4)+dir_color(12)+density(4)+
+            //                fog_color(12)+max_dist(4)+sun(4)+aniso(4)+w(4)+h(4)
+            let dir_d = dir_direction.normalize();
+            let step_count: u32 = 16;
+            // sun_dir points towards sun (negate scene light direction)
+            let sun_dir: [f32; 3] = [-dir_d.x, -dir_d.y, -dir_d.z];
+            let fog_color: [f32; 3] = [sky_color.r * 0.5, sky_color.g * 0.5, sky_color.b * 0.7];
+            let rest: [f32; 16] = [
+                sun_dir[0], sun_dir[1], sun_dir[2], f32::from_bits(step_count),
+                dir_color.r, dir_color.g, dir_color.b, 0.01_f32,    // density
+                fog_color[0], fog_color[1], fog_color[2], 200.0_f32, // max_distance
+                2.0_f32, 0.6_f32, width, height,                     // sun_intensity, anisotropy
+            ];
+            fog_data[64..128].copy_from_slice(unsafe { slice_as_bytes(&rest) });
+            self.queue.write_buffer(&self.fog_params_buf, 0, &fog_data);
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("[fog] pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.fog_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.fog_pipeline);
+            pass.set_bind_group(0, &self.fog_bg0, &[]);
+            pass.set_bind_group(1, &self.fog_bg1, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        // ── contact shadow pass (before composite) ───────────────────────
+        if dev_contact_shadows {
+            let width  = self.surface_config.width;
+            let height = self.surface_config.height;
+            let inv_proj = view_proj.inverse();
+            self.ensure_contact_shadow_resources(width, height, &inv_proj);
+
+            // update light_dir_vs in params (view-space directional light direction)
+            let light_dir_vs_raw = (cam_wt.rotation.inverse() * dir_direction).normalize();
+            if let Some(params_buf) = self.contact_shadow_params_buf.as_ref() {
+                let light_dir_data: [f32; 3] = [light_dir_vs_raw.x, light_dir_vs_raw.y, light_dir_vs_raw.z];
+                self.queue.write_buffer(params_buf, 64, unsafe { slice_as_bytes(&light_dir_data) });
+            }
+
+            if let (Some(pipeline), Some(bgl), Some(params_buf), Some(cs_view), Some(depth_view)) = (
+                self.contact_shadow_pipeline.as_ref(),
+                self.contact_shadow_bgl.as_ref(),
+                self.contact_shadow_params_buf.as_ref(),
+                self.contact_shadow_view.as_ref(),
+                Some(&self.gtao_depth_view),
+            ) {
+                let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("[contact shadow] bg"),
+                    layout: bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: params_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(depth_view) },
+                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                    ],
+                });
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("[contact shadow] pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: cs_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.draw(0..3, 0..1);
+            }
+
+            // rebuild composite_bg if contact_shadow_tex was just created
+            if self.composite_bg_dirty {
+                let cs_view_ref = self.contact_shadow_view.as_ref()
+                    .unwrap_or(&self.contact_shadow_fallback_view);
+                self.composite_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("[composite] bg"),
+                    layout: &self.composite_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: self.composite_params_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
+                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(self.bloom_mip_views.first().unwrap_or(&self.hdr_view)) },
+                        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.gtao_ao_view_a) },
+                        wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&self.ssr_view) },
+                        wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&self.fog_view) },
+                        wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                        wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(cs_view_ref) },
+                    ],
+                });
+                self.composite_bg_dirty = false;
+            }
+        }
+
+        // ── motion vector pass (after main color, before composite) ─────
+        {
+            let width  = self.surface_config.width;
+            let height = self.surface_config.height;
+            self.ensure_motion_vector_resources(width, height);
+            let inv_vp = view_proj.inverse();
+            let inv_vp_cols  = inv_vp.to_cols_array();
+            let prev_vp_cols = self.prev_view_proj.to_cols_array();
+            if let Some(params_buf) = self.motion_vec_params_buf.as_ref() {
+                let mut mv_data = [0u8; MOTION_VECTOR_PARAMS_SIZE as usize];
+                mv_data[0..64].copy_from_slice(unsafe { slice_as_bytes(&inv_vp_cols) });
+                mv_data[64..128].copy_from_slice(unsafe { slice_as_bytes(&prev_vp_cols) });
+                mv_data[128..132].copy_from_slice(&(width as f32).to_le_bytes());
+                mv_data[132..136].copy_from_slice(&(height as f32).to_le_bytes());
+                self.queue.write_buffer(params_buf, 0, &mv_data);
+            }
+            if let (Some(pipeline), Some(bgl), Some(params_buf), Some(mv_view)) = (
+                self.motion_vec_pipeline.as_ref(),
+                self.motion_vec_bgl.as_ref(),
+                self.motion_vec_params_buf.as_ref(),
+                self.motion_vec_view.as_ref(),
+            ) {
+                let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("[motion vec] bg"),
+                    layout: bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: params_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.gtao_depth_view) },
+                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.staa_nearest_sampler) },
+                    ],
+                });
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("[motion vec] pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: mv_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            self.prev_view_proj = view_proj;
+        }
+
+        // ── composite pass → swapchain ────────────────────────────────────
+        {
+            let time = world.resource::<lunar_core::Time>();
+            let quality = world.get_resource::<QualitySettings>();
+            let (bloom_strength, vignette_strength, vignette_radius, ca_strength, grain_strength, flags) = {
+                let q = quality;
+                let mut f: u32 = 0;
+                let bloom_s;
+                let vig_s;
+                let vig_r;
+                let ca_s;
+                let grain_s;
+                if let Some(q) = q {
+                    if self.bloom_enabled && dev_bloom && q.bloom { f |= 1; }
+                    if dev_vignette && q.vignette { f |= 2; }
+                    if dev_chrom_ab && q.chromatic_aberration { f |= 4; }
+                    if dev_film_grain && q.film_grain { f |= 8; }
+                    if self.ssao_enabled && dev_ssao && q.ssao { f |= 16; }
+                    if self.ssr_enabled && dev_ssr && q.ssr { f |= 32; }
+                    if self.fog_enabled && dev_fog && q.volumetric_fog { f |= 64; }
+                    if dev_contact_shadows && self.contact_shadow_tex.is_some() { f |= 128; }
+                    bloom_s = 0.04_f32;
+                    vig_s   = if dev_vignette && q.vignette { 0.3 } else { 0.0 };
+                    vig_r   = 0.3_f32;
+                    ca_s    = if dev_chrom_ab && q.chromatic_aberration { 1.5 } else { 0.0 };
+                    grain_s = if dev_film_grain && q.film_grain { 0.5 } else { 0.0 };
+                } else {
+                    bloom_s = 0.04; vig_s = 0.0; vig_r = 0.0; ca_s = 0.0; grain_s = 0.0;
+                    if self.bloom_enabled && dev_bloom { f |= 1; }
+                    if dev_contact_shadows && self.contact_shadow_tex.is_some() { f |= 128; }
+                }
+                (bloom_s, vig_s, vig_r, ca_s, grain_s, f)
+            };
+            let composite_data: [f32; 8] = [
+                bloom_strength,
+                vignette_strength,
+                vignette_radius,
+                ca_strength,
+                grain_strength,
+                time.elapsed_seconds().fract(),
+                f32::from_bits(flags),
+                0.0, // _pad
+            ];
+            self.queue.write_buffer(&self.composite_params_buf, 0, unsafe { slice_as_bytes(&composite_data) });
+
+            // fxaa and taa both need composite output in a sampleable intermediate texture.
+            // taa takes priority over fxaa (they're mutually exclusive on mid/high tier).
+            let use_intermediate = (self.staa_enabled && dev_staa) || (self.fxaa_enabled && dev_fxaa);
+            let composite_target = if use_intermediate { &self.fxaa_ldr_view } else { &view };
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("[composite] pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: composite_target,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.composite_pipeline);
+            pass.set_bind_group(0, &self.composite_bg, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        // ── TAA pass → swapchain + history ───────────────────────────────────
+        if self.staa_enabled && dev_staa {
+            let w  = self.surface_config.width;
+            let h  = self.surface_config.height;
+
+            // pack params: prev_vp(64) + inv_vp(64) + jitter(8) + rcp_frame(8) + blend_alpha(4) + frame_index(4) + pad(8)
+            let inv_vp = view_proj.inverse();
+            let mut taa_data = [0u8; STAA_PARAMS_SIZE as usize];
+            taa_data[0..64].copy_from_slice(bytemuck::cast_slice(&self.staa_prev_vp.to_cols_array()));
+            taa_data[64..128].copy_from_slice(bytemuck::cast_slice(&inv_vp.to_cols_array()));
+            taa_data[128..132].copy_from_slice(bytemuck::cast_slice(&[staa_jitter_ndc.x]));
+            taa_data[132..136].copy_from_slice(bytemuck::cast_slice(&[staa_jitter_ndc.y]));
+            taa_data[136..140].copy_from_slice(bytemuck::cast_slice(&[1.0_f32 / w as f32]));
+            taa_data[140..144].copy_from_slice(bytemuck::cast_slice(&[1.0_f32 / h as f32]));
+            taa_data[144..148].copy_from_slice(bytemuck::cast_slice(&[0.1_f32]));  // blend_alpha
+            taa_data[148..152].copy_from_slice(&self.staa_frame_index.to_le_bytes());
+            self.queue.write_buffer(&self.staa_params_buf, 0, &taa_data);
+
+            // ping-pong: even frame writes to history_b (reads from history_a via bg_even)
+            //            odd  frame writes to history_a (reads from history_b via bg_odd)
+            let (bg, write_a, write_b) = if !self.staa_ping {
+                (&self.staa_bg_even, false, true)
+            } else {
+                (&self.staa_bg_odd, true, false)
+            };
+            let history_write_view = if write_b { &self.staa_history_b_view } else { &self.staa_history_a_view };
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("[staa] pass"),
+                color_attachments: &[
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                        depth_slice: None,
+                    }),
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: history_write_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                        depth_slice: None,
+                    }),
+                ],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.staa_pipeline);
+            pass.set_bind_group(0, bg, &[]);
+            pass.draw(0..3, 0..1);
+            drop(pass);
+
+            // advance taa state for next frame
+            self.staa_prev_vp    = view_proj_unjittered;
+            self.staa_frame_index = self.staa_frame_index.wrapping_add(1);
+            self.staa_ping       = !self.staa_ping;
+            let _ = (write_a, write_b);
+        }
+
+        // ── FXAA pass → swapchain ─────────────────────────────────────────
+        if self.fxaa_enabled && dev_fxaa && !(self.staa_enabled && dev_staa) {
+            let w = self.surface_config.width;
+            let h = self.surface_config.height;
+            let fxaa_data: [f32; 4] = [1.0 / w as f32, 1.0 / h as f32, 0.0, 0.0];
+            self.queue.write_buffer(&self.fxaa_params_buf, 0, unsafe { slice_as_bytes(&fxaa_data) });
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("[fxaa] pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.fxaa_pipeline);
+            pass.set_bind_group(0, &self.fxaa_bg, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+    }
+
     // a few loops below index multiple parallel arrays by the same counter, or use a
     // sentinel final iteration for batch flushing — clearer as indexed loops than as
     // iterator adapters, so the range-loop/counter lints are intentionally allowed.
@@ -8967,508 +9499,9 @@ impl RenderEngine3d {
             }
         }
 
-        // ── bloom passes ─────────────────────────────────────────────────
-        if self.bloom_enabled && dev_bloom && !self.bloom_mip_views.is_empty() {
-            let n = self.bloom_mip_views.len();
-
-            // upload bloom params for all steps (downsample + upsample)
-            let bloom_threshold = 1.0_f32;
-            let filter_radius = 1.0_f32;
-            let total_steps = n + n.saturating_sub(1);
-            for i in 0..total_steps.min(MAX_BLOOM_MIPS) {
-                let (src_w, src_h) = if i < n {
-                    // downsample: src is HDR (step 0) or previous mip
-                    if i == 0 { (self.surface_config.width, self.surface_config.height) }
-                    else { self.bloom_mip_sizes[i - 1] }
-                } else {
-                    // upsample: src is the mip being read (larger index)
-                    let up_step = i - n;
-                    self.bloom_mip_sizes[n - 1 - up_step]
-                };
-                let threshold = if i == 0 { bloom_threshold } else { 0.0 };
-                let params: [f32; 4] = [
-                    1.0 / src_w as f32,
-                    1.0 / src_h as f32,
-                    filter_radius,
-                    threshold,
-                ];
-                self.queue.write_buffer(
-                    &self.bloom_params_buf,
-                    (i * UNIFORM_STRIDE as usize) as u64,
-                    unsafe { slice_as_bytes(&params) },
-                );
-            }
-
-            // downsample: HDR → mip0 → mip1 → ... → mip(n-1)
-            for i in 0..n {
-                let (dst_w, dst_h) = self.bloom_mip_sizes[i];
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("[bloom] downsample"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &self.bloom_mip_views[i],
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_viewport(0.0, 0.0, dst_w as f32, dst_h as f32, 0.0, 1.0);
-                pass.set_pipeline(&self.bloom_downsample_pipeline);
-                pass.set_bind_group(0, &self.bloom_downsample_bgs[i], &[]);
-                pass.draw(0..3, 0..1);
-            }
-
-            // upsample: mip(n-1) → mip(n-2) → ... → mip0 (additive blend)
-            for i in 0..self.bloom_upsample_bgs.len() {
-                let dst_idx = n - 2 - i;
-                let (dst_w, dst_h) = self.bloom_mip_sizes[dst_idx];
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("[bloom] upsample"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &self.bloom_mip_views[dst_idx],
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_viewport(0.0, 0.0, dst_w as f32, dst_h as f32, 0.0, 1.0);
-                pass.set_pipeline(&self.bloom_upsample_pipeline);
-                pass.set_bind_group(0, &self.bloom_upsample_bgs[i], &[]);
-                pass.draw(0..3, 0..1);
-            }
-        }
-
-        // ── atmospheric scattering sky pass ──────────────────────────────
-        // runs after the main color pass; alpha-blends sky only onto depth==1.0 pixels
-        if let Some(atmos) = world.get_resource::<AtmosphericScattering>().copied() {
-            // sun direction: dir_direction points from scene toward the light source
-            let sun_dir = (-dir_direction).normalize();
-            let mut atmos_data = [0u8; ATMOS_PARAMS_SIZE as usize];
-            let sun_dir_arr: [f32; 3] = [sun_dir.x, sun_dir.y, sun_dir.z];
-            atmos_data[0..12].copy_from_slice(unsafe { slice_as_bytes(&sun_dir_arr) });
-            atmos_data[12..16].copy_from_slice(&atmos.sun_intensity.to_le_bytes());
-            atmos_data[16..28].copy_from_slice(unsafe { slice_as_bytes(&atmos.rayleigh_scatter) });
-            atmos_data[28..32].copy_from_slice(&atmos.mie_scatter.to_le_bytes());
-            atmos_data[32..36].copy_from_slice(&atmos.rayleigh_scale.to_le_bytes());
-            atmos_data[36..40].copy_from_slice(&atmos.mie_scale.to_le_bytes());
-            atmos_data[40..44].copy_from_slice(&atmos.mie_anisotropy.to_le_bytes());
-            atmos_data[44..48].copy_from_slice(&6_371_000.0_f32.to_le_bytes());
-            atmos_data[48..52].copy_from_slice(&6_471_000.0_f32.to_le_bytes());
-            atmos_data[52..56].copy_from_slice(&atmos.exposure.to_le_bytes());
-            self.queue.write_buffer(&self.atmos_params_buf, 0, &atmos_data);
-
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("[atmos] sky pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.hdr_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.atmos_pipeline);
-            pass.set_bind_group(0, &self.atmos_bg0, &[]);
-            pass.set_bind_group(1, &self.atmos_bg1, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        // ── SSR pass (mid+ tier) ─────────────────────────────────────────
-        if self.ssr_enabled && dev_ssr {
-            let width  = self.surface_config.width as f32;
-            let height = self.surface_config.height as f32;
-            let inv_vp   = view_proj.inverse();
-            let view_mat = Mat4::look_at_rh(cam_pos, cam_pos + cam_wt.forward(), cam_wt.up());
-            let inv_vp_cols  = inv_vp.to_cols_array();
-            let vp_cols      = view_proj.to_cols_array();
-            let view_cols    = view_mat.to_cols_array();
-            let mut ssr_data = [0u8; SSR_PARAMS_SIZE as usize];
-            ssr_data[0..64].copy_from_slice(unsafe { slice_as_bytes(&inv_vp_cols) });
-            ssr_data[64..128].copy_from_slice(unsafe { slice_as_bytes(&vp_cols) });
-            ssr_data[128..192].copy_from_slice(unsafe { slice_as_bytes(&view_cols) });
-            // screen_size(vec2) + max_steps(u32) + thickness + stride + fade_start + 2 pads
-            let max_steps: u32 = 32;
-            ssr_data[192..196].copy_from_slice(&width.to_le_bytes());
-            ssr_data[196..200].copy_from_slice(&height.to_le_bytes());
-            ssr_data[200..204].copy_from_slice(&max_steps.to_le_bytes());
-            ssr_data[204..208].copy_from_slice(&0.5_f32.to_le_bytes()); // thickness
-            ssr_data[208..212].copy_from_slice(&1.0_f32.to_le_bytes()); // stride
-            ssr_data[212..216].copy_from_slice(&0.1_f32.to_le_bytes()); // fade_start
-            self.queue.write_buffer(&self.ssr_params_buf, 0, &ssr_data);
-
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("[ssr] pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.ssr_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.ssr_pipeline);
-            pass.set_bind_group(0, &self.ssr_bg0, &[]);
-            pass.set_bind_group(1, &self.ssr_bg1, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        // ── volumetric fog pass (mid+ tier) ──────────────────────────────
-        if self.fog_enabled && dev_fog {
-            let width  = self.surface_config.width as f32;
-            let height = self.surface_config.height as f32;
-            let inv_vp      = view_proj.inverse();
-            let inv_vp_cols = inv_vp.to_cols_array();
-            // write fog params: inv_view_proj(64) + rest(64) = 128 bytes
-            let mut fog_data = [0u8; FOG_PARAMS_SIZE as usize];
-            fog_data[0..64].copy_from_slice(unsafe { slice_as_bytes(&inv_vp_cols) });
-            // rest 64 bytes: dir_direction(12)+step_count(4)+dir_color(12)+density(4)+
-            //                fog_color(12)+max_dist(4)+sun(4)+aniso(4)+w(4)+h(4)
-            let dir_d = dir_direction.normalize();
-            let step_count: u32 = 16;
-            // sun_dir points towards sun (negate scene light direction)
-            let sun_dir: [f32; 3] = [-dir_d.x, -dir_d.y, -dir_d.z];
-            let fog_color: [f32; 3] = [sky_color.r * 0.5, sky_color.g * 0.5, sky_color.b * 0.7];
-            let rest: [f32; 16] = [
-                sun_dir[0], sun_dir[1], sun_dir[2], f32::from_bits(step_count),
-                dir_color.r, dir_color.g, dir_color.b, 0.01_f32,    // density
-                fog_color[0], fog_color[1], fog_color[2], 200.0_f32, // max_distance
-                2.0_f32, 0.6_f32, width, height,                     // sun_intensity, anisotropy
-            ];
-            fog_data[64..128].copy_from_slice(unsafe { slice_as_bytes(&rest) });
-            self.queue.write_buffer(&self.fog_params_buf, 0, &fog_data);
-
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("[fog] pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.fog_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.fog_pipeline);
-            pass.set_bind_group(0, &self.fog_bg0, &[]);
-            pass.set_bind_group(1, &self.fog_bg1, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        // ── contact shadow pass (before composite) ───────────────────────
-        if dev_contact_shadows {
-            let width  = self.surface_config.width;
-            let height = self.surface_config.height;
-            let inv_proj = view_proj.inverse();
-            self.ensure_contact_shadow_resources(width, height, &inv_proj);
-
-            // update light_dir_vs in params (view-space directional light direction)
-            let light_dir_vs_raw = (cam_wt.rotation.inverse() * dir_direction).normalize();
-            if let Some(params_buf) = self.contact_shadow_params_buf.as_ref() {
-                let light_dir_data: [f32; 3] = [light_dir_vs_raw.x, light_dir_vs_raw.y, light_dir_vs_raw.z];
-                self.queue.write_buffer(params_buf, 64, unsafe { slice_as_bytes(&light_dir_data) });
-            }
-
-            if let (Some(pipeline), Some(bgl), Some(params_buf), Some(cs_view), Some(depth_view)) = (
-                self.contact_shadow_pipeline.as_ref(),
-                self.contact_shadow_bgl.as_ref(),
-                self.contact_shadow_params_buf.as_ref(),
-                self.contact_shadow_view.as_ref(),
-                Some(&self.gtao_depth_view),
-            ) {
-                let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("[contact shadow] bg"),
-                    layout: bgl,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: params_buf.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(depth_view) },
-                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
-                    ],
-                });
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("[contact shadow] pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: cs_view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_pipeline(pipeline);
-                pass.set_bind_group(0, &bg, &[]);
-                pass.draw(0..3, 0..1);
-            }
-
-            // rebuild composite_bg if contact_shadow_tex was just created
-            if self.composite_bg_dirty {
-                let cs_view_ref = self.contact_shadow_view.as_ref()
-                    .unwrap_or(&self.contact_shadow_fallback_view);
-                self.composite_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("[composite] bg"),
-                    layout: &self.composite_bgl,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: self.composite_params_buf.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
-                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(self.bloom_mip_views.first().unwrap_or(&self.hdr_view)) },
-                        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.gtao_ao_view_a) },
-                        wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&self.ssr_view) },
-                        wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&self.fog_view) },
-                        wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
-                        wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(cs_view_ref) },
-                    ],
-                });
-                self.composite_bg_dirty = false;
-            }
-        }
-
-        // ── motion vector pass (after main color, before composite) ─────
-        {
-            let width  = self.surface_config.width;
-            let height = self.surface_config.height;
-            self.ensure_motion_vector_resources(width, height);
-            let inv_vp = view_proj.inverse();
-            let inv_vp_cols  = inv_vp.to_cols_array();
-            let prev_vp_cols = self.prev_view_proj.to_cols_array();
-            if let Some(params_buf) = self.motion_vec_params_buf.as_ref() {
-                let mut mv_data = [0u8; MOTION_VECTOR_PARAMS_SIZE as usize];
-                mv_data[0..64].copy_from_slice(unsafe { slice_as_bytes(&inv_vp_cols) });
-                mv_data[64..128].copy_from_slice(unsafe { slice_as_bytes(&prev_vp_cols) });
-                mv_data[128..132].copy_from_slice(&(width as f32).to_le_bytes());
-                mv_data[132..136].copy_from_slice(&(height as f32).to_le_bytes());
-                self.queue.write_buffer(params_buf, 0, &mv_data);
-            }
-            if let (Some(pipeline), Some(bgl), Some(params_buf), Some(mv_view)) = (
-                self.motion_vec_pipeline.as_ref(),
-                self.motion_vec_bgl.as_ref(),
-                self.motion_vec_params_buf.as_ref(),
-                self.motion_vec_view.as_ref(),
-            ) {
-                let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("[motion vec] bg"),
-                    layout: bgl,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: params_buf.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.gtao_depth_view) },
-                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.staa_nearest_sampler) },
-                    ],
-                });
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("[motion vec] pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: mv_view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_pipeline(pipeline);
-                pass.set_bind_group(0, &bg, &[]);
-                pass.draw(0..3, 0..1);
-            }
-            self.prev_view_proj = view_proj;
-        }
-
-        // ── composite pass → swapchain ────────────────────────────────────
-        {
-            let time = world.resource::<lunar_core::Time>();
-            let quality = world.get_resource::<QualitySettings>();
-            let (bloom_strength, vignette_strength, vignette_radius, ca_strength, grain_strength, flags) = {
-                let q = quality;
-                let mut f: u32 = 0;
-                let bloom_s;
-                let vig_s;
-                let vig_r;
-                let ca_s;
-                let grain_s;
-                if let Some(q) = q {
-                    if self.bloom_enabled && dev_bloom && q.bloom { f |= 1; }
-                    if dev_vignette && q.vignette { f |= 2; }
-                    if dev_chrom_ab && q.chromatic_aberration { f |= 4; }
-                    if dev_film_grain && q.film_grain { f |= 8; }
-                    if self.ssao_enabled && dev_ssao && q.ssao { f |= 16; }
-                    if self.ssr_enabled && dev_ssr && q.ssr { f |= 32; }
-                    if self.fog_enabled && dev_fog && q.volumetric_fog { f |= 64; }
-                    if dev_contact_shadows && self.contact_shadow_tex.is_some() { f |= 128; }
-                    bloom_s = 0.04_f32;
-                    vig_s   = if dev_vignette && q.vignette { 0.3 } else { 0.0 };
-                    vig_r   = 0.3_f32;
-                    ca_s    = if dev_chrom_ab && q.chromatic_aberration { 1.5 } else { 0.0 };
-                    grain_s = if dev_film_grain && q.film_grain { 0.5 } else { 0.0 };
-                } else {
-                    bloom_s = 0.04; vig_s = 0.0; vig_r = 0.0; ca_s = 0.0; grain_s = 0.0;
-                    if self.bloom_enabled && dev_bloom { f |= 1; }
-                    if dev_contact_shadows && self.contact_shadow_tex.is_some() { f |= 128; }
-                }
-                (bloom_s, vig_s, vig_r, ca_s, grain_s, f)
-            };
-            let composite_data: [f32; 8] = [
-                bloom_strength,
-                vignette_strength,
-                vignette_radius,
-                ca_strength,
-                grain_strength,
-                time.elapsed_seconds().fract(),
-                f32::from_bits(flags),
-                0.0, // _pad
-            ];
-            self.queue.write_buffer(&self.composite_params_buf, 0, unsafe { slice_as_bytes(&composite_data) });
-
-            // fxaa and taa both need composite output in a sampleable intermediate texture.
-            // taa takes priority over fxaa (they're mutually exclusive on mid/high tier).
-            let use_intermediate = (self.staa_enabled && dev_staa) || (self.fxaa_enabled && dev_fxaa);
-            let composite_target = if use_intermediate { &self.fxaa_ldr_view } else { &view };
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("[composite] pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: composite_target,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.composite_pipeline);
-            pass.set_bind_group(0, &self.composite_bg, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        // ── TAA pass → swapchain + history ───────────────────────────────────
-        if self.staa_enabled && dev_staa {
-            let w  = self.surface_config.width;
-            let h  = self.surface_config.height;
-
-            // pack params: prev_vp(64) + inv_vp(64) + jitter(8) + rcp_frame(8) + blend_alpha(4) + frame_index(4) + pad(8)
-            let inv_vp = view_proj.inverse();
-            let mut taa_data = [0u8; STAA_PARAMS_SIZE as usize];
-            taa_data[0..64].copy_from_slice(bytemuck::cast_slice(&self.staa_prev_vp.to_cols_array()));
-            taa_data[64..128].copy_from_slice(bytemuck::cast_slice(&inv_vp.to_cols_array()));
-            taa_data[128..132].copy_from_slice(bytemuck::cast_slice(&[staa_jitter_ndc.x]));
-            taa_data[132..136].copy_from_slice(bytemuck::cast_slice(&[staa_jitter_ndc.y]));
-            taa_data[136..140].copy_from_slice(bytemuck::cast_slice(&[1.0_f32 / w as f32]));
-            taa_data[140..144].copy_from_slice(bytemuck::cast_slice(&[1.0_f32 / h as f32]));
-            taa_data[144..148].copy_from_slice(bytemuck::cast_slice(&[0.1_f32]));  // blend_alpha
-            taa_data[148..152].copy_from_slice(&self.staa_frame_index.to_le_bytes());
-            self.queue.write_buffer(&self.staa_params_buf, 0, &taa_data);
-
-            // ping-pong: even frame writes to history_b (reads from history_a via bg_even)
-            //            odd  frame writes to history_a (reads from history_b via bg_odd)
-            let (bg, write_a, write_b) = if !self.staa_ping {
-                (&self.staa_bg_even, false, true)
-            } else {
-                (&self.staa_bg_odd, true, false)
-            };
-            let history_write_view = if write_b { &self.staa_history_b_view } else { &self.staa_history_a_view };
-
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("[staa] pass"),
-                color_attachments: &[
-                    Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        resolve_target: None,
-                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
-                        depth_slice: None,
-                    }),
-                    Some(wgpu::RenderPassColorAttachment {
-                        view: history_write_view,
-                        resolve_target: None,
-                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
-                        depth_slice: None,
-                    }),
-                ],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.staa_pipeline);
-            pass.set_bind_group(0, bg, &[]);
-            pass.draw(0..3, 0..1);
-            drop(pass);
-
-            // advance taa state for next frame
-            self.staa_prev_vp    = view_proj_unjittered;
-            self.staa_frame_index = self.staa_frame_index.wrapping_add(1);
-            self.staa_ping       = !self.staa_ping;
-            let _ = (write_a, write_b);
-        }
-
-        // ── FXAA pass → swapchain ─────────────────────────────────────────
-        if self.fxaa_enabled && dev_fxaa && !(self.staa_enabled && dev_staa) {
-            let w = self.surface_config.width;
-            let h = self.surface_config.height;
-            let fxaa_data: [f32; 4] = [1.0 / w as f32, 1.0 / h as f32, 0.0, 0.0];
-            self.queue.write_buffer(&self.fxaa_params_buf, 0, unsafe { slice_as_bytes(&fxaa_data) });
-
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("[fxaa] pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.fxaa_pipeline);
-            pass.set_bind_group(0, &self.fxaa_bg, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
+        // bundle read-only per-frame state, then record the post-processing chain
+        let fc = FrameContext { view_proj, view_proj_unjittered, staa_jitter_ndc, cam_pos, cam_wt, dev_bloom, dev_ssao, dev_ssr, dev_fog, dev_fxaa, dev_staa, dev_vignette, dev_chrom_ab, dev_film_grain, dev_contact_shadows, dir_color, dir_direction, sky_color };
+        self.record_post_processing(&fc, world, &mut encoder, view);
         #[cfg(not(target_arch = "wasm32"))]
         self.staging_belt.finish();
         self.queue.submit(Some(encoder.finish()));
