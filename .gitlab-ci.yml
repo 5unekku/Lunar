@@ -1,7 +1,7 @@
 default:
   image: rust:slim-trixie
   before_script:
-    - apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev
+    - apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev
     # rust-toolchain.toml is picked up automatically — installs the right channel, targets, and components
   cache:
     key:
@@ -48,7 +48,7 @@ test:
 .cross: &cross
   stage: build
   before_script:
-    - apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev python3-pip
+    - apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev python3-pip
     - pip install cargo-zigbuild --break-system-packages
   cache:
     key:
@@ -104,7 +104,7 @@ build-windows-aarch64:
 smoke:
   stage: build
   before_script:
-    - apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev xvfb mesa-vulkan-drivers libvulkan1
+    - apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev xvfb mesa-vulkan-drivers libvulkan1
   script:
     - WGPU_BACKEND=vulkan xvfb-run -a cargo run --example platform_demo -- --smoke
 
