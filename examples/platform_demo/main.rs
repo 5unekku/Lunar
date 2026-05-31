@@ -210,6 +210,7 @@ fn quit_on_escape(input: Res<InputState>) {
         .is_some_and(|gp| gp.is_button_just_pressed(GamepadButton::Start)
             || gp.is_button_just_pressed(GamepadButton::Back));
     if keyboard_quit || controller_quit {
+        #[cfg(not(target_arch = "wasm32"))]
         std::process::exit(0);
     }
 }
@@ -234,6 +235,7 @@ impl GamePlugin for PlatformDemo {
 
 // ── entry point ──────────────────────────────────────────────────────────────
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     lunar::bootstrap_3d::<PlatformDemo>(RenderConfig3d {
         title: "Platform Demo".to_string(),
@@ -244,4 +246,19 @@ fn main() {
         tick_rate: TickRate::Hz60,
         ..Default::default()
     });
+}
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(start)]
+pub async fn start() {
+    lunar::bootstrap_wasm_3d::<PlatformDemo>(RenderConfig3d {
+        width: 1280,
+        height: 720,
+        vsync: true,
+        tick_rate: TickRate::Hz60,
+        ..Default::default()
+    }).await;
 }

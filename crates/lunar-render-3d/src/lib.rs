@@ -56,64 +56,65 @@ use lunar_core::{App, GamePlugin, UpdateStage};
 use lunar_lightmap::{DirectionalLightmap, Lightmap};
 use lunar_math::{Color, Mat3, Mat4, Vec2, Vec3};
 
-// dev builds keep wgsl for live shader errors; release uses pre-compiled spirv (build.rs)
-#[cfg(debug_assertions)]
+// dev builds and wasm keep wgsl inline; native release uses pre-compiled spirv (build.rs)
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const SHADER_SRC: &str                 = include_str!("shader.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const CULL_SHADER_SRC: &str            = include_str!("cull.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const CULL_INDIRECT_SHADER_SRC: &str   = include_str!("cull_indirect.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const HZB_SHADER_SRC: &str             = include_str!("hzb.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const SHADOW_SHADER_SRC: &str          = include_str!("shadow.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const POINT_SHADOW_SHADER_SRC: &str    = include_str!("point_shadow.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const CLUSTER_SHADER_SRC: &str         = include_str!("cluster.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const SURFACE_SHADER_SRC: &str         = include_str!("surface.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const BLOOM_SHADER_SRC: &str           = include_str!("bloom.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const COMPOSITE_SHADER_SRC: &str       = include_str!("composite.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const GTAO_SHADER_SRC: &str            = include_str!("gtao.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const FXAA_SHADER_SRC: &str            = include_str!("fxaa.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const SSR_SHADER_SRC: &str             = include_str!("ssr.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const FOG_SHADER_SRC: &str             = include_str!("volumetric_fog.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const ATMOS_SHADER_SRC: &str           = include_str!("atmos.wgsl");
 const UPSCALE_SHADER_SRC: &str         = include_str!("upscale.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const PARTICLE_SIM_SHADER_SRC: &str    = include_str!("particle_sim.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const PARTICLE_RENDER_SHADER_SRC: &str = include_str!("particle_render.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const DECAL_SHADER_SRC: &str           = include_str!("decal.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const WATER_SHADER_SRC: &str           = include_str!("water.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const TERRAIN_SHADER_SRC: &str            = include_str!("terrain.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const CONTACT_SHADOW_SHADER_SRC: &str     = include_str!("contact_shadow.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const MOTION_VECTOR_SHADER_SRC: &str      = include_str!("motion_vector.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const DETAIL_SPRITE_SHADER_SRC: &str      = include_str!("detail_sprite.wgsl");
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const STAA_SHADER_SRC: &str               = include_str!("staa.wgsl");
 
 /// create a shader module from pre-compiled spirv (release) or wgsl (debug).
 /// in release, `source` is the spirv bytes from OUT_DIR; in debug, the wgsl string.
 macro_rules! shader_source {
     ($wgsl_src:ident, $spv_file:literal) => {{
-        #[cfg(debug_assertions)]
+        // wasm/webgpu only accepts wgsl; native release uses pre-compiled spirv
+        #[cfg(any(debug_assertions, target_arch = "wasm32"))]
         let src = wgpu::ShaderSource::Wgsl($wgsl_src.into());
-        #[cfg(not(debug_assertions))]
+        #[cfg(all(not(debug_assertions), not(target_arch = "wasm32")))]
         let src = wgpu::ShaderSource::SpirV(std::borrow::Cow::Borrowed(
             bytemuck::cast_slice::<u8, u32>(include_bytes!(concat!(env!("OUT_DIR"), "/", $spv_file)))
         ));
@@ -10245,7 +10246,6 @@ impl RenderEngine3d {
 
 // ── ecs integration ────────────────────────────────────────────────────────
 
-#[cfg(not(target_arch = "wasm32"))]
 fn render_3d_system(world: &mut World) {
     let t0 = std::time::Instant::now();
     let mut engine = world.remove_resource::<RenderEngine3d>().unwrap();
