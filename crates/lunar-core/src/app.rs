@@ -375,19 +375,17 @@ impl App {
                 time.set_interp_alpha(alpha);
             }
 
-            for i in 0..ticks {
+            // run 0-5 logic ticks for this frame (fixed timestep accumulator)
+            for _ in 0..ticks {
                 if let Some(mut time) = self.engine.world_mut().get_resource_mut::<Time>() {
                     time.advance(fixed_delta);
                 }
-                // only render on the last tick — rendering blocks on vsync so doing it
-                // on every tick causes a spiral-of-death and double-renders that make
-                // mouse rotation stutter (camera rotation is shown twice at the same angle).
-                if i + 1 < ticks {
-                    self.engine.run_stages_no_render();
-                } else {
-                    self.engine.run_stages();
-                }
+                self.engine.run_logic_tick();
             }
+            // render + post-update always fire exactly once per display frame,
+            // even when ticks == 0 (frame ran faster than the tick interval).
+            // this decouples render rate from logic rate so uncapped framerates work.
+            self.engine.run_render_and_post();
 
             if let Some(state) = self.engine.world().get_resource::<EngineState>()
                 && state.is_stopping()

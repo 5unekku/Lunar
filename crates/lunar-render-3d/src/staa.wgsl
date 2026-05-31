@@ -136,7 +136,7 @@ fn fs_main(in: VertOut) -> FragOut {
     let in_bounds = all(prev_uv >= vec2<f32>(0.0)) && all(prev_uv <= vec2<f32>(1.0));
 
     // velocity in screen-pixels for blend adaptation
-    let curr_uv_unjittered = uv - params.jitter * 0.5;
+    let curr_uv_unjittered = uv - params.jitter;
     let velocity_uv        = curr_uv_unjittered - prev_uv;
     let speed_px           = length(velocity_uv) / max(rc.x, rc.y);
 

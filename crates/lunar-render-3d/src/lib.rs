@@ -1130,7 +1130,8 @@ pub struct RenderEngine3d {
     // staa_bg_odd  reads history_b, writes to [swapchain, history_a].
     staa_enabled: bool,
     staa_frame_index: u32,
-    staa_prev_vp: Mat4,              // unjittered view_proj from previous frame
+    staa_prev_vp: Mat4,              // unjittered view_proj from previous frame (camera_stationary check)
+    staa_prev_vp_jittered: Mat4,     // jittered view_proj from previous frame (shader history reprojection)
     staa_history_a_texture: wgpu::Texture,
     staa_history_a_view: wgpu::TextureView,
     staa_history_b_texture: wgpu::Texture,
@@ -4219,6 +4220,7 @@ impl RenderEngine3d {
             staa_enabled,
             staa_frame_index: 0,
             staa_prev_vp: Mat4::IDENTITY,
+            staa_prev_vp_jittered: Mat4::IDENTITY,
             staa_history_a_texture,
             staa_history_a_view,
             staa_history_b_texture,
@@ -7761,7 +7763,7 @@ impl RenderEngine3d {
             // pack params: prev_vp(64) + inv_vp(64) + jitter(8) + rcp_frame(8) + blend_alpha(4) + frame_index(4) + depth_scale(8)
             let inv_vp = view_proj.inverse();
             let mut taa_data = [0u8; STAA_PARAMS_SIZE as usize];
-            taa_data[0..64].copy_from_slice(bytemuck::cast_slice(&self.staa_prev_vp.to_cols_array()));
+            taa_data[0..64].copy_from_slice(bytemuck::cast_slice(&self.staa_prev_vp_jittered.to_cols_array()));
             taa_data[64..128].copy_from_slice(bytemuck::cast_slice(&inv_vp.to_cols_array()));
             taa_data[128..132].copy_from_slice(bytemuck::cast_slice(&[staa_jitter_ndc.x]));
             taa_data[132..136].copy_from_slice(bytemuck::cast_slice(&[staa_jitter_ndc.y]));
@@ -7817,9 +7819,10 @@ impl RenderEngine3d {
             let _ = (write_a, write_b);
         }
 
-        // always track the unjittered vp so camera_stationary is accurate on the first
-        // frame after staa turns on, even if staa was off the previous frame.
-        self.staa_prev_vp = view_proj_unjittered;
+        // always track both vps regardless of staa state, so the first active frame
+        // has correct values (camera_stationary and history reprojection both need them).
+        self.staa_prev_vp          = view_proj_unjittered;
+        self.staa_prev_vp_jittered = view_proj; // jittered when camera stationary, unjittered when moving
 
         // ── FXAA pass → swapchain ─────────────────────────────────────────
         if dev_fxaa && !dev_staa {
@@ -9402,9 +9405,15 @@ impl RenderEngine3d {
                 while i > 0 { f /= base as f64; r += f * (i % base) as f64; i /= base; }
                 r as f32
             }
-            // NDC jitter: ≤0.5px in render-resolution screen space
-            let jx = (halton(idx, 2) - 0.5) * 2.0 / self.render_w as f32;
-            let jy = (halton(idx, 3) - 0.5) * 2.0 / self.render_h as f32;
+            // NDC jitter: ≤0.5px in display-resolution screen space.
+            // using display (not render) dimensions means the oscillation stays
+            // sub-pixel at the output regardless of render scale. at render_scale < 1
+            // the render-pixel shift is render_scale * 0.5px — effectively zero at
+            // very low scales, which is correct: no sub-pixel info to accumulate there.
+            let dw = self.surface_config.width as f32;
+            let dh = self.surface_config.height as f32;
+            let jx = (halton(idx, 2) - 0.5) * 2.0 / dw;
+            let jy = (halton(idx, 3) - 0.5) * 2.0 / dh;
 
             // modify the projection column 2 (z-axis.xy) to add a constant NDC offset.
             // P[2][0] += Δx shifts NDC.x by -Δx for all depths (clip.w cancels out).

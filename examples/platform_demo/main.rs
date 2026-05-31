@@ -6,11 +6,13 @@
 //! usage: platform_demo [fov]   fov in degrees, 70-150 (default 90)
 //!
 //! controls:
-//!   WASD        — move
-//!   mouse       — look
+//!   WASD          — move
+//!   mouse         — look
 //!   minus / equals — decrease / increase FOV by 5°
-//!   Escape      — quit
-//!   F11 / F     — toggle fullscreen
+//!   [ / ]         — decrease / increase render scale by 0.1
+//!   T             — toggle STAA
+//!   Escape        — quit
+//!   F11           — toggle fullscreen
 
 use lunar::prelude::*;
 
@@ -75,10 +77,10 @@ fn setup(
     let quality = if std::env::args().any(|a| a == "--smoke") {
         QualitySettings::maximum()
     } else {
-        QualitySettings::minimum()
+        QualitySettings { staa: true, render_scale: 1.0, ..QualitySettings::minimum() }
     };
     #[cfg(not(debug_assertions))]
-    let quality = QualitySettings::minimum();
+    let quality = QualitySettings { staa: true, render_scale: 1.0, ..QualitySettings::minimum() };
     commands.insert_resource(quality);
 
     // lock cursor for mouse-look
@@ -141,7 +143,7 @@ fn fps_controller(
         *pitch = std::f32::consts::FRAC_PI_2;
     }
 
-    let dt = time.delta_seconds();
+    let dt = time.real_delta_seconds();
 
     // ── look input: mouse + right stick ───────────────────────────────────
     let (dx, dy) = input.mouse_delta();
@@ -212,6 +214,20 @@ fn fov_controller(
     }
 }
 
+fn render_scale_controller(input: Res<InputState>, mut quality: ResMut<QualitySettings>) {
+    let mut delta = 0.0f32;
+    if input.is_key_just_pressed(KeyCode::LeftBracket)  { delta -= 0.1; }
+    if input.is_key_just_pressed(KeyCode::RightBracket) { delta += 0.1; }
+    if delta == 0.0 { return; }
+    quality.render_scale = (quality.render_scale + delta).clamp(0.1, 1.0);
+}
+
+fn staa_toggle(input: Res<InputState>, mut quality: ResMut<QualitySettings>) {
+    if input.is_key_just_pressed(KeyCode::T) {
+        quality.staa = !quality.staa;
+    }
+}
+
 fn quit_on_escape(input: Res<InputState>) {
     let keyboard_quit = input.is_key_just_pressed(KeyCode::Escape);
     let controller_quit = input.gamepad(0)
@@ -235,8 +251,10 @@ impl GamePlugin for PlatformDemo {
 
     fn build(&mut self, app: &mut App) {
         app.add_startup_system(setup);
-        app.add_system_to_stage(UpdateStage::Update, fps_controller);
+        app.add_system_to_stage(UpdateStage::Render, fps_controller);
         app.add_system_to_stage(UpdateStage::Update, fov_controller);
+        app.add_system_to_stage(UpdateStage::Update, render_scale_controller);
+        app.add_system_to_stage(UpdateStage::Update, staa_toggle);
         app.add_system_to_stage(UpdateStage::Update, quit_on_escape);
     }
 }
