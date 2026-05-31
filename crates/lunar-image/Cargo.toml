@@ -13,5 +13,8 @@ keywords.workspace = true
 zstd = { version = "0.13", default-features = false }
 thiserror = "2"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
+
 [dev-dependencies]
 image = "0.25"

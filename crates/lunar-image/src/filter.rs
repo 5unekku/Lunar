@@ -85,48 +85,85 @@ pub fn filter_planes(planar: &[u8], width: usize, height: usize, plane_count: us
 
     let filtered_row_len = width + 1;
     let mut out = vec![0u8; plane_count * height * filtered_row_len];
-    // one scratch buffer per filter, reused across every row
-    let mut candidates: [Vec<u8>; 5] = std::array::from_fn(|_| vec![0u8; width]);
 
-    for plane in 0..plane_count {
-        let plane_data = &planar[plane * plane_size..plane * plane_size + plane_size];
-        for row in 0..height {
-            let current = &plane_data[row * width..row * width + width];
-            let above_row =
-                if row == 0 { None } else { Some(&plane_data[(row - 1) * width..(row - 1) * width + width]) };
-
-            for x in 0..width {
-                let left = if x == 0 { 0 } else { current[x - 1] };
-                let above = above_row.map_or(0, |a| a[x]);
-                let above_left = if x == 0 { 0 } else { above_row.map_or(0, |a| a[x - 1]) };
-                let value = current[x];
-                candidates[Filter::None as usize][x] = value;
-                candidates[Filter::Sub as usize][x] = value.wrapping_sub(left);
-                candidates[Filter::Up as usize][x] = value.wrapping_sub(above);
-                candidates[Filter::Average as usize][x] = value.wrapping_sub(average(left, above));
-                candidates[Filter::Paeth as usize][x] = value.wrapping_sub(paeth(left, above, above_left));
-            }
-
-            // pick the filter whose output has the smallest sum of absolute signed
-            // bytes — the standard png proxy for how well it will compress.
-            let mut best = Filter::None;
-            let mut best_score = u64::MAX;
-            for filter in ALL_FILTERS {
-                let score: u64 = candidates[filter as usize]
-                    .iter()
-                    .map(|&byte| u64::from((byte as i8).unsigned_abs()))
-                    .sum();
-                if score < best_score {
-                    best_score = score;
-                    best = filter;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        let plane_bufs: Vec<Vec<u8>> = (0..plane_count).into_par_iter().map(|plane| {
+            let plane_data = &planar[plane * plane_size..plane * plane_size + plane_size];
+            let mut plane_out = vec![0u8; height * filtered_row_len];
+            let mut candidates: [Vec<u8>; 5] = std::array::from_fn(|_| vec![0u8; width]);
+            for row in 0..height {
+                let current = &plane_data[row * width..row * width + width];
+                let above_row = if row == 0 { None } else { Some(&plane_data[(row - 1) * width..(row - 1) * width + width]) };
+                for x in 0..width {
+                    let left = if x == 0 { 0 } else { current[x - 1] };
+                    let above = above_row.map_or(0, |a| a[x]);
+                    let above_left = if x == 0 { 0 } else { above_row.map_or(0, |a| a[x - 1]) };
+                    let value = current[x];
+                    candidates[Filter::None as usize][x] = value;
+                    candidates[Filter::Sub as usize][x] = value.wrapping_sub(left);
+                    candidates[Filter::Up as usize][x] = value.wrapping_sub(above);
+                    candidates[Filter::Average as usize][x] = value.wrapping_sub(average(left, above));
+                    candidates[Filter::Paeth as usize][x] = value.wrapping_sub(paeth(left, above, above_left));
                 }
+                let mut best = Filter::None;
+                let mut best_score = u64::MAX;
+                for filter in ALL_FILTERS {
+                    let score: u64 = candidates[filter as usize]
+                        .iter()
+                        .map(|&byte| u64::from((byte as i8).unsigned_abs()))
+                        .sum();
+                    if score < best_score { best_score = score; best = filter; }
+                }
+                let row_start = row * filtered_row_len;
+                plane_out[row_start] = best as u8;
+                plane_out[row_start + 1..row_start + 1 + width].copy_from_slice(&candidates[best as usize]);
             }
-
-            let row_start = (plane * height + row) * filtered_row_len;
-            out[row_start] = best as u8;
-            out[row_start + 1..row_start + 1 + width].copy_from_slice(&candidates[best as usize]);
+            plane_out
+        }).collect();
+        for (plane, buf) in plane_bufs.iter().enumerate() {
+            let base = plane * height * filtered_row_len;
+            out[base..base + height * filtered_row_len].copy_from_slice(buf);
         }
     }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        // one scratch buffer per filter, reused across every row
+        let mut candidates: [Vec<u8>; 5] = std::array::from_fn(|_| vec![0u8; width]);
+        for plane in 0..plane_count {
+            let plane_data = &planar[plane * plane_size..plane * plane_size + plane_size];
+            for row in 0..height {
+                let current = &plane_data[row * width..row * width + width];
+                let above_row = if row == 0 { None } else { Some(&plane_data[(row - 1) * width..(row - 1) * width + width]) };
+                for x in 0..width {
+                    let left = if x == 0 { 0 } else { current[x - 1] };
+                    let above = above_row.map_or(0, |a| a[x]);
+                    let above_left = if x == 0 { 0 } else { above_row.map_or(0, |a| a[x - 1]) };
+                    let value = current[x];
+                    candidates[Filter::None as usize][x] = value;
+                    candidates[Filter::Sub as usize][x] = value.wrapping_sub(left);
+                    candidates[Filter::Up as usize][x] = value.wrapping_sub(above);
+                    candidates[Filter::Average as usize][x] = value.wrapping_sub(average(left, above));
+                    candidates[Filter::Paeth as usize][x] = value.wrapping_sub(paeth(left, above, above_left));
+                }
+                let mut best = Filter::None;
+                let mut best_score = u64::MAX;
+                for filter in ALL_FILTERS {
+                    let score: u64 = candidates[filter as usize]
+                        .iter()
+                        .map(|&byte| u64::from((byte as i8).unsigned_abs()))
+                        .sum();
+                    if score < best_score { best_score = score; best = filter; }
+                }
+                let row_start = (plane * height + row) * filtered_row_len;
+                out[row_start] = best as u8;
+                out[row_start + 1..row_start + 1 + width].copy_from_slice(&candidates[best as usize]);
+            }
+        }
+    }
+
     out
 }
 
@@ -149,29 +186,65 @@ pub fn unfilter_planes(
     let plane_size = width * height;
     let mut out = vec![0u8; plane_count * plane_size];
 
-    for plane in 0..plane_count {
-        let plane_base = plane * plane_size;
-        for row in 0..height {
-            let row_start = (plane * height + row) * filtered_row_len;
-            let filter = Filter::from_u8(filtered[row_start])?;
-            let source = &filtered[row_start + 1..row_start + 1 + width];
-            for x in 0..width {
-                // left/above/above-left are already reconstructed in `out`
-                let left = if x == 0 { 0 } else { out[plane_base + row * width + x - 1] };
-                let above = if row == 0 { 0 } else { out[plane_base + (row - 1) * width + x] };
-                let above_left =
-                    if row == 0 || x == 0 { 0 } else { out[plane_base + (row - 1) * width + x - 1] };
-                let predictor = match filter {
-                    Filter::None => 0,
-                    Filter::Sub => left,
-                    Filter::Up => above,
-                    Filter::Average => average(left, above),
-                    Filter::Paeth => paeth(left, above, above_left),
-                };
-                out[plane_base + row * width + x] = source[x].wrapping_add(predictor);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        let plane_results: Vec<Option<Vec<u8>>> = (0..plane_count).into_par_iter().map(|plane| {
+            let mut plane_out = vec![0u8; plane_size];
+            for row in 0..height {
+                let row_start = (plane * height + row) * filtered_row_len;
+                let filter = Filter::from_u8(filtered[row_start])?;
+                let source = &filtered[row_start + 1..row_start + 1 + width];
+                for x in 0..width {
+                    let left = if x == 0 { 0 } else { plane_out[row * width + x - 1] };
+                    let above = if row == 0 { 0 } else { plane_out[(row - 1) * width + x] };
+                    let above_left = if row == 0 || x == 0 { 0 } else { plane_out[(row - 1) * width + x - 1] };
+                    let predictor = match filter {
+                        Filter::None => 0,
+                        Filter::Sub => left,
+                        Filter::Up => above,
+                        Filter::Average => average(left, above),
+                        Filter::Paeth => paeth(left, above, above_left),
+                    };
+                    plane_out[row * width + x] = source[x].wrapping_add(predictor);
+                }
+            }
+            Some(plane_out)
+        }).collect();
+        for result in &plane_results {
+            if result.is_none() { return None; }
+        }
+        for (plane, buf) in plane_results.iter().enumerate() {
+            let base = plane * plane_size;
+            out[base..base + plane_size].copy_from_slice(buf.as_ref().unwrap());
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        for plane in 0..plane_count {
+            let plane_base = plane * plane_size;
+            for row in 0..height {
+                let row_start = (plane * height + row) * filtered_row_len;
+                let filter = Filter::from_u8(filtered[row_start])?;
+                let source = &filtered[row_start + 1..row_start + 1 + width];
+                for x in 0..width {
+                    let left = if x == 0 { 0 } else { out[plane_base + row * width + x - 1] };
+                    let above = if row == 0 { 0 } else { out[plane_base + (row - 1) * width + x] };
+                    let above_left = if row == 0 || x == 0 { 0 } else { out[plane_base + (row - 1) * width + x - 1] };
+                    let predictor = match filter {
+                        Filter::None => 0,
+                        Filter::Sub => left,
+                        Filter::Up => above,
+                        Filter::Average => average(left, above),
+                        Filter::Paeth => paeth(left, above, above_left),
+                    };
+                    out[plane_base + row * width + x] = source[x].wrapping_add(predictor);
+                }
             }
         }
     }
+
     Some(out)
 }
 

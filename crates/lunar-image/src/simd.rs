@@ -26,8 +26,13 @@ pub fn deinterleave_rgba(rgba: &[u8]) -> Vec<u8> {
     }
 
     #[cfg_attr(target_arch = "aarch64", allow(unreachable_code))]
-    deinterleave_scalar(rgba, &mut out, n);
-    out
+    {
+        #[cfg(not(target_arch = "wasm32"))]
+        deinterleave_parallel(rgba, &mut out, n);
+        #[cfg(target_arch = "wasm32")]
+        deinterleave_scalar(rgba, &mut out, n);
+        out
+    }
 }
 
 /// reinterleave `[R...][G...][B...][A...]` planes back to RGBA.
@@ -50,10 +55,42 @@ pub fn reinterleave_rgba(planar: &[u8], n_pixels: usize) -> Vec<u8> {
     }
 
     #[cfg_attr(target_arch = "aarch64", allow(unreachable_code))]
-    reinterleave_scalar(planar, &mut out, n_pixels);
-    out
+    {
+        #[cfg(not(target_arch = "wasm32"))]
+        reinterleave_parallel(planar, &mut out, n_pixels);
+        #[cfg(target_arch = "wasm32")]
+        reinterleave_scalar(planar, &mut out, n_pixels);
+        out
+    }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn deinterleave_parallel(rgba: &[u8], out: &mut [u8], n: usize) {
+    use rayon::prelude::*;
+    let (r, rest) = out.split_at_mut(n);
+    let (g, rest) = rest.split_at_mut(n);
+    let (b, a) = rest.split_at_mut(n);
+    r.par_iter_mut().zip(g.par_iter_mut()).zip(b.par_iter_mut()).zip(a.par_iter_mut())
+        .zip(rgba.par_chunks_exact(4))
+        .for_each(|((((rv, gv), bv), av), px)| {
+            *rv = px[0]; *gv = px[1]; *bv = px[2]; *av = px[3];
+        });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn reinterleave_parallel(planar: &[u8], out: &mut [u8], n: usize) {
+    use rayon::prelude::*;
+    let (r, rest) = planar.split_at(n);
+    let (g, rest) = rest.split_at(n);
+    let (b, a) = rest.split_at(n);
+    r.par_iter().zip(g.par_iter()).zip(b.par_iter()).zip(a.par_iter())
+        .zip(out.par_chunks_exact_mut(4))
+        .for_each(|((((rv, gv), bv), av), px)| {
+            px[0] = *rv; px[1] = *gv; px[2] = *bv; px[3] = *av;
+        });
+}
+
+#[cfg(target_arch = "wasm32")]
 fn deinterleave_scalar(rgba: &[u8], out: &mut [u8], n: usize) {
     let (r, rest) = out.split_at_mut(n);
     let (g, rest) = rest.split_at_mut(n);
@@ -66,6 +103,7 @@ fn deinterleave_scalar(rgba: &[u8], out: &mut [u8], n: usize) {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 fn reinterleave_scalar(planar: &[u8], out: &mut [u8], n: usize) {
     let (r, rest) = planar.split_at(n);
     let (g, rest) = rest.split_at(n);
