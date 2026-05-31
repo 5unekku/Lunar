@@ -8,16 +8,16 @@ small, friendly public API.
 - **2D and 3D.** Both are first-class. The 2D path (`lunar-2d` / `lunar-render`) and
   the 3D path (`lunar-3d` / `lunar-render-3d`) share the same core, ECS, asset
   pipeline, and game loop. A game pulls in only the dimension it uses via feature flags.
-- **Built for low-spec machines.** The engine front-loads expensive work offline
-  (BSP/PVS visibility, lightmap baking, LOD generation, texture compression, vertex
-  quantization, SPIR-V precompilation) so the runtime frame budget is spent on
-  geometry that is actually visible. Target: 60fps on a 2015 mid-range CPU.
+- **Built for low-spec machines.** Expensive work is front-loaded offline: BSP/PVS
+  visibility, lightmap baking, LOD generation, texture compression, vertex quantization,
+  SPIR-V precompilation. The runtime frame budget is spent only on visible geometry.
+  Target: 60fps on a 2015 mid-range CPU.
 - **One dependency for game code.** Games depend on `lunar` and nothing else.
   Backends (windowing via SDL3, GPU via wgpu, ECS via bevy_ecs) are internal details,
   never named in a game's `Cargo.toml`. A compile-time test (`tests/api_seal`) enforces this.
 - **Game code never needs `unsafe`.** Inside the engine, `unsafe` is used sparingly and
   only where it is a genuine performance win (e.g. NEON pixel processing), with
-  documented safety invariants. Elsewhere, the safe path is preferred.
+  documented safety invariants.
 - **Crossplatform and multiarch.** The same game code runs on Linux, Windows, macOS, and
   the web (WebGPU + WASM). `scripts/build_all.go` cross-compiles 12 target triples.
 
@@ -86,6 +86,7 @@ Game code depends only on `lunar`. The rest are internal or opt-in.
 
 ```bash
 cargo run                              # smoke test (boots the engine, opens a window)
+cargo run --features debug             # same, with ECS debug instrumentation
 cargo run --example rpg_example        # RPG-style example
 cargo run --example platform_demo      # 2D platformer
 cargo run --example shooter_example    # top-down shooter
@@ -148,7 +149,7 @@ fn move_player(time: Res<Time>, input: Res<InputState>, mut query: Query<&mut Tr
     }
 }
 
-lunar::lunar_app!(MyGame);
+lunar_app!(MyGame);
 ```
 
 ## subsystems
@@ -193,7 +194,7 @@ constructs them.
 ### assets
 
 ```rust
-fn load(mut assets: ResMut<AssetServer>) {
+fn setup_assets(mut assets: ResMut<AssetServer>) {
     let texture = assets.load_texture("textures/player.png");
     if assets.is_texture_ready(&texture) {
         // ready to use
@@ -215,8 +216,6 @@ impl GamePlugin for MyPlugin {
     }
 }
 ```
-
-The engine resolves plugin dependencies via topological sort.
 
 ## project structure
 

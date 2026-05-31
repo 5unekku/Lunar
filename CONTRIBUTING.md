@@ -9,6 +9,34 @@
 - **performance trinity** — maximum performance, optimized resources, ease of use. YAGNI / KISS / DRY. unsafe only in engine internals with `// SAFETY:` blocks.
 - **breaking changes are fine** — this codebase has no public users. never add backward-compat shims. just change the thing.
 
+## code style
+
+**naming**
+- no abbreviated names — `request` not `req`, `transform` not `tr`, `texture` not `tex`
+- unused parameters must be prefixed with `_`
+- prefer self-documenting names; use doc comments (`///`) so tooling can surface them
+
+**comments**
+- lowercase, casual, succinct — capitalize only proper names and identifiers
+- only comment the _why_, never the _what_; good names make the what obvious
+
+**formatting**
+- functions: no space before `(` — `fn spawn(mut commands: Commands) {`
+- control flow: space before and after parens, space before brace — `if (x) {`, `for (item in list) {`
+- one-liners when possible; break to next line + indent only when using braces
+- never use braces on a one-liner — use expression/arrow syntax:
+  - `fn name(&self) -> &str { "MyPlugin" }` → `fn name(&self) -> &str => "MyPlugin"`
+  - or just the inline block form if the language requires it
+- when braces are required (multi-statement body), always break lines — never inline brace bodies
+
+## hosting & publishing
+
+- **[GitLab](https://gitlab.com/5unekku/Lunar)** is the canonical home — CI/CD and PRs live here
+- **[Codeberg](https://codeberg.org/5unekku/Lunar)** is a mirror
+- **[GitHub](https://github.com/5unekku/Lunar)** is a mirror (visibility / crates.io integration)
+
+CI/CD runs on GitLab CI. this is a library, not a deployed service — the release job is `cargo publish` to crates.io. a lightweight pipeline that checks `cargo test`, `cargo clippy`, and `cargo build --target wasm32-unknown-unknown` on push is enough; a full matrix build is only needed before a crates.io publish.
+
 ## render rules
 
 violations have known downstream costs:
