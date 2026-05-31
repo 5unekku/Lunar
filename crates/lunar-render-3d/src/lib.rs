@@ -82,6 +82,7 @@ const SSR_SHADER_SRC: &str             = include_str!("ssr.wgsl");
 const FOG_SHADER_SRC: &str             = include_str!("volumetric_fog.wgsl");
 #[cfg(debug_assertions)]
 const ATMOS_SHADER_SRC: &str           = include_str!("atmos.wgsl");
+const FSR_SHADER_SRC: &str             = include_str!("fsr.wgsl");
 #[cfg(debug_assertions)]
 const PARTICLE_SIM_SHADER_SRC: &str    = include_str!("particle_sim.wgsl");
 #[cfg(debug_assertions)]
@@ -221,6 +222,8 @@ const ATMOS_PARAMS_SIZE: u64 = 64;
 /// particle sim params UBO: delta_time(4)+gravity(4)+alive_count(4)+pad(4) = 16 bytes.
 const PARTICLE_SIM_PARAMS_SIZE: u64 = 16;
 
+/// FSR params UBO: render_w(4)+render_h(4)+display_w(4)+display_h(4)+rcas_sharpness(4)+pad(12) = 32 bytes.
+const FSR_PARAMS_SIZE: u64 = 32;
 /// contact shadow params UBO: inv_proj(64)+light_dir_vs(12)+step_count(4)+step_size(4)+w(4)+h(4)+pad(4) = 96 bytes.
 const CONTACT_SHADOW_PARAMS_SIZE: u64 = 96;
 
@@ -435,6 +438,12 @@ pub struct QualitySettings {
     pub ssr: bool,
     /// enable quarter-res ray-marched volumetric fog (mid+ tier).
     pub volumetric_fog: bool,
+    /// render resolution scale factor. 1.0 = native; 0.75 = 75% width/height (56% pixel count).
+    /// when < 1.0, the full render chain runs at reduced size and FSR upscales to display.
+    pub render_scale: f32,
+    /// enable FSR 3 (EASU + RCAS) upscaling when render_scale < 1.0.
+    /// only activates when render_scale < 1.0. on native resolution this is a no-op.
+    pub fsr: bool,
 }
 
 impl QualitySettings {
@@ -459,6 +468,8 @@ impl QualitySettings {
             staa: false,
             ssr: false,
             volumetric_fog: false,
+            render_scale: 0.75,
+            fsr: true,
         }
     }
 
@@ -483,6 +494,8 @@ impl QualitySettings {
                 base.fxaa = false;
                 base.staa = false;
                 base.shadow_cascades = 1;
+                base.render_scale = 0.75;
+                base.fsr = true;
             }
             QualityPreset::Low => {
                 base.msaa_samples = 1;
@@ -521,6 +534,8 @@ impl QualitySettings {
                 staa: false,
                 ssr: false,
                 volumetric_fog: false,
+                render_scale: 1.0,
+                fsr: false,
             },
             RenderTier::Mid => Self {
                 preset: QualityPreset::Medium,
@@ -539,6 +554,8 @@ impl QualitySettings {
                 staa: true,   // selective temporal AA on top of MSAA: shimmer + sub-pixel jitter
                 ssr: true,
                 volumetric_fog: true,
+                render_scale: 1.0,
+                fsr: false,
             },
             RenderTier::High => Self {
                 preset: QualityPreset::High,
@@ -557,6 +574,8 @@ impl QualitySettings {
                 staa: true,
                 ssr: true,
                 volumetric_fog: true,
+                render_scale: 1.0,
+                fsr: false,
             },
         }
     }
@@ -872,6 +891,12 @@ pub struct RenderEngine3d {
     render_tier: RenderTier,
     hdr_format: wgpu::TextureFormat,
 
+    // current render resolution (= display * render_scale). equals display when render_scale = 1.0.
+    render_w: u32,
+    render_h: u32,
+    // active render scale; when this changes render-resolution textures are recreated.
+    render_scale: f32,
+
     msaa_samples: u32,
     depth_view: wgpu::TextureView,
     // some when msaa_samples > 1; render target for color pass, resolved to swapchain
@@ -991,6 +1016,7 @@ pub struct RenderEngine3d {
     gtao_ao_view_b: wgpu::TextureView,
     gtao_params_buf: wgpu::Buffer,
     gtao_bgl: wgpu::BindGroupLayout,
+    gtao_point_sampler: wgpu::Sampler,
     gtao_main_bg: wgpu::BindGroup,   // depth → ao_a
     gtao_blur_h_bg: wgpu::BindGroup, // ao_a → ao_b
     gtao_blur_v_bg: wgpu::BindGroup, // ao_b → ao_a (final result in ao_a)
@@ -1009,8 +1035,23 @@ pub struct RenderEngine3d {
     auto_quality_under_frames: u32,  // frames consecutively under budget
 
     // FXAA post-process AA — single pass on LDR composite output (low tier only)
+    // FSR 3 upscaling (EASU + RCAS). active when render_scale < 1.0 and fsr enabled.
+    fsr_enabled: bool,
+    // render-resolution LDR target — composite writes here when FSR is active
+    fsr_ldr_texture: Option<wgpu::Texture>,
+    fsr_ldr_view: Option<wgpu::TextureView>,
+    // display-resolution intermediate — EASU writes here, RCAS reads from here
+    fsr_mid_texture: Option<wgpu::Texture>,
+    fsr_mid_view: Option<wgpu::TextureView>,
+    fsr_easu_pipeline: Option<wgpu::RenderPipeline>,
+    fsr_rcas_pipeline: Option<wgpu::RenderPipeline>,
+    fsr_bgl: Option<wgpu::BindGroupLayout>,
+    fsr_easu_bg: Option<wgpu::BindGroup>,  // binds fsr_ldr as input
+    fsr_rcas_bg: Option<wgpu::BindGroup>,  // binds fsr_mid as input
+    fsr_params_buf: Option<wgpu::Buffer>,
+
     fxaa_enabled: bool,
-    // intermediate LDR texture — composite writes here when FXAA or TAA is active
+    // intermediate LDR target — composite (or FSR output) writes here when FXAA or TAA active
     fxaa_ldr_texture: wgpu::Texture,
     fxaa_ldr_view: wgpu::TextureView,
     fxaa_bgl: wgpu::BindGroupLayout,
@@ -3922,6 +3963,9 @@ impl RenderEngine3d {
             surface_config,
             render_tier,
             hdr_format,
+            render_w: config.width,
+            render_h: config.height,
+            render_scale: 1.0,
             depth_view,
             globals_buf,
             globals_bg,
@@ -4006,6 +4050,7 @@ impl RenderEngine3d {
             gtao_ao_view_b,
             gtao_params_buf,
             gtao_bgl,
+            gtao_point_sampler,
             gtao_main_bg,
             gtao_blur_h_bg,
             gtao_blur_v_bg,
@@ -4017,6 +4062,17 @@ impl RenderEngine3d {
             transparent_scratch: Vec::new(),
             transparent_last_depths: Vec::new(),
             transparent_last_cam_fwd: Vec3::ZERO,
+            fsr_enabled: false,
+            fsr_ldr_texture: None,
+            fsr_ldr_view: None,
+            fsr_mid_texture: None,
+            fsr_mid_view: None,
+            fsr_easu_pipeline: None,
+            fsr_rcas_pipeline: None,
+            fsr_bgl: None,
+            fsr_easu_bg: None,
+            fsr_rcas_bg: None,
+            fsr_params_buf: None,
             fxaa_enabled,
             fxaa_ldr_texture,
             fxaa_ldr_view,
@@ -5387,6 +5443,121 @@ impl RenderEngine3d {
         })
     }
 
+    /// create or recreate FSR resources for the given render/display dimensions.
+    /// idempotent: no-op if dimensions haven't changed and resources exist.
+    fn ensure_fsr_resources(&mut self, render_w: u32, render_h: u32, display_w: u32, display_h: u32) {
+        let needs_rebuild = self.fsr_easu_pipeline.is_none()
+            || self.fsr_ldr_texture.as_ref().map(|t| {
+                let s = t.size(); s.width != render_w || s.height != render_h
+            }).unwrap_or(true)
+            || self.fsr_mid_texture.as_ref().map(|t| {
+                let s = t.size(); s.width != display_w || s.height != display_h
+            }).unwrap_or(true);
+        if !needs_rebuild { return; }
+
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+        let make_tex = |device: &wgpu::Device, w: u32, h: u32, label: &'static str| {
+            let t = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1, sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let v = t.create_view(&wgpu::TextureViewDescriptor::default());
+            (t, v)
+        };
+        let (ldr_tex, ldr_view) = make_tex(&self.device, render_w, render_h, "[fsr] ldr");
+        let (mid_tex, mid_view) = make_tex(&self.device, display_w, display_h, "[fsr] mid");
+
+        let params_buf = self.fsr_params_buf.get_or_insert_with(|| {
+            self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("[fsr] params"),
+                size: FSR_PARAMS_SIZE,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
+
+        let bgl = self.fsr_bgl.get_or_insert_with(|| {
+            self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("[fsr] bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0, visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: wgpu::BufferSize::new(FSR_PARAMS_SIZE) },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2, visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            })
+        });
+
+        let make_bg = |device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, params: &wgpu::Buffer, view: &wgpu::TextureView, sampler: &wgpu::Sampler, label: &'static str| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: params.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(view) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
+                ],
+            })
+        };
+        self.fsr_easu_bg = Some(make_bg(&self.device, bgl, params_buf, &ldr_view, &self.post_sampler, "[fsr] easu bg"));
+        self.fsr_rcas_bg = Some(make_bg(&self.device, bgl, params_buf, &mid_view, &self.post_sampler, "[fsr] rcas bg"));
+
+        if self.fsr_easu_pipeline.is_none() {
+            let fsr_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("[fsr] shader"),
+                source: shader_source!(FSR_SHADER_SRC, "fsr.spv"),
+            });
+            let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("[fsr] pipeline layout"),
+                bind_group_layouts: &[Some(bgl)],
+                immediate_size: 0,
+            });
+            let make_pp = |entry: &'static str, label: &'static str| -> wgpu::RenderPipeline {
+                self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&layout),
+                    vertex: wgpu::VertexState {
+                        module: &fsr_shader, entry_point: Some("vs_fsr"),
+                        buffers: &[], compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &fsr_shader, entry_point: Some(entry),
+                        targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState::default(),
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    cache: None,
+                    multiview_mask: None,
+                })
+            };
+            self.fsr_easu_pipeline = Some(make_pp("fs_easu", "[fsr] easu pipeline"));
+            self.fsr_rcas_pipeline = Some(make_pp("fs_rcas", "[fsr] rcas pipeline"));
+        }
+
+        self.fsr_ldr_texture = Some(ldr_tex);
+        self.fsr_ldr_view = Some(ldr_view);
+        self.fsr_mid_texture = Some(mid_tex);
+        self.fsr_mid_view = Some(mid_view);
+    }
+
     fn upload_mesh_data(device: &wgpu::Device, queue: &wgpu::Queue, data: &MeshData) -> GpuMesh {
         let qn = |f: f32| -> i8 { (f * 127.0).round().clamp(-127.0, 127.0) as i8 };
         let qu = |f: f32| -> u16 { (f.clamp(0.0, 1.0) * 65535.0).round() as u16 };
@@ -5736,15 +5907,20 @@ impl RenderEngine3d {
         self.surface_config.width = width;
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
-        self.depth_view = Self::make_depth_view(&self.device, width, height, self.msaa_samples);
+        // compute render resolution (may be smaller than display when render_scale < 1.0)
+        let render_w = ((width as f32 * self.render_scale).ceil() as u32).max(1);
+        let render_h = ((height as f32 * self.render_scale).ceil() as u32).max(1);
+        self.render_w = render_w;
+        self.render_h = render_h;
+        self.depth_view = Self::make_depth_view(&self.device, render_w, render_h, self.msaa_samples);
         self.msaa_color_view = Self::make_msaa_color_view(
-            &self.device, width, height, self.hdr_format, self.msaa_samples,
+            &self.device, render_w, render_h, self.hdr_format, self.msaa_samples,
         );
-        let (hdr_texture, hdr_view) = Self::make_hdr_texture(&self.device, width, height, self.hdr_format);
+        let (hdr_texture, hdr_view) = Self::make_hdr_texture(&self.device, render_w, render_h, self.hdr_format);
         let n = self.bloom_mip_views.len();
         let (mip_views, mip_sizes, ds_bgs, us_bgs) = Self::build_bloom_resources(
             &self.device, &hdr_texture, &self.bloom_params_buf,
-            &self.bloom_downsample_bgl, &self.post_sampler, width, height, n, self.hdr_format,
+            &self.bloom_downsample_bgl, &self.post_sampler, render_w, render_h, n, self.hdr_format,
         );
         // store new resources before rebuilding composite bind group
         self.hdr_texture = hdr_texture;
@@ -5754,9 +5930,71 @@ impl RenderEngine3d {
         self.bloom_downsample_bgs = ds_bgs;
         self.bloom_upsample_bgs = us_bgs;
 
-        // rebuild SSR and fog textures at the new resolution
-        let ssr_hw = (width / 2).max(1);
-        let ssr_hh = (height / 2).max(1);
+        // rebuild GTAO depth and AO textures at the new render resolution
+        let ao_w = (render_w / 2).max(1);
+        let ao_h = (render_h / 2).max(1);
+        self.gtao_depth_view = Self::make_depth_view(&self.device, render_w, render_h, 1);
+        let gtao_ao_a = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[gtao] ao ping"),
+            size: wgpu::Extent3d { width: ao_w, height: ao_h, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rg16Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let gtao_ao_b = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("[gtao] ao pong"),
+            size: wgpu::Extent3d { width: ao_w, height: ao_h, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rg16Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        self.gtao_ao_view_a = gtao_ao_a.create_view(&wgpu::TextureViewDescriptor::default());
+        self.gtao_ao_view_b = gtao_ao_b.create_view(&wgpu::TextureViewDescriptor::default());
+        self.gtao_ao_a = gtao_ao_a;
+        self.gtao_ao_b = gtao_ao_b;
+
+        // rebuild GTAO bind groups (they reference the new gtao_depth_view and ao views)
+        self.gtao_main_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[gtao] main bg"),
+            layout: &self.gtao_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.gtao_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.gtao_depth_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.gtao_ao_view_b) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.gtao_point_sampler) },
+            ],
+        });
+        self.gtao_blur_h_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[gtao] blur-h bg"),
+            layout: &self.gtao_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.gtao_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.gtao_depth_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.gtao_ao_view_a) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.gtao_point_sampler) },
+            ],
+        });
+        self.gtao_blur_v_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[gtao] blur-v bg"),
+            layout: &self.gtao_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.gtao_params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.gtao_depth_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.gtao_ao_view_b) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.gtao_point_sampler) },
+            ],
+        });
+
+        // rebuild SSR and fog textures at the new render resolution
+        let ssr_hw = (render_w / 2).max(1);
+        let ssr_hh = (render_h / 2).max(1);
         let ssr_texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("[ssr] reflection texture"),
             size: wgpu::Extent3d { width: ssr_hw, height: ssr_hh, depth_or_array_layers: 1 },
@@ -5934,6 +6172,24 @@ impl RenderEngine3d {
 
         self.fxaa_ldr_view = fxaa_ldr_view;
         self.fxaa_ldr_texture = fxaa_ldr_texture;
+
+        // invalidate FSR resources so they get recreated at the new dimensions
+        if self.fsr_enabled {
+            let dw = self.surface_config.width;
+            let dh = self.surface_config.height;
+            self.ensure_fsr_resources(render_w, render_h, dw, dh);
+        }
+    }
+
+    /// apply a new render scale without resizing the display surface.
+    /// recreates all render-resolution textures at the new size.
+    pub fn set_render_scale(&mut self, render_scale: f32) {
+        let scale = render_scale.clamp(0.5, 1.0);
+        if (scale - self.render_scale).abs() < 1e-4 { return; }
+        self.render_scale = scale;
+        let dw = self.surface_config.width;
+        let dh = self.surface_config.height;
+        if dw > 0 && dh > 0 { self.resize(dw, dh); }
     }
 
     pub fn surface_width(&self) -> u32 { self.surface_config.width }
@@ -6816,8 +7072,15 @@ impl RenderEngine3d {
 
             // fxaa and taa both need composite output in a sampleable intermediate texture.
             // taa takes priority over fxaa (they're mutually exclusive on mid/high tier).
+            // when FSR is active, composite writes to the render-resolution fsr_ldr texture first.
             let use_intermediate = (self.staa_enabled && dev_staa) || (self.fxaa_enabled && dev_fxaa);
-            let composite_target = if use_intermediate { &self.fxaa_ldr_view } else { &view };
+            let composite_target = if self.fsr_enabled {
+                self.fsr_ldr_view.as_ref().unwrap_or(&self.fxaa_ldr_view)
+            } else if use_intermediate {
+                &self.fxaa_ldr_view
+            } else {
+                &view
+            };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("[composite] pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -6837,6 +7100,62 @@ impl RenderEngine3d {
             pass.set_pipeline(&self.composite_pipeline);
             pass.set_bind_group(0, &self.composite_bg, &[]);
             pass.draw(0..3, 0..1);
+        }
+
+        // ── FSR passes (EASU + RCAS): render-resolution → display-resolution ──
+        // EASU: upscales render-res fsr_ldr_view → display-res fsr_mid_view
+        // RCAS: sharpens fsr_mid_view → fxaa_ldr_view (feeds STAA/FXAA) or swapchain
+        if self.fsr_enabled {
+            if let (Some(easu_pl), Some(rcas_pl), Some(easu_bg), Some(rcas_bg), Some(mid_view), Some(params_buf)) = (
+                self.fsr_easu_pipeline.as_ref(),
+                self.fsr_rcas_pipeline.as_ref(),
+                self.fsr_easu_bg.as_ref(),
+                self.fsr_rcas_bg.as_ref(),
+                self.fsr_mid_view.as_ref(),
+                self.fsr_params_buf.as_ref(),
+            ) {
+                let dw = self.surface_config.width as f32;
+                let dh = self.surface_config.height as f32;
+                let fsr_data: [f32; 8] = [
+                    self.render_w as f32, self.render_h as f32, dw, dh,
+                    0.25, 0.0, 0.0, 0.0,  // rcas_sharpness + padding
+                ];
+                self.queue.write_buffer(params_buf, 0, bytemuck::cast_slice(&fsr_data));
+
+                // EASU: fsr_ldr → fsr_mid
+                {
+                    let mut epass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("[fsr] easu pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: mid_view, resolve_target: None,
+                            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                    });
+                    epass.set_pipeline(easu_pl);
+                    epass.set_bind_group(0, easu_bg, &[]);
+                    epass.draw(0..3, 0..1);
+                }
+                // RCAS: fsr_mid → fxaa_ldr (feeds downstream AA) or swapchain
+                let rcas_target = if (self.staa_enabled && dev_staa) || (self.fxaa_enabled && dev_fxaa) { &self.fxaa_ldr_view } else { &view };
+                {
+                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("[fsr] rcas pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: rcas_target, resolve_target: None,
+                            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                    });
+                    rpass.set_pipeline(rcas_pl);
+                    rpass.set_bind_group(0, rcas_bg, &[]);
+                    rpass.draw(0..3, 0..1);
+                }
+            }
         }
 
         // ── TAA pass → swapchain + history ───────────────────────────────────
@@ -8423,9 +8742,8 @@ impl RenderEngine3d {
                 .unwrap_or(ViewportRect::FULL)
         };
 
-        let win_w = self.surface_config.width;
-        let win_h = self.surface_config.height;
-        let (vp_x, vp_y, vp_w, vp_h) = primary_viewport.to_pixels(win_w, win_h);
+        // when FSR is active, all render passes use render resolution, not display resolution
+        let (vp_x, vp_y, vp_w, vp_h) = primary_viewport.to_pixels(self.render_w, self.render_h);
 
         // aspect ratio from viewport rect (not full window) so projection is correct for the rect
         let aspect = if primary_viewport.height > 1e-6 {
@@ -8457,9 +8775,9 @@ impl RenderEngine3d {
                 while i > 0 { f /= base as f64; r += f * (i % base) as f64; i /= base; }
                 r as f32
             }
-            // NDC jitter: ≤0.5px in screen space (NDC = 2/width per pixel)
-            let jx = (halton(idx, 2) - 0.5) * 2.0 / win_w as f32;
-            let jy = (halton(idx, 3) - 0.5) * 2.0 / win_h as f32;
+            // NDC jitter: ≤0.5px in render-resolution screen space
+            let jx = (halton(idx, 2) - 0.5) * 2.0 / self.render_w as f32;
+            let jy = (halton(idx, 3) - 0.5) * 2.0 / self.render_h as f32;
 
             // modify the projection column 2 (z-axis.xy) to add a constant NDC offset.
             // P[2][0] += Δx shifts NDC.x by -Δx for all depths (clip.w cancels out).
@@ -8491,6 +8809,18 @@ impl RenderEngine3d {
         let dev_max_point_lights = world.get_resource::<DevRenderProfile>().map(|d| d.max_point_lights as usize).unwrap_or(MAX_CLUSTERED_LIGHTS);
         let dev_soft_shadows     = world.get_resource::<DevRenderProfile>().map(|d| d.soft_shadows     ).unwrap_or(false);
         let dev_contact_shadows  = world.get_resource::<DevRenderProfile>().map(|d| d.contact_shadows  ).unwrap_or(false);
+
+        // check if FSR state or render_scale changed this frame and apply
+        let (desired_scale, desired_fsr) = world.get_resource::<QualitySettings>()
+            .map(|q| (q.render_scale.clamp(0.5, 1.0), q.fsr && q.render_scale < 0.999))
+            .unwrap_or((1.0, false));
+        if (desired_scale - self.render_scale).abs() > 1e-4 {
+            self.set_render_scale(desired_scale);
+        }
+        self.fsr_enabled = desired_fsr;
+        if self.fsr_enabled {
+            self.ensure_fsr_resources(self.render_w, self.render_h, self.surface_config.width, self.surface_config.height);
+        }
 
         // ── gather sky ────────────────────────────────────────────────────
         let sky = world.get_resource::<Sky>().copied();
