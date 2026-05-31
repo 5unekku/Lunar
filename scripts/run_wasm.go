@@ -65,7 +65,7 @@ func main() {
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { background: hsl(0, 0%%, 0%%); width: 100vw; height: 100vh; overflow: hidden; display: flex; align-items: center; justify-content: center; }
-canvas { display: block; max-width: 100%%; max-height: 100%%; aspect-ratio: 1280 / 720; width: 100%%; }
+canvas { display: block; width: min(100vw, calc(100vh * 1280 / 720)); aspect-ratio: 1280 / 720; }
 </style>
 </head>
 <body>
