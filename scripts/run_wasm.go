@@ -74,8 +74,10 @@ canvas { display: block; width: min(100vw, calc(100vh * 1280 / 720)); aspect-rat
 (function() {
     var c = document.getElementById('lunar-canvas');
     function fit() {
-        var w = Math.round(c.getBoundingClientRect().width);
-        var h = Math.round(c.getBoundingClientRect().height);
+        var dpr = window.devicePixelRatio || 1;
+        var rect = c.getBoundingClientRect();
+        var w = Math.round(rect.width * dpr);
+        var h = Math.round(rect.height * dpr);
         if (w > 0 && h > 0 && (c.width !== w || c.height !== h)) {
             c.width = w; c.height = h;
         }
