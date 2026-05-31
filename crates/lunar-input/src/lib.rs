@@ -825,9 +825,6 @@ impl Default for InputState {
 /// on web, call the platform input setup function before running.
 pub struct InputPlugin;
 
-fn begin_input_tick(mut input: ResMut<InputState>) {
-    input.begin_frame();
-}
 
 #[cfg(target_arch = "wasm32")]
 fn drain_web_input_system(mut input: ResMut<InputState>) {
@@ -843,7 +840,6 @@ impl GamePlugin for InputPlugin {
     fn build(&mut self, app: &mut App) {
         app.insert_resource(InputState::new());
         app.insert_resource(ActionMap::new());
-        app.add_system_to_stage(lunar_core::UpdateStage::PostUpdate, begin_input_tick);
         #[cfg(target_arch = "wasm32")]
         app.add_system_to_stage(lunar_core::UpdateStage::Input, drain_web_input_system);
         log::info!("InputPlugin: input state and action map resources registered");
@@ -966,6 +962,10 @@ pub fn process_events(
     // so it lives in its own block.
     {
         if let Some(mut input) = world.get_resource_mut::<InputState>() {
+            // clear just_pressed/just_released here, not in PostUpdate — this keeps
+            // edge events alive until the next logic tick even when ticks == 0 for a
+            // display frame (e.g. 360fps render with 60hz tick rate).
+            input.begin_frame();
             for event in event_pump.poll_iter() {
                 match &event {
                     Event::KeyDown { keycode: Some(key), repeat: false, .. } => {
