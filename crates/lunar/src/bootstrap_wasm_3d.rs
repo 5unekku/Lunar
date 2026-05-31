@@ -48,11 +48,19 @@ pub async fn bootstrap_wasm_3d<Plugin: lunar_core::GamePlugin + Default + 'stati
     let surface = RenderEngine3d::create_canvas_surface(&instance, &canvas)
         .expect("failed to create WebGPU surface from canvas");
 
-    let engine = RenderEngine3d::from_surface(&instance, surface, &config).await;
+    let mut engine = RenderEngine3d::from_surface(&instance, surface, &config).await;
+
+    // surface.configure() used config.width/height; sync to the actual canvas buffer
+    // size that the JS fit() function set before init (avoids browser upscaling blur)
+    let mut canvas_w = canvas.width().max(1);
+    let mut canvas_h = canvas.height().max(1);
+    if canvas_w != config.width || canvas_h != config.height {
+        engine.resize(canvas_w, canvas_h);
+    }
 
     let mut app = App::new();
 
-    let mut initial_settings = WindowSettings::new(config.width, config.height, config.vsync);
+    let mut initial_settings = WindowSettings::new(canvas_w, canvas_h, config.vsync);
     initial_settings.target_aspect = config.target_aspect;
     initial_settings.allow_resize  = config.allow_resize;
     app.insert_resource(initial_settings);
@@ -65,9 +73,6 @@ pub async fn bootstrap_wasm_3d<Plugin: lunar_core::GamePlugin + Default + 'stati
     app.add_plugin(InputPlugin);
     app.add_plugin(AssetPlugin);
     app.add_plugin(Plugin::default());
-
-    let mut canvas_w = canvas.width();
-    let mut canvas_h = canvas.height();
 
     let app = Rc::new(RefCell::new(app));
     let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));

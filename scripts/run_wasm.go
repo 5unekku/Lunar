@@ -76,10 +76,13 @@ canvas { display: block; max-width: 100%%; max-height: 100%%; aspect-ratio: 1280
     function fit() {
         var w = Math.round(c.getBoundingClientRect().width);
         var h = Math.round(c.getBoundingClientRect().height);
-        if (w > 0 && h > 0) { c.width = w; c.height = h; }
+        if (w > 0 && h > 0 && (c.width !== w || c.height !== h)) {
+            c.width = w; c.height = h;
+        }
     }
     fit();
     new ResizeObserver(fit).observe(c);
+    window.addEventListener('resize', fit);
 })();
 </script>
 <script type="module">

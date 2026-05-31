@@ -1521,11 +1521,13 @@ impl RenderEngine3d {
         log::info!("render tier: {render_tier:?}");
 
         let caps = surface.get_capabilities(adapter);
-        let format = caps
-            .formats
-            .first()
+        // prefer non-sRGB linear format — game colors are sRGB-defined and used directly;
+        // applying hardware gamma on top would wash them out on native vs browser
+        let format = caps.formats.iter()
+            .find(|&&f| f == wgpu::TextureFormat::Bgra8Unorm || f == wgpu::TextureFormat::Rgba8Unorm)
             .copied()
-            .unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb);
+            .or_else(|| caps.formats.first().copied())
+            .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
