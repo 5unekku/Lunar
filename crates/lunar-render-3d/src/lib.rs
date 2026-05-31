@@ -132,6 +132,8 @@ struct GpuVertex3d {
 }
 
 const VERTEX_STRIDE: u64 = std::mem::size_of::<GpuVertex3d>() as u64;
+/// stride for position-only vertex buffer used by shadow and z-prepass pipelines (f32x3 = 12 bytes).
+const POS_VERTEX_STRIDE: u64 = 12;
 
 /// shadow map resolution per cascade.
 const SHADOW_MAP_SIZE: u32 = 1024;
@@ -267,6 +269,8 @@ struct SurfaceStagePacked {
 
 struct GpuMesh {
     vbuf: wgpu::Buffer,
+    /// positions-only (f32x3, 12 bytes/vertex) — bound in shadow and z-prepass pipelines
+    pos_buf: wgpu::Buffer,
     ibuf: wgpu::Buffer,
     index_count: u32,
     index_fmt: wgpu::IndexFormat,
@@ -1856,6 +1860,14 @@ impl RenderEngine3d {
                 wgpu::VertexAttribute { format: wgpu::VertexFormat::Unorm8x4,   offset: 28, shader_location: 5 },
             ],
         }];
+        // position-only layout for shadow and z-prepass pipelines (12 bytes/vertex vs 32)
+        let pos_vertex_buffers = &[wgpu::VertexBufferLayout {
+            array_stride: POS_VERTEX_STRIDE,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 0 },
+            ],
+        }];
 
         let opaque_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("3d opaque pipeline"),
@@ -1943,8 +1955,8 @@ impl RenderEngine3d {
             layout: Some(&zprepass_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: vertex_buffers,
+                entry_point: Some("vs_depth"),
+                buffers: pos_vertex_buffers,
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: None,
@@ -1972,7 +1984,7 @@ impl RenderEngine3d {
             vertex: wgpu::VertexState {
                 module: &shadow_shader,
                 entry_point: Some("vs_shadow"),
-                buffers: vertex_buffers,
+                buffers: pos_vertex_buffers,
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: None,
@@ -2182,7 +2194,7 @@ impl RenderEngine3d {
             vertex: wgpu::VertexState {
                 module: &point_shadow_shader,
                 entry_point: Some("vs_point_shadow"),
-                buffers: vertex_buffers,
+                buffers: pos_vertex_buffers,
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -3502,8 +3514,8 @@ impl RenderEngine3d {
             layout: Some(&zprepass_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: vertex_buffers,
+                entry_point: Some("vs_depth"),
+                buffers: pos_vertex_buffers,
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: None,
@@ -5395,6 +5407,18 @@ impl RenderEngine3d {
         });
         queue.write_buffer(&vbuf, 0, vdata);
 
+        // position-only buffer for shadow and z-prepass passes (12 bytes/vertex vs 32)
+        let positions: Vec<[f32; 3]> = data.vertices.iter()
+            .map(|v| [v.position.x, v.position.y, v.position.z])
+            .collect();
+        let pos_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("[mesh] pos buf"),
+            size: (positions.len() * 12) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&pos_buf, 0, bytemuck::cast_slice(&positions));
+
         match &data.indices {
             IndexBuffer::U16(v) => {
                 let u32_indices: Vec<u32> = v.iter().map(|&i| i as u32).collect();
@@ -5407,7 +5431,7 @@ impl RenderEngine3d {
                     mapped_at_creation: false,
                 });
                 queue.write_buffer(&ibuf, 0, unsafe { slice_as_bytes(u16_opt.as_slice()) });
-                GpuMesh { vbuf, ibuf, index_count: u16_opt.len() as u32, index_fmt: wgpu::IndexFormat::Uint16 }
+                GpuMesh { vbuf, pos_buf, ibuf, index_count: u16_opt.len() as u32, index_fmt: wgpu::IndexFormat::Uint16 }
             }
             IndexBuffer::U32(v) => {
                 let optimized = Self::forsyth_optimize(v, data.vertices.len());
@@ -5418,7 +5442,7 @@ impl RenderEngine3d {
                     mapped_at_creation: false,
                 });
                 queue.write_buffer(&ibuf, 0, unsafe { slice_as_bytes(optimized.as_slice()) });
-                GpuMesh { vbuf, ibuf, index_count: optimized.len() as u32, index_fmt: wgpu::IndexFormat::Uint32 }
+                GpuMesh { vbuf, pos_buf, ibuf, index_count: optimized.len() as u32, index_fmt: wgpu::IndexFormat::Uint32 }
             }
         }
     }
@@ -6952,7 +6976,7 @@ impl RenderEngine3d {
                         if done { break; }
                         if cur_mesh != last_mesh || cur_mat != last_mat {
                             if let Some(gpu_mesh) = self.mesh_gpu.get(&cur_mesh) {
-                                zpass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
+                                zpass.set_vertex_buffer(0, gpu_mesh.pos_buf.slice(..));
                                 zpass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
                             }
                             last_mesh = cur_mesh; last_mat = cur_mat; group_start = i;
@@ -8093,7 +8117,7 @@ impl RenderEngine3d {
                                     }
                                 if si < sn {
                                     if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
-                                        pt_pass.set_vertex_buffer(0, gpu.vbuf.slice(..));
+                                        pt_pass.set_vertex_buffer(0, gpu.pos_buf.slice(..));
                                         pt_pass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
                                     }
                                     last_mesh = cur_mesh;
@@ -8240,7 +8264,7 @@ impl RenderEngine3d {
                             if done { break; }
                             if cur_mesh != last_mesh || cur_mat != last_mat {
                                 if let Some(gpu) = s_mesh_gpu.get(&cur_mesh) {
-                                    zpass.set_vertex_buffer(0, gpu.vbuf.slice(..));
+                                    zpass.set_vertex_buffer(0, gpu.pos_buf.slice(..));
                                     zpass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
                                 }
                                 last_mesh = cur_mesh; last_mat = cur_mat; group_start = i;
@@ -8275,7 +8299,7 @@ impl RenderEngine3d {
                             if done { break; }
                             if cur_mesh != last_mesh {
                                 if let Some(gpu) = s_mesh_gpu.get(&cur_mesh) {
-                                    spass.set_vertex_buffer(0, gpu.vbuf.slice(..));
+                                    spass.set_vertex_buffer(0, gpu.pos_buf.slice(..));
                                     spass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
                                 }
                                 last_mesh = cur_mesh; gs_slot = shadow_list[idx].1; gs_idx = idx;
@@ -8324,7 +8348,7 @@ impl RenderEngine3d {
                         if done { break; }
                         if cur_mesh != last_mesh {
                             if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
-                                sp.set_vertex_buffer(0, gpu.vbuf.slice(..));
+                                sp.set_vertex_buffer(0, gpu.pos_buf.slice(..));
                                 sp.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
                             }
                             last_mesh = cur_mesh; gs_slot = shadow_list[idx].1; gs_idx = idx;
@@ -8362,7 +8386,7 @@ impl RenderEngine3d {
                         if done { break; }
                         if cur_mesh != last_mesh || cur_mat != last_mat {
                             if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
-                                zpass.set_vertex_buffer(0, gpu.vbuf.slice(..));
+                                zpass.set_vertex_buffer(0, gpu.pos_buf.slice(..));
                                 zpass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
                             }
                             last_mesh = cur_mesh; last_mat = cur_mat; group_start = i;
@@ -9483,7 +9507,7 @@ impl RenderEngine3d {
                     if done { break; }
                     if cur_mesh != last_mesh || cur_mat != last_mat {
                         if let Some(gpu_mesh) = self.mesh_gpu.get(&cur_mesh) {
-                            hzb_zpass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
+                            hzb_zpass.set_vertex_buffer(0, gpu_mesh.pos_buf.slice(..));
                             hzb_zpass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
                         }
                         last_mesh = cur_mesh; last_mat = cur_mat; group_start = i;

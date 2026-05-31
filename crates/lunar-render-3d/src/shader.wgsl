@@ -167,6 +167,16 @@ fn vs_main(in: VertIn, @builtin(instance_index) instance_id: u32) -> VertOut {
     return out;
 }
 
+// depth-only pass — reads position only, no varyings. used by z-prepass pipelines.
+@vertex
+fn vs_depth(
+    @location(0) position: vec3<f32>,
+    @builtin(instance_index) instance_id: u32,
+) -> @builtin(position) vec4<f32> {
+    let model = instances[instance_id].model;
+    return globals.view_proj * model * vec4<f32>(position, 1.0);
+}
+
 // ── PBR helpers ────────────────────────────────────────────────────────────
 
 const PI: f32 = 3.14159265358979;
