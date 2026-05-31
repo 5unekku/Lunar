@@ -31,12 +31,14 @@ impl LocalTransform3d {
         }
     }
 
+    /// set rotation, preserving translation and scale.
     #[must_use]
     pub const fn with_rotation(mut self, rotation: Quat) -> Self {
         self.rotation = rotation;
         self
     }
 
+    /// set scale, preserving translation and rotation.
     #[must_use]
     pub const fn with_scale(mut self, scale: Vec3) -> Self {
         self.scale = scale;

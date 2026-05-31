@@ -21,12 +21,13 @@ struct TaaParams {
     prev_vp:     mat4x4<f32>,   // unjittered view-projection from previous frame
     inv_vp:      mat4x4<f32>,   // inverse of current jittered view-projection
     jitter:      vec2<f32>,     // current frame jitter in uv space
-    rcp_frame:   vec2<f32>,     // (1/width, 1/height)
+    rcp_frame:   vec2<f32>,     // (1/display_w, 1/display_h)
     // blend_alpha: base temporal blend weight within the masked region (default 0.1)
     blend_alpha: f32,
     frame_index: u32,           // 0 = cold start: skip temporal blend
-    _pad0:       u32,
-    _pad1:       u32,
+    // depth_scale: render_resolution / display_resolution.
+    // staa runs at display resolution but depth_tex is at render resolution.
+    depth_scale: vec2<f32>,
 }
 
 @group(0) @binding(0) var<uniform> params:      TaaParams;
@@ -118,8 +119,10 @@ fn fs_main(in: VertOut) -> FragOut {
     aabb_max = max(aabb_max, max(max(rgb_to_ycocg(ne), rgb_to_ycocg(nw)), max(rgb_to_ycocg(se), rgb_to_ycocg(sw))));
 
     // ── depth reprojection to get previous-frame uv ───────────────────────
-    // use textureLoad to avoid needing a comparison sampler for depth
-    let texel  = vec2<i32>(in.clip_pos.xy);
+    // use textureLoad to avoid needing a comparison sampler for depth.
+    // scale by depth_scale because depth_tex is at render resolution while staa
+    // runs at display resolution (the two differ when render_scale < 1.0).
+    let texel  = vec2<i32>(in.clip_pos.xy * params.depth_scale);
     let depth  = textureLoad(depth_tex, texel, 0).r;
     let is_sky = depth >= 0.9999;
 
@@ -157,8 +160,11 @@ fn fs_main(in: VertOut) -> FragOut {
     let luma_range = luma_max - luma_min;
     // lower threshold than fxaa to catch sub-pixel edges that benefit from jitter AA
     let is_edge = luma_range > max(0.03, luma_max * 0.06);
-    // edges get a fixed 65% taa influence (modest, won't blur unaliased surfaces)
-    let edge_weight = select(0.0, 0.65, is_edge);
+    // edges get full taa weight (1.0) so effective current-frame contribution is
+    // taa_mask × blend_alpha = 1.0 × 0.1 = 10% — proper 8-sample Halton accumulation.
+    // at 0.65 the current weight was 41.5% (0.35 + 0.65×0.1), causing visible ~7.5 Hz
+    // oscillation at the edge from the cycling jitter offsets.
+    let edge_weight = select(0.0, 1.0, is_edge);
 
     // combined mask: max of shimmer (up to 1.0) and edge (0.65)
     var taa_mask = max(shimmer_weight, edge_weight);

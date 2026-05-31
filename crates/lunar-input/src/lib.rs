@@ -968,7 +968,7 @@ pub fn process_events(
         if let Some(mut input) = world.get_resource_mut::<InputState>() {
             for event in event_pump.poll_iter() {
                 match &event {
-                    Event::KeyDown { keycode: Some(key), .. } => {
+                    Event::KeyDown { keycode: Some(key), repeat: false, .. } => {
                         if let Some(code) = keycode_from_sdl(*key) {
                             input.press_key(code);
                         }
@@ -1066,6 +1066,16 @@ const fn keycode_from_sdl(key: sdl3::keyboard::Keycode) -> Option<KeyCode> {
         Keycode::RAlt => Some(KeyCode::RAlt),
         Keycode::Minus => Some(KeyCode::Minus),
         Keycode::Equals => Some(KeyCode::Equals),
+        Keycode::_0 => Some(KeyCode::Num0),
+        Keycode::_1 => Some(KeyCode::Num1),
+        Keycode::_2 => Some(KeyCode::Num2),
+        Keycode::_3 => Some(KeyCode::Num3),
+        Keycode::_4 => Some(KeyCode::Num4),
+        Keycode::_5 => Some(KeyCode::Num5),
+        Keycode::_6 => Some(KeyCode::Num6),
+        Keycode::_7 => Some(KeyCode::Num7),
+        Keycode::_8 => Some(KeyCode::Num8),
+        Keycode::_9 => Some(KeyCode::Num9),
         _ => None,
     }
 }

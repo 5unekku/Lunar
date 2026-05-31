@@ -143,6 +143,9 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
     let mut sdl_gamepad = SdlGamepadProvider::new(gamepad_subsystem);
     let mut window = window;
     let mut actual_fullscreen = false;
+    // true while a toggle key is physically held; re-armed only after full release.
+    // prevents double-fire regardless of frame rate or compositor key-event replay.
+    let mut fullscreen_key_down = false;
     let mut actual_cursor_locked = false;
     let mut last_window_w = win_w;
     let mut last_window_h = win_h;
@@ -150,17 +153,34 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
     app.run_with_events(config.frame_cap, config.tick_rate, |world| {
         process_events(&mut event_pump, &mut sdl_gamepad, world);
 
-        // read input once for the frame
+        // read input once for the frame — capture both the edge (just pressed) and
+        // whether any toggle combo is still physically held, for the keyup re-arm.
         let input_snap = world.get_resource::<InputState>().map(|i| {
-            let enter       = i.is_key_just_pressed(KeyCode::Enter);
-            let alt         = i.is_key_held(KeyCode::LAlt) || i.is_key_held(KeyCode::RAlt);
-            let fs_action   = world.get_resource::<ActionMap>()
+            let enter_just = i.is_key_just_pressed(KeyCode::Enter);
+            let alt        = i.is_key_held(KeyCode::LAlt) || i.is_key_held(KeyCode::RAlt);
+            let enter_held = i.is_key_held(KeyCode::Enter);
+            let fs_just    = world.get_resource::<ActionMap>()
                 .is_some_and(|a| a.is_action_just_pressed(i, "fullscreen"));
-            (enter && alt, fs_action)
+            let fs_held    = world.get_resource::<ActionMap>()
+                .is_some_and(|a| a.is_action_held(i, "fullscreen"));
+            let any_held   = (alt && enter_held) || fs_held;
+            (enter_just && alt, fs_just, any_held)
         });
 
-        // alt+enter: engine-level shortcut — always active
-        if input_snap.is_some_and(|(alt_enter, _)| alt_enter) {
+        // re-arm once all toggle keys are physically released
+        if !input_snap.is_some_and(|(_, _, held)| held) {
+            fullscreen_key_down = false;
+        }
+
+        // fire only on the keydown edge — gate blocks until full release
+        let request_toggle = !fullscreen_key_down && (
+            input_snap.is_some_and(|(alt_enter, _, _)| alt_enter) ||
+            input_snap.is_some_and(|(_, fs, _)| fs)
+        );
+
+        // alt+enter / f11: engine-level fullscreen toggle
+        if request_toggle {
+            fullscreen_key_down = true;
             actual_fullscreen = !actual_fullscreen;
             let _ = window.set_fullscreen(actual_fullscreen);
             if let Some(mut settings) = world.get_resource_mut::<WindowSettings>() {
@@ -168,16 +188,7 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
             }
         }
 
-        // f11 (or rebound action): rebindable fullscreen toggle
-        if input_snap.is_some_and(|(_, fs)| fs) {
-            actual_fullscreen = !actual_fullscreen;
-            let _ = window.set_fullscreen(actual_fullscreen);
-            if let Some(mut settings) = world.get_resource_mut::<WindowSettings>() {
-                settings.is_fullscreen = actual_fullscreen;
-            }
-        }
-
-        // game code set is_fullscreen directly
+        // game code set is_fullscreen directly (e.g. settings menu) — optimistic update
         if let Some(settings) = world.get_resource::<WindowSettings>()
             && settings.is_fullscreen != actual_fullscreen
         {
@@ -219,6 +230,7 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
                 settings.height = final_h;
             }
         }
+
     });
 
     log::info!("lunar 3d engine shutting down...");

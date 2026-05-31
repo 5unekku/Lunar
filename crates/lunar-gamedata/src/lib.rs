@@ -128,10 +128,10 @@ impl GameData {
     /// intern a lookup string against the string table.
     /// returns None if the string is not present (was never compiled in).
     #[must_use]
-    pub fn string_id(&self, s: &str) -> Option<u32> {
+    pub fn string_id(&self, value: &str) -> Option<u32> {
         self.strings
             .iter()
-            .position(|x| x == s)
+            .position(|x| x == value)
             .and_then(|i| u32::try_from(i).ok())
     }
 

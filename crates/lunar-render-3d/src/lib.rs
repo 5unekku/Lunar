@@ -502,6 +502,12 @@ impl QualitySettings {
         }
     }
 
+    /// everything on, highest fidelity. useful for smoke tests and screenshot tools.
+    #[must_use]
+    pub fn maximum() -> Self {
+        Self::from_tier(RenderTier::High)
+    }
+
     /// build settings for a given tier, overriding the preset.
     /// useful for adaptive quality stepping: tier determines hardware capabilities,
     /// preset determines feature toggles within that capability.
@@ -544,6 +550,7 @@ impl QualitySettings {
         base
     }
 
+    #[must_use]
     pub fn from_tier(tier: RenderTier) -> Self {
         match tier {
             RenderTier::LowGles => Self {
@@ -806,36 +813,44 @@ impl DevRenderProfile {
     // ── builder methods ───────────────────────────────────────────────────
     // each returns Self so they chain: DevRenderProfile::classic().with_bloom().with_shadows()
 
-    #[must_use] pub fn with_point_light_shadows(mut self, v: bool) -> Self { self.point_light_shadows = v; self }
-    #[must_use] pub fn with_max_point_lights(mut self, n: u32) -> Self { self.max_point_lights = n; self }
-    #[must_use] pub fn with_soft_shadows(mut self, v: bool) -> Self { self.soft_shadows = v; self }
-    #[must_use] pub fn with_contact_shadows(mut self, v: bool) -> Self { self.contact_shadows = v; self }
-    #[must_use] pub fn with_shadows(mut self, v: bool) -> Self { self.shadows = v; self }
-    #[must_use] pub fn with_bloom(mut self, v: bool) -> Self { self.bloom = v; self }
-    #[must_use] pub fn with_ssao(mut self, v: bool) -> Self { self.ssao = v; self }
-    #[must_use] pub fn with_ssr(mut self, v: bool) -> Self { self.ssr = v; self }
-    #[must_use] pub fn with_volumetric_fog(mut self, v: bool) -> Self { self.volumetric_fog = v; self }
-    #[must_use] pub fn with_fxaa(mut self, v: bool) -> Self { self.fxaa = v; self }
-    #[must_use] pub fn with_staa(mut self, v: bool) -> Self { self.staa = v; self }
-    #[must_use] pub fn with_vignette(mut self, v: bool) -> Self { self.vignette = v; self }
-    #[must_use] pub fn with_chromatic_aberration(mut self, v: bool) -> Self { self.chromatic_aberration = v; self }
-    #[must_use] pub fn with_film_grain(mut self, v: bool) -> Self { self.film_grain = v; self }
-    #[must_use] pub fn with_max_shadow_cascades(mut self, n: u32) -> Self { self.max_shadow_cascades = n; self }
-    #[must_use] pub fn with_max_msaa(mut self, n: u32) -> Self { self.max_msaa = n; self }
-    #[must_use] pub fn with_max_particles(mut self, n: u32) -> Self { self.max_particles = n; self }
+    #[must_use] pub fn with_point_light_shadows(mut self, enabled: bool) -> Self { self.point_light_shadows = enabled; self }
+    #[must_use] pub fn with_max_point_lights(mut self, count: u32) -> Self { self.max_point_lights = count; self }
+    #[must_use] pub fn with_soft_shadows(mut self, enabled: bool) -> Self { self.soft_shadows = enabled; self }
+    #[must_use] pub fn with_contact_shadows(mut self, enabled: bool) -> Self { self.contact_shadows = enabled; self }
+    #[must_use] pub fn with_shadows(mut self, enabled: bool) -> Self { self.shadows = enabled; self }
+    #[must_use] pub fn with_bloom(mut self, enabled: bool) -> Self { self.bloom = enabled; self }
+    #[must_use] pub fn with_ssao(mut self, enabled: bool) -> Self { self.ssao = enabled; self }
+    #[must_use] pub fn with_ssr(mut self, enabled: bool) -> Self { self.ssr = enabled; self }
+    #[must_use] pub fn with_volumetric_fog(mut self, enabled: bool) -> Self { self.volumetric_fog = enabled; self }
+    #[must_use] pub fn with_fxaa(mut self, enabled: bool) -> Self { self.fxaa = enabled; self }
+    #[must_use] pub fn with_staa(mut self, enabled: bool) -> Self { self.staa = enabled; self }
+    #[must_use] pub fn with_vignette(mut self, enabled: bool) -> Self { self.vignette = enabled; self }
+    #[must_use] pub fn with_chromatic_aberration(mut self, enabled: bool) -> Self { self.chromatic_aberration = enabled; self }
+    #[must_use] pub fn with_film_grain(mut self, enabled: bool) -> Self { self.film_grain = enabled; self }
+    #[must_use] pub fn with_max_shadow_cascades(mut self, count: u32) -> Self { self.max_shadow_cascades = count; self }
+    #[must_use] pub fn with_max_msaa(mut self, samples: u32) -> Self { self.max_msaa = samples; self }
+    #[must_use] pub fn with_max_particles(mut self, cap: u32) -> Self { self.max_particles = cap; self }
 }
 
 // ── render config ──────────────────────────────────────────────────────────
 
+/// window and loop configuration for a 3D game.
+///
+/// passed to [`bootstrap_3d`](lunar::bootstrap_3d) at startup. the render engine
+/// and game loop are created from these settings before the first frame.
 #[derive(Clone)]
 pub struct RenderConfig3d {
+    /// initial window width in pixels.
     pub width: u32,
+    /// initial window height in pixels.
     pub height: u32,
+    /// enable vsync. set false to uncap framerate (useful for benchmarking).
     pub vsync: bool,
     /// target render frame cap (0 = uncapped/vsync-limited)
     pub frame_cap: u32,
     /// fixed logic tick rate — independent of render frame rate
     pub tick_rate: lunar_core::TickRate,
+    /// window title bar text.
     pub title: String,
     /// fixed aspect ratio. when set, the window snaps on resize to maintain this ratio.
     /// expressed as width/height (e.g. `16.0/9.0`). `None` = free aspect ratio.
@@ -1203,6 +1218,13 @@ pub struct RenderEngine3d {
     // sort-skip: quantized depth keys (mm precision) from the previous frame
     transparent_last_depths: Vec<i32>,
     transparent_last_cam_fwd: Vec3,
+
+    // stored shader modules for runtime MSAA rebuild
+    msaa_main_shader: wgpu::ShaderModule,
+    msaa_surface_shader: wgpu::ShaderModule,
+    msaa_water_shader: wgpu::ShaderModule,
+    msaa_terrain_shader: wgpu::ShaderModule,
+    msaa_particle_render_shader: wgpu::ShaderModule,
 
     // pipeline cache — persists compiled shader binaries across runs (Vulkan/DX12 only)
     #[cfg(not(target_arch = "wasm32"))]
@@ -2435,7 +2457,7 @@ impl RenderEngine3d {
         let quality = quality_early;
         let bloom_enabled = quality.bloom;
         let bloom_mip_count = quality.bloom_mips as usize;
-        let fxaa_enabled = quality.fxaa;
+        let fxaa_enabled = true; // pipeline always built; quality.fxaa gates it at runtime via dev_fxaa
 
         let (hdr_texture, hdr_view) = Self::make_hdr_texture(&device, config.width, config.height, hdr_format);
 
@@ -2834,7 +2856,7 @@ impl RenderEngine3d {
         // the bind groups are rebuilt after gtao_depth_tex is known (see below).
         // placeholder views and bind groups are set to the fxaa_ldr_view temporarily.
 
-        let staa_enabled = quality.staa && render_tier != RenderTier::LowGles;
+        let staa_enabled = render_tier != RenderTier::LowGles; // hardware capability only; quality.staa gates it at runtime via dev_staa
 
         let staa_history_a_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("[staa] history A"),
@@ -2985,7 +3007,7 @@ impl RenderEngine3d {
 
         // ── SSR (screen-space reflections, mid+ tier) ─────────────────────
 
-        let ssr_enabled = quality.ssr;
+        let ssr_enabled = true; // pipeline always built; quality.ssr gates it at runtime via dev_ssr
         let ssr_w = (config.width / 2).max(1);
         let ssr_h = (config.height / 2).max(1);
 
@@ -4260,6 +4282,11 @@ impl RenderEngine3d {
             terrain_globals_bg,
             terrain_params_bgl,
             terrain_gpu: HashMap::new(),
+            msaa_main_shader: shader,
+            msaa_surface_shader: surface_shader_module,
+            msaa_water_shader: water_shader,
+            msaa_terrain_shader: terrain_shader,
+            msaa_particle_render_shader: particle_render_shader,
             #[cfg(not(target_arch = "wasm32"))]
             pipeline_cache,
             // 4 MiB chunk — larger than any single write, handles most scene sizes
@@ -6346,17 +6373,397 @@ impl RenderEngine3d {
     /// apply a new render scale without resizing the display surface.
     /// recreates all render-resolution textures at the new size.
     pub fn set_render_scale(&mut self, render_scale: f32) {
-        let scale = render_scale.clamp(0.5, 1.0);
+        let scale = render_scale.clamp(0.1, 1.0);
         if (scale - self.render_scale).abs() < 1e-4 { return; }
         self.render_scale = scale;
         let dw = self.surface_config.width;
         let dh = self.surface_config.height;
-        if dw > 0 && dh > 0 { self.resize(dw, dh); }
+        if dw > 0 && dh > 0 {
+            // resize() early-returns when surface dimensions are unchanged — bypass by
+            // clearing the stored size so it sees a dimension change and rebuilds textures
+            self.surface_config.width = 0;
+            self.resize(dw, dh);
+        }
     }
 
     pub fn surface_width(&self) -> u32 { self.surface_config.width }
     pub fn surface_height(&self) -> u32 { self.surface_config.height }
     pub fn render_tier(&self) -> RenderTier { self.render_tier }
+
+    /// apply a new MSAA sample count. rebuilds all MSAA-dependent pipelines and
+    /// the depth/MSAA color views. causes a brief gpu stall (hidden by a settings menu).
+    pub fn apply_msaa_change(&mut self, samples: u32) {
+        let samples = match samples { 4 => samples, _ => 1 }; // WebGPU spec guarantees only 1 and 4 for Depth32Float
+        if samples == self.msaa_samples { return; }
+        self.msaa_samples = samples;
+        let w = self.render_w;
+        let h = self.render_h;
+        self.depth_view = Self::make_depth_view(&self.device, w, h, samples);
+        self.msaa_color_view = Self::make_msaa_color_view(&self.device, w, h, self.hdr_format, samples);
+        self.rebuild_msaa_pipelines();
+        // force static bundle rebuild next frame
+        self.static_bundle = None;
+        log::info!("msaa changed to {samples}x");
+    }
+
+    fn rebuild_msaa_pipelines(&mut self) {
+        let msaa = self.msaa_samples;
+        let hdr  = self.hdr_format;
+        let tier = self.render_tier;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let cache = self.pipeline_cache.as_ref();
+        #[cfg(target_arch = "wasm32")]
+        let cache: Option<&wgpu::PipelineCache> = None;
+
+        // vertex buffer layouts — same constants as from_surface
+        let vert_attrs = [
+            wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0,  shader_location: 0 },
+            wgpu::VertexAttribute { format: wgpu::VertexFormat::Snorm8x4,  offset: 12, shader_location: 1 },
+            wgpu::VertexAttribute { format: wgpu::VertexFormat::Snorm8x4,  offset: 16, shader_location: 2 },
+            wgpu::VertexAttribute { format: wgpu::VertexFormat::Unorm16x2, offset: 20, shader_location: 3 },
+            wgpu::VertexAttribute { format: wgpu::VertexFormat::Unorm16x2, offset: 24, shader_location: 4 },
+            wgpu::VertexAttribute { format: wgpu::VertexFormat::Unorm8x4,  offset: 28, shader_location: 5 },
+        ];
+        let vertex_buffers = [wgpu::VertexBufferLayout {
+            array_stride: VERTEX_STRIDE,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &vert_attrs,
+        }];
+        let pos_attrs = [
+            wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 0 },
+        ];
+        let pos_vertex_buffers = [wgpu::VertexBufferLayout {
+            array_stride: POS_VERTEX_STRIDE,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &pos_attrs,
+        }];
+
+        // recreate pipeline layouts from stored bgls
+        let main_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("3d pipeline layout"),
+            bind_group_layouts: &[
+                Some(&self.globals_bgl), Some(&self.material_bgl), Some(&self.mesh_bgl),
+                Some(&self.lights_bgl), Some(&self.lightmap_bgl), Some(&self.cluster_bgl_render),
+            ],
+            immediate_size: 0,
+        });
+        let zprepass_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("3d z-prepass pipeline layout"),
+            bind_group_layouts: &[Some(&self.globals_bgl), Some(&self.material_bgl), Some(&self.mesh_bgl)],
+            immediate_size: 0,
+        });
+        let surface_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[surface] pipeline layout"),
+            bind_group_layouts: &[Some(&self.globals_bgl), Some(&self.mesh_bgl), Some(&self.surface_bgl)],
+            immediate_size: 0,
+        });
+        let water_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[water] pipeline layout"),
+            bind_group_layouts: &[Some(&self.water_bgl0), Some(&self.water_bgl1)],
+            immediate_size: 0,
+        });
+        let terrain_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[terrain] pipeline layout"),
+            bind_group_layouts: &[Some(&self.terrain_globals_bgl), Some(&self.terrain_params_bgl)],
+            immediate_size: 0,
+        });
+        let particle_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("[particles] render pipeline layout"),
+            bind_group_layouts: &[Some(&self.particle_render_bgl)],
+            immediate_size: 0,
+        });
+
+        let msaa_state = wgpu::MultisampleState { count: msaa, ..Default::default() };
+        let depth_state = Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: Some(tier == RenderTier::LowGles),
+            depth_compare: Some(if tier == RenderTier::LowGles {
+                wgpu::CompareFunction::Less
+            } else {
+                wgpu::CompareFunction::LessEqual
+            }),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        });
+
+        self.opaque_pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("3d opaque pipeline"),
+            layout: Some(&main_layout),
+            vertex: wgpu::VertexState {
+                module: &self.msaa_main_shader,
+                entry_point: Some("vs_main"),
+                buffers: &vertex_buffers,
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.msaa_main_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: hdr,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: depth_state.clone(),
+            multisample: msaa_state,
+            cache,
+            multiview_mask: None,
+        });
+
+        self.sky_pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("3d sky pipeline"),
+            layout: Some(&main_layout),
+            vertex: wgpu::VertexState {
+                module: &self.msaa_main_shader,
+                entry_point: Some("vs_main"),
+                buffers: &vertex_buffers,
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.msaa_main_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: hdr,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: msaa_state,
+            cache,
+            multiview_mask: None,
+        });
+
+        self.zprepass_pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("3d z-prepass pipeline"),
+            layout: Some(&zprepass_layout),
+            vertex: wgpu::VertexState {
+                module: &self.msaa_main_shader,
+                entry_point: Some("vs_depth"),
+                buffers: &pos_vertex_buffers,
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: None,
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: msaa_state,
+            cache,
+            multiview_mask: None,
+        });
+
+        self.transparent_pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("3d transparent pipeline"),
+            layout: Some(&main_layout),
+            vertex: wgpu::VertexState {
+                module: &self.msaa_main_shader,
+                entry_point: Some("vs_main"),
+                buffers: &vertex_buffers,
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.msaa_main_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: hdr,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: msaa_state,
+            cache,
+            multiview_mask: None,
+        });
+
+        self.surface_pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("[surface] pipeline"),
+            layout: Some(&surface_layout),
+            vertex: wgpu::VertexState {
+                module: &self.msaa_surface_shader,
+                entry_point: Some("vs_surface"),
+                buffers: &vertex_buffers,
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.msaa_surface_shader,
+                entry_point: Some("fs_surface"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: hdr,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: msaa_state,
+            cache,
+            multiview_mask: None,
+        });
+
+        self.water_pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("[water] pipeline"),
+            layout: Some(&water_layout),
+            vertex: wgpu::VertexState {
+                module: &self.msaa_water_shader,
+                entry_point: Some("vs_main"),
+                buffers: &vertex_buffers,
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.msaa_water_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: hdr,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: msaa_state,
+            cache,
+            multiview_mask: None,
+        });
+
+        self.terrain_pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("[terrain] pipeline"),
+            layout: Some(&terrain_layout),
+            vertex: wgpu::VertexState {
+                module: &self.msaa_terrain_shader,
+                entry_point: Some("vs_main"),
+                buffers: &vertex_buffers,
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.msaa_terrain_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: hdr,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState { count: msaa, mask: !0, alpha_to_coverage_enabled: false },
+            cache,
+            multiview_mask: None,
+        });
+
+        self.particle_render_pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("[particles] render pipeline"),
+            layout: Some(&particle_layout),
+            vertex: wgpu::VertexState {
+                module: &self.msaa_particle_render_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.msaa_particle_render_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: hdr,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: msaa_state,
+            cache,
+            multiview_mask: None,
+        });
+    }
 
     // ── render ─────────────────────────────────────────────────────────────
 
@@ -6985,9 +7392,9 @@ impl RenderEngine3d {
         }
 
         // ── SSR pass (mid+ tier) ─────────────────────────────────────────
-        if self.ssr_enabled && dev_ssr {
-            let width  = self.surface_config.width as f32;
-            let height = self.surface_config.height as f32;
+        if dev_ssr {
+            let width  = self.render_w as f32;
+            let height = self.render_h as f32;
             let inv_vp   = view_proj.inverse();
             let view_mat = Mat4::look_at_rh(cam_pos, cam_pos + cam_wt.forward(), cam_wt.up());
             let inv_vp_cols  = inv_vp.to_cols_array();
@@ -7031,8 +7438,8 @@ impl RenderEngine3d {
 
         // ── volumetric fog pass (mid+ tier) ──────────────────────────────
         if self.fog_enabled && dev_fog {
-            let width  = self.surface_config.width as f32;
-            let height = self.surface_config.height as f32;
+            let width  = self.render_w as f32;
+            let height = self.render_h as f32;
             let inv_vp      = view_proj.inverse();
             let inv_vp_cols = inv_vp.to_cols_array();
             // write fog params: inv_view_proj(64) + rest(64) = 128 bytes
@@ -7221,7 +7628,7 @@ impl RenderEngine3d {
                     if dev_chrom_ab && q.chromatic_aberration { f |= 4; }
                     if dev_film_grain && q.film_grain { f |= 8; }
                     if self.ssao_enabled && dev_ssao && q.ssao { f |= 16; }
-                    if self.ssr_enabled && dev_ssr && q.ssr { f |= 32; }
+                    if dev_ssr { f |= 32; }
                     if self.fog_enabled && dev_fog && q.volumetric_fog { f |= 64; }
                     if dev_contact_shadows && self.contact_shadow_tex.is_some() { f |= 128; }
                     bloom_s = 0.04_f32;
@@ -7251,7 +7658,7 @@ impl RenderEngine3d {
             // fxaa and taa both need composite output in a sampleable intermediate texture.
             // taa takes priority over fxaa (they're mutually exclusive on mid/high tier).
             // when FSR is active, composite writes to the render-resolution fsr_ldr texture first.
-            let use_intermediate = (self.staa_enabled && dev_staa) || (self.fxaa_enabled && dev_fxaa);
+            let use_intermediate = dev_staa || dev_fxaa;
             let composite_target = if self.upscale_active {
                 self.fsr_ldr_view.as_ref().unwrap_or(&self.fxaa_ldr_view)
             } else if use_intermediate {
@@ -7298,7 +7705,7 @@ impl RenderEngine3d {
                 ];
                 self.queue.write_buffer(params_buf, 0, bytemuck::cast_slice(&upscale_data));
 
-                let final_target = if (self.staa_enabled && dev_staa) || (self.fxaa_enabled && dev_fxaa) {
+                let final_target = if dev_staa || dev_fxaa {
                     &self.fxaa_ldr_view
                 } else {
                     &view
@@ -7347,11 +7754,11 @@ impl RenderEngine3d {
         }
 
         // ── TAA pass → swapchain + history ───────────────────────────────────
-        if self.staa_enabled && dev_staa {
+        if dev_staa {
             let w  = self.surface_config.width;
             let h  = self.surface_config.height;
 
-            // pack params: prev_vp(64) + inv_vp(64) + jitter(8) + rcp_frame(8) + blend_alpha(4) + frame_index(4) + pad(8)
+            // pack params: prev_vp(64) + inv_vp(64) + jitter(8) + rcp_frame(8) + blend_alpha(4) + frame_index(4) + depth_scale(8)
             let inv_vp = view_proj.inverse();
             let mut taa_data = [0u8; STAA_PARAMS_SIZE as usize];
             taa_data[0..64].copy_from_slice(bytemuck::cast_slice(&self.staa_prev_vp.to_cols_array()));
@@ -7362,6 +7769,11 @@ impl RenderEngine3d {
             taa_data[140..144].copy_from_slice(bytemuck::cast_slice(&[1.0_f32 / h as f32]));
             taa_data[144..148].copy_from_slice(bytemuck::cast_slice(&[0.1_f32]));  // blend_alpha
             taa_data[148..152].copy_from_slice(&self.staa_frame_index.to_le_bytes());
+            // depth_scale: ratio of render resolution to display resolution.
+            // staa runs at display resolution but depth_tex is at render resolution,
+            // so we must scale the texel coordinates to stay in-bounds.
+            taa_data[152..156].copy_from_slice(bytemuck::cast_slice(&[self.render_w as f32 / w as f32]));
+            taa_data[156..160].copy_from_slice(bytemuck::cast_slice(&[self.render_h as f32 / h as f32]));
             self.queue.write_buffer(&self.staa_params_buf, 0, &taa_data);
 
             // ping-pong: even frame writes to history_b (reads from history_a via bg_even)
@@ -7400,14 +7812,17 @@ impl RenderEngine3d {
             drop(pass);
 
             // advance taa state for next frame
-            self.staa_prev_vp    = view_proj_unjittered;
             self.staa_frame_index = self.staa_frame_index.wrapping_add(1);
             self.staa_ping       = !self.staa_ping;
             let _ = (write_a, write_b);
         }
 
+        // always track the unjittered vp so camera_stationary is accurate on the first
+        // frame after staa turns on, even if staa was off the previous frame.
+        self.staa_prev_vp = view_proj_unjittered;
+
         // ── FXAA pass → swapchain ─────────────────────────────────────────
-        if self.fxaa_enabled && dev_fxaa && !(self.staa_enabled && dev_staa) {
+        if dev_fxaa && !dev_staa {
             let w = self.surface_config.width;
             let h = self.surface_config.height;
             let fxaa_data: [f32; 4] = [1.0 / w as f32, 1.0 / h as f32, 0.0, 0.0];
@@ -7442,7 +7857,7 @@ impl RenderEngine3d {
         let &FrameContext { cam_pos, cam_wt, aspect, dev_ssao, dev_staa, sky_color, camera, .. } = fc;
         // ── GTAO passes (mid/high tier, ssao enabled) ────────────────────
         // taa also needs non-msaa depth for reprojection; share this prepass when either is active
-        if (self.ssao_enabled && dev_ssao) || (self.staa_enabled && dev_staa) {
+        if (self.ssao_enabled && dev_ssao) || dev_staa {
             // non-MSAA depth prepass so GTAO/TAA can sample depth without MSAA complication
             {
                 let mut zpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -8919,6 +9334,22 @@ impl RenderEngine3d {
         let camera = { let Some(c) = world.get::<Camera3d>(cam_entity) else { return 0; }; *c };
         let cam_wt  = { let Some(t) = world.get::<WorldTransform3d>(cam_entity) else { return 0; }; *t };
 
+        // apply render scale and MSAA changes before computing viewport
+        {
+            let desired_scale = world.get_resource::<QualitySettings>()
+                .map(|q| q.render_scale.clamp(0.1, 1.0))
+                .unwrap_or(1.0);
+            if (desired_scale - self.render_scale).abs() > 1e-4 {
+                self.set_render_scale(desired_scale);
+            }
+            let desired_msaa = world.get_resource::<QualitySettings>()
+                .map(|q| q.msaa_samples.clamp(1, 8))
+                .unwrap_or(self.msaa_samples);
+            if desired_msaa != self.msaa_samples {
+                self.apply_msaa_change(desired_msaa);
+            }
+        }
+
         // viewport rect for the primary camera: used for scissor/viewport state in color passes.
         // for split-screen, secondary cameras use render-to-texture; the primary camera's rect
         // is applied here to confine its rendering to its portion of the screen.
@@ -8954,7 +9385,15 @@ impl RenderEngine3d {
         // compare to previous unjittered vp: any difference means the camera moved.
         let camera_stationary = self.staa_prev_vp == view_proj_unjittered;
 
-        let (view_proj, staa_jitter_ndc) = if self.staa_enabled && camera_stationary {
+        // precompute before the jitter decision (full dev_staa is built below with the rest)
+        // dev_staa is resolved below with the rest of the dev profile, but we need
+        // the combined (dev+quality) staa decision here for the jitter gate. duplicate
+        // the short reads rather than restructure the whole function.
+        let staa_on = world.get_resource::<DevRenderProfile>().map(|d| d.staa).unwrap_or(true)
+            && world.get_resource::<QualitySettings>().map(|q| q.staa).unwrap_or(false)
+            && self.staa_enabled; // staa_enabled = false on LowGles (no compute), true otherwise
+
+        let (view_proj, staa_jitter_ndc) = if staa_on && camera_stationary {
             // Halton low-discrepancy sequence: base 2 for x, base 3 for y.
             // use frame_index+1 so index 0 maps to a non-zero offset (avoids identity jitter).
             let idx = (self.staa_frame_index % 8 + 1) as u64;
@@ -8984,12 +9423,17 @@ impl RenderEngine3d {
         // ── read dev render profile (dev's feature ceiling) ───────────────
         // all pass gates below AND with this so disabled features are never executed
         // regardless of user quality settings or hardware tier.
+        // fxaa/staa/ssr also AND with QualitySettings so runtime toggles take effect
+        // without having to restart (the pipelines and textures are always built).
         let dev_bloom            = world.get_resource::<DevRenderProfile>().map(|d| d.bloom            ).unwrap_or(true);
         let dev_ssao             = world.get_resource::<DevRenderProfile>().map(|d| d.ssao             ).unwrap_or(true);
-        let dev_ssr              = world.get_resource::<DevRenderProfile>().map(|d| d.ssr              ).unwrap_or(true);
+        let dev_ssr              = world.get_resource::<DevRenderProfile>().map(|d| d.ssr              ).unwrap_or(true)
+            && world.get_resource::<QualitySettings>().map(|q| q.ssr  ).unwrap_or(false);
         let dev_fog              = world.get_resource::<DevRenderProfile>().map(|d| d.volumetric_fog   ).unwrap_or(true);
-        let dev_fxaa             = world.get_resource::<DevRenderProfile>().map(|d| d.fxaa             ).unwrap_or(true);
-        let dev_staa              = world.get_resource::<DevRenderProfile>().map(|d| d.staa              ).unwrap_or(true);
+        let dev_fxaa             = world.get_resource::<DevRenderProfile>().map(|d| d.fxaa             ).unwrap_or(true)
+            && world.get_resource::<QualitySettings>().map(|q| q.fxaa ).unwrap_or(false);
+        let dev_staa             = world.get_resource::<DevRenderProfile>().map(|d| d.staa             ).unwrap_or(true)
+            && world.get_resource::<QualitySettings>().map(|q| q.staa ).unwrap_or(false);
         let dev_vignette         = world.get_resource::<DevRenderProfile>().map(|d| d.vignette         ).unwrap_or(true);
         let dev_chrom_ab         = world.get_resource::<DevRenderProfile>().map(|d| d.chromatic_aberration).unwrap_or(true);
         let dev_film_grain       = world.get_resource::<DevRenderProfile>().map(|d| d.film_grain       ).unwrap_or(true);
@@ -8998,13 +9442,7 @@ impl RenderEngine3d {
         let dev_soft_shadows     = world.get_resource::<DevRenderProfile>().map(|d| d.soft_shadows     ).unwrap_or(false);
         let dev_contact_shadows  = world.get_resource::<DevRenderProfile>().map(|d| d.contact_shadows  ).unwrap_or(false);
 
-        // check if render_scale changed and apply; set up upscale resources when active
-        let desired_scale = world.get_resource::<QualitySettings>()
-            .map(|q| q.render_scale.clamp(0.5, 1.0))
-            .unwrap_or(1.0);
-        if (desired_scale - self.render_scale).abs() > 1e-4 {
-            self.set_render_scale(desired_scale);
-        }
+        // upscale resources — set_render_scale already ran above, just check active state
         self.upscale_active = self.render_scale < 0.999;
         if self.upscale_active {
             self.ensure_upscale_resources(self.render_w, self.render_h, self.surface_config.width, self.surface_config.height);
@@ -9769,11 +10207,12 @@ impl RenderEngine3d {
         }
 
         // ── acquire surface and create encoder ────────────────────────────
+        let mut reconfigure_after_present = false;
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) => f,
             wgpu::CurrentSurfaceTexture::Suboptimal(f) => {
-                // render this frame, reconfigure at the end so next frame is clean
-                self.surface.configure(&self.device, &self.surface_config);
+                // defer reconfigure until after present — can't configure while frame is alive
+                reconfigure_after_present = true;
                 f
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
@@ -10097,6 +10536,9 @@ impl RenderEngine3d {
         self.staging_belt.finish();
         self.queue.submit(Some(encoder.finish()));
         frame.present();
+        if reconfigure_after_present {
+            self.surface.configure(&self.device, &self.surface_config);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         self.staging_belt.recall();
         draw_calls

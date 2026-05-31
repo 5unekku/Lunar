@@ -56,14 +56,14 @@ impl StringInterner {
 
     /// intern a string and return its u32 id.
     /// if the string was already interned, returns the existing id.
-    pub fn intern(&mut self, s: &str) -> u32 {
-        if let Some(&id) = self.forward.get(s) {
+    pub fn intern(&mut self, value: &str) -> u32 {
+        if let Some(&id) = self.forward.get(value) {
             return id;
         }
         let id = u32::try_from(self.reverse.len())
             .unwrap_or_else(|_| panic!("string interner exceeded u32 capacity"));
-        self.forward.insert(s.to_string(), id);
-        self.reverse.push(s.to_string());
+        self.forward.insert(value.to_string(), id);
+        self.reverse.push(value.to_string());
         id
     }
 

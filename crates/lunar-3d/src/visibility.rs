@@ -43,22 +43,27 @@ impl Default for ComputedVisibility {
 pub struct RenderLayers(pub u64);
 
 impl RenderLayers {
+    /// layer 0 only — the standard default for all entities and cameras.
     pub const DEFAULT: Self = Self(1);
+    /// no layers — entity is invisible to all cameras.
     pub const NONE: Self = Self(0);
 
+    /// bitmask with only `layer` set (0-indexed, max 63).
     #[must_use]
-    pub const fn layer(n: u32) -> Self {
-        Self(1 << n)
+    pub const fn layer(index: u32) -> Self {
+        Self(1 << index)
     }
 
+    /// bitmask with `index` added.
     #[must_use]
-    pub const fn with(self, n: u32) -> Self {
-        Self(self.0 | (1 << n))
+    pub const fn with(self, index: u32) -> Self {
+        Self(self.0 | (1 << index))
     }
 
+    /// bitmask with `index` removed.
     #[must_use]
-    pub const fn without(self, n: u32) -> Self {
-        Self(self.0 & !(1 << n))
+    pub const fn without(self, index: u32) -> Self {
+        Self(self.0 & !(1 << index))
     }
 
     #[must_use]

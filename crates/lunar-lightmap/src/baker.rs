@@ -76,10 +76,10 @@ impl LightmapBaker {
     pub fn new() -> Self { Self::default() }
 
     #[must_use]
-    pub fn with_resolution(mut self, res: u32) -> Self { self.resolution = res; self }
+    pub fn with_resolution(mut self, resolution: u32) -> Self { self.resolution = resolution; self }
 
     #[must_use]
-    pub fn with_samples(mut self, n: u32) -> Self { self.samples = n; self }
+    pub fn with_samples(mut self, count: u32) -> Self { self.samples = count; self }
 
     #[must_use]
     pub fn with_directional(mut self, dir: BakeDirectional) -> Self {

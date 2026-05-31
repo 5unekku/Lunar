@@ -1622,6 +1622,7 @@ dependencies = [
  "lunar-core",
  "lunar-image",
  "notify",
+ "rayon",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -1738,6 +1739,7 @@ name = "lunar-image"
 version = "0.1.0"
 dependencies = [
  "image",
+ "rayon",
  "thiserror",
  "zstd",
 ]
@@ -1762,6 +1764,7 @@ name = "lunar-lib"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+ "console_error_panic_hook",
  "console_log",
  "env_logger",
  "js-sys",
@@ -3476,6 +3479,7 @@ dependencies = [
  "smallvec",
  "static_assertions",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
  "wgpu-core",
  "wgpu-hal",

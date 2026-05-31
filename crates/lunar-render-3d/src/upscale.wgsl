@@ -25,10 +25,10 @@ fn vs_upscale(@builtin(vertex_index) vid: u32) -> @builtin(position) vec4<f32> {
     return vec4<f32>(x, -y, 0.0, 1.0);
 }
 
-// render-to-display UV scale
+// render-to-display UV: normalize display pixel coords to [0,1] — the sampler maps
+// this to the render texture regardless of its actual pixel dimensions.
 fn render_uv(frag_pos: vec2<f32>) -> vec2<f32> {
-    let uv = frag_pos / vec2<f32>(params.display_w, params.display_h);
-    return uv * vec2<f32>(params.render_w / params.display_w, params.render_h / params.display_h);
+    return frag_pos / vec2<f32>(params.display_w, params.display_h);
 }
 
 // ── Nearest ─────────────────────────────────────────────────────────────────
