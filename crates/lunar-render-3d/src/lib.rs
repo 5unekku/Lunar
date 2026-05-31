@@ -497,8 +497,8 @@ impl QualitySettings {
             staa: false,
             ssr: false,
             volumetric_fog: false,
-            render_scale: 0.75,
-            upscale_mode: UpscaleMode::Fsr3,
+            render_scale: 1.0,
+            upscale_mode: UpscaleMode::Nearest,
         }
     }
 
@@ -523,8 +523,8 @@ impl QualitySettings {
                 base.fxaa = false;
                 base.staa = false;
                 base.shadow_cascades = 1;
-                base.render_scale = 0.75;
-                base.upscale_mode = UpscaleMode::Fsr3;
+                base.render_scale = 1.0;
+                base.upscale_mode = UpscaleMode::Nearest;
             }
             QualityPreset::Low => {
                 base.msaa_samples = 1;
