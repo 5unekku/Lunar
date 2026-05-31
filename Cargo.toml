@@ -107,11 +107,11 @@ web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElemen
 # these apply workspace-wide (cargo reads profiles only from the root manifest).
 
 [profile.release]
-opt-level     = 3        # the engine is cpu-bound; never trade away speed here
-lto           = "thin"   # cross-crate inlining; switch to "fat" for final ship builds
-codegen-units = 1        # maximises optimisation (slower compile, release-only)
-panic         = "abort"  # drops unwind tables: smaller binary, faster. no catch_unwind in use.
-strip         = true     # strip symbols from the shipped binary
+opt-level     = 3        # maximum speed
+lto           = "fat"    # whole-program LTO: cross-crate inlining + dead code elimination
+codegen-units = 1        # single codegen unit: best optimisation, slowest compile
+panic         = "abort"  # no unwind tables: smaller binary, no overhead
+strip         = "symbols"  # strip debug symbols, keep minimal export table
 
 # faster debug iteration: optimise dependencies (wgpu, bevy_ecs, zstd) at -O3 while
 # keeping our own crates unoptimised and fully debuggable. big win for dev builds of
