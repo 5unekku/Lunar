@@ -77,8 +77,11 @@ pub use world_manifest::{
     StreamingState, StringInterner, WorldManifest, builtin_components,
 };
 
-/// window state resource and display resolution helpers
-pub use window::{WindowSettings, DisplayResolution, STANDARD_RESOLUTIONS, resolutions_for_aspect};
+/// window state resource, display resolution helpers, and available-resolutions resource
+pub use window::{
+    WindowSettings, DisplayResolution, AvailableResolutions,
+    STANDARD_RESOLUTIONS, resolutions_for_aspect,
+};
 
 /// full prelude for game development
 pub mod prelude;

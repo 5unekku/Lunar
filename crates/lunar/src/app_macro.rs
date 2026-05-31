@@ -44,6 +44,25 @@ macro_rules! lunar_app {
             let video = sdl.video().expect("failed to get video subsystem");
             let config = $render_config;
 
+            let available_resolutions: Vec<$crate::lunar_core::DisplayResolution> = {
+                use std::collections::BTreeSet;
+                let modes = video.displays().ok()
+                    .and_then(|d| d.into_iter().next())
+                    .and_then(|d| d.get_fullscreen_modes().ok())
+                    .unwrap_or_default();
+                let unique: BTreeSet<(u32, u32)> = modes.iter()
+                    .filter(|m| m.w > 0 && m.h > 0)
+                    .map(|m| (m.w as u32, m.h as u32))
+                    .collect();
+                if unique.is_empty() {
+                    $crate::lunar_core::STANDARD_RESOLUTIONS.to_vec()
+                } else {
+                    unique.into_iter()
+                        .map(|(w, h)| $crate::lunar_core::DisplayResolution::new(w, h))
+                        .collect()
+                }
+            };
+
             let window = {
                 let mut b = video.window("Lunar", config.width, config.height);
                 if config.allow_resize { b.resizable(); }
@@ -80,6 +99,7 @@ macro_rules! lunar_app {
             initial_settings.target_aspect = config.target_aspect;
             initial_settings.allow_resize  = config.allow_resize;
             app.insert_resource(initial_settings);
+            app.insert_resource($crate::lunar_core::AvailableResolutions(available_resolutions));
             app.insert_resource(render_engine);
 
             app.add_plugin($crate::lunar_render::RenderPlugin);

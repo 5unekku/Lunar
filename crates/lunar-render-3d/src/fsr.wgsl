@@ -4,14 +4,15 @@
 // RCAS sharpens the upscaled result to recover edge clarity lost during upsampling.
 
 struct FsrParams {
-    // EASU
-    render_w: f32,
-    render_h: f32,
-    display_w: f32,
-    display_h: f32,
+    render_w:       f32,
+    render_h:       f32,
+    display_w:      f32,
+    display_h:      f32,
     // RCAS sharpness: 0.0 = maximum sharpening, 2.0 = no sharpening. default 0.25.
     rcas_sharpness: f32,
-    _pad: array<f32, 3>,
+    _pad0:          f32,
+    _pad1:          f32,
+    _pad2:          f32,
 }
 @group(0) @binding(0) var<uniform> params: FsrParams;
 @group(0) @binding(1) var fsr_input_tex: texture_2d<f32>;

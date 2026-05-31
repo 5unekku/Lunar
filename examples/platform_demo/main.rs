@@ -242,5 +242,6 @@ fn main() {
         vsync: true,
         frame_cap: 0,
         tick_rate: TickRate::Hz60,
+        ..Default::default()
     });
 }

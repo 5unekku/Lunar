@@ -29,7 +29,7 @@ pub async fn bootstrap_wasm<Plugin: lunar_core::GamePlugin + Default + 'static>(
         .unwrap_or_else(|_| log::warn!("logger already initialized"));
 
     use lunar_assets::AssetPlugin;
-    use lunar_core::{App, WindowSettings};
+    use lunar_core::{App, AvailableResolutions, STANDARD_RESOLUTIONS, WindowSettings};
     use lunar_input::InputPlugin;
     use lunar_render::{RenderEngine, RenderPlugin, wasm_set_render_engine};
     use std::{cell::RefCell, rc::Rc};
@@ -51,11 +51,12 @@ pub async fn bootstrap_wasm<Plugin: lunar_core::GamePlugin + Default + 'static>(
     wasm_set_render_engine(engine);
 
     let mut app = App::new();
-    app.insert_resource(WindowSettings::new(
-        config.width,
-        config.height,
-        config.vsync,
-    ));
+    let mut initial_settings = WindowSettings::new(config.width, config.height, config.vsync);
+    initial_settings.target_aspect = config.target_aspect;
+    initial_settings.allow_resize  = config.allow_resize;
+    app.insert_resource(initial_settings);
+    // wasm has no display mode API — use the curated standard list
+    app.insert_resource(AvailableResolutions(STANDARD_RESOLUTIONS.to_vec()));
     app.add_plugin(RenderPlugin);
     app.add_plugin(InputPlugin);
     app.add_plugin(AssetPlugin);

@@ -13,7 +13,7 @@ pub fn bootstrap<Plugin: lunar_core::GamePlugin + Default + 'static>(
     config: lunar_render::RenderConfig,
 ) {
     use lunar_assets::AssetPlugin;
-    use lunar_core::{App, WindowSettings};
+    use lunar_core::{App, AvailableResolutions, DisplayResolution, STANDARD_RESOLUTIONS, WindowSettings};
     use lunar_input::{ActionMap, InputBinding, InputPlugin, InputState, KeyCode, SdlGamepadProvider, process_events};
     use lunar_render::{RenderEngine, RenderPlugin};
     use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -23,6 +23,23 @@ pub fn bootstrap<Plugin: lunar_core::GamePlugin + Default + 'static>(
 
     let sdl = sdl3::init().expect("failed to initialize SDL3");
     let video = sdl.video().expect("failed to get video subsystem");
+
+    let available_resolutions = {
+        use std::collections::BTreeSet;
+        let modes = video.displays().ok()
+            .and_then(|displays| displays.into_iter().next())
+            .and_then(|display| display.get_fullscreen_modes().ok())
+            .unwrap_or_default();
+        let unique: BTreeSet<(u32, u32)> = modes.iter()
+            .filter(|m| m.w > 0 && m.h > 0)
+            .map(|m| (m.w as u32, m.h as u32))
+            .collect();
+        if unique.is_empty() {
+            STANDARD_RESOLUTIONS.to_vec()
+        } else {
+            unique.into_iter().map(|(w, h)| DisplayResolution::new(w, h)).collect()
+        }
+    };
 
     let window = {
         let mut b = video.window("Lunar", config.width, config.height);
@@ -53,6 +70,7 @@ pub fn bootstrap<Plugin: lunar_core::GamePlugin + Default + 'static>(
     initial_settings.target_aspect = config.target_aspect;
     initial_settings.allow_resize  = config.allow_resize;
     app.insert_resource(initial_settings);
+    app.insert_resource(AvailableResolutions(available_resolutions));
     app.insert_resource(render_engine);
 
     app.add_plugin(RenderPlugin);

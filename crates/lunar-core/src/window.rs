@@ -51,6 +51,40 @@ pub static STANDARD_RESOLUTIONS: &[DisplayResolution] = &[
     DisplayResolution::new(7680, 4320),
 ];
 
+/// the set of display resolutions available on the current hardware.
+///
+/// inserted by the bootstrap at startup. on native targets the list comes from
+/// SDL3 (`SDL_GetFullscreenDisplayModes`), deduplicated and sorted. on WASM it
+/// falls back to [`STANDARD_RESOLUTIONS`] since the browser exposes no display
+/// mode API. game code reads this for settings menus.
+///
+/// # example
+///
+/// ```ignore
+/// fn resolution_menu(resolutions: Res<AvailableResolutions>) {
+///     for &res in resolutions.iter() {
+///         println!("{}×{}", res.width, res.height);
+///     }
+/// }
+/// ```
+#[derive(Resource, Default)]
+pub struct AvailableResolutions(pub Vec<DisplayResolution>);
+
+impl AvailableResolutions {
+    /// iterate over available resolutions.
+    pub fn iter(&self) -> impl Iterator<Item = &DisplayResolution> { self.0.iter() }
+
+    /// filter to resolutions matching `target_aspect` within `tolerance`.
+    /// useful when `target_aspect` is set on [`WindowSettings`].
+    #[must_use]
+    pub fn for_aspect(&self, target_aspect: f32, tolerance: f32) -> Vec<DisplayResolution> {
+        self.0.iter()
+            .filter(|r| (r.aspect() - target_aspect).abs() <= tolerance)
+            .copied()
+            .collect()
+    }
+}
+
 /// returns standard resolutions matching `target_aspect` within `tolerance`.
 ///
 /// for a game locked to 16:9:
