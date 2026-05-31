@@ -141,7 +141,7 @@ struct VertOut {
     @location(3)       color:        vec4<f32>,
     @location(4)       view_depth:   f32,   // linear view-space depth for cascade selection
     @location(5)       uv_lightmap:  vec2<f32>,
-    @location(6)       instance_id:  u32,
+    @location(6) @interpolate(flat) instance_id:  u32,
 }
 
 @vertex

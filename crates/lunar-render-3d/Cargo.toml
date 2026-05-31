@@ -40,6 +40,6 @@ wgpu = { workspace = true, features = ["dx12"] }
 wgpu = { workspace = true, features = ["metal"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wgpu      = { workspace = true, features = ["web"] }
-web-sys   = { version = "0.3", features = ["HtmlCanvasElement", "Window", "Document", "Element"] }
+wgpu      = { workspace = true, features = ["webgpu"] }
+web-sys   = { version = "0.3", features = ["HtmlCanvasElement", "Window", "Document", "Element", "Performance"] }
 wasm-bindgen = { version = "0.2" }

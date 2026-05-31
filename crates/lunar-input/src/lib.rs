@@ -829,6 +829,12 @@ fn begin_input_tick(mut input: ResMut<InputState>) {
     input.begin_frame();
 }
 
+#[cfg(target_arch = "wasm32")]
+fn drain_web_input_system(mut input: ResMut<InputState>) {
+    web_input::drain_to_input(&mut input);
+    poll_gamepads(&mut input);
+}
+
 impl GamePlugin for InputPlugin {
     fn name(&self) -> &'static str {
         "InputPlugin"
@@ -838,6 +844,8 @@ impl GamePlugin for InputPlugin {
         app.insert_resource(InputState::new());
         app.insert_resource(ActionMap::new());
         app.add_system_to_stage(lunar_core::UpdateStage::PostUpdate, begin_input_tick);
+        #[cfg(target_arch = "wasm32")]
+        app.add_system_to_stage(lunar_core::UpdateStage::Input, drain_web_input_system);
         log::info!("InputPlugin: input state and action map resources registered");
     }
 }
@@ -1536,6 +1544,16 @@ pub fn setup_web_input(canvas: &web_sys::HtmlElement) {
             )
             .expect("failed to add mousemove listener");
         mousemove_closure.forget();
+
+        // request pointer lock on click so mouse movement stays captured inside the page
+        let canvas_for_lock = canvas.clone();
+        let click_closure = wasm_bindgen::closure::Closure::wrap(Box::new(move || {
+            canvas_for_lock.unchecked_ref::<web_sys::Element>().request_pointer_lock();
+        }) as Box<dyn FnMut()>);
+        canvas_target
+            .add_event_listener_with_callback("click", click_closure.as_ref().unchecked_ref())
+            .expect("failed to add click listener");
+        click_closure.forget();
     }
 }
 

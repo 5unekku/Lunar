@@ -22,13 +22,14 @@
 pub async fn bootstrap_wasm_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
     config: lunar_render_3d::RenderConfig3d,
 ) {
+    console_error_panic_hook::set_once();
     console_log::init_with_level(log::Level::Debug)
         .unwrap_or_else(|_| log::warn!("logger already initialized"));
 
     use lunar_3d::Plugin3d;
     use lunar_assets::AssetPlugin;
     use lunar_core::{App, AvailableResolutions, STANDARD_RESOLUTIONS, WindowSettings};
-    use lunar_input::InputPlugin;
+    use lunar_input::{InputPlugin, setup_web_input};
     use lunar_render_3d::{RenderEngine3d, RenderPlugin3d};
     use std::{cell::RefCell, rc::Rc};
     use wasm_bindgen::JsCast;
@@ -41,6 +42,8 @@ pub async fn bootstrap_wasm_3d<Plugin: lunar_core::GamePlugin + Default + 'stati
 
     let canvas = RenderEngine3d::find_canvas("lunar-canvas")
         .expect("expected <canvas id=\"lunar-canvas\"> in the HTML");
+
+    setup_web_input(canvas.unchecked_ref());
 
     let surface = RenderEngine3d::create_canvas_surface(&instance, &canvas)
         .expect("failed to create WebGPU surface from canvas");

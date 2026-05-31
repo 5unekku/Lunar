@@ -61,7 +61,7 @@ struct VertOut {
     @location(0)       uv:          vec2<f32>,
     @location(1)       uv_lightmap: vec2<f32>,
     @location(2)       color:       vec4<f32>,
-    @location(3)       instance_id: u32,
+    @location(3) @interpolate(flat) instance_id: u32,
 }
 
 @vertex

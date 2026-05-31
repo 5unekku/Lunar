@@ -10247,10 +10247,22 @@ impl RenderEngine3d {
 // ── ecs integration ────────────────────────────────────────────────────────
 
 fn render_3d_system(world: &mut World) {
+    #[cfg(not(target_arch = "wasm32"))]
     let t0 = std::time::Instant::now();
+    #[cfg(target_arch = "wasm32")]
+    let t0: f64 = web_sys::window()
+        .and_then(|w| w.performance())
+        .map_or(0.0, |p| p.now());
+
     let mut engine = world.remove_resource::<RenderEngine3d>().unwrap();
     let draw_calls = engine.render_frame(world);
+
+    #[cfg(not(target_arch = "wasm32"))]
     let frame_ms = t0.elapsed().as_secs_f32() * 1000.0;
+    #[cfg(target_arch = "wasm32")]
+    let frame_ms = (web_sys::window()
+        .and_then(|w| w.performance())
+        .map_or(t0, |p| p.now()) - t0) as f32;
     let scale = engine.tick_dynamic_resolution(frame_ms);
 
     // adaptive quality: step preset up/down based on sustained over/under budget
