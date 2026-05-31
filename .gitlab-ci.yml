@@ -95,6 +95,12 @@ build-windows-i686:
     - rustup target add i686-pc-windows-gnu
     - cargo zigbuild --workspace --target i686-pc-windows-gnu
 
+build-windows-aarch64:
+  <<: *cross
+  script:
+    - rustup target add aarch64-pc-windows-gnullvm
+    - cargo zigbuild --workspace --target aarch64-pc-windows-gnullvm
+
 build-wasm:
   stage: build
   cache:
