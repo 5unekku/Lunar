@@ -66,13 +66,37 @@ pub async fn bootstrap_wasm_3d<Plugin: lunar_core::GamePlugin + Default + 'stati
     app.add_plugin(AssetPlugin);
     app.add_plugin(Plugin::default());
 
+    let mut canvas_w = canvas.width();
+    let mut canvas_h = canvas.height();
+
     let app = Rc::new(RefCell::new(app));
     let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
     let g = f.clone();
 
     *g.borrow_mut() = Some(Closure::new({
-        let app = app.clone();
+        let app   = app.clone();
+        let canvas = canvas.clone();
         move || {
+            // ResizeObserver updates canvas.width/height when the CSS size changes;
+            // detect that here and notify the renderer + window settings.
+            let new_w = canvas.width();
+            let new_h = canvas.height();
+            if (new_w != canvas_w || new_h != canvas_h) && new_w > 0 && new_h > 0 {
+                {
+                    let mut app_ref = app.borrow_mut();
+                    let world = app_ref.world_mut();
+                    if let Some(mut engine) = world.get_resource_mut::<lunar_render_3d::RenderEngine3d>() {
+                        engine.resize(new_w, new_h);
+                    }
+                    if let Some(mut ws) = world.get_resource_mut::<lunar_core::WindowSettings>() {
+                        ws.width  = new_w;
+                        ws.height = new_h;
+                    }
+                }
+                canvas_w = new_w;
+                canvas_h = new_h;
+            }
+
             app.borrow_mut().tick(config.tick_rate.delta_seconds());
             web_sys::window()
                 .unwrap()

@@ -54,7 +54,9 @@ func main() {
 		log.Fatalf("wasm-bindgen failed: %v", err)
 	}
 
-	// minimal index.html — canvas fills the viewport, no chrome
+	// minimal index.html — canvas fits the viewport while preserving aspect ratio.
+	// JS sets the canvas buffer size to match its CSS-rendered size so there is
+	// no extra browser-level scaling. ResizeObserver keeps it in sync on resize.
 	html := fmt.Sprintf(`<!DOCTYPE html>
 <html>
 <head>
@@ -62,12 +64,24 @@ func main() {
 <title>%s</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { background: #000; width: 100vw; height: 100vh; overflow: hidden; display: flex; align-items: center; justify-content: center; }
-canvas { display: block; }
+body { background: hsl(0, 0%%, 0%%); width: 100vw; height: 100vh; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+canvas { display: block; max-width: 100%%; max-height: 100%%; aspect-ratio: 1280 / 720; width: 100%%; }
 </style>
 </head>
 <body>
-<canvas id="lunar-canvas" width="1280" height="720"></canvas>
+<canvas id="lunar-canvas"></canvas>
+<script>
+(function() {
+    var c = document.getElementById('lunar-canvas');
+    function fit() {
+        var w = Math.round(c.getBoundingClientRect().width);
+        var h = Math.round(c.getBoundingClientRect().height);
+        if (w > 0 && h > 0) { c.width = w; c.height = h; }
+    }
+    fit();
+    new ResizeObserver(fit).observe(c);
+})();
+</script>
 <script type="module">
 import init from './%s.js';
 await init();
