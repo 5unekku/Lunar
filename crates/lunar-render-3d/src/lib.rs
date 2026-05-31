@@ -800,6 +800,11 @@ pub struct RenderConfig3d {
     /// fixed logic tick rate — independent of render frame rate
     pub tick_rate: lunar_core::TickRate,
     pub title: String,
+    /// fixed aspect ratio. when set, the window snaps on resize to maintain this ratio.
+    /// expressed as width/height (e.g. `16.0/9.0`). `None` = free aspect ratio.
+    pub target_aspect: Option<f32>,
+    /// whether the window is resizable. true by default.
+    pub allow_resize: bool,
 }
 
 impl Default for RenderConfig3d {
@@ -811,6 +816,8 @@ impl Default for RenderConfig3d {
             frame_cap: 0,
             tick_rate: lunar_core::TickRate::Hz60,
             title: "Lunar".to_string(),
+            target_aspect: None,
+            allow_resize: true,
         }
     }
 }

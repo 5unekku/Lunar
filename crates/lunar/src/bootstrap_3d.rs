@@ -4,6 +4,20 @@
 /// built-in plugins, and runs the game loop. use [`lunar_core::WindowSettings`]
 /// to read window state and toggle fullscreen or cursor lock from game code.
 ///
+/// # fullscreen
+///
+/// F11 or Alt+Enter toggle fullscreen by default. game code can rebind F11 via
+/// [`lunar_input::ActionMap`] or disable it entirely. Alt+Enter is always active
+/// and cannot be rebound (it is an engine-level shortcut).
+///
+/// to enter fullscreen programmatically: `settings.is_fullscreen = true`.
+///
+/// # aspect ratio
+///
+/// set `config.target_aspect` (e.g. `Some(16.0 / 9.0)`) to lock the window to a
+/// fixed aspect ratio. on resize the engine snaps the height to the nearest
+/// correct value. has no effect in fullscreen mode.
+///
 /// # cursor lock
 ///
 /// set `WindowSettings::cursor_locked = true` in a setup system to capture
@@ -42,11 +56,11 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
     let video = sdl.video().expect("failed to get video subsystem");
     let mouse = sdl.mouse();
 
-    let window = video
-        .window(&config.title, config.width, config.height)
-        .resizable()
-        .build()
-        .expect("failed to create window");
+    let window = {
+        let mut b = video.window(&config.title, config.width, config.height);
+        if config.allow_resize { b.resizable(); }
+        b.build().expect("failed to create window")
+    };
 
     let instance = wgpu::Instance::default();
     let surface = unsafe {
@@ -69,7 +83,10 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
 
     let mut app = App::new();
 
-    app.insert_resource(WindowSettings::new(config.width, config.height, config.vsync));
+    let mut initial_settings = WindowSettings::new(config.width, config.height, config.vsync);
+    initial_settings.target_aspect = config.target_aspect;
+    initial_settings.allow_resize  = config.allow_resize;
+    app.insert_resource(initial_settings);
     app.insert_resource(render_engine);
 
     app.add_plugin(Plugin3d);
@@ -77,10 +94,9 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
     app.add_plugin(InputPlugin);
     app.add_plugin(AssetPlugin);
 
-    // default fullscreen toggle bindings
+    // F11 toggles fullscreen (rebindable). alt+enter is handled directly in the loop below.
     app.add_startup_system(|mut actions: bevy_ecs::prelude::ResMut<ActionMap>| {
         actions.bind("fullscreen", InputBinding::Key(KeyCode::F11));
-        actions.bind("fullscreen", InputBinding::Key(KeyCode::F));
     });
 
     app.add_plugin(Plugin::default());
@@ -97,11 +113,17 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
     app.run_with_events(config.frame_cap, config.tick_rate, |world| {
         process_events(&mut event_pump, &mut sdl_gamepad, world);
 
-        // fullscreen toggle via action map
-        if let Some(actions) = world.get_resource::<ActionMap>()
-            && let Some(input) = world.get_resource::<InputState>()
-            && actions.is_action_just_pressed(input, "fullscreen")
-        {
+        // read input once for the frame
+        let input_snap = world.get_resource::<InputState>().map(|i| {
+            let enter       = i.is_key_just_pressed(KeyCode::Enter);
+            let alt         = i.is_key_held(KeyCode::LAlt) || i.is_key_held(KeyCode::RAlt);
+            let fs_action   = world.get_resource::<ActionMap>()
+                .is_some_and(|a| a.is_action_just_pressed(i, "fullscreen"));
+            (enter && alt, fs_action)
+        });
+
+        // alt+enter: engine-level shortcut — always active
+        if input_snap.is_some_and(|(alt_enter, _)| alt_enter) {
             actual_fullscreen = !actual_fullscreen;
             let _ = window.set_fullscreen(actual_fullscreen);
             if let Some(mut settings) = world.get_resource_mut::<WindowSettings>() {
@@ -109,7 +131,16 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
             }
         }
 
-        // fullscreen set directly via WindowSettings
+        // f11 (or rebound action): rebindable fullscreen toggle
+        if input_snap.is_some_and(|(_, fs)| fs) {
+            actual_fullscreen = !actual_fullscreen;
+            let _ = window.set_fullscreen(actual_fullscreen);
+            if let Some(mut settings) = world.get_resource_mut::<WindowSettings>() {
+                settings.is_fullscreen = actual_fullscreen;
+            }
+        }
+
+        // game code set is_fullscreen directly
         if let Some(settings) = world.get_resource::<WindowSettings>()
             && settings.is_fullscreen != actual_fullscreen
         {
@@ -117,7 +148,7 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
             let _ = window.set_fullscreen(actual_fullscreen);
         }
 
-        // cursor lock set via WindowSettings
+        // cursor lock
         if let Some(settings) = world.get_resource::<WindowSettings>()
             && settings.cursor_locked != actual_cursor_locked
         {
@@ -125,17 +156,30 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
             mouse.set_relative_mouse_mode(&window, actual_cursor_locked);
         }
 
-        // window resize
+        // window resize — enforce aspect ratio in windowed mode, then notify renderer
         let (w, h) = window.size();
         if w != last_window_w || h != last_window_h {
-            last_window_w = w;
-            last_window_h = h;
+            let target = world.get_resource::<WindowSettings>()
+                .and_then(|s| if !actual_fullscreen { s.target_aspect } else { None });
+
+            let (final_w, final_h) = if let Some(aspect) = target {
+                let snapped_h = ((w as f32 / aspect).round() as u32).max(1);
+                if snapped_h != h {
+                    let _ = window.set_size(w, snapped_h);
+                }
+                (w, snapped_h)
+            } else {
+                (w, h)
+            };
+
+            last_window_w = final_w;
+            last_window_h = final_h;
             if let Some(mut re) = world.get_resource_mut::<RenderEngine3d>() {
-                re.resize(w, h);
+                re.resize(final_w, final_h);
             }
             if let Some(mut settings) = world.get_resource_mut::<WindowSettings>() {
-                settings.width = w;
-                settings.height = h;
+                settings.width  = final_w;
+                settings.height = final_h;
             }
         }
     });

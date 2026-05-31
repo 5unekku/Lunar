@@ -2,13 +2,10 @@
 ///
 /// expands to a `main` function that initializes SDL3, creates a window,
 /// sets up the wgpu render surface, adds all built-in plugins, and runs
-/// the game loop. the window title defaults to `"Lunar"`.
+/// the game loop.
 ///
-/// this is the ONLY entry point game code needs — no `unsafe`, no SDL3,
-/// no wgpu surface touching required. read window state through the
-/// [`WindowSettings`] resource.
-/// fullscreen can be toggled via F11/F (default) or by writing to
-/// `WindowSettings::is_fullscreen`.
+/// fullscreen: F11 or Alt+Enter. game code can rebind F11 via ActionMap.
+/// set `target_aspect` in the RenderConfig to lock the window aspect ratio.
 ///
 /// # usage
 ///
@@ -47,11 +44,11 @@ macro_rules! lunar_app {
             let video = sdl.video().expect("failed to get video subsystem");
             let config = $render_config;
 
-            let window = video
-                .window("Lunar", config.width, config.height)
-                .resizable()
-                .build()
-                .expect("failed to create window");
+            let window = {
+                let mut b = video.window("Lunar", config.width, config.height);
+                if config.allow_resize { b.resizable(); }
+                b.build().expect("failed to create window")
+            };
 
             let instance = $crate::wgpu::Instance::default();
             let surface = unsafe {
@@ -59,9 +56,8 @@ macro_rules! lunar_app {
                 let window_handle = window.window_handle().unwrap();
                 // SAFETY: the SDL3 `window` is owned by this `main` scope and
                 // outlives the wgpu surface (process exit drops both, with the
-                // surface dropped first). The handles point into `window`'s
-                // internal state and remain valid for that lifetime, satisfying
-                // wgpu's `create_surface_unsafe` contract.
+                // surface dropped first). the handles point into `window`'s
+                // internal state and remain valid for that lifetime.
                 instance
                     .create_surface_unsafe(
                         $crate::wgpu::SurfaceTargetUnsafe::from_display_and_window(
@@ -79,32 +75,24 @@ macro_rules! lunar_app {
 
             let mut app = $crate::lunar_core::App::new();
 
-            app.insert_resource($crate::lunar_core::WindowSettings::new(
-                config.width, config.height, config.vsync,
-            ));
+            let mut initial_settings =
+                $crate::lunar_core::WindowSettings::new(config.width, config.height, config.vsync);
+            initial_settings.target_aspect = config.target_aspect;
+            initial_settings.allow_resize  = config.allow_resize;
+            app.insert_resource(initial_settings);
             app.insert_resource(render_engine);
 
             app.add_plugin($crate::lunar_render::RenderPlugin);
             app.add_plugin($crate::lunar_input::InputPlugin);
             app.add_plugin($crate::lunar_assets::AssetPlugin);
-            // audio plugin slot — wire up here when the audio crate is ready
 
-            // register default fullscreen toggle (F11 or F)
             app.add_startup_system(
                 |mut actions: $crate::bevy_ecs::prelude::ResMut<
                     $crate::lunar_input::ActionMap,
                 >| {
                     actions.bind(
                         "fullscreen",
-                        $crate::lunar_input::InputBinding::Key(
-                            $crate::lunar_input::KeyCode::F11,
-                        ),
-                    );
-                    actions.bind(
-                        "fullscreen",
-                        $crate::lunar_input::InputBinding::Key(
-                            $crate::lunar_input::KeyCode::F,
-                        ),
+                        $crate::lunar_input::InputBinding::Key($crate::lunar_input::KeyCode::F11),
                     );
                 },
             );
@@ -120,49 +108,72 @@ macro_rules! lunar_app {
             app.run_with_events(config.frame_cap, config.tick_rate, |world| {
                 $crate::lunar_input::process_events(&mut event_pump, world);
 
-                // handle fullscreen toggle via action
-                if let Some(actions) =
-                    world.get_resource::<$crate::lunar_input::ActionMap>()
-                    && let Some(input) =
-                        world.get_resource::<$crate::lunar_input::InputState>()
-                    && actions.is_action_just_pressed(input, "fullscreen")
-                {
+                let input_snap = world
+                    .get_resource::<$crate::lunar_input::InputState>()
+                    .map(|i| {
+                        let enter = i.is_key_just_pressed($crate::lunar_input::KeyCode::Enter);
+                        let alt   = i.is_key_held($crate::lunar_input::KeyCode::LAlt)
+                            || i.is_key_held($crate::lunar_input::KeyCode::RAlt);
+                        let fs_action = world
+                            .get_resource::<$crate::lunar_input::ActionMap>()
+                            .is_some_and(|a| a.is_action_just_pressed(i, "fullscreen"));
+                        (enter && alt, fs_action)
+                    });
+
+                if input_snap.is_some_and(|(alt_enter, _)| alt_enter) {
                     actual_fullscreen = !actual_fullscreen;
                     let _ = window.set_fullscreen(actual_fullscreen);
-                    if let Some(mut settings) =
-                        world.get_resource_mut::<$crate::lunar_core::WindowSettings>()
+                    if let Some(mut settings) = world
+                        .get_resource_mut::<$crate::lunar_core::WindowSettings>()
+                    {
+                        settings.is_fullscreen = actual_fullscreen;
+                    }
+                }
+                if input_snap.is_some_and(|(_, fs)| fs) {
+                    actual_fullscreen = !actual_fullscreen;
+                    let _ = window.set_fullscreen(actual_fullscreen);
+                    if let Some(mut settings) = world
+                        .get_resource_mut::<$crate::lunar_core::WindowSettings>()
                     {
                         settings.is_fullscreen = actual_fullscreen;
                     }
                 }
 
-                // check if game code set is_fullscreen directly
                 if let Some(settings) =
                     world.get_resource::<$crate::lunar_core::WindowSettings>()
+                    && settings.is_fullscreen != actual_fullscreen
                 {
-                    if settings.is_fullscreen != actual_fullscreen {
-                        let new_fs = settings.is_fullscreen;
-                        let _ = window.set_fullscreen(new_fs);
-                        actual_fullscreen = new_fs;
-                    }
+                    let new_fs = settings.is_fullscreen;
+                    let _ = window.set_fullscreen(new_fs);
+                    actual_fullscreen = new_fs;
                 }
 
-                // handle window resize
-                if let (Some(w), Some(h)) = (window.size().0, window.size().1) {
-                    if w != last_window_w || h != last_window_h {
-                        last_window_w = w;
-                        last_window_h = h;
-                        if let Some(mut re) = world
-                            .get_resource_mut::<$crate::lunar_render::RenderEngine>()
-                        {
-                            re.resize_surface(w as u32, h as u32);
-                        }
-                        if let Some(mut settings) = world
-                            .get_resource_mut::<$crate::lunar_core::WindowSettings>()
-                        {
-                            settings.width = w as u32;
-                            settings.height = h as u32;
-                        }
+                let (w, h) = window.size();
+                if w != last_window_w || h != last_window_h {
+                    let target = world
+                        .get_resource::<$crate::lunar_core::WindowSettings>()
+                        .and_then(|s| if !actual_fullscreen { s.target_aspect } else { None });
+
+                    let (final_w, final_h) = if let Some(aspect) = target {
+                        let snapped_h = ((w as f32 / aspect).round() as u32).max(1);
+                        if snapped_h != h { let _ = window.set_size(w, snapped_h); }
+                        (w, snapped_h)
+                    } else {
+                        (w, h)
+                    };
+
+                    last_window_w = final_w;
+                    last_window_h = final_h;
+                    if let Some(mut re) = world
+                        .get_resource_mut::<$crate::lunar_render::RenderEngine>()
+                    {
+                        re.resize_surface(final_w as u32, final_h as u32);
+                    }
+                    if let Some(mut settings) = world
+                        .get_resource_mut::<$crate::lunar_core::WindowSettings>()
+                    {
+                        settings.width  = final_w;
+                        settings.height = final_h;
                     }
                 }
             });
