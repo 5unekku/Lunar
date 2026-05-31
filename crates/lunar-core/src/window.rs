@@ -23,36 +23,32 @@ impl DisplayResolution {
     pub fn aspect(self) -> f32 { self.width as f32 / self.height as f32 }
 }
 
-/// curated list of common PC and TV display resolutions from VESA DMT and CTA-861.
-/// covers 4:3, 16:10, 16:9, and 21:9 aspect ratios, sorted ascending within each group.
+/// merged VESA DMT + CTA-861 resolution list, sorted by width then height.
+/// use `resolutions_for_aspect` to filter to a specific ratio for a settings menu.
 pub static STANDARD_RESOLUTIONS: &[DisplayResolution] = &[
-    // 4:3
-    DisplayResolution::new(640, 480),
-    DisplayResolution::new(800, 600),
+    DisplayResolution::new(640,  480),
+    DisplayResolution::new(800,  600),
     DisplayResolution::new(1024, 768),
     DisplayResolution::new(1152, 864),
-    DisplayResolution::new(1280, 960),
-    DisplayResolution::new(1400, 1050),
-    DisplayResolution::new(1600, 1200),
-    // 16:10
-    DisplayResolution::new(1280, 800),
-    DisplayResolution::new(1440, 900),
-    DisplayResolution::new(1680, 1050),
-    DisplayResolution::new(1920, 1200),
-    DisplayResolution::new(2560, 1600),
-    // 16:9
     DisplayResolution::new(1280, 720),
+    DisplayResolution::new(1280, 800),
+    DisplayResolution::new(1280, 960),
     DisplayResolution::new(1366, 768),
+    DisplayResolution::new(1400, 1050),
+    DisplayResolution::new(1440, 900),
     DisplayResolution::new(1600, 900),
+    DisplayResolution::new(1600, 1200),
+    DisplayResolution::new(1680, 1050),
     DisplayResolution::new(1920, 1080),
+    DisplayResolution::new(1920, 1200),
+    DisplayResolution::new(2560, 1080),
     DisplayResolution::new(2560, 1440),
+    DisplayResolution::new(2560, 1600),
+    DisplayResolution::new(3440, 1440),
     DisplayResolution::new(3840, 2160),
+    DisplayResolution::new(5120, 2160),
     DisplayResolution::new(5120, 2880),
     DisplayResolution::new(7680, 4320),
-    // 21:9 ultrawide
-    DisplayResolution::new(2560, 1080),
-    DisplayResolution::new(3440, 1440),
-    DisplayResolution::new(5120, 2160),
 ];
 
 /// returns standard resolutions matching `target_aspect` within `tolerance`.
@@ -75,7 +71,7 @@ pub fn resolutions_for_aspect(target_aspect: f32, tolerance: f32) -> Vec<Display
 /// the engine handles all window lifecycle internally (SDL3, wgpu surface).
 /// game code reads this resource to get the current window dimensions and
 /// fullscreen state. to toggle fullscreen, write `is_fullscreen = true`
-/// (or use the default F11/F key binding via ActionMap).
+/// (or use Alt+Enter / F11 — both active by default).
 ///
 /// # example
 ///
