@@ -267,7 +267,7 @@ fn main() {
         title: "Platform Demo".to_string(),
         width: 1280,
         height: 720,
-        vsync: true,
+        vsync: false,
         frame_cap: 0,
         tick_rate: TickRate::Hz60,
         ..Default::default()
@@ -283,7 +283,7 @@ pub async fn start() {
     lunar::bootstrap_wasm_3d::<PlatformDemo>(RenderConfig3d {
         width: 1280,
         height: 720,
-        vsync: true,
+        vsync: false,
         tick_rate: TickRate::Hz60,
         ..Default::default()
     }).await;
