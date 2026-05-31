@@ -101,6 +101,13 @@ build-windows-aarch64:
     - rustup target add aarch64-pc-windows-gnullvm
     - cargo zigbuild --workspace --target aarch64-pc-windows-gnullvm
 
+smoke:
+  stage: build
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq build-essential pkg-config libssl-dev xvfb mesa-vulkan-drivers libvulkan1
+  script:
+    - WGPU_BACKEND=vulkan xvfb-run -a cargo run --example platform_demo -- --smoke
+
 build-wasm:
   stage: build
   cache:

@@ -70,8 +70,16 @@ fn setup(
     mut registry: ResMut<MeshRegistry>,
     mut settings: ResMut<WindowSettings>,
 ) {
-    // simple demo: no post-processing effects
-    commands.insert_resource(QualitySettings::minimum());
+    // smoke test uses max quality to catch shader/pipeline init failures
+    #[cfg(debug_assertions)]
+    let quality = if std::env::args().any(|a| a == "--smoke") {
+        QualitySettings::maximum()
+    } else {
+        QualitySettings::minimum()
+    };
+    #[cfg(not(debug_assertions))]
+    let quality = QualitySettings::minimum();
+    commands.insert_resource(quality);
 
     // lock cursor for mouse-look
     settings.cursor_locked = true;

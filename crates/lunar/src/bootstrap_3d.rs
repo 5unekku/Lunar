@@ -52,6 +52,13 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
     env_logger::init();
     log::info!("lunar 3d engine starting...");
 
+    #[cfg(debug_assertions)]
+    let smoke = std::env::args().any(|a| a == "--smoke");
+    #[cfg(not(debug_assertions))]
+    let smoke = false;
+
+    let (win_w, win_h) = if smoke { (1, 1) } else { (config.width, config.height) };
+
     let sdl = sdl3::init().expect("failed to initialize SDL3");
     let video = sdl.video().expect("failed to get video subsystem");
     let mouse = sdl.mouse();
@@ -75,7 +82,7 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
     };
 
     let window = {
-        let mut b = video.window(&config.title, config.width, config.height);
+        let mut b = video.window(&config.title, win_w, win_h);
         if config.allow_resize { b.resizable(); }
         b.build().expect("failed to create window")
     };
@@ -101,7 +108,7 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
 
     let mut app = App::new();
 
-    let mut initial_settings = WindowSettings::new(config.width, config.height, config.vsync);
+    let mut initial_settings = WindowSettings::new(win_w, win_h, config.vsync);
     initial_settings.target_aspect = config.target_aspect;
     initial_settings.allow_resize  = config.allow_resize;
     app.insert_resource(initial_settings);
@@ -120,14 +127,25 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
 
     app.add_plugin(Plugin::default());
 
+    // stop after the first rendered frame — only active when --smoke is passed in debug builds
+    #[cfg(debug_assertions)]
+    if smoke {
+        use lunar_core::{EngineState, Time};
+        app.add_system(|time: bevy_ecs::prelude::Res<Time>, mut state: bevy_ecs::prelude::ResMut<EngineState>| {
+            if time.frame_count() >= 1 {
+                *state = EngineState::Stopping;
+            }
+        });
+    }
+
     let gamepad_subsystem = sdl.gamepad().expect("failed to get gamepad subsystem");
     let mut event_pump = sdl.event_pump().expect("failed to get event pump");
     let mut sdl_gamepad = SdlGamepadProvider::new(gamepad_subsystem);
     let mut window = window;
     let mut actual_fullscreen = false;
     let mut actual_cursor_locked = false;
-    let mut last_window_w = config.width;
-    let mut last_window_h = config.height;
+    let mut last_window_w = win_w;
+    let mut last_window_h = win_h;
 
     app.run_with_events(config.frame_cap, config.tick_rate, |world| {
         process_events(&mut event_pump, &mut sdl_gamepad, world);
