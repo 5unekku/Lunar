@@ -3,6 +3,11 @@
 //! completely independent of the 2d renderer. owns its own wgpu device, queue,
 //! and surface. add [`RenderPlugin3d`] to your app and the renderer handles
 //! everything from there.
+
+// on wasm, many native-only items (shadow shaders, mega-buffer constants, etc.)
+// have no callers since their use sites are #[cfg(not(wasm32))]. suppress the
+// resulting dead_code noise — the items are genuinely used on native.
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 //!
 //! # rendering model
 //!
@@ -7170,8 +7175,8 @@ impl RenderEngine3d {
         // ── FSR passes (EASU + RCAS): render-resolution → display-resolution ──
         // EASU: upscales render-res fsr_ldr_view → display-res fsr_mid_view
         // RCAS: sharpens fsr_mid_view → fxaa_ldr_view (feeds STAA/FXAA) or swapchain
-        if self.fsr_enabled {
-            if let (Some(easu_pl), Some(rcas_pl), Some(easu_bg), Some(rcas_bg), Some(mid_view), Some(params_buf)) = (
+        if self.fsr_enabled
+            && let (Some(easu_pl), Some(rcas_pl), Some(easu_bg), Some(rcas_bg), Some(mid_view), Some(params_buf)) = (
                 self.fsr_easu_pipeline.as_ref(),
                 self.fsr_rcas_pipeline.as_ref(),
                 self.fsr_easu_bg.as_ref(),
@@ -7220,7 +7225,6 @@ impl RenderEngine3d {
                     rpass.set_bind_group(0, rcas_bg, &[]);
                     rpass.draw(0..3, 0..1);
                 }
-            }
         }
 
         // ── TAA pass → swapchain + history ───────────────────────────────────
@@ -10179,19 +10183,15 @@ impl GamePlugin for RenderPlugin3d {
     fn build(&mut self, app: &mut App) {
         app.insert_resource(RenderInfo3d::default());
 
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            // pull render tier out of the engine resource (already inserted by bootstrap_3d)
-            // and expose it as a standalone resource for game systems to query
-            if let Some(engine) = app.world_mut().get_resource::<RenderEngine3d>() {
-                let tier = engine.render_tier();
-                app.insert_resource(QualitySettings::from_tier(tier));
-                app.insert_resource(tier);
-            }
-
-            app.add_system_to_stage(UpdateStage::Render, render_3d_system);
+        // pull render tier from the engine resource (inserted by bootstrap) and
+        // expose it and quality settings as standalone resources for game systems
+        if let Some(engine) = app.world_mut().get_resource::<RenderEngine3d>() {
+            let tier = engine.render_tier();
+            app.insert_resource(QualitySettings::from_tier(tier));
+            app.insert_resource(tier);
         }
 
+        app.add_system_to_stage(UpdateStage::Render, render_3d_system);
         log::info!("RenderPlugin3d: 3d render system registered");
     }
 }
