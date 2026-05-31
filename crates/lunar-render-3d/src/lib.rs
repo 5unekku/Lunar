@@ -87,7 +87,7 @@ const SSR_SHADER_SRC: &str             = include_str!("ssr.wgsl");
 const FOG_SHADER_SRC: &str             = include_str!("volumetric_fog.wgsl");
 #[cfg(debug_assertions)]
 const ATMOS_SHADER_SRC: &str           = include_str!("atmos.wgsl");
-const FSR_SHADER_SRC: &str             = include_str!("fsr.wgsl");
+const UPSCALE_SHADER_SRC: &str         = include_str!("upscale.wgsl");
 #[cfg(debug_assertions)]
 const PARTICLE_SIM_SHADER_SRC: &str    = include_str!("particle_sim.wgsl");
 #[cfg(debug_assertions)]
@@ -402,6 +402,28 @@ impl RenderTier {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QualityPreset { Minimum, Low, Medium, High, Ultra }
 
+/// upscaling algorithm used when `render_scale < 1.0`.
+///
+/// only active when the surface renders at reduced resolution. at `render_scale = 1.0`
+/// the upscale pass is skipped entirely regardless of this setting.
+///
+/// game devs can force a specific mode via [`DevRenderProfile::forced_upscale_mode`].
+/// users control it through [`QualitySettings::upscale_mode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpscaleMode {
+    /// integer-aligned point sampling — zero blur, correct for pixel art at integer scales.
+    Nearest,
+    /// hardware bilinear — essentially free, acceptable general-purpose quality.
+    Linear,
+    /// Lanczos-2 — sharper than bilinear, preserves fine detail better.
+    Lanczos,
+    /// Mitchell-Netravali bicubic — smooth upscaling, good for 2D and UI-heavy content.
+    Bicubic,
+    /// FSR 3 EASU + RCAS — edge-adaptive spatial upsampling with contrast sharpening.
+    /// best quality for rendered 3D content; two-pass algorithm.
+    Fsr3,
+}
+
 /// per-feature quality knobs. inserted as a resource by [`RenderPlugin3d`]
 /// using defaults derived from the detected [`RenderTier`].
 ///
@@ -444,11 +466,12 @@ pub struct QualitySettings {
     /// enable quarter-res ray-marched volumetric fog (mid+ tier).
     pub volumetric_fog: bool,
     /// render resolution scale factor. 1.0 = native; 0.75 = 75% width/height (56% pixel count).
-    /// when < 1.0, the full render chain runs at reduced size and FSR upscales to display.
+    /// when < 1.0, the full render chain runs at reduced size and the upscale pass runs.
     pub render_scale: f32,
-    /// enable FSR 3 (EASU + RCAS) upscaling when render_scale < 1.0.
-    /// only activates when render_scale < 1.0. on native resolution this is a no-op.
-    pub fsr: bool,
+    /// upscaling algorithm used when render_scale < 1.0.
+    /// has no effect at native resolution. see [`UpscaleMode`] for options.
+    /// game devs can override this via [`DevRenderProfile::forced_upscale_mode`].
+    pub upscale_mode: UpscaleMode,
 }
 
 impl QualitySettings {
@@ -474,7 +497,7 @@ impl QualitySettings {
             ssr: false,
             volumetric_fog: false,
             render_scale: 0.75,
-            fsr: true,
+            upscale_mode: UpscaleMode::Fsr3,
         }
     }
 
@@ -500,7 +523,7 @@ impl QualitySettings {
                 base.staa = false;
                 base.shadow_cascades = 1;
                 base.render_scale = 0.75;
-                base.fsr = true;
+                base.upscale_mode = UpscaleMode::Fsr3;
             }
             QualityPreset::Low => {
                 base.msaa_samples = 1;
@@ -540,7 +563,7 @@ impl QualitySettings {
                 ssr: false,
                 volumetric_fog: false,
                 render_scale: 1.0,
-                fsr: false,
+                upscale_mode: UpscaleMode::Lanczos,
             },
             RenderTier::Mid => Self {
                 preset: QualityPreset::Medium,
@@ -560,7 +583,7 @@ impl QualitySettings {
                 ssr: true,
                 volumetric_fog: true,
                 render_scale: 1.0,
-                fsr: false,
+                upscale_mode: UpscaleMode::Lanczos,
             },
             RenderTier::High => Self {
                 preset: QualityPreset::High,
@@ -580,7 +603,7 @@ impl QualitySettings {
                 ssr: true,
                 volumetric_fog: true,
                 render_scale: 1.0,
-                fsr: false,
+                upscale_mode: UpscaleMode::Lanczos,
             },
         }
     }
@@ -604,6 +627,7 @@ impl QualitySettings {
         if !dev.film_grain     { self.film_grain = false; }
         self.msaa_samples = self.msaa_samples.min(dev.max_msaa);
         self.particle_cap = self.particle_cap.min(dev.max_particles);
+        if let Some(mode) = dev.forced_upscale_mode { self.upscale_mode = mode; }
         // soft_shadows and contact_shadows are read directly from DevRenderProfile at render time
         self
     }
@@ -685,6 +709,10 @@ pub struct DevRenderProfile {
     /// screen-space contact shadow raymarch under objects to fill shadow-map contact gaps.
     /// adds ~0.1ms at 1080p. standard/classic off; full on.
     pub contact_shadows: bool,
+    /// force a specific upscaling algorithm regardless of user quality settings.
+    /// `None` = let the user's `QualitySettings::upscale_mode` decide.
+    /// example: `Some(UpscaleMode::Nearest)` for pixel art games.
+    pub forced_upscale_mode: Option<UpscaleMode>,
 }
 
 impl Default for DevRenderProfile {
@@ -718,6 +746,7 @@ impl DevRenderProfile {
             max_point_lights: 8,
             soft_shadows: false,
             contact_shadows: false,
+            forced_upscale_mode: None,
         }
     }
 
@@ -743,6 +772,7 @@ impl DevRenderProfile {
             max_point_lights: 8,
             soft_shadows: false,
             contact_shadows: false,
+            forced_upscale_mode: None,
         }
     }
 
@@ -768,6 +798,7 @@ impl DevRenderProfile {
             max_point_lights: 256,
             soft_shadows: true,
             contact_shadows: true,
+            forced_upscale_mode: None,
         }
     }
 
@@ -875,6 +906,7 @@ struct FrameContext {
     dev_chrom_ab: bool,
     dev_film_grain: bool,
     dev_contact_shadows: bool,
+    upscale_mode: UpscaleMode,
     dir_color: Color,
     dir_direction: Vec3,
     sky_color: Color,
@@ -1047,14 +1079,19 @@ pub struct RenderEngine3d {
     auto_quality_under_frames: u32,  // frames consecutively under budget
 
     // FXAA post-process AA — single pass on LDR composite output (low tier only)
-    // FSR 3 upscaling (EASU + RCAS). active when render_scale < 1.0 and fsr enabled.
-    fsr_enabled: bool,
-    // render-resolution LDR target — composite writes here when FSR is active
+    // upscaling — active when render_scale < 1.0. all modes share one BGL.
+    upscale_active: bool,
+    // render-resolution LDR target — composite writes here when upscaling
     fsr_ldr_texture: Option<wgpu::Texture>,
     fsr_ldr_view: Option<wgpu::TextureView>,
-    // display-resolution intermediate — EASU writes here, RCAS reads from here
+    // display-resolution intermediate — single-pass modes write output here;
+    // FSR EASU writes here and RCAS reads from here
     fsr_mid_texture: Option<wgpu::Texture>,
     fsr_mid_view: Option<wgpu::TextureView>,
+    upscale_nearest_pipeline: Option<wgpu::RenderPipeline>,
+    upscale_linear_pipeline:  Option<wgpu::RenderPipeline>,
+    upscale_lanczos_pipeline: Option<wgpu::RenderPipeline>,
+    upscale_bicubic_pipeline: Option<wgpu::RenderPipeline>,
     fsr_easu_pipeline: Option<wgpu::RenderPipeline>,
     fsr_rcas_pipeline: Option<wgpu::RenderPipeline>,
     fsr_bgl: Option<wgpu::BindGroupLayout>,
@@ -4132,11 +4169,15 @@ impl RenderEngine3d {
             transparent_scratch: Vec::new(),
             transparent_last_depths: Vec::new(),
             transparent_last_cam_fwd: Vec3::ZERO,
-            fsr_enabled: false,
+            upscale_active: false,
             fsr_ldr_texture: None,
             fsr_ldr_view: None,
             fsr_mid_texture: None,
             fsr_mid_view: None,
+            upscale_nearest_pipeline: None,
+            upscale_linear_pipeline:  None,
+            upscale_lanczos_pipeline: None,
+            upscale_bicubic_pipeline: None,
             fsr_easu_pipeline: None,
             fsr_rcas_pipeline: None,
             fsr_bgl: None,
@@ -5515,36 +5556,41 @@ impl RenderEngine3d {
 
     /// create or recreate FSR resources for the given render/display dimensions.
     /// idempotent: no-op if dimensions haven't changed and resources exist.
-    fn ensure_fsr_resources(&mut self, render_w: u32, render_h: u32, display_w: u32, display_h: u32) {
-        let needs_rebuild = self.fsr_easu_pipeline.is_none()
-            || self.fsr_ldr_texture.as_ref().map(|t| {
-                let s = t.size(); s.width != render_w || s.height != render_h
-            }).unwrap_or(true)
-            || self.fsr_mid_texture.as_ref().map(|t| {
-                let s = t.size(); s.width != display_w || s.height != display_h
-            }).unwrap_or(true);
-        if !needs_rebuild { return; }
+    fn ensure_upscale_resources(&mut self, render_w: u32, render_h: u32, display_w: u32, display_h: u32) {
+        let needs_tex_rebuild = self.fsr_ldr_texture.as_ref().map(|t| {
+            let s = t.size(); s.width != render_w || s.height != render_h
+        }).unwrap_or(true)
+        || self.fsr_mid_texture.as_ref().map(|t| {
+            let s = t.size(); s.width != display_w || s.height != display_h
+        }).unwrap_or(true);
 
-        let format = wgpu::TextureFormat::Bgra8Unorm;
-        let make_tex = |device: &wgpu::Device, w: u32, h: u32, label: &'static str| {
-            let t = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-                mip_level_count: 1, sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            let v = t.create_view(&wgpu::TextureViewDescriptor::default());
-            (t, v)
-        };
-        let (ldr_tex, ldr_view) = make_tex(&self.device, render_w, render_h, "[fsr] ldr");
-        let (mid_tex, mid_view) = make_tex(&self.device, display_w, display_h, "[fsr] mid");
+        let format = self.surface_config.format;
+
+        if needs_tex_rebuild {
+            let make_tex = |device: &wgpu::Device, w: u32, h: u32, label: &'static str| {
+                let t = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                    mip_level_count: 1, sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                });
+                let v = t.create_view(&wgpu::TextureViewDescriptor::default());
+                (t, v)
+            };
+            let (ldr_tex, ldr_view) = make_tex(&self.device, render_w, render_h, "[upscale] ldr");
+            let (mid_tex, mid_view) = make_tex(&self.device, display_w, display_h, "[upscale] mid");
+            self.fsr_ldr_texture = Some(ldr_tex);
+            self.fsr_ldr_view    = Some(ldr_view);
+            self.fsr_mid_texture = Some(mid_tex);
+            self.fsr_mid_view    = Some(mid_view);
+        }
 
         let params_buf = self.fsr_params_buf.get_or_insert_with(|| {
             self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("[fsr] params"),
+                label: Some("[upscale] params"),
                 size: FSR_PARAMS_SIZE,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
@@ -5553,7 +5599,7 @@ impl RenderEngine3d {
 
         let bgl = self.fsr_bgl.get_or_insert_with(|| {
             self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("[fsr] bgl"),
+                label: Some("[upscale] bgl"),
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
                         binding: 0, visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -5574,27 +5620,33 @@ impl RenderEngine3d {
             })
         });
 
-        let make_bg = |device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, params: &wgpu::Buffer, view: &wgpu::TextureView, sampler: &wgpu::Sampler, label: &'static str| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(label),
-                layout: bgl,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: params.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(view) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
-                ],
-            })
-        };
-        self.fsr_easu_bg = Some(make_bg(&self.device, bgl, params_buf, &ldr_view, &self.post_sampler, "[fsr] easu bg"));
-        self.fsr_rcas_bg = Some(make_bg(&self.device, bgl, params_buf, &mid_view, &self.post_sampler, "[fsr] rcas bg"));
+        // rebuild bind groups whenever textures are rebuilt
+        if needs_tex_rebuild {
+            let ldr_view = self.fsr_ldr_view.as_ref().unwrap();
+            let mid_view = self.fsr_mid_view.as_ref().unwrap();
+            let make_bg = |device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, params: &wgpu::Buffer, view: &wgpu::TextureView, sampler: &wgpu::Sampler, label: &'static str| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(label),
+                    layout: bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: params.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(view) },
+                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
+                    ],
+                })
+            };
+            self.fsr_easu_bg = Some(make_bg(&self.device, bgl, params_buf, ldr_view, &self.post_sampler, "[upscale] easu/single bg"));
+            self.fsr_rcas_bg = Some(make_bg(&self.device, bgl, params_buf, mid_view, &self.post_sampler, "[upscale] rcas bg"));
+        }
 
+        // create all upscale pipelines once (shared layout, different entry points)
         if self.fsr_easu_pipeline.is_none() {
-            let fsr_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("[fsr] shader"),
-                source: shader_source!(FSR_SHADER_SRC, "fsr.spv"),
+            let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("[upscale] shader"),
+                source: shader_source!(UPSCALE_SHADER_SRC, "upscale.spv"),
             });
             let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("[fsr] pipeline layout"),
+                label: Some("[upscale] pipeline layout"),
                 bind_group_layouts: &[Some(bgl)],
                 immediate_size: 0,
             });
@@ -5603,11 +5655,11 @@ impl RenderEngine3d {
                     label: Some(label),
                     layout: Some(&layout),
                     vertex: wgpu::VertexState {
-                        module: &fsr_shader, entry_point: Some("vs_fsr"),
+                        module: &shader, entry_point: Some("vs_upscale"),
                         buffers: &[], compilation_options: wgpu::PipelineCompilationOptions::default(),
                     },
                     fragment: Some(wgpu::FragmentState {
-                        module: &fsr_shader, entry_point: Some(entry),
+                        module: &shader, entry_point: Some(entry),
                         targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
                         compilation_options: wgpu::PipelineCompilationOptions::default(),
                     }),
@@ -5618,14 +5670,13 @@ impl RenderEngine3d {
                     multiview_mask: None,
                 })
             };
-            self.fsr_easu_pipeline = Some(make_pp("fs_easu", "[fsr] easu pipeline"));
-            self.fsr_rcas_pipeline = Some(make_pp("fs_rcas", "[fsr] rcas pipeline"));
+            self.upscale_nearest_pipeline = Some(make_pp("fs_nearest", "[upscale] nearest"));
+            self.upscale_linear_pipeline  = Some(make_pp("fs_linear",  "[upscale] linear"));
+            self.upscale_lanczos_pipeline = Some(make_pp("fs_lanczos", "[upscale] lanczos"));
+            self.upscale_bicubic_pipeline = Some(make_pp("fs_bicubic", "[upscale] bicubic"));
+            self.fsr_easu_pipeline        = Some(make_pp("fs_easu",    "[upscale] fsr easu"));
+            self.fsr_rcas_pipeline        = Some(make_pp("fs_rcas",    "[upscale] fsr rcas"));
         }
-
-        self.fsr_ldr_texture = Some(ldr_tex);
-        self.fsr_ldr_view = Some(ldr_view);
-        self.fsr_mid_texture = Some(mid_tex);
-        self.fsr_mid_view = Some(mid_view);
     }
 
     fn upload_mesh_data(device: &wgpu::Device, queue: &wgpu::Queue, data: &MeshData) -> GpuMesh {
@@ -6243,11 +6294,11 @@ impl RenderEngine3d {
         self.fxaa_ldr_view = fxaa_ldr_view;
         self.fxaa_ldr_texture = fxaa_ldr_texture;
 
-        // invalidate FSR resources so they get recreated at the new dimensions
-        if self.fsr_enabled {
+        // rebuild upscale resources at the new dimensions
+        if self.upscale_active {
             let dw = self.surface_config.width;
             let dh = self.surface_config.height;
-            self.ensure_fsr_resources(render_w, render_h, dw, dh);
+            self.ensure_upscale_resources(render_w, render_h, dw, dh);
         }
     }
 
@@ -6750,7 +6801,7 @@ impl RenderEngine3d {
     /// shadow, motion vectors, composite, taa, fxaa) into the frame encoder, ending at
     /// the swapchain. `view` is the surface view (moved in; not used after).
     fn record_post_processing(&mut self, fc: &FrameContext, world: &World, encoder: &mut wgpu::CommandEncoder, view: wgpu::TextureView) {
-        let &FrameContext { view_proj, view_proj_unjittered, staa_jitter_ndc, cam_pos, cam_wt, dev_bloom, dev_ssao, dev_ssr, dev_fog, dev_fxaa, dev_staa, dev_vignette, dev_chrom_ab, dev_film_grain, dev_contact_shadows, dir_color, dir_direction, sky_color, .. } = fc;
+        let &FrameContext { view_proj, view_proj_unjittered, staa_jitter_ndc, cam_pos, cam_wt, dev_bloom, dev_ssao, dev_ssr, dev_fog, dev_fxaa, dev_staa, dev_vignette, dev_chrom_ab, dev_film_grain, dev_contact_shadows, upscale_mode, dir_color, dir_direction, sky_color, .. } = fc;
         // ── bloom passes ─────────────────────────────────────────────────
         if self.bloom_enabled && dev_bloom && !self.bloom_mip_views.is_empty() {
             let n = self.bloom_mip_views.len();
@@ -7144,7 +7195,7 @@ impl RenderEngine3d {
             // taa takes priority over fxaa (they're mutually exclusive on mid/high tier).
             // when FSR is active, composite writes to the render-resolution fsr_ldr texture first.
             let use_intermediate = (self.staa_enabled && dev_staa) || (self.fxaa_enabled && dev_fxaa);
-            let composite_target = if self.fsr_enabled {
+            let composite_target = if self.upscale_active {
                 self.fsr_ldr_view.as_ref().unwrap_or(&self.fxaa_ldr_view)
             } else if use_intermediate {
                 &self.fxaa_ldr_view
@@ -7172,13 +7223,11 @@ impl RenderEngine3d {
             pass.draw(0..3, 0..1);
         }
 
-        // ── FSR passes (EASU + RCAS): render-resolution → display-resolution ──
-        // EASU: upscales render-res fsr_ldr_view → display-res fsr_mid_view
-        // RCAS: sharpens fsr_mid_view → fxaa_ldr_view (feeds STAA/FXAA) or swapchain
-        if self.fsr_enabled
-            && let (Some(easu_pl), Some(rcas_pl), Some(easu_bg), Some(rcas_bg), Some(mid_view), Some(params_buf)) = (
-                self.fsr_easu_pipeline.as_ref(),
-                self.fsr_rcas_pipeline.as_ref(),
+        // ── upscale pass: render resolution → display resolution ──────────────
+        // runs when render_scale < 1.0. mode selected from upscale_mode (resolved
+        // above to respect DevRenderProfile::forced_upscale_mode).
+        if self.upscale_active
+            && let (Some(easu_bg), Some(rcas_bg), Some(mid_view), Some(params_buf)) = (
                 self.fsr_easu_bg.as_ref(),
                 self.fsr_rcas_bg.as_ref(),
                 self.fsr_mid_view.as_ref(),
@@ -7186,44 +7235,57 @@ impl RenderEngine3d {
             ) {
                 let dw = self.surface_config.width as f32;
                 let dh = self.surface_config.height as f32;
-                let fsr_data: [f32; 8] = [
+                let upscale_data: [f32; 8] = [
                     self.render_w as f32, self.render_h as f32, dw, dh,
                     0.25, 0.0, 0.0, 0.0,  // rcas_sharpness + padding
                 ];
-                self.queue.write_buffer(params_buf, 0, bytemuck::cast_slice(&fsr_data));
+                self.queue.write_buffer(params_buf, 0, bytemuck::cast_slice(&upscale_data));
 
-                // EASU: fsr_ldr → fsr_mid
-                {
-                    let mut epass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("[fsr] easu pass"),
+                let final_target = if (self.staa_enabled && dev_staa) || (self.fxaa_enabled && dev_fxaa) {
+                    &self.fxaa_ldr_view
+                } else {
+                    &view
+                };
+
+                let run_pass = |encoder: &mut wgpu::CommandEncoder, label: &'static str, pipeline: &wgpu::RenderPipeline, bg: &wgpu::BindGroup, target: &wgpu::TextureView| {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some(label),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: mid_view, resolve_target: None,
+                            view: target, resolve_target: None,
                             ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
                             depth_slice: None,
                         })],
                         depth_stencil_attachment: None,
                         timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
                     });
-                    epass.set_pipeline(easu_pl);
-                    epass.set_bind_group(0, easu_bg, &[]);
-                    epass.draw(0..3, 0..1);
-                }
-                // RCAS: fsr_mid → fxaa_ldr (feeds downstream AA) or swapchain
-                let rcas_target = if (self.staa_enabled && dev_staa) || (self.fxaa_enabled && dev_fxaa) { &self.fxaa_ldr_view } else { &view };
-                {
-                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("[fsr] rcas pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: rcas_target, resolve_target: None,
-                            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
-                    });
-                    rpass.set_pipeline(rcas_pl);
-                    rpass.set_bind_group(0, rcas_bg, &[]);
-                    rpass.draw(0..3, 0..1);
+                    pass.set_pipeline(pipeline);
+                    pass.set_bind_group(0, bg, &[]);
+                    pass.draw(0..3, 0..1);
+                };
+
+                match upscale_mode {
+                    UpscaleMode::Nearest => if let Some(pl) = &self.upscale_nearest_pipeline {
+                        run_pass(&mut *encoder, "[upscale] nearest", pl, easu_bg, final_target);
+                    },
+                    UpscaleMode::Linear => if let Some(pl) = &self.upscale_linear_pipeline {
+                        run_pass(&mut *encoder, "[upscale] linear", pl, easu_bg, final_target);
+                    },
+                    UpscaleMode::Lanczos => if let Some(pl) = &self.upscale_lanczos_pipeline {
+                        run_pass(&mut *encoder, "[upscale] lanczos", pl, easu_bg, final_target);
+                    },
+                    UpscaleMode::Bicubic => if let Some(pl) = &self.upscale_bicubic_pipeline {
+                        run_pass(&mut *encoder, "[upscale] bicubic", pl, easu_bg, final_target);
+                    },
+                    UpscaleMode::Fsr3 => {
+                        // EASU: fsr_ldr → fsr_mid
+                        if let Some(pl) = &self.fsr_easu_pipeline {
+                            run_pass(&mut *encoder, "[upscale] fsr easu", pl, easu_bg, mid_view);
+                        }
+                        // RCAS: fsr_mid → final target
+                        if let Some(pl) = &self.fsr_rcas_pipeline {
+                            run_pass(&mut *encoder, "[upscale] fsr rcas", pl, rcas_bg, final_target);
+                        }
+                    },
                 }
         }
 
@@ -8879,17 +8941,23 @@ impl RenderEngine3d {
         let dev_soft_shadows     = world.get_resource::<DevRenderProfile>().map(|d| d.soft_shadows     ).unwrap_or(false);
         let dev_contact_shadows  = world.get_resource::<DevRenderProfile>().map(|d| d.contact_shadows  ).unwrap_or(false);
 
-        // check if FSR state or render_scale changed this frame and apply
-        let (desired_scale, desired_fsr) = world.get_resource::<QualitySettings>()
-            .map(|q| (q.render_scale.clamp(0.5, 1.0), q.fsr && q.render_scale < 0.999))
-            .unwrap_or((1.0, false));
+        // check if render_scale changed and apply; set up upscale resources when active
+        let desired_scale = world.get_resource::<QualitySettings>()
+            .map(|q| q.render_scale.clamp(0.5, 1.0))
+            .unwrap_or(1.0);
         if (desired_scale - self.render_scale).abs() > 1e-4 {
             self.set_render_scale(desired_scale);
         }
-        self.fsr_enabled = desired_fsr;
-        if self.fsr_enabled {
-            self.ensure_fsr_resources(self.render_w, self.render_h, self.surface_config.width, self.surface_config.height);
+        self.upscale_active = self.render_scale < 0.999;
+        if self.upscale_active {
+            self.ensure_upscale_resources(self.render_w, self.render_h, self.surface_config.width, self.surface_config.height);
         }
+
+        // resolve upscale mode: dev forced_upscale_mode takes priority over user setting
+        let upscale_mode = world.get_resource::<DevRenderProfile>()
+            .and_then(|d| d.forced_upscale_mode)
+            .or_else(|| world.get_resource::<QualitySettings>().map(|q| q.upscale_mode))
+            .unwrap_or(UpscaleMode::Lanczos);
 
         // ── gather sky ────────────────────────────────────────────────────
         let sky = world.get_resource::<Sky>().copied();
@@ -9964,7 +10032,7 @@ impl RenderEngine3d {
         }
 
         // bundle read-only per-frame state once; shared by the pre-color and post passes
-        let fc = FrameContext { view_proj, view_proj_unjittered, staa_jitter_ndc, cam_pos, cam_wt, aspect, camera, sky, dir_illuminance, dir_enabled, vp_x, vp_y, vp_w, vp_h, dev_bloom, dev_ssao, dev_ssr, dev_fog, dev_fxaa, dev_staa, dev_vignette, dev_chrom_ab, dev_film_grain, dev_contact_shadows, dir_color, dir_direction, sky_color };
+        let fc = FrameContext { view_proj, view_proj_unjittered, staa_jitter_ndc, cam_pos, cam_wt, aspect, camera, sky, dir_illuminance, dir_enabled, vp_x, vp_y, vp_w, vp_h, dev_bloom, dev_ssao, dev_ssr, dev_fog, dev_fxaa, dev_staa, dev_vignette, dev_chrom_ab, dev_film_grain, dev_contact_shadows, upscale_mode, dir_color, dir_direction, sky_color };
         self.record_gtao_reflection(&fc, world, &mut encoder);
         let draw_calls = self.record_scene_passes(&fc, world, &mut encoder);
         self.record_post_processing(&fc, world, &mut encoder, view);

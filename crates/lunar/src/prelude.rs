@@ -102,7 +102,7 @@ pub use lunar_3d::{
 };
 // lunar-render-3d types — only available when the 3d feature is enabled
 #[cfg(feature = "3d")]
-pub use lunar_render_3d::{DevRenderProfile, QualityPreset, QualitySettings, RenderConfig3d, RenderEngine3d, RenderInfo3d, RenderPlugin3d, Sky};
+pub use lunar_render_3d::{DevRenderProfile, QualityPreset, QualitySettings, RenderConfig3d, RenderEngine3d, RenderInfo3d, RenderPlugin3d, Sky, UpscaleMode};
 
 // lunar-bsp types — BVH spatial acceleration, portal culling, and BSP runtime (3d feature)
 #[cfg(feature = "3d")]
