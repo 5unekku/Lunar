@@ -888,7 +888,7 @@ struct FrameContext {
 ///
 /// inserted as a resource by [`RenderPlugin3d`]. game code should not
 /// interact with this directly — use [`MeshRegistry`] and ECS components instead.
-#[cfg_attr(not(target_arch = "wasm32"), derive(Resource))]
+#[derive(Resource)]
 #[allow(dead_code)]
 pub struct RenderEngine3d {
     device: wgpu::Device,
@@ -1405,6 +1405,64 @@ impl RenderEngine3d {
         };
         log::info!("HDR format: {hdr_format:?}, indirect: {has_indirect}");
         Self::init_with_adapter(&adapter, device, queue, surface, config, hdr_format, has_indirect)
+    }
+
+    /// create the 3d render engine from a surface (wasm async path).
+    ///
+    /// call from a `#[wasm_bindgen(start)]` async entry point after obtaining a
+    /// wgpu surface from a `<canvas>` element. feature negotiation mirrors the
+    /// native path; `RG11B10UFLOAT_RENDERABLE` and `INDIRECT_FIRST_INSTANCE` are
+    /// unavailable on WebGPU so the engine will always run at `RenderTier::Mid`.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn from_surface(
+        instance: &wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        config: &RenderConfig3d,
+    ) -> Self {
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: Some(&surface),
+            })
+            .await
+            .expect("no WebGPU adapter — Chrome 113+, Firefox with dom.webgpu.enabled, or Safari 17+");
+        // WebGPU does not expose RG11B10UFLOAT_RENDERABLE or INDIRECT_FIRST_INSTANCE
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("lunar-render-3d device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits { max_bind_groups: 8, ..wgpu::Limits::downlevel_webgl2_defaults() },
+                memory_hints: wgpu::MemoryHints::Performance,
+                trace: wgpu::Trace::default(),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            })
+            .await
+            .expect("failed to create wgpu device");
+        log::info!("HDR format: Rgba16Float (WebGPU), indirect: false");
+        Self::init_with_adapter(&adapter, device, queue, surface, config, wgpu::TextureFormat::Rgba16Float, false)
+    }
+
+    /// create a WebGPU surface from a canvas element (wasm only).
+    #[cfg(target_arch = "wasm32")]
+    pub fn create_canvas_surface(
+        instance: &wgpu::Instance,
+        canvas: &web_sys::HtmlCanvasElement,
+    ) -> Result<wgpu::Surface<'static>, String> {
+        instance
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
+            .map_err(|e| format!("failed to create surface: {e:?}"))
+    }
+
+    /// find a canvas element by id (wasm only).
+    #[cfg(target_arch = "wasm32")]
+    pub fn find_canvas(id: &str) -> Result<web_sys::HtmlCanvasElement, String> {
+        use wasm_bindgen::JsCast;
+        web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.get_element_by_id(id))
+            .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
+            .ok_or_else(|| format!("canvas #{id} not found"))
     }
 
     fn init_with_adapter(

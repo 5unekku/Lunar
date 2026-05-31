@@ -1564,7 +1564,7 @@ impl Texture {
 
     /// generate a full mip chain using a 2×2 box filter.
     ///
-    /// each mip halves both dimensions (minimum 1×1). parallelised via rayon.
+    /// each mip halves both dimensions (minimum 1×1).
     /// no-op if mips are already populated or the image is 1×1.
     pub fn generate_mipmaps(&mut self) {
         if !self.mips.is_empty() || (self.width <= 1 && self.height <= 1) {

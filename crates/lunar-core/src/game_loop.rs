@@ -170,19 +170,25 @@ impl GameLoop {
     ///
     /// uses a hybrid sleep + spin-wait: sleep for all but the last 1ms,
     /// then spin-wait for precision. no-op when frame_cap is 0 (vsync-limited).
+    /// no-op on wasm — the browser drives frame timing via requestAnimationFrame.
     pub fn apply_frame_cap(&self) {
-        if self.frame_cap == 0 {
-            return;
-        }
-        let frame_duration = Duration::from_secs_f64(1.0 / f64::from(self.frame_cap));
-        let elapsed = self.last_frame.elapsed();
-        if elapsed < frame_duration {
-            let remaining = frame_duration - elapsed;
-            if remaining > Duration::from_millis(1) {
-                std::thread::sleep(remaining - Duration::from_millis(1));
+        #[cfg(target_arch = "wasm32")]
+        return;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.frame_cap == 0 {
+                return;
             }
-            while self.last_frame.elapsed() < frame_duration {
-                std::hint::spin_loop();
+            let frame_duration = Duration::from_secs_f64(1.0 / f64::from(self.frame_cap));
+            let elapsed = self.last_frame.elapsed();
+            if elapsed < frame_duration {
+                let remaining = frame_duration - elapsed;
+                if remaining > Duration::from_millis(1) {
+                    std::thread::sleep(remaining - Duration::from_millis(1));
+                }
+                while self.last_frame.elapsed() < frame_duration {
+                    std::hint::spin_loop();
+                }
             }
         }
     }

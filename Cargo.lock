@@ -1914,6 +1914,8 @@ dependencies = [
  "naga",
  "pollster",
  "rayon",
+ "wasm-bindgen",
+ "web-sys",
  "wgpu",
 ]
 

@@ -69,6 +69,11 @@ mod bootstrap_wasm;
 #[cfg(target_arch = "wasm32")]
 pub use bootstrap_wasm::bootstrap_wasm;
 
+#[cfg(all(target_arch = "wasm32", feature = "3d"))]
+mod bootstrap_wasm_3d;
+#[cfg(all(target_arch = "wasm32", feature = "3d"))]
+pub use bootstrap_wasm_3d::bootstrap_wasm_3d;
+
 // types re-exported at crate root for direct access (prelude covers glob imports)
 pub use lunar_assets::{AssetServer, AudioFormat, Font, Handle, Sound, Texture};
 pub use lunar_core::{App, GamePlugin, Time, WindowSettings};
