@@ -1577,26 +1577,61 @@ impl Texture {
         loop {
             let next_w = (prev_w / 2).max(1);
             let next_h = (prev_h / 2).max(1);
-            let mut next = vec![0u8; (next_w * next_h * 4) as usize];
-            for y in 0..next_h {
-                for x in 0..next_w {
-                    let sx = (x * 2).min(prev_w - 1);
-                    let sy = (y * 2).min(prev_h - 1);
-                    let sx1 = (sx + 1).min(prev_w - 1);
-                    let sy1 = (sy + 1).min(prev_h - 1);
-                    let sample = |px: u32, py: u32| -> [u32; 4] {
-                        let i = ((py * prev_w + px) * 4) as usize;
-                        [prev_pixels[i] as u32, prev_pixels[i+1] as u32,
-                         prev_pixels[i+2] as u32, prev_pixels[i+3] as u32]
-                    };
-                    let a = sample(sx, sy); let b = sample(sx1, sy);
-                    let c = sample(sx, sy1); let d = sample(sx1, sy1);
-                    let di = ((y * next_w + x) * 4) as usize;
-                    for ch in 0..4 {
-                        next[di + ch] = ((a[ch] + b[ch] + c[ch] + d[ch] + 2) / 4) as u8;
+
+            #[cfg(not(target_arch = "wasm32"))]
+            let next = {
+                use rayon::prelude::*;
+                let rows: Vec<Vec<u8>> = (0..next_h).into_par_iter().map(|y| {
+                    let mut row = vec![0u8; (next_w * 4) as usize];
+                    for x in 0..next_w {
+                        let sx = (x * 2).min(prev_w - 1);
+                        let sy = (y * 2).min(prev_h - 1);
+                        let sx1 = (sx + 1).min(prev_w - 1);
+                        let sy1 = (sy + 1).min(prev_h - 1);
+                        let sample = |px: u32, py: u32| -> [u32; 4] {
+                            let i = ((py * prev_w + px) * 4) as usize;
+                            [prev_pixels[i] as u32, prev_pixels[i+1] as u32,
+                             prev_pixels[i+2] as u32, prev_pixels[i+3] as u32]
+                        };
+                        let a = sample(sx, sy); let b = sample(sx1, sy);
+                        let c = sample(sx, sy1); let d = sample(sx1, sy1);
+                        let di = (x * 4) as usize;
+                        for ch in 0..4 {
+                            row[di + ch] = ((a[ch] + b[ch] + c[ch] + d[ch] + 2) / 4) as u8;
+                        }
+                    }
+                    row
+                }).collect();
+                let mut buf = Vec::with_capacity((next_w * next_h * 4) as usize);
+                for row in rows { buf.extend_from_slice(&row); }
+                buf
+            };
+
+            #[cfg(target_arch = "wasm32")]
+            let next = {
+                let mut buf = vec![0u8; (next_w * next_h * 4) as usize];
+                for y in 0..next_h {
+                    for x in 0..next_w {
+                        let sx = (x * 2).min(prev_w - 1);
+                        let sy = (y * 2).min(prev_h - 1);
+                        let sx1 = (sx + 1).min(prev_w - 1);
+                        let sy1 = (sy + 1).min(prev_h - 1);
+                        let sample = |px: u32, py: u32| -> [u32; 4] {
+                            let i = ((py * prev_w + px) * 4) as usize;
+                            [prev_pixels[i] as u32, prev_pixels[i+1] as u32,
+                             prev_pixels[i+2] as u32, prev_pixels[i+3] as u32]
+                        };
+                        let a = sample(sx, sy); let b = sample(sx1, sy);
+                        let c = sample(sx, sy1); let d = sample(sx1, sy1);
+                        let di = ((y * next_w + x) * 4) as usize;
+                        for ch in 0..4 {
+                            buf[di + ch] = ((a[ch] + b[ch] + c[ch] + d[ch] + 2) / 4) as u8;
+                        }
                     }
                 }
-            }
+                buf
+            };
+
             self.mips.push(next);
             if next_w <= 1 && next_h <= 1 { break; }
             prev_owned = self.mips.last().unwrap().clone();
