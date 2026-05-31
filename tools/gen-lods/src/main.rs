@@ -22,6 +22,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use rayon::prelude::*;
 
 // vertex stride in bytes matching GpuVertex3d: position(12) + normal(4) + tangent(4) + uv(4) + uv_lm(4) + color(4) = 32
 const VERTEX_STRIDE: usize = 32;
@@ -198,7 +199,5 @@ fn main() {
         std::process::exit(1);
     }
 
-    for path in &paths {
-        process_mesh(path, &thresholds);
-    }
+    paths.par_iter().for_each(|path| process_mesh(path, &thresholds));
 }
