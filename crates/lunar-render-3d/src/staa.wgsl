@@ -1,26 +1,31 @@
-// selective temporal anti-aliasing.
+// STAA — spatial-temporal anti-aliasing.
 //
-// designed around "minimal destruction" — only modifies pixels that actually need it.
-// smooth surfaces and already-clean regions pass through 100% unchanged.
-// msaa handles per-frame geometric edge quality; this pass handles two remaining problems:
+// a selective hybrid of spatial (smaa/fxaa-style) and temporal (taa) AA.
+// per pixel it chooses between, and blends, two resolves and applies neither to
+// already-clean surfaces. goal: the edge quality of smaa + the sub-pixel stability
+// of taa, without the full-frame blur either produces on its own.
+//
+// "minimal destruction": smooth, stable regions pass through 100% unchanged.
+// msaa handles per-frame geometric edges; this pass handles what msaa leaves:
 //   - shimmer: specular flicker, thin-geometry aliasing, sub-pixel instability
-//   - sub-pixel edges: accumulates the camera jitter offset across frames for edge AA
+//   - moving edges: spatial directional resolve every frame (no jitter required)
+//   - static edges: temporal accumulation of the camera jitter offset → true ssaa
 //
 // per-pixel decision:
-//   1. detect shimmer (temporal luma variance vs history)
-//   2. detect edge-adjacent pixels (spatial luma gradient)
-//   3. compute taa_mask = max(shimmer_weight, edge_weight)
-//   4. smooth static surfaces → taa_mask = 0 → output = current frame unchanged
-//   5. masked regions → variance-clipped history blend → temporal stabilization
+//   1. edge_conf     = smooth ramp on 3×3 luma contrast (exactly 0 on flat areas)
+//   2. shimmer_weight = temporal luma delta vs clipped history
+//   3. spatial resolve runs on edges, weighted UP under motion (when temporal jitter
+//      accumulation can't work) and DOWN when static-jitter ssaa is doing the job
+//   4. temporal resolve blends clipped history toward the spatially-resolved current
+//   5. output = mix(spatial_current, temporal, max(edge_conf, shimmer_weight))
+//      → clean regions: mask 0 → spatial_current → center → untouched
 //
-// no post-sharpening: we are not blurring the whole frame, so no corrective filter needed.
-// the blend on edge regions averages msaa-resolved frames at different jitter positions,
-// which does not increase blur relative to a single msaa frame.
+// no post-sharpening: nothing is blurred globally, so no corrective filter is needed.
 
 struct TaaParams {
-    prev_vp:     mat4x4<f32>,   // unjittered view-projection from previous frame
+    prev_vp:     mat4x4<f32>,   // previous-frame view-projection (jittered, matches history)
     inv_vp:      mat4x4<f32>,   // inverse of current jittered view-projection
-    jitter:      vec2<f32>,     // current frame jitter in uv space
+    jitter:      vec2<f32>,     // current frame jitter in uv space (zero while moving)
     rcp_frame:   vec2<f32>,     // (1/display_w, 1/display_h)
     // blend_alpha: base temporal blend weight within the masked region (default 0.1)
     blend_alpha: f32,
@@ -95,6 +100,37 @@ fn clip_aabb(history: vec3<f32>, aabb_min: vec3<f32>, aabb_max: vec3<f32>) -> ve
     return history;
 }
 
+// fxaa-style directional edge resolve. estimates the edge tangent from the diagonal
+// luma gradients, then blends ALONG that tangent — smoothing the staircase with
+// minimal cross-edge blur. 4 taps, run only on edge pixels.
+const FXAA_SPAN_MAX:   f32 = 8.0;
+const FXAA_REDUCE_MUL: f32 = 1.0 / 8.0;
+const FXAA_REDUCE_MIN: f32 = 1.0 / 128.0;
+
+fn fxaa_resolve(uv: vec2<f32>, rc: vec2<f32>,
+                luma_nw: f32, luma_ne: f32, luma_sw: f32, luma_se: f32,
+                luma_min: f32, luma_max: f32) -> vec3<f32> {
+    var dir = vec2<f32>(
+        -((luma_nw + luma_ne) - (luma_sw + luma_se)),
+         ((luma_nw + luma_sw) - (luma_ne + luma_se)),
+    );
+    let reduce  = max((luma_nw + luma_ne + luma_sw + luma_se) * 0.25 * FXAA_REDUCE_MUL, FXAA_REDUCE_MIN);
+    let rcp_min = 1.0 / (min(abs(dir.x), abs(dir.y)) + reduce);
+    dir = clamp(dir * rcp_min, vec2<f32>(-FXAA_SPAN_MAX), vec2<f32>(FXAA_SPAN_MAX)) * rc;
+
+    let rgb_a = 0.5 * (
+        textureSample(current_tex, linear_smp, uv + dir * (1.0 / 3.0 - 0.5)).rgb +
+        textureSample(current_tex, linear_smp, uv + dir * (2.0 / 3.0 - 0.5)).rgb);
+    let rgb_b = rgb_a * 0.5 + 0.25 * (
+        textureSample(current_tex, linear_smp, uv + dir * -0.5).rgb +
+        textureSample(current_tex, linear_smp, uv + dir *  0.5).rgb);
+
+    // if the wider blend overshoots the local luma range it has bled across the
+    // edge — fall back to the narrower (lower-blur) blend.
+    let luma_b = luma(rgb_b);
+    return select(rgb_a, rgb_b, luma_b >= luma_min && luma_b <= luma_max);
+}
+
 @fragment
 fn fs_main(in: VertOut) -> FragOut {
     let uv = in.uv;
@@ -112,86 +148,102 @@ fn fs_main(in: VertOut) -> FragOut {
     let sw = textureSample(current_tex, linear_smp, uv + vec2<f32>(-rc.x,  rc.y)).rgb;
 
     // ── ycocg neighborhood aabb for ghost rejection ───────────────────────
-    let yc = rgb_to_ycocg(center);
-    var aabb_min = min(yc, min(min(rgb_to_ycocg(n), rgb_to_ycocg(s)), min(rgb_to_ycocg(e), rgb_to_ycocg(w))));
-    var aabb_max = max(yc, max(max(rgb_to_ycocg(n), rgb_to_ycocg(s)), max(rgb_to_ycocg(e), rgb_to_ycocg(w))));
-    aabb_min = min(aabb_min, min(min(rgb_to_ycocg(ne), rgb_to_ycocg(nw)), min(rgb_to_ycocg(se), rgb_to_ycocg(sw))));
-    aabb_max = max(aabb_max, max(max(rgb_to_ycocg(ne), rgb_to_ycocg(nw)), max(rgb_to_ycocg(se), rgb_to_ycocg(sw))));
+    let c_yc  = rgb_to_ycocg(center);
+    let n_yc  = rgb_to_ycocg(n);  let s_yc  = rgb_to_ycocg(s);
+    let e_yc  = rgb_to_ycocg(e);  let w_yc  = rgb_to_ycocg(w);
+    let ne_yc = rgb_to_ycocg(ne); let nw_yc = rgb_to_ycocg(nw);
+    let se_yc = rgb_to_ycocg(se); let sw_yc = rgb_to_ycocg(sw);
+    var aabb_min = min(c_yc, min(min(n_yc, s_yc), min(e_yc, w_yc)));
+    var aabb_max = max(c_yc, max(max(n_yc, s_yc), max(e_yc, w_yc)));
+    aabb_min = min(aabb_min, min(min(ne_yc, nw_yc), min(se_yc, sw_yc)));
+    aabb_max = max(aabb_max, max(max(ne_yc, nw_yc), max(se_yc, sw_yc)));
 
-    // ── depth reprojection to get previous-frame uv ───────────────────────
-    // use textureLoad to avoid needing a comparison sampler for depth.
-    // scale by depth_scale because depth_tex is at render resolution while staa
-    // runs at display resolution (the two differ when render_scale < 1.0).
+    // ── neighborhood luma (edge detect + fxaa direction) ──────────────────
+    let curr_luma = luma(center);
+    let luma_n  = luma(n);  let luma_s  = luma(s);  let luma_e  = luma(e);  let luma_w  = luma(w);
+    let luma_ne = luma(ne); let luma_nw = luma(nw); let luma_se = luma(se); let luma_sw = luma(sw);
+    let luma_min = min(curr_luma, min(min(min(luma_n, luma_s), min(luma_e, luma_w)),
+                                      min(min(luma_ne, luma_nw), min(luma_se, luma_sw))));
+    let luma_max = max(curr_luma, max(max(max(luma_n, luma_s), max(luma_e, luma_w)),
+                                      max(max(luma_ne, luma_nw), max(luma_se, luma_sw))));
+    let contrast = luma_max - luma_min;
+
+    // edge confidence: smooth ramp above a relative+absolute threshold (lower than
+    // fxaa's to catch sub-pixel edges). stays exactly 0 below threshold, so flat
+    // regions are never touched.
+    let edge_lo   = max(0.03, luma_max * 0.06);
+    let edge_conf = saturate((contrast - edge_lo) / edge_lo);
+
+    // ── depth reprojection to previous-frame uv ───────────────────────────
+    // textureLoad avoids needing a comparison sampler for depth. depth_scale maps
+    // display-res coords → render-res depth texels (they differ when render_scale<1).
     let texel  = vec2<i32>(in.clip_pos.xy * params.depth_scale);
     let depth  = textureLoad(depth_tex, texel, 0).r;
     let is_sky = depth >= 0.9999;
 
-    let ndc     = vec4<f32>(uv * 2.0 - 1.0, depth, 1.0);
+    // wgpu rasterizes y-up ndc into y-down uv, so y flips on the way in and out.
+    let ndc     = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
     let world_h = params.inv_vp * ndc;
     let world   = world_h.xyz / world_h.w;
 
     let prev_clip = params.prev_vp * vec4<f32>(world, 1.0);
-    let prev_uv   = (prev_clip.xy / prev_clip.w) * 0.5 + 0.5;
+    let prev_ndc  = prev_clip.xy / prev_clip.w;
+    let prev_uv   = vec2<f32>(prev_ndc.x * 0.5 + 0.5, 0.5 - prev_ndc.y * 0.5);
 
     let in_bounds = all(prev_uv >= vec2<f32>(0.0)) && all(prev_uv <= vec2<f32>(1.0));
 
-    // velocity in screen-pixels for blend adaptation
+    // velocity in screen-pixels (jitter removed) for blend adaptation
     let curr_uv_unjittered = uv - params.jitter;
     let velocity_uv        = curr_uv_unjittered - prev_uv;
     let speed_px           = length(velocity_uv) / max(rc.x, rc.y);
 
     // ── history sample + clip ─────────────────────────────────────────────
-    let history_raw  = textureSample(history_tex, linear_smp, prev_uv).rgb;
-    let history_ycocg = rgb_to_ycocg(history_raw);
-    let clipped_ycocg = clip_aabb(history_ycocg, aabb_min, aabb_max);
+    let history_raw     = textureSample(history_tex, linear_smp, prev_uv).rgb;
+    let clipped_ycocg   = clip_aabb(rgb_to_ycocg(history_raw), aabb_min, aabb_max);
     let history_clipped = ycocg_to_rgb(clipped_ycocg);
 
-    // ── taa mask: only touch pixels that need it ──────────────────────────
-    // shimmer detection: high luma variance between current and (clipped) history
-    let curr_luma = luma(center);
-    let hist_luma = luma(history_clipped);
-    let temporal_diff = abs(curr_luma - hist_luma) / max(max(curr_luma, hist_luma), 0.01);
-    // ramp: zero below 2% diff, full above 7% diff
-    let shimmer_weight = saturate((temporal_diff - 0.02) * 20.0);
-
-    // edge detection: luma range in the 3×3 neighborhood (sub-pixel edges shimmer with jitter)
-    let luma_min = min(curr_luma, min(min(luma(n), luma(s)), min(luma(e), luma(w))));
-    let luma_max = max(curr_luma, max(max(luma(n), luma(s)), max(luma(e), luma(w))));
-    let luma_range = luma_max - luma_min;
-    // lower threshold than fxaa to catch sub-pixel edges that benefit from jitter AA
-    let is_edge = luma_range > max(0.03, luma_max * 0.06);
-    // edges get full taa weight (1.0) so effective current-frame contribution is
-    // taa_mask × blend_alpha = 1.0 × 0.1 = 10% — proper 8-sample Halton accumulation.
-    // at 0.65 the current weight was 41.5% (0.35 + 0.65×0.1), causing visible ~7.5 Hz
-    // oscillation at the edge from the cycling jitter offsets.
-    let edge_weight = select(0.0, 1.0, is_edge);
-
-    // combined mask: max of shimmer (up to 1.0) and edge (0.65)
-    var taa_mask = max(shimmer_weight, edge_weight);
-
-    // disable taa for sky, out-of-frame reprojections, or very fast movement
-    // fast movement: the aabb clip handles it, but very high speed means the history
-    // is probably completely wrong — disable the mask to pass current through unchanged
-    if is_sky || !in_bounds || speed_px > 12.0 {
-        taa_mask = 0.0;
+    // ── spatial edge resolve (the "S") ────────────────────────────────────
+    // only the 4 extra taps run on edges. directional along the edge tangent, so it
+    // removes the staircase with minimal cross-edge blur. independent of jitter —
+    // this is what anti-aliases moving edges, where temporal accumulation can't.
+    var spatial = center;
+    if edge_conf > 0.0 {
+        spatial = fxaa_resolve(uv, rc, luma_nw, luma_ne, luma_sw, luma_se, luma_min, luma_max);
     }
 
-    // cold start: no valid history yet, produce output for future frames without blending
-    if params.frame_index == 0u {
-        taa_mask = 0.0;
-    }
+    // spatial vs temporal balance on edges:
+    //   - camera dead-still + jitter active → temporal accumulates true ssaa, so back
+    //     spatial off (it would only add blur over an already-resolved edge).
+    //   - any motion → jitter is disabled upstream and history reprojects, so spatial
+    //     carries the edge AA while temporal just stabilizes it.
+    let jitter_active = dot(params.jitter, params.jitter) > 1e-12;
+    let ssaa_factor   = select(0.0, saturate(1.0 - speed_px * 0.5), jitter_active);
+    let spatial_amt   = edge_conf * (1.0 - 0.85 * ssaa_factor);
+    let current_aa    = mix(center, spatial, spatial_amt);
 
-    // ── blend within the masked region ────────────────────────────────────
-    // alpha controls history vs current WITHIN the taa zone.
-    // faster motion → higher alpha (more current frame) → less ghost risk.
+    // ── temporal resolve (the "T") ────────────────────────────────────────
+    // shimmer: high luma delta between current and clipped history.
+    let hist_luma      = luma(history_clipped);
+    let temporal_diff  = abs(curr_luma - hist_luma) / max(max(curr_luma, hist_luma), 0.01);
+    let shimmer_weight = saturate((temporal_diff - 0.02) * 20.0);   // 0 below 2%, 1 at 7%
+
+    // faster motion → more current frame → less ghost risk.
     let motion_alpha = min(0.5, speed_px * 0.05);
     let alpha        = max(params.blend_alpha, motion_alpha);
+    // accumulate against the spatially-resolved current so history converges to an
+    // AA'd result rather than re-introducing the aliased center each frame.
+    let taa_blend    = mix(history_clipped, current_aa, alpha);
 
-    // taa blend: weighted combination of clipped history and current
-    let taa_blend = mix(history_clipped, center, alpha);
+    // ── selective combine ─────────────────────────────────────────────────
+    var taa_mask = max(shimmer_weight, edge_conf);
+    // no temporal for sky, out-of-frame reprojection, very fast motion (history is
+    // probably wrong), or cold start. spatial still applies via current_aa.
+    if is_sky || !in_bounds || speed_px > 12.0 || params.frame_index == 0u {
+        taa_mask = 0.0;
+    }
 
-    // selective application: smooth surfaces get 0% taa → output = current frame
-    let output = mix(center, taa_blend, taa_mask);
+    // smooth surfaces: mask 0 → output = current_aa = center → unchanged.
+    let output = mix(current_aa, taa_blend, taa_mask);
 
     var result: FragOut;
     result.present = vec4<f32>(output, 1.0);
