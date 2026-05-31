@@ -564,7 +564,7 @@ impl QualitySettings {
                 ssr: false,
                 volumetric_fog: false,
                 render_scale: 1.0,
-                upscale_mode: UpscaleMode::Lanczos,
+                upscale_mode: UpscaleMode::Nearest,
             },
             RenderTier::Mid => Self {
                 preset: QualityPreset::Medium,
@@ -584,7 +584,7 @@ impl QualitySettings {
                 ssr: true,
                 volumetric_fog: true,
                 render_scale: 1.0,
-                upscale_mode: UpscaleMode::Lanczos,
+                upscale_mode: UpscaleMode::Nearest,
             },
             RenderTier::High => Self {
                 preset: QualityPreset::High,
@@ -604,7 +604,7 @@ impl QualitySettings {
                 ssr: true,
                 volumetric_fog: true,
                 render_scale: 1.0,
-                upscale_mode: UpscaleMode::Lanczos,
+                upscale_mode: UpscaleMode::Nearest,
             },
         }
     }
