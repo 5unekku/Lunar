@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: MIT
+// reimplementation of XeGTAO (Intel, 2021) — https://github.com/GameTechDev/XeGTAO
+// original: MIT License, Copyright (c) 2021 Intel Corporation
+//
 // ground truth ambient occlusion (GTAO-style)
-// simplified horizon-based AO inspired by XeGTAO (Intel, 2021)
 // reference: "XeGTAO: practical realtime AO using a horizon-based formulation"
 //
 // pass 1 (gtao): half-res AO from depth + normals

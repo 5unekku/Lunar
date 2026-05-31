@@ -2,7 +2,7 @@
 name = "lunar-lib"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license = "MIT"
 description = "public API facade: re-exports all types game code needs from engine sub-crates"
 repository.workspace = true
 readme.workspace = true

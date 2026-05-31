@@ -60,7 +60,7 @@ Game code depends only on `lunar`. The rest are internal or opt-in.
 | crate | purpose |
 |-------|---------|
 | `lunar-2d` / `lunar-render` | 2D ECS components + wgpu sprite/text/camera/layer pipeline |
-| `lunar-3d` / `lunar-render-3d` | 3D scene components + clustered-forward PBR renderer (CSM, GTAO, SSR, bloom, reflections) |
+| `lunar-3d` / `lunar-render-3d` | 3D scene components + clustered-forward PBR renderer (CSM, GTAO, SSR, STAA, FXAA, bloom, volumetric fog, contact shadows, decals, atmosphere) |
 | `lunar-camera-3d` | spring-arm / orbit camera |
 
 **asset pipeline**
@@ -68,7 +68,7 @@ Game code depends only on `lunar`. The rest are internal or opt-in.
 | crate | purpose |
 |-------|---------|
 | `lunar-assets` | handle-based asset server, async loading, hot-reload, mip streaming |
-| `lunar-image` | custom `.li` image format (LIF: planar + zstd) |
+| `lunar-image` | custom `.li` image format (LIF: planar + delta filter + zstd) |
 | `lunar-atlas` | texture atlas packer |
 | `lunar-gamedata` (+ `-build`) | baked binary game-data tables (zero runtime parsing) |
 | `lunar-bsp` (+ `-build`) | BVH / BSP visibility, portal culling |

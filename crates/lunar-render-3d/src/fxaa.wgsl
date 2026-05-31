@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// FXAA algorithm by Timothy Lottes (NVIDIA, 2009/2012) — https://developer.download.nvidia.com/assets/gamedev/files/sdk/11/FXAA_WhitePaper.pdf
+//
 // FXAA 3.11-style fast approximate anti-aliasing post-process.
 //
 // single fullscreen pass after the composite pass. reads from the LDR composite

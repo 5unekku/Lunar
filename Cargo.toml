@@ -39,7 +39,7 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "MPL-2.0"
 description = "a game engine for Rust with ECS, wgpu rendering, and WASM support"
 repository = "https://github.com/jimmy/Lunar"
 homepage = "https://github.com/jimmy/Lunar"

@@ -2,7 +2,7 @@
 name = "lunar-macros"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license = "MIT"
 description = "internal proc-macro crate for lunar — wraps ECS derives so game crates depend only on lunar"
 repository.workspace = true
 readme.workspace = true
