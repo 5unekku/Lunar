@@ -4518,6 +4518,19 @@ impl RenderEngine3d {
         // upload vertices (quantized)
         let qn = |f: f32| -> i8 { (f * 127.0).round().clamp(-127.0, 127.0) as i8 };
         let qu = |f: f32| -> u16 { (f.clamp(0.0, 1.0) * 65535.0).round() as u16 };
+        #[cfg(not(target_arch = "wasm32"))]
+        let gpu_verts: Vec<GpuVertex3d> = {
+            use rayon::prelude::*;
+            data.vertices.par_iter().map(|v| GpuVertex3d {
+                position:    [v.position.x, v.position.y, v.position.z],
+                normal:      [qn(v.normal.x), qn(v.normal.y), qn(v.normal.z), 0],
+                tangent:     [qn(v.tangent[0]), qn(v.tangent[1]), qn(v.tangent[2]), qn(v.tangent[3])],
+                uv:          [qu(v.uv.x), qu(v.uv.y)],
+                uv_lightmap: [qu(v.uv_lightmap.x), qu(v.uv_lightmap.y)],
+                color:       v.color,
+            }).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
         let gpu_verts: Vec<GpuVertex3d> = data.vertices.iter().map(|v| GpuVertex3d {
             position:    [v.position.x, v.position.y, v.position.z],
             normal:      [qn(v.normal.x), qn(v.normal.y), qn(v.normal.z), 0],
@@ -4535,6 +4548,9 @@ impl RenderEngine3d {
 
         // upload indices as u32 (convert u16 → u32 if needed)
         let idx32: Vec<u32> = match &data.indices {
+            #[cfg(not(target_arch = "wasm32"))]
+            IndexBuffer::U16(v) => { use rayon::prelude::*; v.par_iter().map(|&x| x as u32).collect() }
+            #[cfg(target_arch = "wasm32")]
             IndexBuffer::U16(v) => v.iter().map(|&x| x as u32).collect(),
             IndexBuffer::U32(v) => v.clone(),
         };
@@ -5682,6 +5698,19 @@ impl RenderEngine3d {
     fn upload_mesh_data(device: &wgpu::Device, queue: &wgpu::Queue, data: &MeshData) -> GpuMesh {
         let qn = |f: f32| -> i8 { (f * 127.0).round().clamp(-127.0, 127.0) as i8 };
         let qu = |f: f32| -> u16 { (f.clamp(0.0, 1.0) * 65535.0).round() as u16 };
+        #[cfg(not(target_arch = "wasm32"))]
+        let gpu_verts: Vec<GpuVertex3d> = {
+            use rayon::prelude::*;
+            data.vertices.par_iter().map(|v| GpuVertex3d {
+                position:    [v.position.x, v.position.y, v.position.z],
+                normal:      [qn(v.normal.x), qn(v.normal.y), qn(v.normal.z), 0],
+                tangent:     [qn(v.tangent[0]), qn(v.tangent[1]), qn(v.tangent[2]), qn(v.tangent[3])],
+                uv:          [qu(v.uv.x), qu(v.uv.y)],
+                uv_lightmap: [qu(v.uv_lightmap.x), qu(v.uv_lightmap.y)],
+                color:       v.color,
+            }).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
         let gpu_verts: Vec<GpuVertex3d> = data.vertices.iter().map(|v| GpuVertex3d {
             position:    [v.position.x, v.position.y, v.position.z],
             normal:      [qn(v.normal.x), qn(v.normal.y), qn(v.normal.z), 0],
@@ -5700,6 +5729,12 @@ impl RenderEngine3d {
         queue.write_buffer(&vbuf, 0, vdata);
 
         // position-only buffer for shadow and z-prepass passes (12 bytes/vertex vs 32)
+        #[cfg(not(target_arch = "wasm32"))]
+        let positions: Vec<[f32; 3]> = {
+            use rayon::prelude::*;
+            data.vertices.par_iter().map(|v| [v.position.x, v.position.y, v.position.z]).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
         let positions: Vec<[f32; 3]> = data.vertices.iter()
             .map(|v| [v.position.x, v.position.y, v.position.z])
             .collect();
@@ -5713,6 +5748,9 @@ impl RenderEngine3d {
 
         match &data.indices {
             IndexBuffer::U16(v) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                let u32_indices: Vec<u32> = { use rayon::prelude::*; v.par_iter().map(|&i| i as u32).collect() };
+                #[cfg(target_arch = "wasm32")]
                 let u32_indices: Vec<u32> = v.iter().map(|&i| i as u32).collect();
                 let optimized = Self::forsyth_optimize(&u32_indices, data.vertices.len());
                 let u16_opt: Vec<u16> = optimized.iter().map(|&i| i as u16).collect();
@@ -6527,6 +6565,22 @@ impl RenderEngine3d {
         } else {
             let frustum = *world.resource::<Frustum>();
             let soa = world.resource::<CullSoa>();
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use rayon::prelude::*;
+                let n = soa.entities.len();
+                let visible: Vec<Entity> = (0..n).into_par_iter()
+                    .filter_map(|i| {
+                        if frustum.intersects_aabb(soa.centers[i], soa.half_extents[i]) {
+                            Some(soa.entities[i])
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                self.frustum_visible.extend(visible);
+            }
+            #[cfg(target_arch = "wasm32")]
             for (i, &entity) in soa.entities.iter().enumerate() {
                 if frustum.intersects_aabb(soa.centers[i], soa.half_extents[i]) {
                     self.frustum_visible.insert(entity);
