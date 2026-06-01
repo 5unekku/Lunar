@@ -1,0 +1,17 @@
+[package]
+name = "lunar-plugin-tilemap"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "tile-based level rendering for lunar 2d games"
+repository.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
+
+[dependencies]
+lunar-core = { path = "../lunar-core" }
+lunar-math = { path = "../lunar-math" }
+lunar-render = { path = "../lunar-render" }
+lunar-assets = { path = "../lunar-assets" }
+bevy_ecs = { workspace = true }

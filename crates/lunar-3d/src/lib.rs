@@ -89,3 +89,21 @@ pub use visibility::{
     Visibility, ViewportAspect, VisibilityScratch, build_cull_soa, propagate_visibility,
     update_frustum,
 };
+
+/// common, game-facing 3D types for `use lunar::prelude::*`.
+///
+/// the full surface (mesh internals, surface shaders, probe grids, propagation
+/// systems, …) stays at the crate root — reach it via `lunar::lunar_3d::X`.
+pub mod prelude {
+    // note: skeletal-animation types (`AnimationClip`, `AnimationPlayer`, …) are
+    // intentionally NOT here — they'd clash with the 2D sprite `animation` plugin's
+    // `AnimationClip`. reach them via `lunar::lunar_3d::AnimationClip`.
+    pub use crate::{
+        ActiveCamera3d, AmbientLight, Camera3d, Camera3dBundle, Collider3d, ColliderShape3d,
+        CollisionWorld3d, DirectionalLight, DirectionalLightBundle, Fog, FogFalloff,
+        LocalTransform3d, Material3d, MaterialData, Mesh3d, Mesh3dBundle, MeshData, MeshRegistry,
+        Plugin3d, PointLight, PointLightBundle, Projection, Ray3d, RayHit3d, RenderLayers,
+        ShadingModel, ShadowCaster, ShadowMesh3dBundle, ShadowReceiver, SpotLight, SpotLightBundle,
+        StaticMesh, Visibility, WorldTransform3d, primitives, raycast_3d,
+    };
+}

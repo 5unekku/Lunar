@@ -12,9 +12,10 @@
 pub fn bootstrap<Plugin: lunar_core::GamePlugin + Default + 'static>(
     config: lunar_render::RenderConfig,
 ) {
+    use crate::WindowHost;
     use lunar_assets::AssetPlugin;
     use lunar_core::{App, AvailableResolutions, DisplayResolution, STANDARD_RESOLUTIONS, WindowSettings};
-    use lunar_input::{ActionMap, InputBinding, InputPlugin, InputState, KeyCode, SdlGamepadProvider, process_events};
+    use lunar_input::{ActionMap, InputBinding, InputPlugin, KeyCode, SdlGamepadProvider, process_events};
     use lunar_render::{RenderEngine, RenderPlugin};
     use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
@@ -42,7 +43,7 @@ pub fn bootstrap<Plugin: lunar_core::GamePlugin + Default + 'static>(
     };
 
     let window = {
-        let mut b = video.window("Lunar", config.width, config.height);
+        let mut b = video.window(&config.title, config.width, config.height);
         if config.allow_resize { b.resizable(); }
         b.build().expect("failed to create window")
     };
@@ -86,67 +87,15 @@ pub fn bootstrap<Plugin: lunar_core::GamePlugin + Default + 'static>(
     let gamepad_subsystem = sdl.gamepad().expect("failed to get gamepad subsystem");
     let mut event_pump = sdl.event_pump().expect("failed to get event pump");
     let mut sdl_gamepad = SdlGamepadProvider::new(gamepad_subsystem);
-    let mut window = window;
-    let mut actual_fullscreen = false;
-    let mut last_window_w = config.width;
-    let mut last_window_h = config.height;
+    let mut host = WindowHost::new(window, sdl.mouse(), config.width, config.height);
 
-    app.run_with_events(config.frame_cap, config.tick_rate, |world| {
+    app.run_with_events(config.loop_config(), |world| {
         process_events(&mut event_pump, &mut sdl_gamepad, world);
-
-        let input_snap = world.get_resource::<InputState>().map(|i| {
-            let enter     = i.is_key_just_pressed(KeyCode::Enter);
-            let alt       = i.is_key_held(KeyCode::LAlt) || i.is_key_held(KeyCode::RAlt);
-            let fs_action = world.get_resource::<ActionMap>()
-                .is_some_and(|a| a.is_action_just_pressed(i, "fullscreen"));
-            (enter && alt, fs_action)
-        });
-
-        if input_snap.is_some_and(|(alt_enter, _)| alt_enter) {
-            actual_fullscreen = !actual_fullscreen;
-            let _ = window.set_fullscreen(actual_fullscreen);
-            if let Some(mut settings) = world.get_resource_mut::<WindowSettings>() {
-                settings.is_fullscreen = actual_fullscreen;
-            }
-        }
-        if input_snap.is_some_and(|(_, fs)| fs) {
-            actual_fullscreen = !actual_fullscreen;
-            let _ = window.set_fullscreen(actual_fullscreen);
-            if let Some(mut settings) = world.get_resource_mut::<WindowSettings>() {
-                settings.is_fullscreen = actual_fullscreen;
-            }
-        }
-
-        if let Some(settings) = world.get_resource::<WindowSettings>()
-            && settings.is_fullscreen != actual_fullscreen
-        {
-            actual_fullscreen = settings.is_fullscreen;
-            let _ = window.set_fullscreen(actual_fullscreen);
-        }
-
-        let (w, h) = window.size();
-        if w != last_window_w || h != last_window_h {
-            let target = world.get_resource::<WindowSettings>()
-                .and_then(|s| if !actual_fullscreen { s.target_aspect } else { None });
-
-            let (final_w, final_h) = if let Some(aspect) = target {
-                let snapped_h = ((w as f32 / aspect).round() as u32).max(1);
-                if snapped_h != h { let _ = window.set_size(w, snapped_h); }
-                (w, snapped_h)
-            } else {
-                (w, h)
-            };
-
-            last_window_w = final_w;
-            last_window_h = final_h;
+        host.sync(world, |world, w, h| {
             if let Some(mut re) = world.get_resource_mut::<RenderEngine>() {
-                re.resize_surface(final_w, final_h);
+                re.resize(w, h);
             }
-            if let Some(mut settings) = world.get_resource_mut::<WindowSettings>() {
-                settings.width  = final_w;
-                settings.height = final_h;
-            }
-        }
+        });
     });
 
     log::info!("lunar engine shutting down...");

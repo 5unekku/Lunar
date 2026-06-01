@@ -879,6 +879,16 @@ impl Default for RenderConfig3d {
     }
 }
 
+impl RenderConfig3d {
+    /// the loop-timing parameters ([`frame_cap`](Self::frame_cap) +
+    /// [`tick_rate`](Self::tick_rate)) as a [`LoopConfig`](lunar_core::LoopConfig)
+    /// for [`App::run`](lunar_core::App::run).
+    #[must_use]
+    pub fn loop_config(&self) -> lunar_core::LoopConfig {
+        lunar_core::LoopConfig { frame_cap: self.frame_cap, tick_rate: self.tick_rate }
+    }
+}
+
 // ── render info ────────────────────────────────────────────────────────────
 
 /// per-frame rendering statistics. updated by `render_3d_system`.
@@ -10789,4 +10799,13 @@ impl GamePlugin for RenderPlugin3d {
         app.add_system_to_stage(UpdateStage::Render, render_3d_system);
         log::info!("RenderPlugin3d: 3d render system registered");
     }
+}
+
+/// common, game-facing 3D render types for `use lunar::prelude::*`.
+/// dev/profiling internals stay at the crate root (`lunar::lunar_render_3d::X`).
+pub mod prelude {
+    pub use crate::{
+        QualityPreset, QualitySettings, RenderConfig3d, RenderEngine3d, RenderInfo3d,
+        RenderPlugin3d, Sky, UpscaleMode,
+    };
 }

@@ -34,7 +34,9 @@ pub enum UpdateStage {
 
 /// relative stage ordering for custom stage placement.
 ///
-/// allows inserting custom stages before, after, or between built-in stages.
+/// reserved for future custom-stage support (needs the `bevy_ecs` schedule graph).
+/// not part of the public API yet — kept internal until the feature lands.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum StageOrder {
     /// run before the given stage

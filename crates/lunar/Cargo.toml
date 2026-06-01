@@ -14,8 +14,30 @@ keywords.workspace = true
 default = ["2d"]
 2d = ["dep:lunar-2d"]
 3d = ["dep:lunar-3d", "dep:lunar-render-3d", "dep:lunar-bsp", "dep:lunar-lightmap"]
-# optional engine modules — enable only what your game uses
-dialogue = ["dep:lunar-dialogue"]
+
+# ── optional plugins (drop-in via `app.add_plugin(...)`) ──────────────────────
+animation    = ["dep:lunar-plugin-animation"]
+tilemap      = ["dep:lunar-plugin-tilemap"]
+ui           = ["dep:lunar-plugin-ui"]
+particles    = ["dep:lunar-plugin-particles"]
+localization = ["dep:lunar-plugin-localization"]
+dialogue     = ["dep:lunar-plugin-dialogue"]
+timeline     = ["dep:lunar-plugin-timeline"]
+ai           = ["dep:lunar-plugin-ai"]
+zones        = ["dep:lunar-plugin-zones"]
+physics-2d   = ["2d", "dep:lunar-plugin-physics-2d"]
+physics-3d   = ["3d", "dep:lunar-plugin-physics-3d"]
+spline       = ["3d", "dep:lunar-plugin-spline"]
+camera-3d    = ["3d", "dep:lunar-plugin-camera-3d"]
+
+# ── libraries (call directly; no plugin) ─────────────────────────────────────
+pathfinding  = ["dep:lunar-pathfinding-rt"]
+
+# everything — convenience for examples / docs / "kitchen sink" builds.
+full = [
+    "2d", "3d", "animation", "tilemap", "ui", "particles", "localization", "dialogue",
+    "timeline", "ai", "zones", "physics-2d", "physics-3d", "spline", "camera-3d", "pathfinding",
+]
 
 [dependencies]
 bevy_ecs = { workspace = true }
@@ -30,8 +52,26 @@ lunar-lightmap = { path = "../lunar-lightmap", optional = true }
 lunar-render = { path = "../lunar-render" }
 lunar-input = { path = "../lunar-input" }
 lunar-assets = { path = "../lunar-assets" }
-lunar-dialogue = { path = "../lunar-dialogue", optional = true }
 lunar-gamedata = { path = "../lunar-gamedata" }
+
+# optional plugins
+lunar-plugin-animation    = { path = "../lunar-plugin-animation", optional = true }
+lunar-plugin-tilemap      = { path = "../lunar-plugin-tilemap", optional = true }
+lunar-plugin-ui           = { path = "../lunar-plugin-ui", optional = true }
+lunar-plugin-particles    = { path = "../lunar-plugin-particles", optional = true }
+lunar-plugin-localization = { path = "../lunar-plugin-localization", optional = true }
+lunar-plugin-dialogue     = { path = "../lunar-plugin-dialogue", optional = true }
+lunar-plugin-timeline     = { path = "../lunar-plugin-timeline", optional = true }
+lunar-plugin-ai           = { path = "../lunar-plugin-ai", optional = true }
+lunar-plugin-zones        = { path = "../lunar-plugin-zones", optional = true }
+lunar-plugin-physics-2d   = { path = "../lunar-plugin-physics-2d", optional = true }
+lunar-plugin-physics-3d   = { path = "../lunar-plugin-physics-3d", optional = true }
+lunar-plugin-spline       = { path = "../lunar-plugin-spline", optional = true }
+lunar-plugin-camera-3d    = { path = "../lunar-plugin-camera-3d", optional = true }
+
+# libraries (no plugin)
+lunar-pathfinding-rt = { path = "../lunar-pathfinding-rt", optional = true }
+
 log = { workspace = true }
 env_logger = { workspace = true }
 # wgsl is the shader language on every platform — declared once here

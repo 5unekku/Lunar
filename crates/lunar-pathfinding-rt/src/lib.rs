@@ -355,3 +355,8 @@ mod tests {
         assert!(find_path(&grid, [0, 0], [99, 99], opts).is_none());
     }
 }
+
+/// common, game-facing pathfinding API for `use lunar::prelude::*`.
+pub mod prelude {
+    pub use crate::{NavGrid, PathOptions, find_path};
+}

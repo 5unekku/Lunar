@@ -45,11 +45,41 @@ pub use lunar_3d;
 pub use lunar_render_3d;
 pub use lunar_assets;
 pub use lunar_core;
-#[cfg(feature = "dialogue")]
-pub use lunar_dialogue;
 pub use lunar_input;
 pub use lunar_math;
 pub use lunar_render;
+
+// optional modules — re-exported under short, dimensionless names so game code
+// reaches them as `lunar::ui`, `lunar::physics2d`, etc. each is feature-gated and
+// pulls its own curated `prelude` into `lunar::prelude` (see prelude.rs).
+#[cfg(feature = "animation")]
+pub use lunar_plugin_animation as animation;
+#[cfg(feature = "tilemap")]
+pub use lunar_plugin_tilemap as tilemap;
+#[cfg(feature = "ui")]
+pub use lunar_plugin_ui as ui;
+#[cfg(feature = "particles")]
+pub use lunar_plugin_particles as particles;
+#[cfg(feature = "localization")]
+pub use lunar_plugin_localization as localization;
+#[cfg(feature = "dialogue")]
+pub use lunar_plugin_dialogue as dialogue;
+#[cfg(feature = "timeline")]
+pub use lunar_plugin_timeline as timeline;
+#[cfg(feature = "ai")]
+pub use lunar_plugin_ai as ai;
+#[cfg(feature = "zones")]
+pub use lunar_plugin_zones as zones;
+#[cfg(feature = "physics-2d")]
+pub use lunar_plugin_physics_2d as physics2d;
+#[cfg(feature = "physics-3d")]
+pub use lunar_plugin_physics_3d as physics3d;
+#[cfg(feature = "spline")]
+pub use lunar_plugin_spline as spline;
+#[cfg(feature = "camera-3d")]
+pub use lunar_plugin_camera_3d as camera3d;
+#[cfg(feature = "pathfinding")]
+pub use lunar_pathfinding_rt as pathfinding;
 
 pub mod prelude;
 pub use prelude::*;
@@ -58,6 +88,17 @@ pub use prelude::*;
 mod bootstrap;
 #[cfg(not(target_arch = "wasm32"))]
 pub use bootstrap::bootstrap;
+
+// `lunar_app!` lives here; it expands to a native `main` that calls `bootstrap`.
+// `#[macro_export]` hoists the macro to the crate root once the module compiles.
+#[cfg(not(target_arch = "wasm32"))]
+mod app_macro;
+
+// shared per-frame window reconciliation, reusable by custom native loops.
+#[cfg(not(target_arch = "wasm32"))]
+mod window_host;
+#[cfg(not(target_arch = "wasm32"))]
+pub use window_host::WindowHost;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "3d"))]
 mod bootstrap_3d;
@@ -82,7 +123,7 @@ pub use lunar_math::{
     Color, Mat2, Mat3, Mat4, Quat, Rect, ScreenRect, Transform, Vec2, Vec3, Vec4,
 };
 pub use lunar_render::{
-    Camera, Layer, RenderConfig, RenderEngine, RenderInfo, RenderQueue, Sprite, Text, layers,
+    Camera, RenderConfig, RenderEngine, RenderInfo, RenderQueue, Sprite, Text, layers,
 };
 
 /// marker trait for components that can be used in game logic.

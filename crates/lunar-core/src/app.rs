@@ -6,12 +6,12 @@
 use std::collections::VecDeque;
 
 use bevy_ecs::prelude::*;
-use bevy_ecs::schedule::{IntoScheduleConfigs, ScheduleLabel};
+use bevy_ecs::schedule::IntoScheduleConfigs;
 use bevy_ecs::system::ScheduleSystem;
 
 use crate::engine::Engine;
 use crate::game_loop::{GameLoop, TickRate};
-use crate::schedule::{StageOrder, UpdateStage};
+use crate::schedule::UpdateStage;
 use crate::state::EngineState;
 
 /// runtime-switchable logic tick rate.
@@ -21,6 +21,25 @@ use crate::state::EngineState;
 #[derive(Resource, Clone, Copy, PartialEq, Eq)]
 pub struct TickRateConfig {
     pub rate: TickRate,
+}
+
+/// timing parameters for the game loop, passed to [`App::run`].
+///
+/// the one typed representation of loop timing — render-side configs
+/// (`RenderConfig`, `RenderConfig3d`) expose a `loop_config()` that produces this,
+/// so authoring stays in one place and `run` takes a single self-documenting value.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct LoopConfig {
+    /// render frame cap in fps. `0` = uncapped (vsync-limited).
+    pub frame_cap: u32,
+    /// fixed logic tick rate, independent of the render frame rate.
+    pub tick_rate: TickRate,
+}
+
+impl Default for LoopConfig {
+    fn default() -> Self {
+        Self { frame_cap: 0, tick_rate: TickRate::Hz60 }
+    }
 }
 
 /// time resource updated each frame
@@ -241,14 +260,6 @@ impl App {
         self
     }
 
-    /// add a custom stage with the given ordering relative to built-in stages.
-    /// **note:** custom stages are not yet implemented — this is a no-op placeholder.
-    /// full stage support requires `bevy_ecs`'s schedule graph, which is a planned upgrade.
-    pub fn add_stage<S: ScheduleLabel>(&mut self, _stage: S, _order: StageOrder) -> &mut Self {
-        log::warn!("add_stage: custom stages not yet implemented, call ignored");
-        self
-    }
-
     /// add a plugin to the app
     /// plugins are built in dependency order using topological sort.
     /// each plugin's dependencies must be built before the plugin itself.
@@ -328,22 +339,16 @@ impl App {
         &mut self.engine
     }
 
-    /// start the game loop. `frame_cap` = 0 means uncapped/vsync. `tick_rate` is
-    /// the fixed logic rate, independent of render rate.
-    pub fn run(&mut self, frame_cap: u32, tick_rate: crate::game_loop::TickRate) {
-        self.run_with_events(frame_cap, tick_rate, |_| {});
+    /// start the game loop with the given timing ([`LoopConfig`]).
+    pub fn run(&mut self, config: LoopConfig) {
+        self.run_with_events(config, |_| {});
     }
 
     /// start the game loop with per-frame event processing.
     ///
     /// `time.delta_seconds()` inside systems is always exactly `1 / tick_hz`.
     /// `time.real_delta_seconds()` is wall-clock render frame time for interpolation.
-    pub fn run_with_events<F>(
-        &mut self,
-        frame_cap: u32,
-        tick_rate: crate::game_loop::TickRate,
-        mut process_events: F,
-    )
+    pub fn run_with_events<F>(&mut self, config: LoopConfig, mut process_events: F)
     where
         F: FnMut(&mut World),
     {
@@ -354,10 +359,10 @@ impl App {
         }
 
         // insert TickRateConfig so game code can change tick rate at runtime
-        self.engine.world_mut().insert_resource(TickRateConfig { rate: tick_rate });
+        self.engine.world_mut().insert_resource(TickRateConfig { rate: config.tick_rate });
 
-        let mut fixed_delta = tick_rate.delta_seconds();
-        let mut game_loop = GameLoop::new(frame_cap, tick_rate);
+        let mut fixed_delta = config.tick_rate.delta_seconds();
+        let mut game_loop = GameLoop::new(config.frame_cap, config.tick_rate);
 
         while game_loop.is_running() {
             // check if game code changed the tick rate via TickRateConfig

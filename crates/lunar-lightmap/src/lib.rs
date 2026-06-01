@@ -30,6 +30,12 @@ pub mod baker;
 
 pub use baker::{BakeDirectional, BakeResult, LightmapBaker};
 
+/// common, game-facing lightmap components for `use lunar::prelude::*`.
+/// the baker API (`LightmapBaker`, `BakeResult`, …) stays at the crate root.
+pub mod prelude {
+    pub use crate::{DirectionalLightmap, Lightmap};
+}
+
 use bevy_ecs::prelude::*;
 use lunar_assets::Handle;
 

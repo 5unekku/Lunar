@@ -25,7 +25,7 @@ pub use bevy_ecs::system::Commands;
 pub use lunar_math::{Color, Mat2, Mat3, Mat4, Rect, Transform, Vec2, Vec3, Vec4};
 
 // lunar-core types
-pub use crate::app::{App, GamePlugin, Time};
+pub use crate::app::{App, GamePlugin, LoopConfig, Time};
 pub use crate::engine::Engine;
 pub use crate::error::{EngineError, EngineResult, ErrorEvent, ErrorSource};
 pub use crate::game_loop::{GameLoop, TickRate};
@@ -35,7 +35,7 @@ pub use crate::scene_format::{
     EntityDefinition, SceneEntity, SceneInstance, SceneLayer, SceneLoader, SceneSprite, SceneTags,
     SceneText, SpriteDef, TextDef, TransformDef,
 };
-pub use crate::schedule::{StageLabelExt, StageOrder, UpdateStage};
+pub use crate::schedule::UpdateStage;
 pub use crate::persist::{self, PersistError};
 pub use crate::pool::Pool;
 pub use crate::state::EngineState;

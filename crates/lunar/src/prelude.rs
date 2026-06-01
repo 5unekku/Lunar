@@ -60,72 +60,28 @@ pub use lunar_math::{
 };
 
 // lunar-core types
-pub use lunar_core::{App, GamePlugin, Time, TickRate, TickRateConfig, UpdateStage, WindowSettings};
+pub use lunar_core::{App, GamePlugin, LoopConfig, Time, TickRate, TickRateConfig, UpdateStage, WindowSettings};
 pub use lunar_core::pool::Pool;
 
-// lunar-2d types — only available when the 2d feature is enabled
+// lunar-2d types — only available when the 2d feature is enabled.
+// `propagate_transforms` is a Plugin2d-owned system, not surfaced here — reach it
+// via `lunar_2d::propagate_transforms` if you order it by hand.
 #[cfg(feature = "2d")]
 pub use lunar_2d::{
     Collider, Collider2dBundle, ColliderShape, CollisionWorld, Plugin2d, SpriteAnimation,
-    propagate_transforms,
 };
 
-// lunar-3d types — only available when the 3d feature is enabled
+// 3D — only when the 3d feature is enabled. each crate exposes a curated `prelude`
+// of common, game-facing types; advanced types stay reachable at the crate root
+// (`lunar::lunar_3d::IrradianceSH`, etc.).
 #[cfg(feature = "3d")]
-pub use lunar_3d::{
-    // core transforms / camera / mesh / material / lights
-    ActiveCamera3d, AmbientLight, AmbientProbeGrid, Camera3d, CullMode, DetailDensity, DirectionalLight, IndexBuffer, IrradianceSH,
-    LocalTransform3d, Material3d, MaterialData, Mesh3d, MeshData, MeshUsage, Plugin3d, StaticMesh,
-    PointLight, Projection, ShadingModel, SkinWeights, SpotLight, Vertex3d, WorldTransform3d,
-    propagate_transforms_3d,
-    // surface shaders (q3-style multi-stage animated surfaces)
-    AlphaGen, BlendMode, SurfaceShader, SurfaceStage, TcGen, UvTransform,
-    // bundles
-    Camera3dBundle, DirectionalLightBundle, Mesh3dBundle, PointLightBundle, ShadowMesh3dBundle,
-    SpotLightBundle,
-    // interpolation
-    PrevWorldTransform3d, copy_prev_transforms,
-    // animation
-    AnimationClip, AnimationPlayer, AnimationTarget, JointTrack, Keyframe, advance_animations,
-    // collision + raycasting
-    Collider3d, ColliderShape3d, CollisionWorld3d, Ray3d, RayHit3d,
-    build_collision_world_3d, raycast_3d,
-    // fog
-    Fog, FogFalloff,
-    // visibility
-    Aabb3d, ComputedVisibility, Frustum, RenderLayers, ShadowCaster, ShadowReceiver,
-    Visibility, ViewportAspect, propagate_visibility, update_frustum,
-    // primitives
-    primitives,
-    // mesh registry
-    MeshRegistry, PlanarReflector,
-};
-// lunar-render-3d types — only available when the 3d feature is enabled
+pub use lunar_3d::prelude::*;
 #[cfg(feature = "3d")]
-pub use lunar_render_3d::{DevRenderProfile, QualityPreset, QualitySettings, RenderConfig3d, RenderEngine3d, RenderInfo3d, RenderPlugin3d, Sky, UpscaleMode};
-
-// lunar-bsp types — BVH spatial acceleration, portal culling, and BSP runtime (3d feature)
+pub use lunar_render_3d::prelude::*;
 #[cfg(feature = "3d")]
-pub use lunar_bsp::{
-    Area, BspPlugin, Bvh, BvhPlugin, BvhVisible, BvhNode,
-    BspLevel,
-    Portal, PortalCulling, PortalPlugin, VisibleAreas,
-    portal::{CameraArea, PortalOpen},
-};
-
-// lunar-lightmap types — CPU lightmap baker and Lightmap components (3d feature)
+pub use lunar_bsp::prelude::*;
 #[cfg(feature = "3d")]
-pub use lunar_lightmap::{
-    DirectionalLightmap, Lightmap,
-    baker::{BakeDirectional, BakeResult, LightmapBaker},
-};
-
-// multiview/split-screen types
-#[cfg(feature = "3d")]
-pub use lunar_3d::{ActiveViewports, ViewportRect};
-
-// mip streaming types
-pub use lunar_assets::{MipStreamingConfig, TextureVramUsage};
+pub use lunar_lightmap::prelude::*;
 
 // Bundle derive — needed for game code that defines its own bundles
 #[cfg(feature = "3d")]
@@ -135,7 +91,7 @@ pub use bevy_ecs::bundle::Bundle;
 pub use lunar_gamedata::{DataRecord, DataTable, DataValue, GameData};
 
 pub use lunar_render::{
-    Camera, CameraFollow2d, ColorTint, Layer, PostEffect, PostProcessStack, RenderConfig,
+    Camera, CameraFollow2d, ColorTint, PostEffect, PostProcessStack, RenderConfig,
     RenderEngine, RenderInfo, RenderQueue, RenderTargetId, RenderTargetStore, ScreenFlash,
     ScreenShake, Sprite, Text, YSort, layers,
 };
@@ -150,11 +106,37 @@ pub use lunar_assets::{AssetServer, AudioFormat, Font, Handle, LoadingState, Loa
 // texture! macro — embeds and converts image assets at compile time
 pub use crate::texture;
 
-// optional engine modules — included in prelude when the feature is enabled
+// optional modules — each pulls its curated prelude in when its feature is enabled,
+// so `use lunar::prelude::*` lights up exactly the modules the game opted into.
+// the full surface of each stays at its module path (`lunar::ui::X`, etc.).
+#[cfg(feature = "animation")]
+pub use lunar_plugin_animation::prelude::*;
+#[cfg(feature = "tilemap")]
+pub use lunar_plugin_tilemap::prelude::*;
+#[cfg(feature = "ui")]
+pub use lunar_plugin_ui::prelude::*;
+#[cfg(feature = "particles")]
+pub use lunar_plugin_particles::prelude::*;
+#[cfg(feature = "localization")]
+pub use lunar_plugin_localization::prelude::*;
 #[cfg(feature = "dialogue")]
-pub use lunar_dialogue::{
-    Block, Character, Choice, DialogueManager, DialoguePlugin, Next, Script, ScriptBuilder,
-};
+pub use lunar_plugin_dialogue::prelude::*;
+#[cfg(feature = "timeline")]
+pub use lunar_plugin_timeline::prelude::*;
+#[cfg(feature = "ai")]
+pub use lunar_plugin_ai::prelude::*;
+#[cfg(feature = "zones")]
+pub use lunar_plugin_zones::prelude::*;
+#[cfg(feature = "physics-2d")]
+pub use lunar_plugin_physics_2d::prelude::*;
+#[cfg(feature = "physics-3d")]
+pub use lunar_plugin_physics_3d::prelude::*;
+#[cfg(feature = "spline")]
+pub use lunar_plugin_spline::prelude::*;
+#[cfg(feature = "camera-3d")]
+pub use lunar_plugin_camera_3d::prelude::*;
+#[cfg(feature = "pathfinding")]
+pub use lunar_pathfinding_rt::prelude::*;
 
 // lunar marker traits
 pub use crate::{GameComponent, GameResource};

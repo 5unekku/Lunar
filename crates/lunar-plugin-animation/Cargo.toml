@@ -1,0 +1,16 @@
+[package]
+name = "lunar-plugin-animation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "frame-by-frame sprite animation for lunar 2d games"
+repository.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
+
+[dependencies]
+lunar-core = { path = "../lunar-core" }
+lunar-math = { path = "../lunar-math" }
+lunar-render = { path = "../lunar-render" }
+bevy_ecs = { workspace = true }

@@ -27,10 +27,10 @@
 //! ```ignore
 //! use lunar::prelude::*;
 //!
-//! fn spawn_player(mut commands: Commands, assets: Res<AssetServer>) {
+//! fn spawn_player(mut commands: Commands, mut assets: ResMut<AssetServer>) {
 //!     commands.spawn((
 //!         Transform::from_xy(100.0, 100.0),
-//!         Sprite::new(assets.get_texture_handle("player.png")),
+//!         Sprite::new(assets.load_texture("player.png")),
 //!     ));
 //! }
 //! ```
@@ -130,6 +130,7 @@ impl RenderTargetStore {
 ///     rotation: 0.0,
 ///     viewport: Some((800, 600)),
 ///     layer_parallax: Default::default(),
+///     target: None,
 /// };
 ///
 /// // use cam.projection_matrix(window_w, window_h) for the render projection
@@ -367,6 +368,8 @@ pub struct RenderConfig {
     /// fixed logic tick rate — independent of render frame rate.
     /// `time.delta_seconds()` in game systems always equals `1 / tick_hz`.
     pub tick_rate: lunar_core::TickRate,
+    /// window title bar text.
+    pub title: String,
     /// fixed aspect ratio. when set, the window snaps on resize to maintain this ratio.
     /// expressed as width/height (e.g. `16.0/9.0`). `None` = free aspect ratio.
     pub target_aspect: Option<f32>,
@@ -382,9 +385,20 @@ impl Default for RenderConfig {
             vsync: true,
             frame_cap: 0,
             tick_rate: lunar_core::TickRate::Hz60,
+            title: "Lunar".to_string(),
             target_aspect: None,
             allow_resize: true,
         }
+    }
+}
+
+impl RenderConfig {
+    /// the loop-timing parameters ([`frame_cap`](Self::frame_cap) +
+    /// [`tick_rate`](Self::tick_rate)) as a [`LoopConfig`](lunar_core::LoopConfig)
+    /// for [`App::run`](lunar_core::App::run).
+    #[must_use]
+    pub fn loop_config(&self) -> lunar_core::LoopConfig {
+        lunar_core::LoopConfig { frame_cap: self.frame_cap, tick_rate: self.tick_rate }
     }
 }
 
@@ -1235,13 +1249,6 @@ impl RenderEngine {
         });
     }
 
-    /// reconfigure the surface to a new size (e.g. for fullscreen).
-    pub fn resize_surface(&mut self, width: u32, height: u32) {
-        self.config.width = width;
-        self.config.height = height;
-        self.surface.configure(&self.device, &self.config);
-    }
-
     /// current surface size
     pub fn surface_size(&self) -> (u32, u32) {
         (self.config.width, self.config.height)
@@ -1971,13 +1978,6 @@ pub mod layers {
     pub const POST_PROCESS: i32 = 1000;
 }
 
-/// ECS component that assigns an entity to a render layer.
-///
-/// entities with a higher layer value are drawn on top of lower layers.
-/// use the [`layers`] constants for common layer assignments.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Component)]
-pub struct Layer(pub i32);
-
 /// renderable 2D sprite component.
 ///
 /// any entity carrying a [`Transform`] and a `Sprite`
@@ -1989,8 +1989,8 @@ pub struct Layer(pub i32);
 /// ```ignore
 /// use lunar::prelude::*;
 ///
-/// fn spawn_player(mut commands: Commands, assets: Res<AssetServer>) {
-///     let texture = assets.get_texture_handle("player.png");
+/// fn spawn_player(mut commands: Commands, mut assets: ResMut<AssetServer>) {
+///     let texture = assets.load_texture("player.png");
 ///     commands.spawn((
 ///         Transform::from_xy(100.0, 100.0),
 ///         Sprite::new(texture).with_size(Vec2::new(32.0, 32.0)),
@@ -2079,8 +2079,8 @@ impl Sprite {
 /// ```ignore
 /// use lunar::prelude::*;
 ///
-/// fn spawn_label(mut commands: Commands, assets: Res<AssetServer>) {
-///     let font = assets.get_font_handle("ui.ttf");
+/// fn spawn_label(mut commands: Commands, mut assets: ResMut<AssetServer>) {
+///     let font = assets.load_font("ui.ttf");
 ///     commands.spawn((
 ///         Transform::from_xy(10.0, 10.0),
 ///         Text::new("Score: 0", font).with_size(20.0),

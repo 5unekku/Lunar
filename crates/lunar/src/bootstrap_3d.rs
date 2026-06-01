@@ -45,7 +45,8 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
     use lunar_3d::Plugin3d;
     use lunar_assets::AssetPlugin;
     use lunar_core::{App, AvailableResolutions, DisplayResolution, STANDARD_RESOLUTIONS, WindowSettings};
-    use lunar_input::{ActionMap, InputBinding, InputPlugin, InputState, KeyCode, SdlGamepadProvider, process_events};
+    use crate::WindowHost;
+    use lunar_input::{ActionMap, InputBinding, InputPlugin, KeyCode, SdlGamepadProvider, process_events};
     use lunar_render_3d::{RenderEngine3d, RenderPlugin3d};
     use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
@@ -141,96 +142,15 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
     let gamepad_subsystem = sdl.gamepad().expect("failed to get gamepad subsystem");
     let mut event_pump = sdl.event_pump().expect("failed to get event pump");
     let mut sdl_gamepad = SdlGamepadProvider::new(gamepad_subsystem);
-    let mut window = window;
-    let mut actual_fullscreen = false;
-    // true while a toggle key is physically held; re-armed only after full release.
-    // prevents double-fire regardless of frame rate or compositor key-event replay.
-    let mut fullscreen_key_down = false;
-    let mut actual_cursor_locked = false;
-    let mut last_window_w = win_w;
-    let mut last_window_h = win_h;
+    let mut host = WindowHost::new(window, mouse, win_w, win_h);
 
-    app.run_with_events(config.frame_cap, config.tick_rate, |world| {
+    app.run_with_events(config.loop_config(), |world| {
         process_events(&mut event_pump, &mut sdl_gamepad, world);
-
-        // read input once for the frame — capture both the edge (just pressed) and
-        // whether any toggle combo is still physically held, for the keyup re-arm.
-        let input_snap = world.get_resource::<InputState>().map(|i| {
-            let enter_just = i.is_key_just_pressed(KeyCode::Enter);
-            let alt        = i.is_key_held(KeyCode::LAlt) || i.is_key_held(KeyCode::RAlt);
-            let enter_held = i.is_key_held(KeyCode::Enter);
-            let fs_just    = world.get_resource::<ActionMap>()
-                .is_some_and(|a| a.is_action_just_pressed(i, "fullscreen"));
-            let fs_held    = world.get_resource::<ActionMap>()
-                .is_some_and(|a| a.is_action_held(i, "fullscreen"));
-            let any_held   = (alt && enter_held) || fs_held;
-            (enter_just && alt, fs_just, any_held)
-        });
-
-        // re-arm once all toggle keys are physically released
-        if !input_snap.is_some_and(|(_, _, held)| held) {
-            fullscreen_key_down = false;
-        }
-
-        // fire only on the keydown edge — gate blocks until full release
-        let request_toggle = !fullscreen_key_down && (
-            input_snap.is_some_and(|(alt_enter, _, _)| alt_enter) ||
-            input_snap.is_some_and(|(_, fs, _)| fs)
-        );
-
-        // alt+enter / f11: engine-level fullscreen toggle
-        if request_toggle {
-            fullscreen_key_down = true;
-            actual_fullscreen = !actual_fullscreen;
-            let _ = window.set_fullscreen(actual_fullscreen);
-            if let Some(mut settings) = world.get_resource_mut::<WindowSettings>() {
-                settings.is_fullscreen = actual_fullscreen;
-            }
-        }
-
-        // game code set is_fullscreen directly (e.g. settings menu) — optimistic update
-        if let Some(settings) = world.get_resource::<WindowSettings>()
-            && settings.is_fullscreen != actual_fullscreen
-        {
-            actual_fullscreen = settings.is_fullscreen;
-            let _ = window.set_fullscreen(actual_fullscreen);
-        }
-
-        // cursor lock
-        if let Some(settings) = world.get_resource::<WindowSettings>()
-            && settings.cursor_locked != actual_cursor_locked
-        {
-            actual_cursor_locked = settings.cursor_locked;
-            mouse.set_relative_mouse_mode(&window, actual_cursor_locked);
-        }
-
-        // window resize — enforce aspect ratio in windowed mode, then notify renderer
-        let (w, h) = window.size();
-        if w != last_window_w || h != last_window_h {
-            let target = world.get_resource::<WindowSettings>()
-                .and_then(|s| if !actual_fullscreen { s.target_aspect } else { None });
-
-            let (final_w, final_h) = if let Some(aspect) = target {
-                let snapped_h = ((w as f32 / aspect).round() as u32).max(1);
-                if snapped_h != h {
-                    let _ = window.set_size(w, snapped_h);
-                }
-                (w, snapped_h)
-            } else {
-                (w, h)
-            };
-
-            last_window_w = final_w;
-            last_window_h = final_h;
+        host.sync(world, |world, w, h| {
             if let Some(mut re) = world.get_resource_mut::<RenderEngine3d>() {
-                re.resize(final_w, final_h);
+                re.resize(w, h);
             }
-            if let Some(mut settings) = world.get_resource_mut::<WindowSettings>() {
-                settings.width  = final_w;
-                settings.height = final_h;
-            }
-        }
-
+        });
     });
 
     log::info!("lunar 3d engine shutting down...");
