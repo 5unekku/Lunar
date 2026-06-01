@@ -87,6 +87,7 @@ const SSR_SHADER_SRC: &str             = include_str!("ssr.wgsl");
 const FOG_SHADER_SRC: &str             = include_str!("volumetric_fog.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const ATMOS_SHADER_SRC: &str           = include_str!("atmos.wgsl");
+#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const UPSCALE_SHADER_SRC: &str         = include_str!("upscale.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const PARTICLE_SIM_SHADER_SRC: &str    = include_str!("particle_sim.wgsl");

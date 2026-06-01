@@ -811,7 +811,7 @@ impl RenderEngine3d {
         });
         let compute_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[detail sprite] compute shader"),
-            source: shader_source!(DETAIL_SPRITE_SHADER_SRC, "detail_sprite_compute.spv"),
+            source: shader_source!(DETAIL_SPRITE_SHADER_SRC, "detail_sprite.spv"),
         });
         self.detail_sprite_compute_pipeline = Some(self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("[detail sprite] compute pipeline"),
@@ -857,7 +857,7 @@ impl RenderEngine3d {
         });
         let render_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("[detail sprite] render shader"),
-            source: shader_source!(DETAIL_SPRITE_SHADER_SRC, "detail_sprite_render.spv"),
+            source: shader_source!(DETAIL_SPRITE_SHADER_SRC, "detail_sprite.spv"),
         });
         self.detail_sprite_pipeline = Some(self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("[detail sprite] pipeline"),
