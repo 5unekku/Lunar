@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use bevy_ecs::prelude::*;
 use lunar_assets::Handle;

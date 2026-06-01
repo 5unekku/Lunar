@@ -52,7 +52,7 @@ pub mod textbox;
 pub use camera_follow::CameraFollow2d;
 pub use screen_shake::ScreenShake;
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
 
 use bevy_ecs::prelude::*;
@@ -101,7 +101,7 @@ pub struct RenderTargetId(pub u32);
 /// drawable texture handle for a render target without keeping it separately.
 #[derive(Resource, Default)]
 pub struct RenderTargetStore {
-    entries: std::collections::HashMap<RenderTargetId, lunar_assets::Handle<lunar_assets::Texture>>,
+    entries: rustc_hash::FxHashMap<RenderTargetId, lunar_assets::Handle<lunar_assets::Texture>>,
 }
 
 impl RenderTargetStore {
@@ -841,9 +841,9 @@ impl RenderEngine {
             globals_bg,
             material_bgl,
             sampler,
-            textures: HashMap::new(),
+            textures: HashMap::default(),
             material_bgs: {
-                let mut map = HashMap::new();
+                let mut map = HashMap::default();
                 map.insert(u32::MAX, placeholder_material_bg);
                 map
             },
@@ -858,9 +858,9 @@ impl RenderEngine {
             #[cfg(not(target_arch = "wasm32"))]
             pipeline_cache: Self::load_pipeline_cache(device),
             sorted_indices: Vec::new(),
-            text_quads: HashMap::new(),
+            text_quads: HashMap::default(),
             text_layout_cache: text::TextLayoutCache::new(256),
-            render_target_views: HashMap::new(),
+            render_target_views: HashMap::default(),
             render_target_counter: 0,
         }
     }

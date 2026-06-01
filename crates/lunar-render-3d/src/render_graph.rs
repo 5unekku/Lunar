@@ -35,7 +35,8 @@
 //! }
 //! ```
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::collections::VecDeque;
 
 /// handle to a logical render texture resource declared in the graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -71,7 +72,7 @@ impl RenderGraph {
     pub fn new() -> Self {
         Self {
             passes: Vec::new(),
-            textures: HashMap::new(),
+            textures: HashMap::default(),
             sorted: Vec::new(),
             dirty: false,
             next_texture_id: 0,
@@ -126,7 +127,7 @@ impl RenderGraph {
 
         // for each texture, collect all passes that write it (last writer wins for ordering).
         // multiple writers to the same texture are valid (e.g. depth cleared by z-prepass, read by gtao).
-        let mut writers: HashMap<TextureRef, Vec<usize>> = HashMap::new();
+        let mut writers: HashMap<TextureRef, Vec<usize>> = HashMap::default();
         for (i, pass) in self.passes.iter().enumerate() {
             for &tex in &pass.writes {
                 writers.entry(tex).or_default().push(i);
@@ -134,7 +135,7 @@ impl RenderGraph {
         }
 
         // build dependency edges: writer → reader
-        let mut adj: Vec<HashSet<usize>> = vec![HashSet::new(); n];
+        let mut adj: Vec<HashSet<usize>> = vec![HashSet::default(); n];
         let mut in_degree: Vec<usize> = vec![0; n];
         for (i, pass) in self.passes.iter().enumerate() {
             for &tex in &pass.reads {

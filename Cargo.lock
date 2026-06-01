@@ -625,7 +625,7 @@ dependencies = [
  "log",
  "rangemap",
  "rayon",
- "rustc-hash",
+ "rustc-hash 1.1.0",
  "rustybuzz",
  "self_cell",
  "swash",
@@ -1591,6 +1591,7 @@ dependencies = [
  "lunar-assets",
  "lunar-core",
  "lunar-math",
+ "rustc-hash 2.1.2",
 ]
 
 [[package]]
@@ -1606,6 +1607,7 @@ dependencies = [
  "lunar-image",
  "notify",
  "rayon",
+ "rustc-hash 2.1.2",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -1620,6 +1622,7 @@ dependencies = [
  "lunar-assets",
  "lunar-image",
  "lunar-math",
+ "rustc-hash 2.1.2",
  "thiserror",
 ]
 
@@ -1632,6 +1635,7 @@ dependencies = [
  "lunar-3d",
  "lunar-core",
  "lunar-math",
+ "rustc-hash 2.1.2",
  "serde",
 ]
 
@@ -1657,6 +1661,7 @@ dependencies = [
  "lunar-math",
  "ron",
  "roxmltree",
+ "rustc-hash 2.1.2",
  "serde",
  "serde_json",
  "smallvec",
@@ -1682,6 +1687,7 @@ name = "lunar-gamedata"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "rustc-hash 2.1.2",
  "serde",
 ]
 
@@ -1692,6 +1698,7 @@ dependencies = [
  "bincode",
  "lunar-core",
  "lunar-gamedata",
+ "rustc-hash 2.1.2",
  "serde",
  "toml",
 ]
@@ -1716,6 +1723,7 @@ dependencies = [
  "lunar-core",
  "lunar-math",
  "raw-window-handle",
+ "rustc-hash 2.1.2",
  "sdl3",
  "wasm-bindgen",
  "web-sys",
@@ -1828,6 +1836,7 @@ dependencies = [
  "lunar-core",
  "lunar-math",
  "lunar-render",
+ "rustc-hash 2.1.2",
 ]
 
 [[package]]
@@ -1848,6 +1857,7 @@ dependencies = [
  "log",
  "lunar-core",
  "ron",
+ "rustc-hash 2.1.2",
  "serde",
 ]
 
@@ -1859,6 +1869,7 @@ dependencies = [
  "log",
  "lunar-core",
  "ron",
+ "rustc-hash 2.1.2",
 ]
 
 [[package]]
@@ -1901,6 +1912,7 @@ dependencies = [
  "lunar-assets",
  "lunar-core",
  "lunar-math",
+ "rustc-hash 2.1.2",
 ]
 
 [[package]]
@@ -1943,6 +1955,7 @@ dependencies = [
  "log",
  "lunar-core",
  "lunar-math",
+ "rustc-hash 2.1.2",
 ]
 
 [[package]]
@@ -1960,6 +1973,7 @@ dependencies = [
  "lunar-math",
  "pollster",
  "raw-window-handle",
+ "rustc-hash 2.1.2",
  "sdl3",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -1984,6 +1998,7 @@ dependencies = [
  "naga",
  "pollster",
  "rayon",
+ "rustc-hash 2.1.2",
  "wasm-bindgen",
  "web-sys",
  "wgpu",
@@ -2067,7 +2082,7 @@ dependencies = [
  "num-traits",
  "once_cell",
  "petgraph",
- "rustc-hash",
+ "rustc-hash 1.1.0",
  "spirv",
  "thiserror",
  "unicode-ident",
@@ -2725,6 +2740,12 @@ name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
+
+[[package]]
+name = "rustc-hash"
+version = "2.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94300abf3f1ae2e2b8ffb7b58043de3d399c73fa6f4b73826402a5c457614dbe"
 
 [[package]]
 name = "rustc_version"
@@ -3523,7 +3544,7 @@ dependencies = [
  "portable-atomic",
  "profiling",
  "raw-window-handle",
- "rustc-hash",
+ "rustc-hash 1.1.0",
  "smallvec",
  "thiserror",
  "wgpu-core-deps-apple",

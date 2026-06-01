@@ -37,7 +37,7 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 /// a single field value in a data record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -211,10 +211,10 @@ mod tests {
                 (4, DataValue::Float(2.5)), // speed = 2.5
             ],
         };
-        let mut index = HashMap::new();
+        let mut index = HashMap::default();
         index.insert(0u32, 0usize);
         let table = DataTable { records: vec![record], index };
-        let mut tables = HashMap::new();
+        let mut tables = HashMap::default();
         tables.insert("enemies".to_string(), table);
         GameData { strings, tables }
     }

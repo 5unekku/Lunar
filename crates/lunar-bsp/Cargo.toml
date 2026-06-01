@@ -6,6 +6,7 @@ license.workspace = true
 description = "BVH spatial acceleration and portal culling for the Lunar engine"
 
 [dependencies]
+rustc-hash = { workspace = true }
 bevy_ecs   = { workspace = true }
 lunar-math = { path = "../lunar-math" }
 lunar-3d   = { path = "../lunar-3d" }

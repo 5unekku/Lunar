@@ -37,7 +37,7 @@
 
 use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use lunar_math::{Color, LocalTransform, Vec2};
 
@@ -375,7 +375,7 @@ impl SceneLoader {
         scene_registry: Option<&HashMap<String, SceneDefinition>>,
         parent_entity: Option<Entity>,
     ) -> HashMap<String, Entity> {
-        let mut id_map: HashMap<String, Entity> = HashMap::new();
+        let mut id_map: HashMap<String, Entity> = HashMap::default();
         let mut parent_refs: Vec<(Entity, String)> = Vec::new();
         let mut sub_scene_roots: Vec<(Entity, String)> = Vec::new();
 
@@ -441,7 +441,7 @@ impl SceneLoader {
 
         // second pass: resolve parent references — group children per parent, insert once
         let mut parent_to_children: HashMap<Entity, smallvec::SmallVec<[Entity; 4]>> =
-            HashMap::new();
+            HashMap::default();
         for (entity, parent_id) in parent_refs {
             if let Some(&parent_entity) = id_map.get(&parent_id) {
                 commands.entity(entity).insert(Parent(parent_entity));

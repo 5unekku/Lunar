@@ -38,7 +38,7 @@ struct BoxedScene {
 /// overlay scenes with [`SceneManager::push_overlay`].
 #[derive(Resource)]
 pub struct SceneManager {
-    scenes: std::collections::HashMap<String, BoxedScene>,
+    scenes: rustc_hash::FxHashMap<String, BoxedScene>,
     /// stack of active scene names (bottom = base, top = current overlay)
     scene_stack: Vec<String>,
 }
@@ -48,7 +48,7 @@ impl SceneManager {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            scenes: std::collections::HashMap::new(),
+            scenes: rustc_hash::FxHashMap::default(),
             scene_stack: Vec::new(),
         }
     }

@@ -37,7 +37,7 @@
 //! supported TOML value types: `String`, `Integer`, `Float`, `Boolean`.
 //! arrays, inline tables, and datetimes are not supported.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use lunar_gamedata::{DataRecord, DataTable, DataValue, GameData};
 use lunar_core::{SceneDefinition, WorldManifest};
@@ -60,8 +60,8 @@ pub fn compile_toml(source: &str) -> Result<Vec<u8>, String> {
     let table_map = root.as_table().ok_or("root toml value must be a table")?;
 
     let mut strings: Vec<String> = Vec::new();
-    let mut string_index: HashMap<String, u32> = HashMap::new();
-    let mut tables: HashMap<String, DataTable> = HashMap::new();
+    let mut string_index: HashMap<String, u32> = HashMap::default();
+    let mut tables: HashMap<String, DataTable> = HashMap::default();
 
     let intern = |s: &str, strings: &mut Vec<String>, index: &mut HashMap<String, u32>| -> u32 {
         if let Some(&id) = index.get(s) {
@@ -89,7 +89,7 @@ pub fn compile_toml(source: &str) -> Result<Vec<u8>, String> {
         }
 
         let mut records: Vec<DataRecord> = Vec::new();
-        let mut id_seen: HashMap<String, usize> = HashMap::new();
+        let mut id_seen: HashMap<String, usize> = HashMap::default();
 
         for (record_index, record_value) in records_toml.iter().enumerate() {
             let fields_toml = record_value
@@ -129,7 +129,7 @@ pub fn compile_toml(source: &str) -> Result<Vec<u8>, String> {
             });
         }
 
-        let mut index: HashMap<u32, usize> = HashMap::new();
+        let mut index: HashMap<u32, usize> = HashMap::default();
         for (i, record) in records.iter().enumerate() {
             index.insert(record.id, i);
         }

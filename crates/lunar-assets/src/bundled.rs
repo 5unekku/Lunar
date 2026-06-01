@@ -14,7 +14,7 @@
 //!
 //! the asset server will automatically check bundled assets before falling back to fetch.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::sync::Mutex;
 
 /// global registry of bundled assets.
@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn register_many_assets() {
         clear();
-        let mut assets = HashMap::new();
+        let mut assets = HashMap::default();
         assets.insert("a.png".to_string(), vec![1]);
         assets.insert("b.png".to_string(), vec![2]);
         register_many(assets);

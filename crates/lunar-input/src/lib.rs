@@ -31,7 +31,7 @@ use bevy_ecs::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
 use lunar_core::EngineState;
 use lunar_core::{App, GamePlugin};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 /// size of the fast-path key array (covers common keys 0-127)
 const KEY_ARRAY_SIZE: usize = 128;
@@ -77,7 +77,7 @@ pub enum InputBinding {
 /// ```
 #[derive(Resource)]
 pub struct ActionMap {
-    bindings: std::collections::HashMap<String, Vec<InputBinding>>,
+    bindings: rustc_hash::FxHashMap<String, Vec<InputBinding>>,
 }
 
 impl ActionMap {
@@ -85,7 +85,7 @@ impl ActionMap {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            bindings: std::collections::HashMap::new(),
+            bindings: rustc_hash::FxHashMap::default(),
         }
     }
 
@@ -602,9 +602,9 @@ impl InputState {
             keys_held: [false; KEY_ARRAY_SIZE],
             keys_just_pressed: [false; KEY_ARRAY_SIZE],
             keys_just_released: [false; KEY_ARRAY_SIZE],
-            keys_held_extra: HashMap::new(),
-            keys_just_pressed_extra: HashMap::new(),
-            keys_just_released_extra: HashMap::new(),
+            keys_held_extra: HashMap::default(),
+            keys_just_pressed_extra: HashMap::default(),
+            keys_just_released_extra: HashMap::default(),
             mouse_position: (0.0, 0.0),
             mouse_delta: (0.0, 0.0),
             mouse_buttons_held: [false; MOUSE_BUTTON_COUNT],
@@ -890,7 +890,7 @@ impl SdlGamepadProvider {
     /// create a new provider from an already-initialized SDL3 gamepad subsystem.
     #[must_use]
     pub fn new(gamepad_subsystem: sdl3::GamepadSubsystem) -> Self {
-        Self { gamepad_subsystem, open_gamepads: HashMap::new() }
+        Self { gamepad_subsystem, open_gamepads: HashMap::default() }
     }
 
     fn handle_event(&mut self, event: &sdl3::event::Event, input: &mut InputState) {

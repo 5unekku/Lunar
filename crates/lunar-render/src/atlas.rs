@@ -30,7 +30,7 @@ pub struct TextureAtlas {
     /// manifest describing region layout
     pub manifest: AtlasManifest,
     /// pre-computed UV regions for fast lookup
-    regions: std::collections::HashMap<String, AtlasRegion>,
+    regions: rustc_hash::FxHashMap<String, AtlasRegion>,
 }
 
 impl TextureAtlas {

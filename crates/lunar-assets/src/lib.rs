@@ -48,7 +48,7 @@ pub mod bundled;
 
 use bevy_ecs::prelude::*;
 use lunar_core::{App, GamePlugin};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::Arc;
@@ -246,7 +246,7 @@ impl<T: Asset> AssetStore<T> {
     fn new() -> Self {
         Self {
             entries: Vec::new(),
-            path_index: HashMap::new(),
+            path_index: HashMap::default(),
         }
     }
 
@@ -958,7 +958,7 @@ pub struct AssetServer {
     /// per-texture screen-space coverage hints from the renderer (max coverage this frame).
     /// coverage ≈ object_diameter / camera_distance; larger = closer = needs higher quality.
     /// cleared at the start of each render frame by the renderer.
-    pub coverage_hints: std::collections::HashMap<u32, f32>,
+    pub coverage_hints: rustc_hash::FxHashMap<u32, f32>,
 }
 
 impl AssetServer {
@@ -978,7 +978,7 @@ impl AssetServer {
             evicted_texture_ids: Vec::new(),
             proc_texture_counter: 0,
             mip_config: MipStreamingConfig::default(),
-            coverage_hints: std::collections::HashMap::new(),
+            coverage_hints: rustc_hash::FxHashMap::default(),
         }
     }
 
@@ -1813,7 +1813,7 @@ pub enum AssetType {
 pub struct AssetWatcher {
     #[allow(dead_code)]
     watcher: Option<notify::RecommendedWatcher>,
-    watched: std::collections::HashMap<String, AssetType>,
+    watched: rustc_hash::FxHashMap<String, AssetType>,
     // receiver side of the notify callback channel; behind a mutex so the resource
     // stays Sync. drained once per frame by dispatch_asset_changes.
     changes: std::sync::Mutex<std::sync::mpsc::Receiver<String>>,
@@ -1845,7 +1845,7 @@ impl AssetWatcher {
         }
         Self {
             watcher,
-            watched: std::collections::HashMap::new(),
+            watched: rustc_hash::FxHashMap::default(),
             changes: std::sync::Mutex::new(receiver),
         }
     }

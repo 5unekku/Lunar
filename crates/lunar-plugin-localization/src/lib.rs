@@ -14,7 +14,7 @@
 //! ```
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use bevy_ecs::prelude::*;
 
@@ -36,13 +36,13 @@ impl Localization {
     /// create a new localization manager with the given default language.
     #[must_use]
     pub fn new(default_language: &str) -> Self {
-        let mut available = HashMap::new();
+        let mut available = HashMap::default();
         available.insert(default_language.to_string(), default_language.to_string());
 
         Self {
             current_language: default_language.to_string(),
             available_languages: available,
-            string_tables: HashMap::new(),
+            string_tables: HashMap::default(),
             locale_base_path: "locales".to_string(),
         }
     }

@@ -19,7 +19,8 @@
 use bevy_ecs::prelude::*;
 use lunar_3d::{ActiveCamera3d, WorldTransform3d};
 use lunar_math::Vec3;
-use std::collections::{HashSet, VecDeque};
+use rustc_hash::FxHashSet as HashSet;
+use std::collections::VecDeque;
 
 use lunar_core::{App, GamePlugin, UpdateStage};
 
@@ -140,7 +141,7 @@ pub fn cull_portals(
 
     // BFS through portals
     let mut queue: VecDeque<(u32, u32)> = VecDeque::new(); // (area_id, depth)
-    let mut visited: HashSet<u32> = HashSet::new();
+    let mut visited: HashSet<u32> = HashSet::default();
     queue.push_back((cam_area, 0));
     visited.insert(cam_area);
 

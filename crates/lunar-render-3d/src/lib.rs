@@ -39,7 +39,7 @@ pub mod render_graph;
 
 pub use sky::{AtmosphericScattering, Sky};
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 use bevy_ecs::prelude::*;
@@ -4168,10 +4168,10 @@ impl RenderEngine3d {
             surface_fallback_view,
             surface_sampler,
             surface_params_buf,
-            surface_tex_cache: HashMap::new(),
-            surface_bg_cache: HashMap::new(),
+            surface_tex_cache: HashMap::default(),
+            surface_bg_cache: HashMap::default(),
             surface_scratch: Vec::new(),
-            mesh_gpu: HashMap::new(),
+            mesh_gpu: HashMap::default(),
             dome_mesh,
             sun_mesh,
             hdr_texture,
@@ -4298,7 +4298,7 @@ impl RenderEngine3d {
             terrain_globals_bgl,
             terrain_globals_bg,
             terrain_params_bgl,
-            terrain_gpu: HashMap::new(),
+            terrain_gpu: HashMap::default(),
             msaa_main_shader: shader,
             msaa_surface_shader: surface_shader_module,
             msaa_water_shader: water_shader,
@@ -4318,7 +4318,7 @@ impl RenderEngine3d {
             static_draw_list: Vec::new(),
             static_bundle_params: (wgpu::TextureFormat::Rgba16Float, 0),
             static_entity_count: 0,
-            static_entity_slots: HashMap::new(),
+            static_entity_slots: HashMap::default(),
             lightmap_bgl,
             lightmap_sampler,
             lightmap_fallback_tex,
@@ -4326,21 +4326,21 @@ impl RenderEngine3d {
             dir_lm_fallback_tex,
             dir_lm_fallback_view,
             lightmap_fallback_bg,
-            lm_tex_cache: HashMap::new(),
-            dir_lm_tex_cache: HashMap::new(),
-            lightmap_bg_cache: HashMap::new(),
+            lm_tex_cache: HashMap::default(),
+            dir_lm_tex_cache: HashMap::default(),
+            lightmap_bg_cache: HashMap::default(),
             atlas_tex: None,
             atlas_view: None,
             atlas_bg: None,
-            atlas_lm_uvs: HashMap::new(),
+            atlas_lm_uvs: HashMap::default(),
             atlas_lm_ids: Vec::new(),
             mega_vbuf: None,
             mega_ibuf: None,
             mega_vbuf_bytes: 0,
             mega_ibuf_bytes: 0,
-            mega_mesh_entries: HashMap::new(),
+            mega_mesh_entries: HashMap::default(),
             entity_draw_params_buf: None,
-            frustum_visible: HashSet::new(),
+            frustum_visible: HashSet::default(),
             raw_scratch: Vec::new(),
             draw_scratch: Vec::new(),
             impostor_scratch: Vec::new(),
@@ -4424,14 +4424,14 @@ impl RenderEngine3d {
             detail_sprite_pipeline: None,
             detail_sprite_compute_bgl: None,
             detail_sprite_compute_pipeline: None,
-            detail_sprite_instance_bufs: HashMap::new(),
+            detail_sprite_instance_bufs: HashMap::default(),
 
             lod_select_bgl: None,
             lod_select_pipeline: None,
             lod_params_buf: None,
             lod_indices_buf: None,
             lod_indices_staging: None,
-            gpu_lod_indices: HashMap::new(),
+            gpu_lod_indices: HashMap::default(),
             lod_staging_pending: false,
             lod_pending_entity_count: 0,
             lod_staging_ready: Arc::new(AtomicBool::new(false)),
@@ -7140,7 +7140,7 @@ impl RenderEngine3d {
                 let leaf = level.camera_leaf(cam_pos);
                 let visible_leaves = level.visible_leaves(leaf);
                 let area_map = level.area_map();
-                let mut areas = HashSet::new();
+                let mut areas = HashSet::default();
                 for leaf_idx in &visible_leaves {
                     if let Ok(pos) = area_map.binary_search_by_key(&(*leaf_idx as u32), |&(li, _)| li) {
                         areas.insert(area_map[pos].1);
@@ -9862,7 +9862,7 @@ impl RenderEngine3d {
                     let mut cursor_x: u32 = 0;
                     let mut cursor_y: u32 = 0;
                     let mut row_height: u32 = 0;
-                    let mut new_uvs: HashMap<u32, [f32; 4]> = HashMap::new();
+                    let mut new_uvs: HashMap<u32, [f32; 4]> = HashMap::default();
                     for (lm_id, tw, th, pixels) in &entries {
                         let tw = *tw; let th = *th;
                         if tw > atlas_dim || th > atlas_dim { continue; }

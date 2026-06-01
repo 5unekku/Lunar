@@ -6,6 +6,7 @@ license.workspace = true
 description = "build-time TOML-to-binary compiler for lunar game data tables"
 
 [dependencies]
+rustc-hash = { workspace = true }
 lunar-gamedata = { path = "../lunar-gamedata" }
 lunar-core     = { path = "../lunar-core" }
 toml = "0.8"

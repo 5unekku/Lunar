@@ -19,7 +19,7 @@
 //!   - x, y, w, h: u32 each  (pixel coordinates within atlas)
 //! ```
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::io::{self, Read, Write};
 
 use crate::region::AtlasRegion;
@@ -128,7 +128,7 @@ impl AtlasManifest {
             .map_err(|_| ManifestError::Truncated)?;
         let region_count = u32::from_le_bytes(count_buf);
 
-        let mut regions = HashMap::with_capacity(region_count as usize);
+        let mut regions = HashMap::with_capacity_and_hasher(region_count as usize, Default::default());
         for _ in 0..region_count {
             let mut name_len_buf = [0u8; 2];
             reader
@@ -226,7 +226,7 @@ mod manifest_tests {
     use super::*;
 
     fn make_manifest() -> AtlasManifest {
-        let mut regions = HashMap::new();
+        let mut regions = HashMap::default();
         regions.insert(
             "player".into(),
             ManifestRegion {
@@ -274,7 +274,7 @@ mod manifest_tests {
         let m = AtlasManifest {
             atlas_width: 1,
             atlas_height: 1,
-            regions: HashMap::new(),
+            regions: HashMap::default(),
         };
         let bytes = m.to_bytes();
         let decoded = AtlasManifest::from_bytes(&bytes).unwrap();

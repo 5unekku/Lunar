@@ -5,7 +5,7 @@
 
 use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache, SwashContent};
 use lunar_math::Vec2;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
 
@@ -46,7 +46,7 @@ pub struct TextLayoutCache {
 
 impl TextLayoutCache {
     pub fn new(cap: usize) -> Self {
-        Self { map: HashMap::with_capacity(cap + 1), lru_gen: 0, cap }
+        Self { map: HashMap::with_capacity_and_hasher(cap + 1, Default::default()), lru_gen: 0, cap }
     }
 
     pub fn clear(&mut self) {
@@ -121,8 +121,8 @@ impl GlyphAtlas {
             pixels: vec![0u8; (width * height * 4) as usize],
             font_system,
             swash_cache: SwashCache::new(),
-            entries: HashMap::new(),
-            font_families: HashMap::new(),
+            entries: HashMap::default(),
+            font_families: HashMap::default(),
             cursor_x: 0,
             cursor_y: 0,
             row_height: 0,
@@ -156,7 +156,7 @@ impl GlyphAtlas {
             return;
         }
         // collect existing face ids before loading
-        let before: std::collections::HashSet<cosmic_text::fontdb::ID> =
+        let before: rustc_hash::FxHashSet<cosmic_text::fontdb::ID> =
             self.font_system.db().faces().map(|f| f.id).collect();
         self.font_system.db_mut().load_font_data(data.to_vec());
         // find newly added face and grab its first family name

@@ -5,7 +5,7 @@
 
 use crate::manifest::{AtlasManifest, ManifestRegion};
 use lunar_image::Image;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 /// a source image to be packed into the atlas.
 #[derive(Debug, Clone)]
@@ -64,7 +64,7 @@ impl AtlasPacker {
         // pass 1: compute placements without allocating any pixel memory
         let mut shelves: Vec<Shelf> = Vec::new();
         let mut current_y: u32 = 0;
-        let mut regions: HashMap<String, ManifestRegion> = HashMap::new();
+        let mut regions: HashMap<String, ManifestRegion> = HashMap::default();
         let mut used_w: u32 = 0;
         let mut used_h: u32 = 0;
 
@@ -114,7 +114,7 @@ impl AtlasPacker {
                 manifest: AtlasManifest {
                     atlas_width: 1,
                     atlas_height: 1,
-                    regions: HashMap::new(),
+                    regions: HashMap::default(),
                 },
             });
         }

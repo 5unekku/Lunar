@@ -288,7 +288,7 @@ fn advance_follower_t(follower: &mut PathFollower, delta: f32) {
 /// insert this resource with your spline data before using path followers.
 #[derive(Resource, Default)]
 pub struct SplineStore {
-    splines: std::collections::HashMap<u32, Spline>,
+    splines: rustc_hash::FxHashMap<u32, Spline>,
     next_id: u32,
 }
 

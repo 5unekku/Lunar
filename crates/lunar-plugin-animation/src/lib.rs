@@ -26,7 +26,7 @@
 //! }
 //! ```
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use bevy_ecs::message::{MessageRegistry, MessageWriter};
 use bevy_ecs::prelude::*;
@@ -133,7 +133,7 @@ impl Animator {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            clips: HashMap::new(),
+            clips: HashMap::default(),
             clip_names: Vec::new(),
             current_clip: None,
             current_clip_idx: None,

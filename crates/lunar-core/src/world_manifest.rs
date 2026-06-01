@@ -30,7 +30,7 @@
 use bevy_ecs::prelude::*;
 use roxmltree::Document;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::scene_format::SceneDefinition;
 
@@ -595,7 +595,7 @@ impl Default for StreamingConfig {
 #[derive(Debug, Clone, Resource)]
 pub struct StreamingState {
     /// currently loaded chunk ids
-    pub loaded_chunk_ids: std::collections::HashSet<u32>,
+    pub loaded_chunk_ids: rustc_hash::FxHashSet<u32>,
     /// last center position used for streaming
     pub last_center_x: f32,
     pub last_center_y: f32,
@@ -610,7 +610,7 @@ impl StreamingState {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            loaded_chunk_ids: std::collections::HashSet::new(),
+            loaded_chunk_ids: rustc_hash::FxHashSet::default(),
             last_center_x: 0.0,
             last_center_y: 0.0,
             config: StreamingConfig::default(),
@@ -622,7 +622,7 @@ impl StreamingState {
     #[must_use]
     pub fn with_config(config: StreamingConfig) -> Self {
         Self {
-            loaded_chunk_ids: std::collections::HashSet::new(),
+            loaded_chunk_ids: rustc_hash::FxHashSet::default(),
             last_center_x: 0.0,
             last_center_y: 0.0,
             config,
@@ -651,7 +651,7 @@ impl LoadedScenes {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            scene_entity_maps: HashMap::new(),
+            scene_entity_maps: HashMap::default(),
             active_scenes: Vec::new(),
         }
     }
@@ -946,7 +946,7 @@ mod tests {
         let mut entity = EntityData {
             id: Some("player".to_string()),
             parent: None,
-            components: HashMap::new(),
+            components: HashMap::default(),
         };
 
         entity.set_component(builtin_components::LAYER, &1);
@@ -964,7 +964,7 @@ mod tests {
             entities: vec![EntityData {
                 id: Some("e1".to_string()),
                 parent: None,
-                components: HashMap::new(),
+                components: HashMap::default(),
             }],
         };
         let binary = scene.to_binary().unwrap();

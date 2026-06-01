@@ -9,7 +9,7 @@
 //! the [`CommandRegistry`]. commands receive a list of string arguments
 //! and return a result string or error.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 /// a command that can be executed by the engine.
 ///
@@ -40,7 +40,7 @@ impl CommandRegistry {
     #[must_use]
     pub fn new() -> Self {
         let mut registry = Self {
-            commands: HashMap::new(),
+            commands: HashMap::default(),
         };
 
         // register built-in commands

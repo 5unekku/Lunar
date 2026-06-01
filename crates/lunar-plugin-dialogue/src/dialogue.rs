@@ -43,7 +43,7 @@
 //! manager.start("npc1");
 //! ```
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use bevy_ecs::prelude::*;
 use lunar_core::App;
@@ -177,7 +177,7 @@ impl ScriptBuilder {
     /// returns an error if the start ID or any `next`/choice target does not match a declared block,
     /// or if two blocks share the same id.
     pub fn build(self) -> Result<Script, String> {
-        let mut id_to_index: HashMap<&str, u32> = HashMap::new();
+        let mut id_to_index: HashMap<&str, u32> = HashMap::default();
         for (i, entry) in self.entries.iter().enumerate() {
             if id_to_index.insert(entry.id.as_str(), i as u32).is_some() {
                 return Err(format!("duplicate block id '{}'", entry.id));
@@ -263,7 +263,7 @@ impl DialogueManager {
     pub fn new() -> Self {
         Self {
             characters: vec![Character { name: "".into() }],
-            scripts: HashMap::new(),
+            scripts: HashMap::default(),
             active: None,
         }
     }

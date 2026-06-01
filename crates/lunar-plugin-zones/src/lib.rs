@@ -10,7 +10,7 @@
 //! 3. define [`ZoneTransition`]s for automatic area changes
 //! 4. exit a zone — triggers [`Zone::on_exit`]
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use bevy_ecs::prelude::*;
 use lunar_math::{Color, Rect, Vec2};
@@ -84,7 +84,7 @@ impl WorldManager {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            zones: HashMap::new(),
+            zones: HashMap::default(),
             current_zone: None,
             pending_transition: None,
         }
