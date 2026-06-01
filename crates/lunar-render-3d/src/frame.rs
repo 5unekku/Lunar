@@ -172,22 +172,27 @@ impl RenderEngine3d {
         // point lights: up to MAX_POINT_LIGHTS closest to camera
         self.point_light_scratch.clear();
         {
+            let cam_pos_a = Vec3A::from(cam_pos);
             let mut pq = world.query::<(&PointLight, &WorldTransform3d)>();
             pq.iter(world).for_each(|(pl, wt)| {
-                self.point_light_scratch.push((wt.translation, pl.color, pl.intensity, pl.radius, pl.casts_shadows));
+                // decorate with distance² (computed once, SIMD Vec3A) so the sort never recomputes it
+                let dist_sq = (Vec3A::from(wt.translation) - cam_pos_a).length_squared();
+                self.point_light_scratch.push((wt.translation, pl.color, pl.intensity, pl.radius, pl.casts_shadows, dist_sq));
             });
         }
-        self.point_light_scratch.sort_unstable_by(|a, b| {
-            let da = (a.0 - cam_pos).length_squared();
-            let db = (b.0 - cam_pos).length_squared();
-            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-        });
         let max_lights = dev_max_point_lights.min(MAX_CLUSTERED_LIGHTS);
-        self.point_light_scratch.truncate(max_lights);
+        let cmp_dist = |a: &(Vec3, Color, f32, f32, bool, f32), b: &(Vec3, Color, f32, f32, bool, f32)|
+            a.5.partial_cmp(&b.5).unwrap_or(std::cmp::Ordering::Equal);
+        // partial sort: select the closest `max_lights` to the front, then order just those
+        if self.point_light_scratch.len() > max_lights {
+            self.point_light_scratch.select_nth_unstable_by(max_lights, cmp_dist);
+            self.point_light_scratch.truncate(max_lights);
+        }
+        self.point_light_scratch.sort_unstable_by(cmp_dist);
 
         // ── compute cascade splits (log-linear blend, λ=0.5) ─────────────
         // produces 3 split depths in view space separating the 3 cascade slices.
-        let cascade_splits = Self::compute_cascade_splits(SHADOW_NEAR, SHADOW_FAR, NUM_CASCADES as usize, CASCADE_LAMBDA);
+        let cascade_splits = Self::compute_cascade_splits(SHADOW_NEAR, SHADOW_FAR, CASCADE_LAMBDA);
 
         // ── compute per-cascade light-space matrices ──────────────────────
         let light_spaces = if dir_enabled != 0 {
@@ -617,7 +622,7 @@ impl RenderEngine3d {
         // assign shadow slots to first MAX_POINT_SHADOW_LIGHTS lights with casts_shadows=true
         let mut shadow_slot_idx: usize = 0;
         let shadow_indices: Vec<u32> = self.point_light_scratch.iter()
-            .map(|&(_, _, _, _, casts)| {
+            .map(|&(_, _, _, _, casts, _)| {
                 if casts && dev_point_shadows && shadow_slot_idx < MAX_POINT_SHADOW_LIGHTS {
                     let idx = shadow_slot_idx as u32;
                     shadow_slot_idx += 1;
@@ -688,7 +693,7 @@ impl RenderEngine3d {
         if light_count > 0 {
             self.light_data_scratch.clear();
             self.light_data_scratch.resize(light_count * 48, 0);
-            for (i, &(pos, color, intensity, radius, _)) in self.point_light_scratch.iter().enumerate() {
+            for (i, &(pos, color, intensity, radius, _, _)) in self.point_light_scratch.iter().enumerate() {
                 let off = i * 48;
                 let entry = PointLightGpuCpu {
                     position: [pos.x, pos.y, pos.z],
@@ -884,21 +889,27 @@ impl RenderEngine3d {
             }
         }
         // skip re-sort when camera direction and all transparent entity depths match
-        // the previous frame within 1mm (quantized to i32 millimetres)
-        let cur_depths: Vec<i32> = self.transparent_scratch.iter().map(|&i| {
-            let w = self.draw_scratch[i].6.w_axis;
-            ((Vec3::new(w.x, w.y, w.z) - cam_pos).dot(cam_fwd) * 1000.0) as i32
-        }).collect();
+        // the previous frame within 1mm (quantized to i32 millimetres). depths land in a
+        // reused scratch vec instead of a fresh per-frame alloc; math is SIMD via Vec3A.
+        let cam_pos_a = Vec3A::from(cam_pos);
+        let cam_fwd_a = Vec3A::from(cam_fwd);
+        self.transparent_depths_scratch.clear();
+        for k in 0..self.transparent_scratch.len() {
+            let w = self.draw_scratch[self.transparent_scratch[k]].6.w_axis;
+            let depth = (Vec3A::new(w.x, w.y, w.z) - cam_pos_a).dot(cam_fwd_a);
+            self.transparent_depths_scratch.push((depth * 1000.0) as i32);
+        }
         let cam_fwd_changed = (cam_fwd - self.transparent_last_cam_fwd).length_squared() > 1e-8;
-        if cam_fwd_changed || cur_depths != self.transparent_last_depths {
+        if cam_fwd_changed || self.transparent_depths_scratch != self.transparent_last_depths {
             self.transparent_scratch.sort_unstable_by(|&a, &b| {
                 let wa = self.draw_scratch[a].6.w_axis;
                 let wb = self.draw_scratch[b].6.w_axis;
-                let depth_a = (Vec3::new(wa.x, wa.y, wa.z) - cam_pos).dot(cam_fwd);
-                let depth_b = (Vec3::new(wb.x, wb.y, wb.z) - cam_pos).dot(cam_fwd);
+                let depth_a = (Vec3A::new(wa.x, wa.y, wa.z) - cam_pos_a).dot(cam_fwd_a);
+                let depth_b = (Vec3A::new(wb.x, wb.y, wb.z) - cam_pos_a).dot(cam_fwd_a);
                 depth_b.partial_cmp(&depth_a).unwrap_or(std::cmp::Ordering::Equal)
             });
-            self.transparent_last_depths = cur_depths;
+            // swap the fresh keys into last_depths; scratch keeps the old vec for reuse next frame
+            std::mem::swap(&mut self.transparent_last_depths, &mut self.transparent_depths_scratch);
             self.transparent_last_cam_fwd = cam_fwd;
         }
 
@@ -1268,15 +1279,17 @@ impl RenderEngine3d {
         (slot * UNIFORM_STRIDE as usize) as u32
     }
     /// compute cascade split depths using logarithmic-linear blending.
-    /// returns `n` split values in view-space depth (positive distance from camera).
-    pub(crate) fn compute_cascade_splits(near: f32, far: f32, n: usize, lambda: f32) -> Vec<f32> {
-        (1..=n)
-            .map(|i| {
-                let uniform = near + (far - near) * (i as f32 / n as f32);
-                let log = near * (far / near).powf(i as f32 / n as f32);
-                lambda * log + (1.0 - lambda) * uniform
-            })
-            .collect()
+    /// returns `NUM_CASCADES` split values in view-space depth (positive distance from camera).
+    pub(crate) fn compute_cascade_splits(near: f32, far: f32, lambda: f32) -> [f32; NUM_CASCADES as usize] {
+        let n = NUM_CASCADES as f32;
+        let mut splits = [0.0f32; NUM_CASCADES as usize];
+        for (i, slot) in splits.iter_mut().enumerate() {
+            let k = (i + 1) as f32 / n;
+            let uniform = near + (far - near) * k;
+            let log = near * (far / near).powf(k);
+            *slot = lambda * log + (1.0 - lambda) * uniform;
+        }
+        splits
     }
     /// compute a tight orthographic light-space matrix for one cascade slice.
     /// fits the ortho projection to the 8 corners of the camera frustum slice.

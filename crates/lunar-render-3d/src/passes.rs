@@ -854,7 +854,7 @@ impl RenderEngine3d {
                 self.point_shadow_last_draw_count = pt_draw_count;
             }
             let mut pt_shadow_idx = 0usize;
-            for (light_i, &(light_pos, _, _, light_radius, casts)) in self.point_light_scratch.iter().enumerate() {
+            for (light_i, &(light_pos, _, _, light_radius, casts, _)) in self.point_light_scratch.iter().enumerate() {
                 if !casts || pt_shadow_idx >= MAX_POINT_SHADOW_LIGHTS { break; }
                 let _ = light_i;
                 let lp = Vec3::from(light_pos);

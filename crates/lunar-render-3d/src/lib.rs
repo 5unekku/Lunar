@@ -54,7 +54,7 @@ use lunar_3d::primitives::{quad_mesh, sphere_mesh};
 use lunar_bsp::{Area, BspLevel, VisibleAreas};
 use lunar_core::{App, GamePlugin, UpdateStage};
 use lunar_lightmap::{DirectionalLightmap, Lightmap};
-use lunar_math::{Color, Mat3, Mat4, Vec2, Vec3};
+use lunar_math::{Color, Mat3, Mat4, Vec2, Vec3, Vec3A};
 
 // dev builds and wasm keep wgsl inline; native release uses pre-compiled spirv (build.rs)
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
@@ -1239,6 +1239,8 @@ pub struct RenderEngine3d {
     transparent_scratch: Vec<usize>,
     // sort-skip: quantized depth keys (mm precision) from the previous frame
     transparent_last_depths: Vec<i32>,
+    // reused scratch for this frame's depth keys (compared against last_depths)
+    transparent_depths_scratch: Vec<i32>,
     transparent_last_cam_fwd: Vec3,
 
     // stored shader modules for runtime MSAA rebuild
@@ -1316,7 +1318,7 @@ pub struct RenderEngine3d {
     #[allow(clippy::type_complexity)]
     draw_scratch: Vec<(Entity, u32, u32, Color, f32, f32, Mat4, f32, u32, u32, u32)>,
     uniform_staging: Vec<u8>,
-    point_light_scratch: Vec<(Vec3, Color, f32, f32, bool)>,  // (pos, color, intensity, radius, casts_shadows)
+    point_light_scratch: Vec<(Vec3, Color, f32, f32, bool, f32)>,  // (pos, color, intensity, radius, casts_shadows, dist_sq)
     // BSP PVS visible-area set, rebuilt each frame; `active` mirrors the old Option::Some
     bsp_visible_scratch: HashSet<u32>,
     bsp_visible_active: bool,

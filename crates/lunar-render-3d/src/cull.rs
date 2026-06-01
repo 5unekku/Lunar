@@ -415,7 +415,8 @@ impl RenderEngine3d {
                     let render_wt = prev_wt
                         .map(|prev| prev.0.lerp(wt, interp_alpha))
                         .unwrap_or(*wt);
-                    let dist_sq = (render_wt.translation - cam_pos).length_squared();
+                    // SIMD distance² (Vec3A) — this runs per visible renderable, hot path
+                    let dist_sq = (Vec3A::from(render_wt.translation) - Vec3A::from(cam_pos)).length_squared();
 
                     // check if entity should use impostor billboard
                     if let Some(imp) = impostor

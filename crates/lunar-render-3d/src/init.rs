@@ -2765,6 +2765,7 @@ impl RenderEngine3d {
             transparent_pipeline,
             transparent_scratch: Vec::new(),
             transparent_last_depths: Vec::new(),
+            transparent_depths_scratch: Vec::new(),
             transparent_last_cam_fwd: Vec3::ZERO,
             upscale_active: false,
             fsr_ldr_texture: None,
