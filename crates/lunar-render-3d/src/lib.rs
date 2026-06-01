@@ -305,6 +305,7 @@ struct GpuMesh {
 
 /// per-particle GPU layout — must match the WGSL Particle struct exactly.
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct GpuParticle {
     position:     [f32; 3],
     lifetime:     f32,
@@ -319,6 +320,7 @@ struct GpuParticle {
 }
 
 /// CPU-side particle tracking for spawn management.
+#[derive(Clone, Copy)]
 struct CpuParticle {
     position:     Vec3,
     velocity:     Vec3,
@@ -1039,6 +1041,9 @@ pub struct RenderEngine3d {
     shadow_cascade_dirty: [bool; 3],
     shadow_last_dir: Vec3,
     shadow_last_draw_count: usize,
+    // reused shadow-caster scratch: visible casters set + (mesh_id, draw index) list, refilled each frame
+    shadow_entities_scratch: HashSet<Entity>,
+    shadow_list_scratch: Vec<(u32, usize)>,
 
     // point light cube shadow maps — 4 lights × 6 faces as 24-layer depth 2D array.
     // layer = shadow_index * 6 + face; face order: 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z.
@@ -1223,6 +1228,12 @@ pub struct RenderEngine3d {
     particle_render_bg: wgpu::BindGroup,
     particle_render_pipeline: wgpu::RenderPipeline,
     particle_cpu: Vec<CpuParticle>,
+    // live particle count, tracked incrementally on spawn/death (no per-frame scan)
+    particle_alive_count: usize,
+    // reused per-frame particle scratch: pending spawns, (slot, gpu) writes, coalesced upload bytes
+    particle_spawn_scratch: Vec<CpuParticle>,
+    particle_gpu_writes: Vec<(u32, GpuParticle)>,
+    particle_upload_scratch: Vec<u8>,
 
     // water rendering — Gerstner wave displacement + refraction (mid+ tier)
     water_params_buf: wgpu::Buffer,

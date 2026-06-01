@@ -572,9 +572,9 @@ impl RenderEngine3d {
         if self.particles_enabled {
             let delta = world.resource::<lunar_core::Time>().delta_seconds();
 
-            // gather emitters from ECS and manage CPU-side spawn
+            // gather emitters from ECS and manage CPU-side spawn (reused scratch)
+            self.particle_spawn_scratch.clear();
             let mut emitter_query = world.query::<(&ParticleEmitter, &WorldTransform3d)>();
-            let mut to_spawn: Vec<CpuParticle> = Vec::new();
             for (emitter, wt) in emitter_query.iter(world) {
                 if !emitter.active { continue; }
                 let new_count = ((emitter.emission_rate * delta) as u32).min(emitter.max_particles);
@@ -586,7 +586,7 @@ impl RenderEngine3d {
                     let theta = t * std::f32::consts::TAU;
                     let spread = Vec3::new(theta.cos() * angle, 0.0, theta.sin() * angle);
                     let direction = (fwd + spread).normalize();
-                    to_spawn.push(CpuParticle {
+                    self.particle_spawn_scratch.push(CpuParticle {
                         position: pos,
                         velocity: direction * emitter.initial_speed,
                         lifetime: emitter.particle_lifetime,
@@ -600,30 +600,41 @@ impl RenderEngine3d {
                 }
             }
 
-            // fill dead slots with newly spawned particles
-            let mut new_gpu_writes: Vec<(u32, GpuParticle)> = Vec::new();
-            let mut spawn_iter = to_spawn.into_iter();
-            for (slot, cpu) in self.particle_cpu.iter_mut().enumerate() {
-                if cpu.alive { continue; }
-                let Some(spawned) = spawn_iter.next() else { break; };
-                new_gpu_writes.push((slot as u32, spawned.as_gpu()));
-                *cpu = spawned;
+            // fill dead slots with newly spawned particles, recording (slot, gpu) in slot order
+            self.particle_gpu_writes.clear();
+            let mut spawn_idx = 0usize;
+            for slot in 0..self.particle_cpu.len() {
+                if spawn_idx >= self.particle_spawn_scratch.len() { break; }
+                if self.particle_cpu[slot].alive { continue; }
+                let spawned = self.particle_spawn_scratch[spawn_idx];
+                spawn_idx += 1;
+                self.particle_gpu_writes.push((slot as u32, spawned.as_gpu()));
+                self.particle_cpu[slot] = spawned;
+                self.particle_alive_count += 1; // dead slot → alive
             }
 
-            // upload newly spawned particles to their slots in the storage buffer
-            for (slot, gpu_particle) in &new_gpu_writes {
-                let offset = *slot as u64 * PARTICLE_STRIDE;
-                let bytes = unsafe {
-                    std::slice::from_raw_parts(
-                        gpu_particle as *const GpuParticle as *const u8,
-                        PARTICLE_STRIDE as usize,
-                    )
-                };
-                self.queue.write_buffer(&self.particle_buf, offset, bytes);
+            // upload spawned particles, coalescing consecutive slots into one contiguous write
+            let mut i = 0;
+            while i < self.particle_gpu_writes.len() {
+                let start_slot = self.particle_gpu_writes[i].0;
+                self.particle_upload_scratch.clear();
+                let mut j = i;
+                let mut expected = start_slot;
+                while j < self.particle_gpu_writes.len() && self.particle_gpu_writes[j].0 == expected {
+                    let gpu = &self.particle_gpu_writes[j].1;
+                    let bytes = unsafe {
+                        std::slice::from_raw_parts(gpu as *const GpuParticle as *const u8, PARTICLE_STRIDE as usize)
+                    };
+                    self.particle_upload_scratch.extend_from_slice(bytes);
+                    expected += 1;
+                    j += 1;
+                }
+                self.queue.write_buffer(&self.particle_buf, start_slot as u64 * PARTICLE_STRIDE, &self.particle_upload_scratch);
+                i = j;
             }
 
-            // count alive particles (after CPU lifetime update that happens via compute)
-            let alive_count = self.particle_cpu.iter().filter(|p| p.alive).count() as u32;
+            // alive count is tracked incrementally on spawn (above) and death (below)
+            let alive_count = self.particle_alive_count as u32;
             if alive_count > 0 {
                 let gravity = 9.8_f32;
                 let sim_params: [f32; 4] = [delta, gravity, f32::from_bits(alive_count), 0.0];
@@ -671,12 +682,14 @@ impl RenderEngine3d {
                 draw_calls += 1;
             }
 
-            // update CPU lifetime state (particles were simulated on GPU; mirror the aging here)
+            // update CPU lifetime state (particles were simulated on GPU; mirror the aging here).
+            // this pass is required for slot reuse — it's what frees dead slots for the next spawn.
             for cpu in &mut self.particle_cpu {
                 if cpu.alive {
                     cpu.lifetime -= delta;
                     if cpu.lifetime <= 0.0 {
                         cpu.alive = false;
+                        self.particle_alive_count -= 1; // alive → dead
                     }
                 }
             }
@@ -846,18 +859,21 @@ impl RenderEngine3d {
         // shadow_list: (mesh_id, draw_scratch_index) for all visible shadow casters.
         // using entity lookup so every caster gets its own correct transform.
         // sorted by mesh_id so consecutive shadow draws can share VBO/IBO.
-        let shadow_list: Vec<(u32, usize)> = {
-            let shadow_entities: HashSet<Entity> = {
-                let mut q = world.query::<(Entity, &ComputedVisibility, &ShadowCaster)>();
-                q.iter(world).filter(|(_, vis, _)| vis.0).map(|(e, _, _)| e).collect()
-            };
-            let mut list: Vec<(u32, usize)> = self.draw_scratch.iter().enumerate()
-                .filter(|(_, entry)| shadow_entities.contains(&entry.0))
-                .map(|(i, entry)| (entry.1, i))
-                .collect();
-            list.sort_unstable_by_key(|&(mesh_id, _)| mesh_id);
-            list
-        };
+        // reused scratch: visible shadow-caster entity set, then the (mesh_id, draw index) list
+        self.shadow_entities_scratch.clear();
+        {
+            let mut q = world.query::<(Entity, &ComputedVisibility, &ShadowCaster)>();
+            for (e, vis, _) in q.iter(world) {
+                if vis.0 { self.shadow_entities_scratch.insert(e); }
+            }
+        }
+        self.shadow_list_scratch.clear();
+        for (i, entry) in self.draw_scratch.iter().enumerate() {
+            if self.shadow_entities_scratch.contains(&entry.0) {
+                self.shadow_list_scratch.push((entry.1, i));
+            }
+        }
+        self.shadow_list_scratch.sort_unstable_by_key(|&(mesh_id, _)| mesh_id);
 
         // ── dirty-flag shadow cascade invalidation ────────────────────────
         // cascades are re-rendered only when something relevant changed.
@@ -865,11 +881,11 @@ impl RenderEngine3d {
         // or any shadow-casting entity's mesh_id changed (proxy for transform change).
         {
             let dir_changed = (dir_direction - self.shadow_last_dir).length_squared() > 1e-6;
-            let draw_changed = shadow_list.len() != self.shadow_last_draw_count;
+            let draw_changed = self.shadow_list_scratch.len() != self.shadow_last_draw_count;
             if dir_changed || draw_changed {
                 self.shadow_cascade_dirty = [true; 3];
                 self.shadow_last_dir = dir_direction;
-                self.shadow_last_draw_count = shadow_list.len();
+                self.shadow_last_draw_count = self.shadow_list_scratch.len();
             }
         }
 
@@ -1052,8 +1068,10 @@ impl RenderEngine3d {
                 let mat_bg        = &self.material_bg;
                 let depth_vw      = &self.depth_view;
                 let draw_ref      = &self.draw_scratch;
+                let shadow_ref    = &self.shadow_list_scratch;
                 tasks.par_iter().map(move |&task| {
-                    // shadow_list is owned locally and shared by reference across tasks
+                    // shadow_list is shared by reference (read-only) across tasks
+                    let shadow_list  = shadow_ref;
                     let s_device     = device;
                     let s_shad_pl    = shad_pl;
                     let s_shad_gbg   = shad_gbg;
@@ -1153,6 +1171,7 @@ impl RenderEngine3d {
             // WASM: sequential shadow + z-prepass on the main encoder
             #[cfg(target_arch = "wasm32")]
             {
+                let shadow_list = &self.shadow_list_scratch;
                 for &cascade in &dirty_cascades {
                     let label = format!("[shadow] cascade-{cascade}");
                     let mut sp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
