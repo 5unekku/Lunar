@@ -1309,20 +1309,15 @@ impl RenderEngine {
             None
         };
 
-        // get the output view — either from the swapchain frame or the render target.
-        // for render targets we stash a raw pointer to escape the borrow checker:
-        // SAFETY: render_target_views is never modified during a render() call —
-        //         create_render_target() is only callable from outside the render system.
-        //         the wgpu::TextureView inside lives at least as long as this function.
-        let swapchain_view;
-        let view: &wgpu::TextureView = if let Some(id) = rt_tex_id {
+        // get the output view — owned. wgpu::TextureView is a cheap Arc handle, so
+        // cloning the cached render-target view sidesteps the borrow checker without
+        // any unsafe pointer juggling.
+        let view: wgpu::TextureView = if let Some(id) = rt_tex_id {
             let Some(rt_view) = self.render_target_views.get(&id) else { return; };
-            let ptr: *const wgpu::TextureView = rt_view;
-            unsafe { &*ptr }
+            rt_view.clone()
         } else {
-            swapchain_view = surface_frame.as_ref().unwrap().texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-            &swapchain_view
+            surface_frame.as_ref().unwrap().texture
+                .create_view(&wgpu::TextureViewDescriptor::default())
         };
 
         // update atlas rasterization scale from the viewport so glyphs are sharp
@@ -1461,7 +1456,7 @@ impl RenderEngine {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
+                    view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -1608,7 +1603,7 @@ impl RenderEngine {
             let mut custom_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(pass.name()),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
+                    view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
