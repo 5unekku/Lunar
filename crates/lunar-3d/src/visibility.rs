@@ -352,6 +352,62 @@ pub struct CullSoa {
 /// transforms local-space AABB to world space using the entity's [`WorldTransform3d`].
 /// only includes entities whose [`ComputedVisibility`] is true.
 /// run in Render stage, after `propagate_transforms_3d` and `propagate_visibility`.
+/// transform one local-space AABB to a world-space (center, half_extents) pair.
+///
+/// `world_he[i] = sum_j(|R[i][j]| * scale[j] * local_he[j])` rotate-expands the box.
+#[inline]
+fn world_space_aabb(aabb: &Aabb3d, world: &WorldTransform3d) -> (Vec3A, Vec3A) {
+    let rot = Mat3::from_quat(world.rotation);
+    let local_center = Vec3::from(aabb.center) * world.scale;
+    let world_center = Vec3A::from(world.translation + rot * local_center);
+    let scaled_he = Vec3::from(aabb.half_extents) * world.scale;
+    let abs_rot = Mat3::from_cols(rot.x_axis.abs(), rot.y_axis.abs(), rot.z_axis.abs());
+    let world_half = Vec3A::from(abs_rot * scaled_he);
+    (world_center, world_half)
+}
+
+/// native build: snapshot visible entities sequentially (cheap component copies), then
+/// rotate-expand each AABB in parallel over contiguous slices. order is preserved so the
+/// renderer's index-aligned `frustum_visible` / GPU readback stay consistent with `CullSoa`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn build_cull_soa(
+    query: Query<(Entity, &Aabb3d, &WorldTransform3d, &ComputedVisibility)>,
+    mut soa: ResMut<CullSoa>,
+    mut scratch: Local<Vec<(Entity, Aabb3d, WorldTransform3d)>>,
+) {
+    use rayon::prelude::*;
+
+    scratch.clear();
+    for (entity, aabb, world, vis) in query.iter() {
+        if vis.0 {
+            scratch.push((entity, *aabb, *world));
+        }
+    }
+    let items = scratch.as_slice();
+    let n = items.len();
+
+    soa.entities.clear();
+    soa.entities.extend(items.iter().map(|(e, _, _)| *e));
+    soa.centers.clear();
+    soa.centers.resize(n, Vec3A::ZERO);
+    soa.half_extents.clear();
+    soa.half_extents.resize(n, Vec3A::ZERO);
+
+    let soa = &mut *soa;
+    soa.centers
+        .par_iter_mut()
+        .zip(soa.half_extents.par_iter_mut())
+        .enumerate()
+        .for_each(|(i, (center, half))| {
+            let (_, aabb, world) = &items[i];
+            let (c, h) = world_space_aabb(aabb, world);
+            *center = c;
+            *half = h;
+        });
+}
+
+/// wasm build: single-threaded fallback (no rayon on wasm).
+#[cfg(target_arch = "wasm32")]
 pub fn build_cull_soa(
     query: Query<(Entity, &Aabb3d, &WorldTransform3d, &ComputedVisibility)>,
     mut soa: ResMut<CullSoa>,
@@ -364,15 +420,7 @@ pub fn build_cull_soa(
         if !vis.0 {
             continue;
         }
-        let rot = Mat3::from_quat(world.rotation);
-        let local_center = Vec3::from(aabb.center) * world.scale;
-        let world_center = Vec3A::from(world.translation + rot * local_center);
-
-        // expand AABB half_extents through rotation: world_he[i] = sum_j(|R[i][j]| * scale[j] * local_he[j])
-        let scaled_he = Vec3::from(aabb.half_extents) * world.scale;
-        let abs_rot = Mat3::from_cols(rot.x_axis.abs(), rot.y_axis.abs(), rot.z_axis.abs());
-        let world_half = Vec3A::from(abs_rot * scaled_he);
-
+        let (world_center, world_half) = world_space_aabb(aabb, world);
         soa.entities.push(entity);
         soa.centers.push(world_center);
         soa.half_extents.push(world_half);

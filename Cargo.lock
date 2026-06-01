@@ -1591,6 +1591,7 @@ dependencies = [
  "lunar-assets",
  "lunar-core",
  "lunar-math",
+ "rayon",
  "rustc-hash 2.1.2",
 ]
 
