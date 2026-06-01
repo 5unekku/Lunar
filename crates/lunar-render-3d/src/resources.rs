@@ -186,6 +186,10 @@ impl RenderEngine3d {
             let cap = entity_count.next_power_of_two().max(256);
             self.cull_entity_capacity = cap;
 
+            // these buffers back the cull + LOD bind groups — force a rebuild of both
+            self.cull_bg = None;
+            self.lod_select_bg = None;
+
             // aabb input buffer: 32 bytes per entry (center vec3+pad + half_extent vec3+pad)
             self.cull_aabb_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("[cull] aabb buf"),
@@ -552,6 +556,9 @@ impl RenderEngine3d {
             .is_none_or(|b| b.size() < (cap * 4) as u64);
         if !needs { return; }
 
+        // the hzb-cull bind group references these buffers — force a rebuild
+        self.hzb_cull_bg = None;
+
         self.hzb_occ_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("[hzb] occ flags buf"),
             size: (cap * 4) as u64,
@@ -898,6 +905,8 @@ impl RenderEngine3d {
 
         let needs_rebuild = self.lod_indices_buf.is_none() || cap > self.cull_entity_capacity;
         if needs_rebuild {
+            // lod indices buffer is rebuilt — the cached LOD bind group references it
+            self.lod_select_bg = None;
             self.lod_indices_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("[lod] indices buf"),
                 size: (cap * 4) as u64,

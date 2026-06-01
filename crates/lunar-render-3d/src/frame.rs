@@ -1186,50 +1186,56 @@ impl RenderEngine3d {
                 }
             }
 
-            // copy depth → HZB mip 0
+            // copy depth → HZB mip 0. the HZB views are fixed-size, so this bind group
+            // is built once and reused every frame.
             {
-                let depth_src_view = self.hzb_depth_src_view.as_ref().unwrap();
-                let copy_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("[hzb] copy bg"),
-                    layout: self.hzb_copy_bgl.as_ref().unwrap(),
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(depth_src_view) },
-                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hzb_mip_views[0]) },
-                    ],
-                });
+                if self.hzb_copy_bg.is_none() {
+                    self.hzb_copy_bg = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("[hzb] copy bg"),
+                        layout: self.hzb_copy_bgl.as_ref().unwrap(),
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(self.hzb_depth_src_view.as_ref().unwrap()) },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hzb_mip_views[0]) },
+                        ],
+                    }));
+                }
                 let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("[hzb] copy pass"),
                     timestamp_writes: None,
                 });
                 cpass.set_pipeline(self.hzb_copy_pipeline.as_ref().unwrap());
-                cpass.set_bind_group(0, &copy_bg, &[]);
+                cpass.set_bind_group(0, self.hzb_copy_bg.as_ref().unwrap(), &[]);
                 let wg_x = self.hzb_width.div_ceil(8);
                 let wg_y = self.hzb_height.div_ceil(8);
                 cpass.dispatch_workgroups(wg_x, wg_y, 1);
             }
 
-            // downsample each mip level
+            // downsample each mip level. per-mip bind groups + labels are built once
+            // (mip views never change), so no per-frame bind-group/String alloc here.
+            if self.hzb_downsample_bgs.is_empty() && self.hzb_mip_count > 1 {
+                let ds_bgl = self.hzb_downsample_bgl.as_ref().unwrap();
+                for mip in 1..self.hzb_mip_count as usize {
+                    let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some(&format!("[hzb] downsample mip {mip}")),
+                        layout: ds_bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.hzb_mip_views[mip - 1]) },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hzb_mip_views[mip]) },
+                        ],
+                    });
+                    self.hzb_downsample_bgs.push(bg);
+                }
+            }
             let ds_pipeline = self.hzb_downsample_pipeline.as_ref().unwrap();
-            let ds_bgl = self.hzb_downsample_bgl.as_ref().unwrap();
             for mip in 1..self.hzb_mip_count as usize {
-                let src_view = &self.hzb_mip_views[mip - 1];
-                let dst_view = &self.hzb_mip_views[mip];
                 let mip_w = (self.hzb_width >> mip).max(1);
                 let mip_h = (self.hzb_height >> mip).max(1);
-                let ds_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some(&format!("[hzb] downsample mip {mip}")),
-                    layout: ds_bgl,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src_view) },
-                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(dst_view) },
-                    ],
-                });
                 let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some(&format!("[hzb] downsample mip {mip}")),
+                    label: Some("[hzb] downsample"),
                     timestamp_writes: None,
                 });
                 cpass.set_pipeline(ds_pipeline);
-                cpass.set_bind_group(0, &ds_bg, &[]);
+                cpass.set_bind_group(0, &self.hzb_downsample_bgs[mip - 1], &[]);
                 cpass.dispatch_workgroups(mip_w.div_ceil(8), mip_h.div_ceil(8), 1);
             }
         }

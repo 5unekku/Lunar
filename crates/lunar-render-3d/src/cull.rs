@@ -119,23 +119,44 @@ impl RenderEngine3d {
                 // ensure LOD buffers before borrowing aabb_buf (borrow checker requirement)
                 self.ensure_lod_select_resources(entity_count);
 
+                // (re)build the cull + LOD bind groups only when their backing buffers regrew;
+                // the ensure_* paths reset these to None on growth. done before the local buffer
+                // borrows below so the mutable self writes don't clash with them.
+                if self.cull_bg.is_none() {
+                    self.cull_bg = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("[cull] bg"),
+                        layout: self.cull_bgl.as_ref().unwrap(),
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: self.cull_aabb_buf.as_ref().unwrap().as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 1, resource: self.cull_frustum_buf.as_ref().unwrap().as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 2, resource: self.cull_flags_buf.as_ref().unwrap().as_entire_binding() },
+                        ],
+                    }));
+                }
+                if self.lod_select_bg.is_none()
+                    && let (Some(lod_bgl), Some(lod_params_buf), Some(lod_buf), Some(aabb_for_lod)) = (
+                        self.lod_select_bgl.as_ref(), self.lod_params_buf.as_ref(),
+                        self.lod_indices_buf.as_ref(), self.cull_aabb_buf.as_ref(),
+                    ) {
+                    self.lod_select_bg = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("[lod select] bg"),
+                        layout: lod_bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: lod_params_buf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 1, resource: aabb_for_lod.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 2, resource: lod_buf.as_entire_binding() },
+                        ],
+                    }));
+                }
+
                 let aabb_buf = self.cull_aabb_buf.as_ref().unwrap();
                 let frustum_buf = self.cull_frustum_buf.as_ref().unwrap();
                 let flags_buf = self.cull_flags_buf.as_ref().unwrap();
                 let staging_buf = self.cull_flags_staging.as_ref().unwrap();
+                let bg = self.cull_bg.as_ref().unwrap();
 
                 self.queue.write_buffer(aabb_buf, 0, bytemuck::cast_slice(&self.cull_aabb_scratch));
                 self.queue.write_buffer(frustum_buf, 0, bytemuck::cast_slice(&frustum_data));
-
-                let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("[cull] bg"),
-                    layout: self.cull_bgl.as_ref().unwrap(),
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: aabb_buf.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: frustum_buf.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 2, resource: flags_buf.as_entire_binding() },
-                    ],
-                });
                 let mut cull_enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("[cull] encoder"),
                 });
@@ -145,15 +166,15 @@ impl RenderEngine3d {
                         timestamp_writes: None,
                     });
                     cpass.set_pipeline(self.cull_pipeline.as_ref().unwrap());
-                    cpass.set_bind_group(0, &bg, &[]);
+                    cpass.set_bind_group(0, bg, &[]);
                     cpass.dispatch_workgroups((entity_count as u32).div_ceil(64), 1, 1);
                 }
-                // also dispatch LOD selection in the same encoder (reuses aabb_buf)
-                if let (Some(lod_pipeline), Some(lod_bgl), Some(lod_params_buf), Some(lod_buf)) = (
+                // also dispatch LOD selection in the same encoder (reuses the cached bind group)
+                if let (Some(lod_pipeline), Some(lod_params_buf), Some(lod_buf), Some(lod_bg)) = (
                     self.lod_select_pipeline.as_ref(),
-                    self.lod_select_bgl.as_ref(),
                     self.lod_params_buf.as_ref(),
                     self.lod_indices_buf.as_ref(),
+                    self.lod_select_bg.as_ref(),
                 ) {
                     let mut lod_params_data = [0u32; 8];
                     lod_params_data[0] = cam_pos.x.to_bits();
@@ -166,23 +187,13 @@ impl RenderEngine3d {
                     lod_params_data[6] = 22500.0f32.to_bits();
                     lod_params_data[7] = 160000.0f32.to_bits();
                     self.queue.write_buffer(lod_params_buf, 0, bytemuck::cast_slice(&lod_params_data));
-
-                    let lod_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("[lod select] bg"),
-                        layout: lod_bgl,
-                        entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: lod_params_buf.as_entire_binding() },
-                            wgpu::BindGroupEntry { binding: 1, resource: aabb_buf.as_entire_binding() },
-                            wgpu::BindGroupEntry { binding: 2, resource: lod_buf.as_entire_binding() },
-                        ],
-                    });
                     {
                         let mut lpass = cull_enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
                             label: Some("[lod select] pass"),
                             timestamp_writes: None,
                         });
                         lpass.set_pipeline(lod_pipeline);
-                        lpass.set_bind_group(0, &lod_bg, &[]);
+                        lpass.set_bind_group(0, lod_bg, &[]);
                         lpass.dispatch_workgroups((entity_count as u32).div_ceil(64), 1, 1);
                     }
                     if let Some(lod_staging) = self.lod_indices_staging.as_ref() {
@@ -301,22 +312,25 @@ impl RenderEngine3d {
                         bytemuck::cast_slice(&params_data),
                     );
 
-                    let hzb_src_view = self.hzb_src_view.as_ref().unwrap();
+                    // (re)build the hzb-cull bind group only when its buffers regrew (reset to None
+                    // in ensure_hzb_cull_buffers); the hzb src view is fixed-size so it never changes.
+                    if self.hzb_cull_bg.is_none() {
+                        self.hzb_cull_bg = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("[hzb] cull bg"),
+                            layout: self.hzb_cull_bgl.as_ref().unwrap(),
+                            entries: &[
+                                wgpu::BindGroupEntry { binding: 0, resource: self.hzb_cull_aabb_buf.as_ref().unwrap().as_entire_binding() },
+                                wgpu::BindGroupEntry { binding: 1, resource: self.hzb_cull_params_buf.as_ref().unwrap().as_entire_binding() },
+                                wgpu::BindGroupEntry { binding: 2, resource: self.hzb_occ_buf.as_ref().unwrap().as_entire_binding() },
+                                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(self.hzb_src_view.as_ref().unwrap()) },
+                            ],
+                        }));
+                    }
+
                     let occ_buf = self.hzb_occ_buf.as_ref().unwrap();
                     let occ_staging = self.hzb_occ_staging.as_ref().unwrap();
-                    let aabb_buf = self.hzb_cull_aabb_buf.as_ref().unwrap();
-                    let params_buf = self.hzb_cull_params_buf.as_ref().unwrap();
+                    let hzb_cull_bg = self.hzb_cull_bg.as_ref().unwrap();
 
-                    let hzb_cull_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("[hzb] cull bg"),
-                        layout: self.hzb_cull_bgl.as_ref().unwrap(),
-                        entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: aabb_buf.as_entire_binding() },
-                            wgpu::BindGroupEntry { binding: 1, resource: params_buf.as_entire_binding() },
-                            wgpu::BindGroupEntry { binding: 2, resource: occ_buf.as_entire_binding() },
-                            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(hzb_src_view) },
-                        ],
-                    });
                     let mut hzb_enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("[hzb] cull encoder"),
                     });
@@ -326,7 +340,7 @@ impl RenderEngine3d {
                             timestamp_writes: None,
                         });
                         cpass.set_pipeline(self.hzb_cull_pipeline.as_ref().unwrap());
-                        cpass.set_bind_group(0, &hzb_cull_bg, &[]);
+                        cpass.set_bind_group(0, hzb_cull_bg, &[]);
                         cpass.dispatch_workgroups((entity_count as u32).div_ceil(64), 1, 1);
                     }
                     hzb_enc.copy_buffer_to_buffer(occ_buf, 0, occ_staging, 0, (entity_count * 4) as u64);

@@ -1380,6 +1380,8 @@ pub struct RenderEngine3d {
     cull_count_buf: Option<wgpu::Buffer>,
     cull_bgl: Option<wgpu::BindGroupLayout>,
     cull_pipeline: Option<wgpu::ComputePipeline>,
+    // cached cull bind group (aabb+frustum+flags); rebuilt only when those buffers regrow
+    cull_bg: Option<wgpu::BindGroup>,
     // cpu-side visible flag result (read back from previous frame's GPU result)
     gpu_cull_flags: Vec<u32>,
     cull_entity_capacity: usize,
@@ -1411,6 +1413,11 @@ pub struct RenderEngine3d {
     hzb_copy_pipeline: Option<wgpu::ComputePipeline>,
     hzb_cull_bgl: Option<wgpu::BindGroupLayout>,
     hzb_cull_pipeline: Option<wgpu::ComputePipeline>,
+    // cached HZB bind groups. copy + per-mip downsample depend only on the (fixed-size)
+    // HZB views so they build once; cull also reads the hzb-cull buffers so it regrows.
+    hzb_copy_bg: Option<wgpu::BindGroup>,
+    hzb_downsample_bgs: Vec<wgpu::BindGroup>,
+    hzb_cull_bg: Option<wgpu::BindGroup>,
     // depth-source view for hzb copy (non-msaa, texture_binding)
     hzb_depth_src: Option<wgpu::Texture>,
     hzb_depth_src_view: Option<wgpu::TextureView>,
@@ -1475,6 +1482,8 @@ pub struct RenderEngine3d {
     // ── gpu lod selection ─────────────────────────────────────────────────
     lod_select_bgl:           Option<wgpu::BindGroupLayout>,
     lod_select_pipeline:      Option<wgpu::ComputePipeline>,
+    // cached LOD-select bind group; rebuilt when cull aabb buf or lod buffers regrow
+    lod_select_bg:            Option<wgpu::BindGroup>,
     lod_params_buf:           Option<wgpu::Buffer>,
     lod_indices_buf:          Option<wgpu::Buffer>,
     lod_indices_staging:      Option<wgpu::Buffer>,
