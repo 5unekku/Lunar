@@ -67,7 +67,7 @@ fn texture_impl(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::Tok
 
     // strip assets/ prefix to get the relative path for the cache
     let relative = source_path.strip_prefix(&assets_dir).unwrap();
-    let cache_path = cache_dir.join(relative).with_extension("mi");
+    let cache_path = cache_dir.join(relative).with_extension("li");
 
     let needs_convert = !cache_path.exists()
         || source_path
@@ -81,7 +81,7 @@ fn texture_impl(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::Tok
             std::fs::create_dir_all(parent)
                 .map_err(|e| syn::Error::new(span, format!("failed to create cache dir: {e}")))?;
         }
-        convert_to_mi(&source_path, &cache_path, format, span)?;
+        convert_to_li(&source_path, &cache_path, format, span)?;
     }
 
     let cache_str = cache_path.to_string_lossy().into_owned();
@@ -193,7 +193,7 @@ fn resolve_texture(
     }
 }
 
-fn convert_to_mi(
+fn convert_to_li(
     source: &std::path::Path,
     dest: &std::path::Path,
     _format: ImageFormat,

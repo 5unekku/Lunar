@@ -29,7 +29,7 @@ impl Default for EncodeOptions {
     }
 }
 
-/// encode RGBA pixels to .mi format bytes using default options.
+/// encode RGBA pixels to .li format bytes using default options.
 ///
 /// # Errors
 /// returns an error if the pixel buffer size does not match `width * height * 4`.
@@ -37,7 +37,7 @@ pub fn encode(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, EncodeErr
     encode_with_opts(width, height, rgba, &EncodeOptions::default())
 }
 
-/// encode RGBA pixels to .mi format bytes with custom options.
+/// encode RGBA pixels to .li format bytes with custom options.
 ///
 /// pixel data is deinterleaved into channel planes before compression.
 /// this gives zstd coherent per-channel statistics and significantly better ratios,

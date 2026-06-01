@@ -100,13 +100,13 @@ impl Image {
     }
 }
 
-/// decode .mi format bytes to an RGBA image.
+/// decode .li format bytes to an RGBA image.
 ///
 /// parses the file header and decompresses the pixel data.
 /// returns an error if the file is malformed or incomplete.
 ///
 /// # Errors
-/// returns an error if the data is not a valid .mi file, if pixel data is missing,
+/// returns an error if the data is not a valid .li file, if pixel data is missing,
 /// or if decompression fails.
 pub fn decode(data: &[u8]) -> Result<Image, DecodeError> {
     // Parse header
