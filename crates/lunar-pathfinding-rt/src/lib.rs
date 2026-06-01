@@ -39,6 +39,10 @@ pub struct NavGrid {
     walkable: Vec<bool>,
     /// per-tile movement cost multiplier (default 1.0). higher = more expensive.
     cost: Vec<f32>,
+    /// running minimum of any tile cost ever set — used to keep the A* heuristic
+    /// admissible when cheap tiles exist. a monotone lower bound: never rises, so
+    /// it stays admissible even if a tile's cost is later raised.
+    min_cost: f32,
 }
 
 impl NavGrid {
@@ -51,6 +55,7 @@ impl NavGrid {
             height,
             walkable: vec![true; n],
             cost: vec![1.0; n],
+            min_cost: 1.0,
         }
     }
 
@@ -68,9 +73,14 @@ impl NavGrid {
     }
 
     /// set the movement cost multiplier for a tile. must be positive.
+    ///
+    /// `find_path` stays optimal for any positive cost: the heuristic is scaled
+    /// by the lowest cost seen, so it never overestimates the true path cost.
     pub fn set_cost(&mut self, x: u32, y: u32, cost: f32) {
         if let Some(idx) = self.idx(x, y) {
-            self.cost[idx] = cost.max(0.001);
+            let clamped = cost.max(0.001);
+            self.cost[idx] = clamped;
+            self.min_cost = self.min_cost.min(clamped);
         }
     }
 
@@ -147,7 +157,9 @@ impl PathScratch {
 /// returns the path as a sequence of `[x, y]` tile coordinates from `start` to `goal`
 /// (inclusive of both endpoints), or `None` if no path exists within `options.max_nodes`.
 ///
-/// uses Manhattan heuristic for 4-directional movement, Chebyshev for 8-directional.
+/// uses a Manhattan heuristic for 4-directional movement, octile for 8-directional,
+/// both scaled by the grid's lowest tile cost so the result stays optimal even when
+/// some tiles cost less than 1.0.
 ///
 /// pass a `PathScratch` to avoid per-call heap allocation. the scratch buffers
 /// are re-initialised each call so sharing across agents is safe (not concurrent).
@@ -189,7 +201,7 @@ pub fn find_path_with_scratch(
     let mut expanded = 0usize;
 
     scratch.g_score[start_node as usize] = 0.0;
-    let h = heuristic(start, goal, options.diagonal);
+    let h = heuristic(start, goal, options.diagonal, grid.min_cost);
     open.push(Reverse((f32::to_bits(h), start_node)));
 
     while let Some(Reverse((_, current))) = open.pop() {
@@ -211,7 +223,7 @@ pub fn find_path_with_scratch(
             if tentative_g < scratch.g_score[neighbor as usize] {
                 scratch.g_score[neighbor as usize] = tentative_g;
                 scratch.parent[neighbor as usize] = current;
-                let f = tentative_g + heuristic([nx, ny], goal, options.diagonal);
+                let f = tentative_g + heuristic([nx, ny], goal, options.diagonal, grid.min_cost);
                 open.push(Reverse((f32::to_bits(f), neighbor)));
             }
         }
@@ -220,16 +232,21 @@ pub fn find_path_with_scratch(
     None
 }
 
-fn heuristic(from: [u32; 2], to: [u32; 2], diagonal: bool) -> f32 {
+/// admissible distance estimate, scaled by `min_cost` so it never overestimates
+/// when some tiles cost less than 1.0.
+fn heuristic(from: [u32; 2], to: [u32; 2], diagonal: bool, min_cost: f32) -> f32 {
     let dx = from[0].abs_diff(to[0]) as f32;
     let dy = from[1].abs_diff(to[1]) as f32;
-    if diagonal {
-        // Chebyshev distance
-        dx.max(dy)
+    let dist = if diagonal {
+        // octile distance — exact min steps for 8-dir movement with diagonal cost √2.
+        // tighter than Chebyshev (which assumes diagonal cost 1.0) so fewer nodes expand.
+        let (lo, hi) = if dx < dy { (dx, dy) } else { (dy, dx) };
+        lo * std::f32::consts::SQRT_2 + (hi - lo)
     } else {
         // Manhattan distance
         dx + dy
-    }
+    };
+    dist * min_cost
 }
 
 fn neighbors(grid: &NavGrid, x: u32, y: u32, diagonal: bool) -> impl Iterator<Item = (u32, u32, f32)> {
@@ -345,6 +362,22 @@ mod tests {
         let path = find_path(&grid, [0, 0], [4, 0], PathOptions::default());
         assert!(path.is_some());
         assert!(path.unwrap().iter().any(|&[x, _y]| x == 2));
+    }
+
+    #[test]
+    fn prefers_cheaper_low_cost_lane() {
+        // direct lane (y=1) costs 1.0/tile; a parallel lane (y=0) costs 0.1/tile.
+        // the detour through the cheap lane is longer in steps but far cheaper, so
+        // the optimal path must use it. an unscaled heuristic would (wrongly) keep
+        // the direct route; scaling by the lowest tile cost restores optimality.
+        let mut grid = NavGrid::new(10, 3);
+        for x in 0..10 {
+            grid.set_cost(x, 0, 0.1);
+        }
+        let path = find_path(&grid, [0, 1], [9, 1], PathOptions::default()).unwrap();
+        assert_eq!(path.first(), Some(&[0u32, 1u32]));
+        assert_eq!(path.last(), Some(&[9u32, 1u32]));
+        assert!(path.iter().any(|&[_, y]| y == 0), "optimal path must detour through the cheap lane");
     }
 
     #[test]
