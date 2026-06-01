@@ -1,7 +1,7 @@
 default:
   image: rust:slim-trixie
   before_script:
-    - apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev
+    - apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev clang
     # rust-toolchain.toml is picked up automatically — installs the right channel, targets, and components
   cache:
     key:
@@ -121,6 +121,27 @@ build-wasm:
       - target/
   script:
     - cargo build --target wasm32-unknown-unknown --package lunar-lib
+
+pages:
+  stage: publish
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  cache:
+    key:
+      files:
+        - Cargo.lock
+        - rust-toolchain.toml
+    paths:
+      - ~/.cargo/registry
+      - ~/.cargo/git
+      - target/
+  script:
+    - cargo doc --no-deps --workspace
+    - mv target/doc public
+    - echo '<meta http-equiv="refresh" content="0; url=lunar_lib">' > public/index.html
+  artifacts:
+    paths:
+      - public
 
 publish:
   stage: publish
