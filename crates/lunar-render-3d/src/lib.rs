@@ -1432,6 +1432,9 @@ pub struct RenderEngine3d {
     // ── planar reflections ────────────────────────────────────────────────
     reflection_tex:           Option<wgpu::Texture>,
     reflection_view:          Option<wgpu::TextureView>,
+    // depth target for the reflection pass, cached on (rw, rh) like reflection_tex
+    reflection_depth_tex:     Option<wgpu::Texture>,
+    reflection_depth_view:    Option<wgpu::TextureView>,
     reflection_globals_buf:   Option<wgpu::Buffer>,
     reflection_globals_bg:    Option<wgpu::BindGroup>,
     // 1×1 Rgba16Float fallback for water_bg0 binding 3 when no reflection is active

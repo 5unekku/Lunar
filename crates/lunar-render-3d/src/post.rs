@@ -799,17 +799,26 @@ impl RenderEngine3d {
                     }));
                 }
 
-                // depth buffer for the reflection pass (simple 1-sample)
-                let refl_depth_tex = self.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("[reflection] depth"),
-                    size: wgpu::Extent3d { width: rw, height: rh, depth_or_array_layers: 1 },
-                    mip_level_count: 1, sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Depth32Float,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                    view_formats: &[],
-                });
-                let refl_depth_view = refl_depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
+                // depth buffer for the reflection pass (simple 1-sample), cached on (rw, rh)
+                let depth_needs_new = self.reflection_depth_tex.is_none()
+                    || self.reflection_depth_tex.as_ref().map(|t| {
+                        let sz = t.size();
+                        sz.width != rw || sz.height != rh
+                    }).unwrap_or(false);
+                if depth_needs_new {
+                    let dt = self.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("[reflection] depth"),
+                        size: wgpu::Extent3d { width: rw, height: rh, depth_or_array_layers: 1 },
+                        mip_level_count: 1, sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Depth32Float,
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                        view_formats: &[],
+                    });
+                    self.reflection_depth_view = Some(dt.create_view(&wgpu::TextureViewDescriptor::default()));
+                    self.reflection_depth_tex  = Some(dt);
+                }
+                let refl_depth_view = self.reflection_depth_view.as_ref().unwrap();
 
                 // rebuild reflection_globals_bg when buf is first created
                 if self.reflection_globals_bg.is_none() {

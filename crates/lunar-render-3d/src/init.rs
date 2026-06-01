@@ -2981,6 +2981,8 @@ impl RenderEngine3d {
 
             reflection_tex: None,
             reflection_view: None,
+            reflection_depth_tex: None,
+            reflection_depth_view: None,
             reflection_globals_buf: None,
             reflection_globals_bg: None,
             reflection_fallback_tex,
