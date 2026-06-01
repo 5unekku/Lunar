@@ -133,6 +133,7 @@ const SUN_Y: f32 = 895.0;
 // normals/tangents snorm8×4, uvs unorm16×2, position stays f32.
 // the upload path converts Vertex3d → GpuVertex3d at upload time.
 #[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GpuVertex3d {
     position:    [f32; 3],  // 12 bytes
     normal:      [i8; 4],   // 4 bytes — snorm8×4, w=0
@@ -359,12 +360,6 @@ struct TerrainGpu {
     params_buf: wgpu::Buffer,
     params_bg: wgpu::BindGroup,
     hmap_sampler: wgpu::Sampler,
-}
-
-// ── byte helpers ───────────────────────────────────────────────────────────
-
-unsafe fn slice_as_bytes<T>(slice: &[T]) -> &[u8] {
-    unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const u8, std::mem::size_of_val(slice)) }
 }
 
 // ── render tier ────────────────────────────────────────────────────────────
@@ -4618,7 +4613,7 @@ impl RenderEngine3d {
         self.queue.write_buffer(
             self.mega_vbuf.as_ref().unwrap(),
             self.mega_vbuf_bytes,
-            unsafe { slice_as_bytes(&gpu_verts) },
+            bytemuck::cast_slice(&gpu_verts),
         );
         self.mega_vbuf_bytes += vertex_bytes;
 
@@ -5144,7 +5139,7 @@ impl RenderEngine3d {
         data[21] = width  as f32;
         data[22] = height as f32;
         if let Some(buf) = self.contact_shadow_params_buf.as_ref() {
-            self.queue.write_buffer(buf, 0, unsafe { slice_as_bytes(&data) });
+            self.queue.write_buffer(buf, 0, bytemuck::cast_slice(&data));
         }
     }
 
@@ -5795,7 +5790,7 @@ impl RenderEngine3d {
             uv_lightmap: [qu(v.uv_lightmap.x), qu(v.uv_lightmap.y)],
             color:       v.color,
         }).collect();
-        let vdata = unsafe { slice_as_bytes(&gpu_verts) };
+        let vdata = bytemuck::cast_slice(&gpu_verts);
         let vbuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("[mesh] vbuf"),
             size: vdata.len() as u64,
@@ -5836,7 +5831,7 @@ impl RenderEngine3d {
                     usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
-                queue.write_buffer(&ibuf, 0, unsafe { slice_as_bytes(u16_opt.as_slice()) });
+                queue.write_buffer(&ibuf, 0, bytemuck::cast_slice(u16_opt.as_slice()));
                 GpuMesh { vbuf, pos_buf, ibuf, index_count: u16_opt.len() as u32, index_fmt: wgpu::IndexFormat::Uint16 }
             }
             IndexBuffer::U32(v) => {
@@ -5847,7 +5842,7 @@ impl RenderEngine3d {
                     usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
-                queue.write_buffer(&ibuf, 0, unsafe { slice_as_bytes(optimized.as_slice()) });
+                queue.write_buffer(&ibuf, 0, bytemuck::cast_slice(optimized.as_slice()));
                 GpuMesh { vbuf, pos_buf, ibuf, index_count: optimized.len() as u32, index_fmt: wgpu::IndexFormat::Uint32 }
             }
         }
@@ -6082,7 +6077,7 @@ impl RenderEngine3d {
         let offset = slot * UNIFORM_STRIDE as usize;
         // model matrix (64 bytes)
         let model_cols = model.to_cols_array();
-        staging[offset..offset + 64].copy_from_slice(unsafe { slice_as_bytes(&model_cols) });
+        staging[offset..offset + 64].copy_from_slice(bytemuck::cast_slice(&model_cols));
         // normal matrix = transpose(inverse(mat3(model))), packed as 3×vec4 (48 bytes)
         let normal_mat = Mat3::from_mat4(model).inverse().transpose();
         let cols = normal_mat.to_cols_array();
@@ -6091,7 +6086,7 @@ impl RenderEngine3d {
             cols[3], cols[4], cols[5], 0.0,
             cols[6], cols[7], cols[8], 0.0,
         ];
-        staging[offset + 64..offset + 112].copy_from_slice(unsafe { slice_as_bytes(&normal_packed) });
+        staging[offset + 64..offset + 112].copy_from_slice(bytemuck::cast_slice(&normal_packed));
     }
 
     /// write 9 L2 SH coefficients to the per-entity staging slot starting at offset 112.
@@ -6105,7 +6100,7 @@ impl RenderEngine3d {
             data[i * 4 + 2] = c[2];
             data[i * 4 + 3] = if i == 0 { 1.0 } else { 0.0 };  // flag only in [0].w
         }
-        staging[offset..offset + 144].copy_from_slice(unsafe { slice_as_bytes(&data) });
+        staging[offset..offset + 144].copy_from_slice(bytemuck::cast_slice(&data));
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -6117,11 +6112,11 @@ impl RenderEngine3d {
         let offset = slot * MATERIAL_UNIFORMS_SIZE as usize;
         // base_color(16) + metallic(4) + roughness(4) + flags(4) + has_lightmap(4) = 32 bytes
         let data: [f32; 7] = [color.r, color.g, color.b, color.a, metallic, roughness, f32::from_bits(flags)];
-        staging[offset..offset + 28].copy_from_slice(unsafe { slice_as_bytes(&data) });
+        staging[offset..offset + 28].copy_from_slice(bytemuck::cast_slice(&data));
         staging[offset + 28..offset + 32].copy_from_slice(&has_lightmap.to_le_bytes());
         // lm_uv_offset(8) + lm_uv_scale(8) = 16 bytes at offset 32
-        staging[offset + 32..offset + 40].copy_from_slice(unsafe { slice_as_bytes(&lm_uv_offset) });
-        staging[offset + 40..offset + 48].copy_from_slice(unsafe { slice_as_bytes(&lm_uv_scale) });
+        staging[offset + 32..offset + 40].copy_from_slice(bytemuck::cast_slice(&lm_uv_offset));
+        staging[offset + 40..offset + 48].copy_from_slice(bytemuck::cast_slice(&lm_uv_scale));
     }
 
     // ── public surface management ──────────────────────────────────────────
@@ -7338,7 +7333,7 @@ impl RenderEngine3d {
                 self.queue.write_buffer(
                     &self.bloom_params_buf,
                     (i * UNIFORM_STRIDE as usize) as u64,
-                    unsafe { slice_as_bytes(&params) },
+                    bytemuck::cast_slice(&params),
                 );
             }
 
@@ -7401,9 +7396,9 @@ impl RenderEngine3d {
             let sun_dir = (-dir_direction).normalize();
             let mut atmos_data = [0u8; ATMOS_PARAMS_SIZE as usize];
             let sun_dir_arr: [f32; 3] = [sun_dir.x, sun_dir.y, sun_dir.z];
-            atmos_data[0..12].copy_from_slice(unsafe { slice_as_bytes(&sun_dir_arr) });
+            atmos_data[0..12].copy_from_slice(bytemuck::cast_slice(&sun_dir_arr));
             atmos_data[12..16].copy_from_slice(&atmos.sun_intensity.to_le_bytes());
-            atmos_data[16..28].copy_from_slice(unsafe { slice_as_bytes(&atmos.rayleigh_scatter) });
+            atmos_data[16..28].copy_from_slice(bytemuck::cast_slice(&atmos.rayleigh_scatter));
             atmos_data[28..32].copy_from_slice(&atmos.mie_scatter.to_le_bytes());
             atmos_data[32..36].copy_from_slice(&atmos.rayleigh_scale.to_le_bytes());
             atmos_data[36..40].copy_from_slice(&atmos.mie_scale.to_le_bytes());
@@ -7445,9 +7440,9 @@ impl RenderEngine3d {
             let vp_cols      = view_proj.to_cols_array();
             let view_cols    = view_mat.to_cols_array();
             let mut ssr_data = [0u8; SSR_PARAMS_SIZE as usize];
-            ssr_data[0..64].copy_from_slice(unsafe { slice_as_bytes(&inv_vp_cols) });
-            ssr_data[64..128].copy_from_slice(unsafe { slice_as_bytes(&vp_cols) });
-            ssr_data[128..192].copy_from_slice(unsafe { slice_as_bytes(&view_cols) });
+            ssr_data[0..64].copy_from_slice(bytemuck::cast_slice(&inv_vp_cols));
+            ssr_data[64..128].copy_from_slice(bytemuck::cast_slice(&vp_cols));
+            ssr_data[128..192].copy_from_slice(bytemuck::cast_slice(&view_cols));
             // screen_size(vec2) + max_steps(u32) + thickness + stride + fade_start + 2 pads
             let max_steps: u32 = 32;
             ssr_data[192..196].copy_from_slice(&width.to_le_bytes());
@@ -7488,7 +7483,7 @@ impl RenderEngine3d {
             let inv_vp_cols = inv_vp.to_cols_array();
             // write fog params: inv_view_proj(64) + rest(64) = 128 bytes
             let mut fog_data = [0u8; FOG_PARAMS_SIZE as usize];
-            fog_data[0..64].copy_from_slice(unsafe { slice_as_bytes(&inv_vp_cols) });
+            fog_data[0..64].copy_from_slice(bytemuck::cast_slice(&inv_vp_cols));
             // rest 64 bytes: dir_direction(12)+step_count(4)+dir_color(12)+density(4)+
             //                fog_color(12)+max_dist(4)+sun(4)+aniso(4)+w(4)+h(4)
             let dir_d = dir_direction.normalize();
@@ -7502,7 +7497,7 @@ impl RenderEngine3d {
                 fog_color[0], fog_color[1], fog_color[2], 200.0_f32, // max_distance
                 2.0_f32, 0.6_f32, width, height,                     // sun_intensity, anisotropy
             ];
-            fog_data[64..128].copy_from_slice(unsafe { slice_as_bytes(&rest) });
+            fog_data[64..128].copy_from_slice(bytemuck::cast_slice(&rest));
             self.queue.write_buffer(&self.fog_params_buf, 0, &fog_data);
 
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -7538,7 +7533,7 @@ impl RenderEngine3d {
             let light_dir_vs_raw = (cam_wt.rotation.inverse() * dir_direction).normalize();
             if let Some(params_buf) = self.contact_shadow_params_buf.as_ref() {
                 let light_dir_data: [f32; 3] = [light_dir_vs_raw.x, light_dir_vs_raw.y, light_dir_vs_raw.z];
-                self.queue.write_buffer(params_buf, 64, unsafe { slice_as_bytes(&light_dir_data) });
+                self.queue.write_buffer(params_buf, 64, bytemuck::cast_slice(&light_dir_data));
             }
 
             if let (Some(pipeline), Some(bgl), Some(params_buf), Some(cs_view), Some(depth_view)) = (
@@ -7610,8 +7605,8 @@ impl RenderEngine3d {
             let prev_vp_cols = self.prev_view_proj.to_cols_array();
             if let Some(params_buf) = self.motion_vec_params_buf.as_ref() {
                 let mut mv_data = [0u8; MOTION_VECTOR_PARAMS_SIZE as usize];
-                mv_data[0..64].copy_from_slice(unsafe { slice_as_bytes(&inv_vp_cols) });
-                mv_data[64..128].copy_from_slice(unsafe { slice_as_bytes(&prev_vp_cols) });
+                mv_data[0..64].copy_from_slice(bytemuck::cast_slice(&inv_vp_cols));
+                mv_data[64..128].copy_from_slice(bytemuck::cast_slice(&prev_vp_cols));
                 mv_data[128..132].copy_from_slice(&(width as f32).to_le_bytes());
                 mv_data[132..136].copy_from_slice(&(height as f32).to_le_bytes());
                 self.queue.write_buffer(params_buf, 0, &mv_data);
@@ -7697,7 +7692,7 @@ impl RenderEngine3d {
                 f32::from_bits(flags),
                 0.0, // _pad
             ];
-            self.queue.write_buffer(&self.composite_params_buf, 0, unsafe { slice_as_bytes(&composite_data) });
+            self.queue.write_buffer(&self.composite_params_buf, 0, bytemuck::cast_slice(&composite_data));
 
             // fxaa and taa both need composite output in a sampleable intermediate texture.
             // taa takes priority over fxaa (they're mutually exclusive on mid/high tier).
@@ -7876,7 +7871,7 @@ impl RenderEngine3d {
             let w = self.surface_config.width;
             let h = self.surface_config.height;
             let fxaa_data: [f32; 4] = [1.0 / w as f32, 1.0 / h as f32, 0.0, 0.0];
-            self.queue.write_buffer(&self.fxaa_params_buf, 0, unsafe { slice_as_bytes(&fxaa_data) });
+            self.queue.write_buffer(&self.fxaa_params_buf, 0, bytemuck::cast_slice(&fxaa_data));
 
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("[fxaa] pass"),
@@ -7984,7 +7979,7 @@ impl RenderEngine3d {
                 let _ = (fov_y, near);
                 d
             };
-            self.queue.write_buffer(&self.gtao_params_buf, 0, unsafe { slice_as_bytes(&gtao_params) });
+            self.queue.write_buffer(&self.gtao_params_buf, 0, bytemuck::cast_slice(&gtao_params));
 
             let run_fullscreen_pass = |encoder: &mut wgpu::CommandEncoder,
                                        label: &str,
@@ -8086,7 +8081,7 @@ impl RenderEngine3d {
                 refl_globals[19] = time.elapsed_seconds();
                 refl_globals[20] = time.delta_seconds();
                 let refl_globals_buf = self.reflection_globals_buf.as_ref().unwrap();
-                self.queue.write_buffer(refl_globals_buf, 0, unsafe { slice_as_bytes(&refl_globals) });
+                self.queue.write_buffer(refl_globals_buf, 0, bytemuck::cast_slice(&refl_globals));
 
                 // rebuild reflection_globals_bg if needed
                 if self.reflection_globals_bg.is_none() {
@@ -8521,21 +8516,21 @@ impl RenderEngine3d {
                     let mut data = [0u8; TERRAIN_PARAMS_SIZE as usize];
                     // ring_origin (vec4)
                     let ro: [f32; 4] = [ring_origin_x, 0.0, ring_origin_z, 0.0];
-                    data[0..16].copy_from_slice(unsafe { slice_as_bytes(&ro) });
+                    data[0..16].copy_from_slice(bytemuck::cast_slice(&ro));
                     // terrain_origin (vec4)
                     let to_arr: [f32; 4] = [terrain_origin.x, terrain_origin.y, terrain_origin.z, 0.0];
-                    data[16..32].copy_from_slice(unsafe { slice_as_bytes(&to_arr) });
+                    data[16..32].copy_from_slice(bytemuck::cast_slice(&to_arr));
                     // misc: lod_cell_size, world_size, height_scale, ring_resolution
                     let misc: [f32; 4] = [lod_cell_size, world_size, terrain_comp.height_scale, resolution];
-                    data[32..48].copy_from_slice(unsafe { slice_as_bytes(&misc) });
+                    data[32..48].copy_from_slice(bytemuck::cast_slice(&misc));
                     // tint (vec4)
-                    data[48..64].copy_from_slice(unsafe { slice_as_bytes(&tint) });
+                    data[48..64].copy_from_slice(bytemuck::cast_slice(&tint));
                     // sun_dir (vec4)
                     let sun: [f32; 4] = [sun_dx, sun_dy, sun_dz, sun_int];
-                    data[64..80].copy_from_slice(unsafe { slice_as_bytes(&sun) });
+                    data[64..80].copy_from_slice(bytemuck::cast_slice(&sun));
                     // ambient + pad
                     let amb: [f32; 4] = [0.15, 0.0, 0.0, 0.0];
-                    data[80..96].copy_from_slice(unsafe { slice_as_bytes(&amb) });
+                    data[80..96].copy_from_slice(bytemuck::cast_slice(&amb));
                     self.queue.write_buffer(&gpu.params_buf, 0, &data);
 
                     let (color_target, resolve_target) = match &self.msaa_color_view {
@@ -8596,11 +8591,11 @@ impl RenderEngine3d {
 
                 let mut data = [0u8; WATER_PARAMS_SIZE as usize];
                 for (i, w) in waves.iter().enumerate() {
-                    data[i*16..i*16+16].copy_from_slice(unsafe { slice_as_bytes(w) });
+                    data[i*16..i*16+16].copy_from_slice(bytemuck::cast_slice(w));
                 }
-                data[64..128].copy_from_slice(unsafe { slice_as_bytes(&model_cols) });
-                data[128..144].copy_from_slice(unsafe { slice_as_bytes(&water_color) });
-                data[144..160].copy_from_slice(unsafe { slice_as_bytes(&deep_color) });
+                data[64..128].copy_from_slice(bytemuck::cast_slice(&model_cols));
+                data[128..144].copy_from_slice(bytemuck::cast_slice(&water_color));
+                data[144..160].copy_from_slice(bytemuck::cast_slice(&deep_color));
                 let misc: [f32; 8] = [
                     water_comp.refract_strength,
                     water_comp.wave_speed,
@@ -8608,7 +8603,7 @@ impl RenderEngine3d {
                     width, height,
                     0.0, 0.0, 0.0,
                 ];
-                data[160..192].copy_from_slice(unsafe { slice_as_bytes(&misc) });
+                data[160..192].copy_from_slice(bytemuck::cast_slice(&misc));
                 self.queue.write_buffer(&self.water_params_buf, 0, &data);
 
                 let (color_target, resolve_target) = match &self.msaa_color_view {
@@ -8663,14 +8658,14 @@ impl RenderEngine3d {
                 let inv_world_cols  = decal_inv_world.to_cols_array();
 
                 let mut data = [0u8; DECAL_PARAMS_SIZE as usize];
-                data[0..64].copy_from_slice(unsafe { slice_as_bytes(&inv_world_cols) });
-                data[64..128].copy_from_slice(unsafe { slice_as_bytes(&inv_vp_cols) });
+                data[0..64].copy_from_slice(bytemuck::cast_slice(&inv_world_cols));
+                data[64..128].copy_from_slice(bytemuck::cast_slice(&inv_vp_cols));
                 let color_arr: [f32; 4] = [decal.color.r, decal.color.g, decal.color.b, decal.color.a];
-                data[128..144].copy_from_slice(unsafe { slice_as_bytes(&color_arr) });
-                data[144..208].copy_from_slice(unsafe { slice_as_bytes(&decal_world_cols) });
+                data[128..144].copy_from_slice(bytemuck::cast_slice(&color_arr));
+                data[144..208].copy_from_slice(bytemuck::cast_slice(&decal_world_cols));
                 let _ = vp_cols; // available if needed by future extensions
                 let misc: [f32; 4] = [width, height, 0.0, 0.0];
-                data[208..224].copy_from_slice(unsafe { slice_as_bytes(&misc) });
+                data[208..224].copy_from_slice(bytemuck::cast_slice(&misc));
                 self.queue.write_buffer(&self.decal_params_buf, 0, &data);
 
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -8753,7 +8748,7 @@ impl RenderEngine3d {
             if alive_count > 0 {
                 let gravity = 9.8_f32;
                 let sim_params: [f32; 4] = [delta, gravity, f32::from_bits(alive_count), 0.0];
-                self.queue.write_buffer(&self.particle_sim_params_buf, 0, unsafe { slice_as_bytes(&sim_params) });
+                self.queue.write_buffer(&self.particle_sim_params_buf, 0, bytemuck::cast_slice(&sim_params));
 
                 // compute pass: simulate alive particles
                 let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -8878,7 +8873,7 @@ impl RenderEngine3d {
                         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                         mapped_at_creation: false,
                     });
-                    self.queue.write_buffer(&params_buf, 0, unsafe { slice_as_bytes(&compute_params) });
+                    self.queue.write_buffer(&params_buf, 0, bytemuck::cast_slice(&compute_params));
                     self.queue.write_buffer(&params_buf, 48, bytemuck::cast_slice(&compute_params_tail));
 
                     // get density map GPU texture view — fallback to 1x1 when not uploaded yet
@@ -9993,6 +9988,7 @@ impl RenderEngine3d {
             .collect();
 
         #[repr(C)]
+        #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
         struct PointLightGpuCpu {
             position:    [f32; 3],
             intensity:   f32,
@@ -10003,6 +9999,7 @@ impl RenderEngine3d {
         }
 
         #[repr(C)]
+        #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
         struct LightsGpu {
             ambient_color:     [f32; 3],
             ambient_intensity: f32,
@@ -10043,7 +10040,7 @@ impl RenderEngine3d {
             _sh_pad: [0; 3],
             sh_coeffs,
         };
-        self.queue.write_buffer(&self.lights_buf, 0, unsafe { slice_as_bytes(std::slice::from_ref(&lights_gpu)) });
+        self.queue.write_buffer(&self.lights_buf, 0, bytemuck::bytes_of(&lights_gpu));
 
         // upload light list to storage buffer (for clustered path in group 5)
         let light_count = self.point_light_scratch.len();
@@ -10060,7 +10057,7 @@ impl RenderEngine3d {
                     shadow_index: shadow_indices[i],
                     _pad: [0; 3],
                 };
-                self.light_data_scratch[off..off + 48].copy_from_slice(unsafe { slice_as_bytes(std::slice::from_ref(&entry)) });
+                self.light_data_scratch[off..off + 48].copy_from_slice(bytemuck::bytes_of(&entry));
             }
             self.queue.write_buffer(&self.light_list_buf, 0, &self.light_data_scratch);
         }
@@ -10209,7 +10206,7 @@ impl RenderEngine3d {
             self.queue.write_buffer(
                 &self.shadow_globals_buf,
                 (i * UNIFORM_STRIDE as usize) as u64,
-                unsafe { slice_as_bytes(&cols) },
+                bytemuck::cast_slice(&cols),
             );
         }
 
@@ -10235,7 +10232,7 @@ impl RenderEngine3d {
             d[22] = f32::from_bits(render_flags);
             d
         };
-        self.queue.write_buffer(&self.globals_buf, 0, unsafe { slice_as_bytes(&globals_data) });
+        self.queue.write_buffer(&self.globals_buf, 0, bytemuck::cast_slice(&globals_data));
 
         // ── sort transparent draws back-to-front ──────────────────────────
         let cam_fwd = cam_wt.forward();
