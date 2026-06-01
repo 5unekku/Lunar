@@ -1310,6 +1310,24 @@ pub struct RenderEngine3d {
     draw_scratch: Vec<(Entity, u32, u32, Color, f32, f32, Mat4, f32, u32, u32, u32)>,
     uniform_staging: Vec<u8>,
     point_light_scratch: Vec<(Vec3, Color, f32, f32, bool)>,  // (pos, color, intensity, radius, casts_shadows)
+    // BSP PVS visible-area set, rebuilt each frame; `active` mirrors the old Option::Some
+    bsp_visible_scratch: HashSet<u32>,
+    bsp_visible_active: bool,
+    // portal visible-area snapshot, rebuilt each frame; `active` mirrors the old Option::Some
+    portal_visible_scratch: HashSet<u32>,
+    portal_visible_active: bool,
+    // static-mesh entity set, refilled each frame to diff against static_entity_slots
+    static_entities_scratch: HashSet<Entity>,
+    // per-entity AABB upload data (CullSoa order) — built once, fed to both frustum + HZB cull
+    cull_aabb_scratch: Vec<f32>,
+    // packed point-light list bytes uploaded to light_list_buf
+    light_data_scratch: Vec<u8>,
+    // CPU clustered-lighting fallback: per-cluster light counts + index table
+    cluster_counts_scratch: Vec<u32>,
+    cluster_indices_scratch: Vec<u32>,
+    // late indirect-cull upload data (draw_scratch order): AABBs + draw params
+    late_aabb_scratch: Vec<f32>,
+    dp_data_scratch: Vec<u32>,
 
     // render graph DAG — built once at init, drives pass execution order in render_frame.
     // models pass dependencies via declared texture reads/writes and topological sort.
@@ -4346,6 +4364,17 @@ impl RenderEngine3d {
             impostor_scratch: Vec::new(),
             uniform_staging,
             point_light_scratch: Vec::new(),
+            bsp_visible_scratch: HashSet::default(),
+            bsp_visible_active: false,
+            portal_visible_scratch: HashSet::default(),
+            portal_visible_active: false,
+            static_entities_scratch: HashSet::default(),
+            cull_aabb_scratch: Vec::new(),
+            light_data_scratch: Vec::new(),
+            cluster_counts_scratch: Vec::new(),
+            cluster_indices_scratch: Vec::new(),
+            late_aabb_scratch: Vec::new(),
+            dp_data_scratch: Vec::new(),
 
             render_graph: Self::build_render_graph(render_tier, bloom_enabled, ssr_enabled, fog_enabled, fxaa_enabled, ssao_enabled, staa_enabled),
 
@@ -6874,13 +6903,14 @@ impl RenderEngine3d {
             if entity_count > 0 {
                 self.ensure_gpu_cull_resources(entity_count);
 
-                let mut aabb_data: Vec<f32> = Vec::with_capacity(entity_count * 8);
+                // build per-entity AABB upload data once; the HZB cull below reuses it
+                self.cull_aabb_scratch.clear();
                 {
                     let soa = world.resource::<CullSoa>();
                     for i in 0..entity_count {
                         let c = soa.centers[i];
                         let e = soa.half_extents[i];
-                        aabb_data.extend_from_slice(&[c.x, c.y, c.z, 0.0, e.x, e.y, e.z, 0.0]);
+                        self.cull_aabb_scratch.extend_from_slice(&[c.x, c.y, c.z, 0.0, e.x, e.y, e.z, 0.0]);
                     }
                 }
                 let mut frustum_data = [0f32; 32];
@@ -6900,7 +6930,7 @@ impl RenderEngine3d {
                 let flags_buf = self.cull_flags_buf.as_ref().unwrap();
                 let staging_buf = self.cull_flags_staging.as_ref().unwrap();
 
-                self.queue.write_buffer(aabb_buf, 0, bytemuck::cast_slice(&aabb_data));
+                self.queue.write_buffer(aabb_buf, 0, bytemuck::cast_slice(&self.cull_aabb_scratch));
                 self.queue.write_buffer(frustum_buf, 0, bytemuck::cast_slice(&frustum_data));
 
                 let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -7054,13 +7084,7 @@ impl RenderEngine3d {
 
                 // dispatch this frame's HZB occlusion compute
                 if !self.gpu_cull_flags.is_empty() {
-                    let soa = world.resource::<CullSoa>();
-                    let mut aabb_data: Vec<f32> = Vec::with_capacity(entity_count * 8);
-                    for i in 0..entity_count {
-                        let c = soa.centers[i];
-                        let e = soa.half_extents[i];
-                        aabb_data.extend_from_slice(&[c.x, c.y, c.z, 0.0, e.x, e.y, e.z, 0.0]);
-                    }
+                    // reuse the AABB data built above for the frustum cull (same CullSoa order)
                     let vp_array = view_proj.to_cols_array();
                     let mut params_data = [0f32; 24];
                     params_data[..16].copy_from_slice(&vp_array);
@@ -7076,7 +7100,7 @@ impl RenderEngine3d {
                     );
                     self.queue.write_buffer(
                         self.hzb_cull_aabb_buf.as_ref().unwrap(), 0,
-                        bytemuck::cast_slice(&aabb_data),
+                        bytemuck::cast_slice(&self.cull_aabb_scratch),
                     );
                     self.queue.write_buffer(
                         self.hzb_cull_params_buf.as_ref().unwrap(), 0,
@@ -7132,36 +7156,37 @@ impl RenderEngine3d {
     fn gather_draw_list(&mut self, world: &mut World, cam_pos: Vec3) {
         // ── gather draw list ──────────────────────────────────────────────
 
-        // build area visibility from BspLevel PVS if loaded; fall through to VisibleAreas otherwise
-        let bsp_visible: Option<HashSet<u32>> = world
-            .get_resource::<BspLevel>()
-            .filter(|level| level.is_loaded())
-            .map(|level| {
-                let leaf = level.camera_leaf(cam_pos);
-                let visible_leaves = level.visible_leaves(leaf);
-                let area_map = level.area_map();
-                let mut areas = HashSet::default();
-                for leaf_idx in &visible_leaves {
-                    if let Ok(pos) = area_map.binary_search_by_key(&(*leaf_idx as u32), |&(li, _)| li) {
-                        areas.insert(area_map[pos].1);
-                    }
+        // build area visibility from BspLevel PVS if loaded; fall through to VisibleAreas otherwise.
+        // reuses bsp_visible_scratch; `active` mirrors the old `Option::is_some`.
+        self.bsp_visible_scratch.clear();
+        self.bsp_visible_active = false;
+        if let Some(level) = world.get_resource::<BspLevel>().filter(|level| level.is_loaded()) {
+            let leaf = level.camera_leaf(cam_pos);
+            let visible_leaves = level.visible_leaves(leaf);
+            let area_map = level.area_map();
+            for leaf_idx in &visible_leaves {
+                if let Ok(pos) = area_map.binary_search_by_key(&(*leaf_idx as u32), |&(li, _)| li) {
+                    self.bsp_visible_scratch.insert(area_map[pos].1);
                 }
-                areas
-            });
+            }
+            self.bsp_visible_active = true;
+        }
 
         // write visible areas back so game code (AI LOS queries etc.) reads a correct set
-        if let Some(ref areas) = bsp_visible
+        if self.bsp_visible_active
             && let Some(mut vis_areas) = world.get_resource_mut::<VisibleAreas>() {
                 vis_areas.area_ids.clear();
-                vis_areas.area_ids.extend(areas.iter().copied());
+                vis_areas.area_ids.extend(self.bsp_visible_scratch.iter().copied());
                 vis_areas.active = true;
             }
 
-        // snapshot portal visible areas before the mutable query borrow
-        let portal_visible_snap: Option<HashSet<u32>> = world
-            .get_resource::<VisibleAreas>()
-            .filter(|pv| pv.active)
-            .map(|pv| pv.area_ids.clone());
+        // snapshot portal visible areas before the mutable query borrow (reuses portal_visible_scratch)
+        self.portal_visible_scratch.clear();
+        self.portal_visible_active = false;
+        if let Some(pv) = world.get_resource::<VisibleAreas>().filter(|pv| pv.active) {
+            self.portal_visible_scratch.extend(pv.area_ids.iter().copied());
+            self.portal_visible_active = true;
+        }
 
         let interp_alpha = world.get_resource::<lunar_core::Time>()
             .map(|t| t.interp_alpha())
@@ -7185,12 +7210,12 @@ impl RenderEngine3d {
                 .filter(|(entity, _, _, _, vis, aabb, _, _, area, _, _, _)| {
                     if !vis.0 { return false; }
                     // BSP PVS area culling (takes priority over portal traversal)
-                    if let Some(ref visible_areas) = bsp_visible {
+                    if self.bsp_visible_active {
                         if let Some(a) = area
-                            && !visible_areas.contains(&a.0) { return false; }
-                    } else if let Some(ref pv) = portal_visible_snap
+                            && !self.bsp_visible_scratch.contains(&a.0) { return false; }
+                    } else if self.portal_visible_active
                         && let Some(a) = area
-                            && !pv.contains(&a.0) { return false; }
+                            && !self.portal_visible_scratch.contains(&a.0) { return false; }
                     aabb.is_none() || self.frustum_visible.contains(entity)
                 })
                 .for_each(|(entity, mesh, mat, wt, _, _, lod, impostor, _, lightmap, dir_lightmap, prev_wt)| {
@@ -7234,15 +7259,18 @@ impl RenderEngine3d {
                 });
         }
 
-        // collect static entities and assign stable slot ids
+        // collect static entities and assign stable slot ids (reuses static_entities_scratch)
         {
+            self.static_entities_scratch.clear();
             let mut q = world.query::<(Entity, &StaticMesh)>();
-            let static_entities: HashSet<Entity> = q.iter(world).map(|(e, _)| e).collect();
+            for (e, _) in q.iter(world) {
+                self.static_entities_scratch.insert(e);
+            }
             // remove slots for entities that are no longer in the world
-            self.static_entity_slots.retain(|e, _| static_entities.contains(e));
+            self.static_entity_slots.retain(|e, _| self.static_entities_scratch.contains(e));
             // assign slots to new static entities (append after existing)
             let mut next_slot = self.static_entity_slots.values().copied().max().map(|m| m + 1).unwrap_or(0);
-            for entity in &static_entities {
+            for entity in &self.static_entities_scratch {
                 if !self.static_entity_slots.contains_key(entity) {
                     self.static_entity_slots.insert(*entity, next_slot);
                     next_slot += 1;
@@ -10020,7 +10048,8 @@ impl RenderEngine3d {
         // upload light list to storage buffer (for clustered path in group 5)
         let light_count = self.point_light_scratch.len();
         if light_count > 0 {
-            let mut light_data = vec![0u8; light_count * 48];
+            self.light_data_scratch.clear();
+            self.light_data_scratch.resize(light_count * 48, 0);
             for (i, &(pos, color, intensity, radius, _)) in self.point_light_scratch.iter().enumerate() {
                 let off = i * 48;
                 let entry = PointLightGpuCpu {
@@ -10031,9 +10060,9 @@ impl RenderEngine3d {
                     shadow_index: shadow_indices[i],
                     _pad: [0; 3],
                 };
-                light_data[off..off + 48].copy_from_slice(unsafe { slice_as_bytes(std::slice::from_ref(&entry)) });
+                self.light_data_scratch[off..off + 48].copy_from_slice(unsafe { slice_as_bytes(std::slice::from_ref(&entry)) });
             }
-            self.queue.write_buffer(&self.light_list_buf, 0, &light_data);
+            self.queue.write_buffer(&self.light_list_buf, 0, &self.light_data_scratch);
         }
 
         // ── cluster params + CPU light assignment (pre-encoder) ──────────
@@ -10063,16 +10092,18 @@ impl RenderEngine3d {
 
             if !cluster_needs_compute {
                 // CPU path: all clusters point to the full light list
-                let mut counts = vec![0u32; NUM_CLUSTERS];
-                let mut indices = vec![0u32; NUM_CLUSTERS * MAX_LIGHTS_PER_CLUSTER];
+                self.cluster_counts_scratch.clear();
+                self.cluster_counts_scratch.resize(NUM_CLUSTERS, 0);
+                self.cluster_indices_scratch.clear();
+                self.cluster_indices_scratch.resize(NUM_CLUSTERS * MAX_LIGHTS_PER_CLUSTER, 0);
                 for c in 0..NUM_CLUSTERS {
-                    counts[c] = light_count as u32;
+                    self.cluster_counts_scratch[c] = light_count as u32;
                     for j in 0..light_count {
-                        indices[c * MAX_LIGHTS_PER_CLUSTER + j] = j as u32;
+                        self.cluster_indices_scratch[c * MAX_LIGHTS_PER_CLUSTER + j] = j as u32;
                     }
                 }
-                self.queue.write_buffer(&self.cluster_counts_buf, 0, bytemuck::cast_slice(&counts));
-                self.queue.write_buffer(&self.cluster_indices_buf, 0, bytemuck::cast_slice(&indices));
+                self.queue.write_buffer(&self.cluster_counts_buf, 0, bytemuck::cast_slice(&self.cluster_counts_scratch));
+                self.queue.write_buffer(&self.cluster_indices_buf, 0, bytemuck::cast_slice(&self.cluster_indices_scratch));
             }
         }
 
@@ -10378,25 +10409,25 @@ impl RenderEngine3d {
                 self.ensure_gpu_cull_resources(entity_count);
 
                 // build late AABB data in draw_scratch order
-                let mut late_aabb: Vec<f32> = Vec::with_capacity(entity_count * 8);
+                self.late_aabb_scratch.clear();
                 for i in 0..entity_count {
                     let entity = self.draw_scratch[i].0;
                     let (center, half) = match world.get::<Aabb3d>(entity) {
                         Some(aabb) => (Vec3::from(aabb.center), Vec3::from(aabb.half_extents)),
                         None => (Vec3::ZERO, Vec3::splat(1e6)),
                     };
-                    late_aabb.extend_from_slice(&[center.x, center.y, center.z, 0.0, half.x, half.y, half.z, 0.0]);
+                    self.late_aabb_scratch.extend_from_slice(&[center.x, center.y, center.z, 0.0, half.x, half.y, half.z, 0.0]);
                 }
 
                 // build draw params in draw_scratch order: [index_count, first_index, base_vertex, first_instance]
-                let mut dp_data: Vec<u32> = Vec::with_capacity(entity_count * 4);
+                self.dp_data_scratch.clear();
                 for i in 0..entity_count {
                     let mesh_id = self.draw_scratch[i].1;
                     let slot = (ENTITY_SLOT_START + i) as u32;
                     if let Some(entry) = self.mega_mesh_entries.get(&mesh_id) {
-                        dp_data.extend_from_slice(&[entry[1], entry[0], entry[2], slot]);
+                        self.dp_data_scratch.extend_from_slice(&[entry[1], entry[0], entry[2], slot]);
                     } else {
-                        dp_data.extend_from_slice(&[0, 0, 0, slot]);
+                        self.dp_data_scratch.extend_from_slice(&[0, 0, 0, slot]);
                     }
                 }
 
@@ -10417,9 +10448,9 @@ impl RenderEngine3d {
                 let ind_buf = self.indirect_buf.as_ref().unwrap();
                 let cnt_buf = self.cull_indirect_count_buf.as_ref().unwrap();
 
-                self.queue.write_buffer(aabb_buf, 0, bytemuck::cast_slice(&late_aabb));
+                self.queue.write_buffer(aabb_buf, 0, bytemuck::cast_slice(&self.late_aabb_scratch));
                 self.queue.write_buffer(late_fp_buf, 0, bytemuck::cast_slice(&late_fp));
-                self.queue.write_buffer(dp_buf, 0, bytemuck::cast_slice(&dp_data));
+                self.queue.write_buffer(dp_buf, 0, bytemuck::cast_slice(&self.dp_data_scratch));
                 self.queue.write_buffer(cnt_buf, 0, bytemuck::bytes_of(&0u32));
 
                 let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
