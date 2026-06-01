@@ -27,6 +27,12 @@ pub struct TransformScratch3d {
     world_mats: Vec<Mat4>,
     // parallel to snapshot: computed visibility (true for entities without Visibility)
     computed_vis: Vec<bool>,
+    // parallel to snapshot: computed world transform (identity for entries without a local transform)
+    world_ts: Vec<WorldTransform3d>,
+    // parallel to snapshot: set when the batched query sweep already wrote the component,
+    // so the structural-insert pass only fires for entities genuinely missing it
+    wt_written: Vec<bool>,
+    cv_written: Vec<bool>,
 }
 
 /// propagate [`LocalTransform3d`] and [`Visibility`] through the entity hierarchy in one pass.
@@ -65,73 +71,154 @@ pub fn propagate_transforms_3d(world: &mut World) {
     }
     scratch.entity_idx.sort_unstable_by_key(|&(entity, _)| entity);
 
+    // resolve each entry's parent to a snapshot index; note if the scene has any real link
     scratch.parent_idx.clear();
     scratch.parent_idx.resize(n, None);
-    for (i, &(_, _, _, parent_entity)) in scratch.snapshot.iter().enumerate() {
-        if let Some(parent_entity) = parent_entity
+    let mut any_parented = false;
+    for i in 0..n {
+        if let Some(parent_entity) = scratch.snapshot[i].3
             && let Ok(j) = scratch.entity_idx.binary_search_by_key(&parent_entity, |&(e, _)| e) {
                 scratch.parent_idx[i] = Some(scratch.entity_idx[j].1);
+                any_parented = true;
             }
     }
 
-    scratch.depths.clear();
-    scratch.depths.resize(n, u32::MAX);
-    for i in 0..n {
-        depth_of(i, &scratch.parent_idx, &mut scratch.depths);
-    }
-
-    scratch.order.clear();
-    scratch.order.extend(0..n);
-    scratch.order.sort_unstable_by_key(|&i| scratch.depths[i]);
-
-    scratch.world_mats.clear();
-    scratch.world_mats.resize(n, Mat4::IDENTITY);
+    scratch.world_ts.clear();
+    scratch.world_ts.resize(n, WorldTransform3d::new());
     scratch.computed_vis.clear();
     scratch.computed_vis.resize(n, true);
 
-    for &i in &scratch.order {
-        let (entity, local, vis, _) = scratch.snapshot[i];
-
-        // transform propagation
-        if let Some(local) = local {
-            let local_mat = local.to_matrix();
-            let world_mat = match scratch.parent_idx[i] {
-                Some(parent_i) => scratch.world_mats[parent_i] * local_mat,
-                None => local_mat,
-            };
-            scratch.world_mats[i] = world_mat;
-
-            let (scale, rotation, translation) = world_mat.to_scale_rotation_translation();
-            let computed = WorldTransform3d { translation, rotation, scale };
-            if let Some(mut existing) = world.get_mut::<WorldTransform3d>(entity) {
-                *existing = computed;
-            } else if let Ok(mut entity_ref) = world.get_entity_mut(entity) {
-                entity_ref.insert(computed);
-            }
-        } else if let Some(parent_i) = scratch.parent_idx[i] {
-            // entity has no local transform — inherit parent matrix for child chains
-            scratch.world_mats[i] = scratch.world_mats[parent_i];
+    if !any_parented {
+        // ── flat-scene fast path ──────────────────────────────────────────
+        // no hierarchy: world transform == local transform (T/R/S copied straight
+        // through, no matrix build or decompose), and Inherited visibility (no parent)
+        // resolves to visible. each entry is independent ⇒ parallelizable.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            let snapshot = &scratch.snapshot;
+            scratch.world_ts.par_iter_mut()
+                .zip(scratch.computed_vis.par_iter_mut())
+                .enumerate()
+                .for_each(|(i, (world_ts, computed_vis))| {
+                    if let Some(local) = snapshot[i].1 {
+                        *world_ts = WorldTransform3d { translation: local.translation, rotation: local.rotation, scale: local.scale };
+                    }
+                    if let Some(vis) = snapshot[i].2 {
+                        *computed_vis = !matches!(vis, Visibility::Hidden);
+                    }
+                });
         }
-
-        // visibility propagation
-        if let Some(vis) = vis {
-            let parent_visible = scratch.parent_idx[i]
-                .map(|pi| scratch.computed_vis[pi])
-                .unwrap_or(true);
-            let visible = match vis {
-                Visibility::Visible => true,
-                Visibility::Hidden => false,
-                Visibility::Inherited => parent_visible,
-            };
-            scratch.computed_vis[i] = visible;
-
-            let cv = ComputedVisibility(visible);
-            if let Some(mut existing) = world.get_mut::<ComputedVisibility>(entity) {
-                *existing = cv;
-            } else if let Ok(mut entity_ref) = world.get_entity_mut(entity) {
-                entity_ref.insert(cv);
+        #[cfg(target_arch = "wasm32")]
+        for i in 0..n {
+            if let Some(local) = scratch.snapshot[i].1 {
+                scratch.world_ts[i] = WorldTransform3d { translation: local.translation, rotation: local.rotation, scale: local.scale };
+            }
+            if let Some(vis) = scratch.snapshot[i].2 {
+                scratch.computed_vis[i] = !matches!(vis, Visibility::Hidden);
             }
         }
+    } else {
+        // ── hierarchical path ─────────────────────────────────────────────
+        // depth-sort so parents are resolved before children, then chain matrices.
+        // parentless entries still skip the decompose (world == local).
+        scratch.world_mats.clear();
+        scratch.world_mats.resize(n, Mat4::IDENTITY);
+
+        scratch.depths.clear();
+        scratch.depths.resize(n, u32::MAX);
+        for i in 0..n {
+            depth_of(i, &scratch.parent_idx, &mut scratch.depths);
+        }
+        scratch.order.clear();
+        scratch.order.extend(0..n);
+        scratch.order.sort_unstable_by_key(|&i| scratch.depths[i]);
+
+        for &i in &scratch.order {
+            let (_, local, vis, _) = scratch.snapshot[i];
+
+            if let Some(local) = local {
+                match scratch.parent_idx[i] {
+                    None => {
+                        // parentless: world == local; keep the matrix for any children, skip decompose
+                        scratch.world_mats[i] = local.to_matrix();
+                        scratch.world_ts[i] = WorldTransform3d { translation: local.translation, rotation: local.rotation, scale: local.scale };
+                    }
+                    Some(parent_i) => {
+                        let world_mat = scratch.world_mats[parent_i] * local.to_matrix();
+                        scratch.world_mats[i] = world_mat;
+                        let (scale, rotation, translation) = world_mat.to_scale_rotation_translation();
+                        scratch.world_ts[i] = WorldTransform3d { translation, rotation, scale };
+                    }
+                }
+            } else if let Some(parent_i) = scratch.parent_idx[i] {
+                // no local transform — inherit parent matrix for downstream child chains
+                scratch.world_mats[i] = scratch.world_mats[parent_i];
+            }
+
+            if let Some(vis) = vis {
+                let parent_visible = scratch.parent_idx[i]
+                    .map(|pi| scratch.computed_vis[pi])
+                    .unwrap_or(true);
+                scratch.computed_vis[i] = match vis {
+                    Visibility::Visible => true,
+                    Visibility::Hidden => false,
+                    Visibility::Inherited => parent_visible,
+                };
+            }
+        }
+    }
+
+    // ── write back results ────────────────────────────────────────────────
+    // one linear column sweep per component (cache-friendly) + a binary search to map
+    // entity → snapshot index, replacing N random `get_mut` archetype lookups. entities
+    // that don't have the component yet fall to the structural-insert pass below.
+    scratch.wt_written.clear();
+    scratch.wt_written.resize(n, false);
+    scratch.cv_written.clear();
+    scratch.cv_written.resize(n, false);
+    {
+        let entity_idx = &scratch.entity_idx;
+        let snapshot = &scratch.snapshot;
+        let world_ts = &scratch.world_ts;
+        let wt_written = &mut scratch.wt_written;
+        let mut query = world.query::<(Entity, &mut WorldTransform3d)>();
+        for (entity, mut wt) in query.iter_mut(world) {
+            if let Ok(j) = entity_idx.binary_search_by_key(&entity, |&(e, _)| e) {
+                let i = entity_idx[j].1;
+                if snapshot[i].1.is_some() {
+                    *wt = world_ts[i];
+                    wt_written[i] = true;
+                }
+            }
+        }
+    }
+    {
+        let entity_idx = &scratch.entity_idx;
+        let snapshot = &scratch.snapshot;
+        let computed_vis = &scratch.computed_vis;
+        let cv_written = &mut scratch.cv_written;
+        let mut query = world.query::<(Entity, &mut ComputedVisibility)>();
+        for (entity, mut cv) in query.iter_mut(world) {
+            if let Ok(j) = entity_idx.binary_search_by_key(&entity, |&(e, _)| e) {
+                let i = entity_idx[j].1;
+                if snapshot[i].2.is_some() {
+                    *cv = ComputedVisibility(computed_vis[i]);
+                    cv_written[i] = true;
+                }
+            }
+        }
+    }
+    // structural insert — cold path, only entities missing the component (e.g. first frame)
+    for i in 0..n {
+        if scratch.snapshot[i].1.is_some() && !scratch.wt_written[i]
+            && let Ok(mut entity_ref) = world.get_entity_mut(scratch.snapshot[i].0) {
+                entity_ref.insert(scratch.world_ts[i]);
+            }
+        if scratch.snapshot[i].2.is_some() && !scratch.cv_written[i]
+            && let Ok(mut entity_ref) = world.get_entity_mut(scratch.snapshot[i].0) {
+                entity_ref.insert(ComputedVisibility(scratch.computed_vis[i]));
+            }
     }
 
     world.insert_resource(scratch);
@@ -157,4 +244,73 @@ fn depth_of(idx: usize, parent_idx: &[Option<usize>], depths: &mut [u32]) -> u32
         .unwrap_or(0);
     depths[idx] = depth;
     depth
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lunar_math::Vec3;
+
+    fn close(a: Vec3, b: Vec3) -> bool {
+        (a - b).length() < 1e-4
+    }
+
+    // flat scene (no parents): world transform == local transform, inserted on first run.
+    #[test]
+    fn flat_scene_world_equals_local() {
+        let mut world = World::new();
+        world.init_resource::<TransformScratch3d>();
+        let e = world.spawn(LocalTransform3d::from_xyz(3.0, 4.0, 5.0)).id();
+        propagate_transforms_3d(&mut world);
+        let wt = world.get::<WorldTransform3d>(e).unwrap();
+        assert!(close(wt.translation, Vec3::new(3.0, 4.0, 5.0)));
+    }
+
+    // child world transform composes with its parent's.
+    #[test]
+    fn child_composes_with_parent() {
+        let mut world = World::new();
+        world.init_resource::<TransformScratch3d>();
+        let parent = world.spawn(LocalTransform3d::from_xyz(10.0, 0.0, 0.0)).id();
+        let child = world.spawn((LocalTransform3d::from_xyz(1.0, 0.0, 0.0), Parent(parent))).id();
+        propagate_transforms_3d(&mut world);
+        let cw = world.get::<WorldTransform3d>(child).unwrap();
+        assert!(close(cw.translation, Vec3::new(11.0, 0.0, 0.0)));
+    }
+
+    // Inherited visibility resolves through a hidden ancestor.
+    #[test]
+    fn visibility_inherits_from_parent() {
+        let mut world = World::new();
+        world.init_resource::<TransformScratch3d>();
+        let parent = world.spawn((LocalTransform3d::default(), Visibility::Hidden)).id();
+        let child = world.spawn((LocalTransform3d::default(), Visibility::Inherited, Parent(parent))).id();
+        propagate_transforms_3d(&mut world);
+        assert!(!world.get::<ComputedVisibility>(child).unwrap().0);
+    }
+
+    // re-running updates the existing component in place (the batched query-sweep path).
+    #[test]
+    fn updates_existing_world_transform_in_place() {
+        let mut world = World::new();
+        world.init_resource::<TransformScratch3d>();
+        let e = world.spawn(LocalTransform3d::from_xyz(1.0, 2.0, 3.0)).id();
+        propagate_transforms_3d(&mut world);
+        world.get_mut::<LocalTransform3d>(e).unwrap().translation = Vec3::new(7.0, 8.0, 9.0);
+        propagate_transforms_3d(&mut world);
+        let wt = world.get::<WorldTransform3d>(e).unwrap();
+        assert!(close(wt.translation, Vec3::new(7.0, 8.0, 9.0)));
+    }
+
+    // a 3-level chain composes through both ancestors (exercises the depth sort).
+    #[test]
+    fn grandchild_composes_through_chain() {
+        let mut world = World::new();
+        world.init_resource::<TransformScratch3d>();
+        let a = world.spawn(LocalTransform3d::from_xyz(1.0, 0.0, 0.0)).id();
+        let b = world.spawn((LocalTransform3d::from_xyz(2.0, 0.0, 0.0), Parent(a))).id();
+        let c = world.spawn((LocalTransform3d::from_xyz(4.0, 0.0, 0.0), Parent(b))).id();
+        propagate_transforms_3d(&mut world);
+        assert!(close(world.get::<WorldTransform3d>(c).unwrap().translation, Vec3::new(7.0, 0.0, 0.0)));
+    }
 }
