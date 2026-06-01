@@ -3,8 +3,6 @@
 //! the app builder provides a fluent interface for configuring the engine.
 //! game plugins register their systems, resources, and sub-plugins through the app.
 
-use std::collections::VecDeque;
-
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::IntoScheduleConfigs;
 use bevy_ecs::system::ScheduleSystem;
@@ -270,45 +268,39 @@ impl App {
 
     /// build all pending plugins in dependency order
     fn build_plugins(&mut self) {
-        // simple topological sort using Kahn's algorithm
+        // name-keyed topological build: each round drains every plugin whose
+        // declared dependencies are already built and defers the rest. plugins
+        // registered during build() are absorbed before the next round. the loop
+        // ends once a full round builds nothing new — any leftovers have missing
+        // or circular dependencies. `built` accumulates across calls.
         let mut built = std::mem::take(&mut self.built_plugins);
         let mut pending = std::mem::take(&mut self.pending_plugins);
         let mut ready: Vec<Box<dyn GamePlugin>> = Vec::new();
 
-        let mut queue = VecDeque::new();
-
-        // find plugins with no dependencies
-        for (i, plugin) in pending.iter().enumerate() {
-            let deps = plugin.dependencies();
-            if deps.is_empty() || deps.iter().all(|d| built.contains(&d.to_string())) {
-                queue.push_back(i);
+        loop {
+            // absorb anything registered by a previous round's build() calls
+            pending.append(&mut self.pending_plugins);
+            if pending.is_empty() {
+                break;
             }
-        }
 
-        while let Some(idx) = queue.pop_front() {
-            let mut plugin = pending.remove(idx);
-            let name = plugin.name().to_string();
-
-            // adjust remaining indices
-            for i in &mut queue {
-                if *i > idx {
-                    *i -= 1;
+            let mut progressed = false;
+            for mut plugin in std::mem::take(&mut pending) {
+                let deps_met = plugin.dependencies().iter()
+                    .all(|dep| built.iter().any(|name| name.as_str() == *dep));
+                if deps_met {
+                    plugin.build(self);
+                    built.push(plugin.name().to_string());
+                    ready.push(plugin);
+                    progressed = true;
+                } else {
+                    pending.push(plugin);
                 }
             }
 
-            plugin.build(self);
-            built.push(name.clone());
-            ready.push(plugin);
-
-            // absorb any plugins registered during build() before checking deps
-            pending.extend(std::mem::take(&mut self.pending_plugins));
-
-            // check if any pending plugins now have all deps met
-            for (i, p) in pending.iter().enumerate() {
-                let deps = p.dependencies();
-                if deps.iter().all(|d| built.contains(&d.to_string())) && !queue.contains(&i) {
-                    queue.push_back(i);
-                }
+            // nothing became buildable and nothing new was registered → stuck
+            if !progressed && self.pending_plugins.is_empty() {
+                break;
             }
         }
 
@@ -443,4 +435,91 @@ pub trait GamePlugin: Send {
 
     /// finish the plugin, called after all plugins have been built
     fn finish(&mut self, _app: &mut App) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    type Log = Arc<Mutex<Vec<String>>>;
+    /// callback that registers more plugins mid-build()
+    type Spawn = Box<dyn FnOnce(&mut App) + Send>;
+
+    /// test plugin that records its build/finish calls into a shared log.
+    /// `spawn` optionally registers another plugin during build() to exercise
+    /// mid-build registration absorption.
+    struct Recorder {
+        name: &'static str,
+        deps: Vec<&'static str>,
+        log: Log,
+        spawn: Option<Spawn>,
+    }
+
+    impl GamePlugin for Recorder {
+        fn name(&self) -> &str { self.name }
+        fn dependencies(&self) -> &[&str] { &self.deps }
+        fn build(&mut self, app: &mut App) {
+            self.log.lock().unwrap().push(format!("build:{}", self.name));
+            if let Some(spawn) = self.spawn.take() { spawn(app); }
+        }
+        fn finish(&mut self, _app: &mut App) {
+            self.log.lock().unwrap().push(format!("finish:{}", self.name));
+        }
+    }
+
+    fn calls(log: &Log) -> Vec<String> { log.lock().unwrap().clone() }
+
+    #[test]
+    fn builds_dependencies_before_dependents() {
+        let log: Log = Arc::new(Mutex::new(Vec::new()));
+        let mut app = App::new();
+        // register the dependent first to prove ordering isn't just insertion order
+        app.add_plugin(Recorder { name: "b", deps: vec!["a"], log: log.clone(), spawn: None });
+        app.add_plugin(Recorder { name: "a", deps: vec![], log: log.clone(), spawn: None });
+        app.build_plugins();
+
+        let c = calls(&log);
+        let build_a = c.iter().position(|x| x == "build:a").expect("a built");
+        let build_b = c.iter().position(|x| x == "build:b").expect("b built");
+        assert!(build_a < build_b, "a must build before b: {c:?}");
+        // every build runs before any finish
+        let last_build = c.iter().rposition(|x| x.starts_with("build:")).unwrap();
+        let first_finish = c.iter().position(|x| x.starts_with("finish:")).unwrap();
+        assert!(last_build < first_finish, "all builds precede finishes: {c:?}");
+    }
+
+    #[test]
+    fn absorbs_plugin_registered_during_build() {
+        let log: Log = Arc::new(Mutex::new(Vec::new()));
+        let log_for_child = log.clone();
+        let mut app = App::new();
+        app.add_plugin(Recorder {
+            name: "parent",
+            deps: vec![],
+            log: log.clone(),
+            spawn: Some(Box::new(move |app| {
+                app.add_plugin(Recorder {
+                    name: "child", deps: vec!["parent"], log: log_for_child.clone(), spawn: None,
+                });
+            })),
+        });
+        app.build_plugins();
+
+        let c = calls(&log);
+        assert!(c.contains(&"build:parent".to_string()), "parent built: {c:?}");
+        assert!(c.contains(&"build:child".to_string()), "child registered during build must be built: {c:?}");
+        assert!(app.pending_plugins.is_empty(), "no plugins left pending");
+    }
+
+    #[test]
+    fn leaves_unresolved_dependency_unbuilt() {
+        let log: Log = Arc::new(Mutex::new(Vec::new()));
+        let mut app = App::new();
+        app.add_plugin(Recorder { name: "needy", deps: vec!["missing"], log: log.clone(), spawn: None });
+        app.build_plugins();
+
+        assert!(!calls(&log).iter().any(|x| x == "build:needy"), "plugin with a missing dep must not build");
+        assert_eq!(app.pending_plugins.len(), 1, "the unresolved plugin stays pending");
+    }
 }
