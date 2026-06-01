@@ -2995,7 +2995,7 @@ impl RenderEngine3d {
             detail_sprite_pipeline: None,
             detail_sprite_compute_bgl: None,
             detail_sprite_compute_pipeline: None,
-            detail_sprite_instance_bufs: HashMap::default(),
+            detail_sprite_cache: HashMap::default(),
 
             lod_select_bgl: None,
             lod_select_pipeline: None,

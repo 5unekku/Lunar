@@ -6,6 +6,41 @@
 use super::*;
 
 impl RenderEngine3d {
+    /// build the detail-sprite compute bind group. resolves the density map view
+    /// (1×1 fallback until the texture uploads). returns `None` if the layout isn't ready.
+    fn build_detail_compute_bg(&self, params_buf: &wgpu::Buffer, inst_buf: &wgpu::Buffer, count_buf: &wgpu::Buffer, density_id: u32) -> Option<wgpu::BindGroup> {
+        let compute_bgl = self.detail_sprite_compute_bgl.as_ref()?;
+        let density_view = self.surface_tex_cache.get(&density_id).map(|(_, v)| v).unwrap_or(&self.contact_shadow_fallback_view);
+        Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[detail sprite] compute bg"),
+            layout: compute_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(density_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: inst_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: count_buf.as_entire_binding() },
+            ],
+        }))
+    }
+
+    /// build the detail-sprite render bind group. resolves the atlas view
+    /// (1×1 fallback until the texture uploads). returns `None` if the layout isn't ready.
+    fn build_detail_render_bg(&self, inst_buf: &wgpu::Buffer, atlas_id: u32) -> Option<wgpu::BindGroup> {
+        let render_bgl = self.detail_sprite_bgl.as_ref()?;
+        let atlas_view = self.surface_tex_cache.get(&atlas_id).map(|(_, v)| v as &wgpu::TextureView).unwrap_or(&self.contact_shadow_fallback_view);
+        Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("[detail sprite] render bg"),
+            layout: render_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.globals_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(atlas_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: inst_buf.as_entire_binding() },
+            ],
+        }))
+    }
+
     /// records the main color pass and the scene passes (surface shaders, terrain,
     /// water, decals, particles, detail sprites) into the HDR target; returns draw count.
     pub(crate) fn record_scene_passes(&mut self, fc: &FrameContext, world: &mut World, encoder: &mut wgpu::CommandEncoder) -> u32 {
@@ -664,9 +699,14 @@ impl RenderEngine3d {
 
                 for (entity, dd, _base_y) in &detail_entities {
                     let entity_key = entity.to_bits();
+                    let density_id = dd.density_map.id();
+                    let atlas_id   = dd.texture.id();
+                    // (id, uploaded yet?) — bind groups must rebuild when the resolved view flips
+                    let density_key = (density_id, self.surface_tex_cache.contains_key(&density_id));
+                    let atlas_key   = (atlas_id,   self.surface_tex_cache.contains_key(&atlas_id));
 
-                    // create per-entity buffers if needed
-                    if !self.detail_sprite_instance_bufs.contains_key(&entity_key) {
+                    // first sighting: allocate persistent buffers + build both bind groups once
+                    if !self.detail_sprite_cache.contains_key(&entity_key) {
                         let inst_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
                             label: Some("[detail sprite] instance buf"),
                             size: MAX_SPRITES as u64 * INSTANCE_STRIDE,
@@ -686,18 +726,51 @@ impl RenderEngine3d {
                             usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
                             mapped_at_creation: false,
                         });
-                        self.detail_sprite_instance_bufs.insert(entity_key, (inst_buf, count_buf, draw_buf));
+                        // persistent compute params uniform (48 bytes used; re-written each frame)
+                        let params_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("[detail sprite] compute params"),
+                            size: 64,
+                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        });
+                        let (Some(compute_bg), Some(render_bg)) = (
+                            self.build_detail_compute_bg(&params_buf, &inst_buf, &count_buf, density_id),
+                            self.build_detail_render_bg(&inst_buf, atlas_id),
+                        ) else { continue };
+                        self.detail_sprite_cache.insert(entity_key, DetailSpriteEntry {
+                            inst_buf, count_buf, draw_buf, params_buf, compute_bg, render_bg, density_key, atlas_key,
+                        });
+                    } else {
+                        // rebuild a bind group only when its resolved texture view changed
+                        let entry = self.detail_sprite_cache.get(&entity_key).unwrap();
+                        if entry.density_key != density_key {
+                            let (params_buf, inst_buf, count_buf) = (entry.params_buf.clone(), entry.inst_buf.clone(), entry.count_buf.clone());
+                            if let Some(bg) = self.build_detail_compute_bg(&params_buf, &inst_buf, &count_buf, density_id) {
+                                let e = self.detail_sprite_cache.get_mut(&entity_key).unwrap();
+                                e.compute_bg = bg;
+                                e.density_key = density_key;
+                            }
+                        }
+                        let entry = self.detail_sprite_cache.get(&entity_key).unwrap();
+                        if entry.atlas_key != atlas_key {
+                            let inst_buf = entry.inst_buf.clone();
+                            if let Some(bg) = self.build_detail_render_bg(&inst_buf, atlas_id) {
+                                let e = self.detail_sprite_cache.get_mut(&entity_key).unwrap();
+                                e.render_bg = bg;
+                                e.atlas_key = atlas_key;
+                            }
+                        }
                     }
 
-                    let (inst_buf, count_buf, draw_buf) = self.detail_sprite_instance_bufs.get(&entity_key).unwrap();
+                    let entry = self.detail_sprite_cache.get(&entity_key).unwrap();
 
                     // reset count and draw_buf each frame
-                    self.queue.write_buffer(count_buf, 0, &0u32.to_le_bytes());
+                    self.queue.write_buffer(&entry.count_buf, 0, &0u32.to_le_bytes());
                     // draw_buf: vertex_count=4 (strip quad), instance_count=0 (filled by copy), first_vertex=0, first_instance=0
                     let draw_init: [u32; 4] = [4, 0, 0, 0];
-                    self.queue.write_buffer(draw_buf, 0, bytemuck::cast_slice(&draw_init));
+                    self.queue.write_buffer(&entry.draw_buf, 0, bytemuck::cast_slice(&draw_init));
 
-                    // write compute params
+                    // write compute params into the persistent params buffer
                     let grid_step = dd.grid_step.max(0.1);
                     let grid_count_x = ((dd.world_size.x / grid_step).ceil() as u32).min(256);
                     let grid_count_z = ((dd.world_size.y / grid_step).ceil() as u32).min(256);
@@ -709,73 +782,24 @@ impl RenderEngine3d {
                     ];
                     // additional u32 fields: variant_count + pad
                     let compute_params_tail: [u32; 2] = [dd.variant_count, 0];
+                    self.queue.write_buffer(&entry.params_buf, 0, bytemuck::cast_slice(&compute_params));
+                    self.queue.write_buffer(&entry.params_buf, 48, bytemuck::cast_slice(&compute_params_tail));
 
-                    // build a temp uniform buffer for compute params (48 bytes)
-                    let params_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("[detail sprite] compute params"),
-                        size: 64,
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    });
-                    self.queue.write_buffer(&params_buf, 0, bytemuck::cast_slice(&compute_params));
-                    self.queue.write_buffer(&params_buf, 48, bytemuck::cast_slice(&compute_params_tail));
-
-                    // get density map GPU texture view — fallback to 1x1 when not uploaded yet
-                    let density_view: Option<&wgpu::TextureView> =
-                        self.surface_tex_cache.get(&dd.density_map.id()).map(|(_, v)| v);
-
-                    if let (Some(compute_bgl), Some(compute_pipeline)) = (
-                        self.detail_sprite_compute_bgl.as_ref(),
-                        self.detail_sprite_compute_pipeline.as_ref(),
-                    ) {
-                        // use contact shadow fallback view as density map fallback (1x1 R8)
-                        let density_tex_view = density_view.unwrap_or(&self.contact_shadow_fallback_view);
-
-                        let compute_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("[detail sprite] compute bg"),
-                            layout: compute_bgl,
-                            entries: &[
-                                wgpu::BindGroupEntry { binding: 0, resource: params_buf.as_entire_binding() },
-                                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(density_tex_view) },
-                                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
-                                wgpu::BindGroupEntry { binding: 3, resource: inst_buf.as_entire_binding() },
-                                wgpu::BindGroupEntry { binding: 4, resource: count_buf.as_entire_binding() },
-                            ],
-                        });
-
+                    if let Some(compute_pipeline) = self.detail_sprite_compute_pipeline.as_ref() {
                         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                             label: Some("[detail sprite] compute"),
                             timestamp_writes: None,
                         });
                         cpass.set_pipeline(compute_pipeline);
-                        cpass.set_bind_group(0, &compute_bg, &[]);
+                        cpass.set_bind_group(0, &entry.compute_bg, &[]);
                         cpass.dispatch_workgroups(grid_count_x.div_ceil(8), grid_count_z.div_ceil(8), 1);
                     }
 
                     // copy instance count → draw_buf instance_count field
-                    encoder.copy_buffer_to_buffer(count_buf, 0, draw_buf, 4, 4);
+                    encoder.copy_buffer_to_buffer(&entry.count_buf, 0, &entry.draw_buf, 4, 4);
 
                     // render the sprites
-                    if let (Some(render_bgl), Some(render_pipeline)) = (
-                        self.detail_sprite_bgl.as_ref(),
-                        self.detail_sprite_pipeline.as_ref(),
-                    ) {
-                        // use surface_tex_cache for atlas lookup, fallback to 1x1 when not uploaded yet
-                        let atlas_view = self.surface_tex_cache.get(&dd.texture.id())
-                            .map(|(_, v)| v as &wgpu::TextureView)
-                            .unwrap_or(&self.contact_shadow_fallback_view);
-
-                        let render_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("[detail sprite] render bg"),
-                            layout: render_bgl,
-                            entries: &[
-                                wgpu::BindGroupEntry { binding: 0, resource: self.globals_buf.as_entire_binding() },
-                                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(atlas_view) },
-                                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.post_sampler) },
-                                wgpu::BindGroupEntry { binding: 3, resource: inst_buf.as_entire_binding() },
-                            ],
-                        });
-
+                    if let Some(render_pipeline) = self.detail_sprite_pipeline.as_ref() {
                         let (color_target, resolve_target) = match &self.msaa_color_view {
                             Some(msaa) => (msaa as &wgpu::TextureView, Some(&self.hdr_view as &wgpu::TextureView)),
                             None => (&self.hdr_view as &wgpu::TextureView, None),
@@ -798,8 +822,8 @@ impl RenderEngine3d {
                             multiview_mask: None,
                         });
                         rpass.set_pipeline(render_pipeline);
-                        rpass.set_bind_group(0, &render_bg, &[]);
-                        rpass.draw_indirect(draw_buf, 0);
+                        rpass.set_bind_group(0, &entry.render_bg, &[]);
+                        rpass.draw_indirect(&entry.draw_buf, 0);
                         draw_calls += 1;
                     }
                 }

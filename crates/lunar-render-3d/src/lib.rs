@@ -958,6 +958,22 @@ struct FrameContext {
     camera: Camera3d,
 }
 
+/// per-detail-density-entity GPU resources, cached across frames.
+///
+/// buffers and bind groups are persistent; only `params_buf` is re-written each frame
+/// and the bind groups are rebuilt when the resolved density/atlas texture view changes
+/// (tracked via `density_key`/`atlas_key` — `(texture id, uploaded yet?)`).
+struct DetailSpriteEntry {
+    inst_buf:   wgpu::Buffer,
+    count_buf:  wgpu::Buffer,
+    draw_buf:   wgpu::Buffer,
+    params_buf: wgpu::Buffer,
+    compute_bg: wgpu::BindGroup,
+    render_bg:  wgpu::BindGroup,
+    density_key: (u32, bool),
+    atlas_key:   (u32, bool),
+}
+
 /// the 3d rendering engine. owns the wgpu device, queue, and surface.
 ///
 /// inserted as a resource by [`RenderPlugin3d`]. game code should not
@@ -1452,9 +1468,9 @@ pub struct RenderEngine3d {
     detail_sprite_pipeline:         Option<wgpu::RenderPipeline>,
     detail_sprite_compute_bgl:      Option<wgpu::BindGroupLayout>,
     detail_sprite_compute_pipeline: Option<wgpu::ComputePipeline>,
-    // per-entity detail sprite buffers: entity_bits → (instances_buf, count_buf, draw_buf)
-    // instances_buf: array<SpriteInstance>, count_buf: atomic<u32>, draw_buf: DrawIndirect
-    detail_sprite_instance_bufs: HashMap<u64, (wgpu::Buffer, wgpu::Buffer, wgpu::Buffer)>,
+    // per-entity detail sprite GPU resources (buffers + cached bind groups), keyed by entity bits.
+    // see [`DetailSpriteEntry`]: instances_buf/count_buf/draw_buf/params_buf + compute & render BGs.
+    detail_sprite_cache: HashMap<u64, DetailSpriteEntry>,
 
     // ── gpu lod selection ─────────────────────────────────────────────────
     lod_select_bgl:           Option<wgpu::BindGroupLayout>,
