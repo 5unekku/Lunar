@@ -216,7 +216,7 @@ impl RenderEngine3d {
         self.cull_entities(world, view_proj, cam_pos);
         self.gather_draw_list(world, cam_pos);
         // ── upload missing meshes ─────────────────────────────────────────
-        let mut mesh_evict_ids: Vec<u32> = Vec::new();
+        self.mesh_evict_scratch.clear();
         for i in 0..self.draw_scratch.len() {
             let mesh_id = self.draw_scratch[i].1;
             if !self.mesh_gpu.contains_key(&mesh_id) {
@@ -224,7 +224,7 @@ impl RenderEngine3d {
                 if let Some(data) = registry.get_mesh(lunar_assets::Handle::new(mesh_id, 0)) {
                     let gpu = Self::upload_mesh_data(&self.device, &self.queue, data);
                     self.mesh_gpu.insert(mesh_id, gpu);
-                    if data.gpu_only { mesh_evict_ids.push(mesh_id); }
+                    if data.gpu_only { self.mesh_evict_scratch.push(mesh_id); }
                 }
             }
             // also append to mega-buffers when has_indirect and not yet there
@@ -281,7 +281,7 @@ impl RenderEngine3d {
                         if let Some(data) = registry.get_mesh(lunar_assets::Handle::new(mesh_id, 0)) {
                             let gpu = Self::upload_mesh_data(&self.device, &self.queue, data);
                             self.mesh_gpu.insert(mesh_id, gpu);
-                            if data.gpu_only { mesh_evict_ids.push(mesh_id); }
+                            if data.gpu_only { self.mesh_evict_scratch.push(mesh_id); }
                         }
                     }
                 }
@@ -293,11 +293,11 @@ impl RenderEngine3d {
         }
 
         // evict cpu mesh data for newly uploaded gpu_only meshes
-        if !mesh_evict_ids.is_empty() {
-            mesh_evict_ids.sort_unstable();
-            mesh_evict_ids.dedup();
+        if !self.mesh_evict_scratch.is_empty() {
+            self.mesh_evict_scratch.sort_unstable();
+            self.mesh_evict_scratch.dedup();
             let mut registry = world.resource_mut::<MeshRegistry>();
-            for id in mesh_evict_ids {
+            for id in self.mesh_evict_scratch.drain(..) {
                 registry.evict_cpu_data(lunar_assets::Handle::new(id, 0));
             }
         }
@@ -342,35 +342,33 @@ impl RenderEngine3d {
         // ── texture coverage hints (item E — mip streaming) ──────────────
         // collect (lm_id, coverage) pairs, then update asset server in one pass.
         {
-            let mut hints: Vec<(u32, f32)> = Vec::new();
+            self.coverage_hints_scratch.clear();
             for i in 0..self.draw_scratch.len() {
                 let lm_id = self.draw_scratch[i].9;
                 if lm_id == u32::MAX { continue; }
                 let model = self.draw_scratch[i].6;
                 let world_pos = model.w_axis;
                 let dist = (Vec3::new(world_pos.x, world_pos.y, world_pos.z) - cam_pos).length().max(0.01);
-                hints.push((lm_id, 1.0 / dist));
+                self.coverage_hints_scratch.push((lm_id, 1.0 / dist));
             }
             let mut asset_server = world.resource_mut::<lunar_assets::AssetServer>();
             asset_server.coverage_hints.clear();
-            for (tid, cov) in hints {
+            for (tid, cov) in self.coverage_hints_scratch.drain(..) {
                 asset_server.hint_coverage(tid, cov);
             }
         }
 
         // upload lightmap textures (irradiance + direction) and create combined bind groups
-        // step 1: collect needed (lm_id, dir_lm_id) pairs from draw_scratch
-        let lm_needed: Vec<(u32, u32)> = {
-            let mut v: Vec<(u32, u32)> = self.draw_scratch.iter()
-                .filter(|e| e.9 != u32::MAX)
-                .map(|e| (e.9, e.10))
-                .collect();
-            v.sort_unstable();
-            v.dedup();
-            v
-        };
+        // step 1: collect needed (lm_id, dir_lm_id) pairs from draw_scratch (reused scratch)
+        self.lm_needed_scratch.clear();
+        self.lm_needed_scratch.extend(
+            self.draw_scratch.iter().filter(|e| e.9 != u32::MAX).map(|e| (e.9, e.10)),
+        );
+        self.lm_needed_scratch.sort_unstable();
+        self.lm_needed_scratch.dedup();
         // step 2: upload textures (uses asset_server borrow)
-        let (lm_new_vram, lm_evict_ids): (u64, Vec<u32>) = {
+        let lm_new_vram: u64 = {
+            self.lm_evict_scratch.clear();
             let asset_server = world.resource::<lunar_assets::AssetServer>();
 
             // helper: upload one Texture asset to GPU, return (Texture, TextureView)
@@ -441,9 +439,8 @@ impl RenderEngine3d {
             };
 
             let mut new_vram_bytes = 0u64;
-            let mut evict_ids: Vec<u32> = Vec::new();
             // upload irradiance textures not yet in cache
-            for &(lm_id, _) in &lm_needed {
+            for &(lm_id, _) in &self.lm_needed_scratch {
                 if !self.lm_tex_cache.contains_key(&lm_id)
                     && let Some(tex) = asset_server.get_texture_by_id(lm_id) {
                         let max_mips = tex.mip_level_count();
@@ -452,20 +449,20 @@ impl RenderEngine3d {
                         new_vram_bytes += (tex.width * tex.height * 4) as u64 * 4 / 3;
                         let entry = upload_lm_tex(&self.device, &self.queue, tex, "[lightmap] irr", true);
                         self.lm_tex_cache.insert(lm_id, entry);
-                        evict_ids.push(lm_id);
+                        self.lm_evict_scratch.push(lm_id);
                     }
             }
             // upload direction textures not yet in cache
-            for &(_, dir_lm_id) in &lm_needed {
+            for &(_, dir_lm_id) in &self.lm_needed_scratch {
                 if dir_lm_id != u32::MAX && !self.dir_lm_tex_cache.contains_key(&dir_lm_id)
                     && let Some(tex) = asset_server.get_texture_by_id(dir_lm_id) {
                         new_vram_bytes += (tex.width * tex.height * 4) as u64;
                         let entry = upload_lm_tex(&self.device, &self.queue, tex, "[lightmap] dir", false);
                         self.dir_lm_tex_cache.insert(dir_lm_id, entry);
-                        evict_ids.push(dir_lm_id);
+                        self.lm_evict_scratch.push(dir_lm_id);
                     }
             }
-            (new_vram_bytes, evict_ids)
+            new_vram_bytes
         };  // asset_server released here
         // step 3: update VRAM tracking
         if lm_new_vram > 0
@@ -473,16 +470,16 @@ impl RenderEngine3d {
                 vram.add_bytes(lm_new_vram);
             }
         // step 3b: evict cpu-side pixel data for newly uploaded lightmap textures
-        if !lm_evict_ids.is_empty() {
+        if !self.lm_evict_scratch.is_empty() {
             let mut asset_server = world.resource_mut::<lunar_assets::AssetServer>();
-            for id in lm_evict_ids {
+            for id in self.lm_evict_scratch.drain(..) {
                 if let Some(tex) = asset_server.get_texture_by_id_mut(id) {
                     tex.evict_cpu_data();
                 }
             }
         }
         // step 4: create missing combined bind groups (only needs self, no world borrow)
-        for &(lm_id, dir_lm_id) in &lm_needed {
+        for &(lm_id, dir_lm_id) in &self.lm_needed_scratch {
                 if self.lightmap_bg_cache.contains_key(&(lm_id, dir_lm_id)) { continue; }
                 let Some((_, irr_view)) = self.lm_tex_cache.get(&lm_id) else { continue; };
                 let dir_view: &wgpu::TextureView = if dir_lm_id != u32::MAX {
@@ -621,17 +618,17 @@ impl RenderEngine3d {
         // ── pack lights buffer ────────────────────────────────────────────
         // assign shadow slots to first MAX_POINT_SHADOW_LIGHTS lights with casts_shadows=true
         let mut shadow_slot_idx: usize = 0;
-        let shadow_indices: Vec<u32> = self.point_light_scratch.iter()
-            .map(|&(_, _, _, _, casts, _)| {
-                if casts && dev_point_shadows && shadow_slot_idx < MAX_POINT_SHADOW_LIGHTS {
-                    let idx = shadow_slot_idx as u32;
-                    shadow_slot_idx += 1;
-                    idx
-                } else {
-                    0xffffffff
-                }
-            })
-            .collect();
+        self.shadow_indices_scratch.clear();
+        for &(_, _, _, _, casts, _) in &self.point_light_scratch {
+            let idx = if casts && dev_point_shadows && shadow_slot_idx < MAX_POINT_SHADOW_LIGHTS {
+                let v = shadow_slot_idx as u32;
+                shadow_slot_idx += 1;
+                v
+            } else {
+                0xffffffff
+            };
+            self.shadow_indices_scratch.push(idx);
+        }
 
         #[repr(C)]
         #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -700,7 +697,7 @@ impl RenderEngine3d {
                     intensity,
                     color: [color.r, color.g, color.b],
                     radius,
-                    shadow_index: shadow_indices[i],
+                    shadow_index: self.shadow_indices_scratch[i],
                     _pad: [0; 3],
                 };
                 self.light_data_scratch[off..off + 48].copy_from_slice(bytemuck::bytes_of(&entry));
@@ -751,9 +748,9 @@ impl RenderEngine3d {
         }
 
         // ── upload surface shader textures + stage params ─────────────────
-        let surface_evict_ids: Vec<u32> = {
+        self.surface_evict_scratch.clear();
+        {
             let asset_server = world.resource::<lunar_assets::AssetServer>();
-            let mut evict_ids: Vec<u32> = Vec::new();
             for &(_, slot, tex_ids, packed_stages) in &self.surface_scratch {
                 // upload any new textures
                 for &tid in &tex_ids {
@@ -791,7 +788,7 @@ impl RenderEngine3d {
                                 wgpu::Extent3d { width: tex.width, height: tex.height, depth_or_array_layers: 1 });
                             let view = gpu_tex.create_view(&Default::default());
                             self.surface_tex_cache.insert(tid, (gpu_tex, view));
-                            evict_ids.push(tid);
+                            self.surface_evict_scratch.push(tid);
                         }
                 }
                 // upload stage params for this entity
@@ -834,12 +831,11 @@ impl RenderEngine3d {
                     self.surface_bg_cache.insert(tex_ids, bg);
                 }
             }
-            evict_ids
-        };
+        }
         // evict cpu-side data for newly uploaded surface textures
-        if !surface_evict_ids.is_empty() {
+        if !self.surface_evict_scratch.is_empty() {
             let mut asset_server = world.resource_mut::<lunar_assets::AssetServer>();
-            for id in surface_evict_ids {
+            for id in self.surface_evict_scratch.drain(..) {
                 if let Some(tex) = asset_server.get_texture_by_id_mut(id) {
                     tex.evict_cpu_data();
                 }

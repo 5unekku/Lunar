@@ -2915,6 +2915,12 @@ impl RenderEngine3d {
             cluster_indices_scratch: Vec::new(),
             late_aabb_scratch: Vec::new(),
             dp_data_scratch: Vec::new(),
+            mesh_evict_scratch: Vec::new(),
+            coverage_hints_scratch: Vec::new(),
+            shadow_indices_scratch: Vec::new(),
+            lm_needed_scratch: Vec::new(),
+            lm_evict_scratch: Vec::new(),
+            surface_evict_scratch: Vec::new(),
 
             render_graph: Self::build_render_graph(render_tier, bloom_enabled, ssr_enabled, fog_enabled, fxaa_enabled, ssao_enabled, staa_enabled),
 

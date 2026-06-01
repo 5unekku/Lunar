@@ -1355,6 +1355,13 @@ pub struct RenderEngine3d {
     // late indirect-cull upload data (draw_scratch order): AABBs + draw params
     late_aabb_scratch: Vec<f32>,
     dp_data_scratch: Vec<u32>,
+    // reused per-frame transients (cleared + refilled each frame instead of re-allocating)
+    mesh_evict_scratch: Vec<u32>,           // gpu_only mesh ids to evict cpu data for
+    coverage_hints_scratch: Vec<(u32, f32)>, // (lm_id, coverage) mip-streaming hints
+    shadow_indices_scratch: Vec<u32>,        // per-point-light shadow slot index
+    lm_needed_scratch: Vec<(u32, u32)>,      // distinct (lm_id, dir_lm_id) pairs this frame
+    lm_evict_scratch: Vec<u32>,              // lightmap texture ids to evict cpu data for
+    surface_evict_scratch: Vec<u32>,         // surface texture ids to evict cpu data for
 
     // render graph DAG — built once at init, drives pass execution order in render_frame.
     // models pass dependencies via declared texture reads/writes and topological sort.
