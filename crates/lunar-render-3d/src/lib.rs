@@ -1264,6 +1264,8 @@ pub struct RenderEngine3d {
     static_bundle: Option<wgpu::RenderBundle>,
     // sorted (mesh_id, mat_id, lm_id, entity_slot) list used to detect set changes
     static_draw_list: Vec<(u32, u32, u32, u32, usize)>,
+    // reused scratch for building this frame's list before comparing to static_draw_list
+    static_list_scratch: Vec<(u32, u32, u32, u32, usize)>,
     // (hdr_format, msaa_samples) the bundle was recorded with
     static_bundle_params: (wgpu::TextureFormat, u32),
     // number of entity slots reserved for static entities (slots 2..2+N)

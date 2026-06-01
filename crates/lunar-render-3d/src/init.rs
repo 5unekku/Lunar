@@ -2873,6 +2873,7 @@ impl RenderEngine3d {
             auto_quality_under_frames: 0,
             static_bundle: None,
             static_draw_list: Vec::new(),
+            static_list_scratch: Vec::new(),
             static_bundle_params: (wgpu::TextureFormat::Rgba16Float, 0),
             static_entity_count: 0,
             static_entity_slots: HashMap::default(),

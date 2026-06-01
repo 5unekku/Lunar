@@ -17,19 +17,25 @@ impl RenderEngine3d {
 
         // ── static RenderBundle recording ─────────────────────────────────
         // rebuild when the static entity set changes or hdr_format/msaa_samples change.
+        // the comparison stays per-frame on purpose: the bundle bakes `ENTITY_SLOT_START + i`
+        // (draw_scratch index), and those indices shift whenever culling reorders draw_scratch,
+        // so a static-set-only dirty flag would leave stale slot bindings. we only avoid the
+        // per-frame heap churn here — build into a reused scratch vec and swap instead of clone.
         {
-            let mut new_static_list: Vec<(u32, u32, u32, u32, usize)> = Vec::new();
+            self.static_list_scratch.clear();
             for (i, entry) in self.draw_scratch.iter().enumerate() {
                 if self.static_entity_slots.contains_key(&entry.0) {
-                    new_static_list.push((entry.1, entry.2, entry.9, entry.10, i));
+                    self.static_list_scratch.push((entry.1, entry.2, entry.9, entry.10, i));
                 }
             }
-            new_static_list.sort_unstable();
+            self.static_list_scratch.sort_unstable();
             let format_changed = self.static_bundle_params != (self.hdr_format, self.msaa_samples);
-            let list_changed = new_static_list != self.static_draw_list;
-            if (list_changed || format_changed) && !new_static_list.is_empty() {
+            let list_changed = self.static_list_scratch != self.static_draw_list;
+            if (list_changed || format_changed) && !self.static_list_scratch.is_empty() {
                 self.static_bundle_params = (self.hdr_format, self.msaa_samples);
-                self.static_draw_list = new_static_list.clone();
+                // adopt the freshly built list; scratch keeps the old vec's capacity for reuse
+                std::mem::swap(&mut self.static_draw_list, &mut self.static_list_scratch);
+                let new_static_list = &self.static_draw_list;
                 let mut benc = self.device.create_render_bundle_encoder(
                     &wgpu::RenderBundleEncoderDescriptor {
                         label: Some("[static] bundle encoder"),
@@ -85,7 +91,7 @@ impl RenderEngine3d {
                 self.static_bundle = Some(benc.finish(&wgpu::RenderBundleDescriptor {
                     label: Some("[static] bundle"),
                 }));
-            } else if new_static_list.is_empty() {
+            } else if self.static_list_scratch.is_empty() {
                 self.static_bundle = None;
                 self.static_draw_list.clear();
             }
