@@ -107,6 +107,10 @@ const DETAIL_SPRITE_SHADER_SRC: &str      = include_str!("detail_sprite.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const STAA_SHADER_SRC: &str               = include_str!("staa.wgsl");
 
+// staa history is stored at higher precision than the 8-bit swapchain so temporal
+// accumulation keeps sub-lsb detail instead of quantizing back to softness each frame.
+const STAA_HISTORY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
 /// create a shader module from pre-compiled spirv (release) or wgsl (debug).
 /// in release, `source` is the spirv bytes from OUT_DIR; in debug, the wgsl string.
 macro_rules! shader_source {
@@ -213,8 +217,9 @@ const GTAO_PARAMS_SIZE: u64 = 160;
 /// FXAA params UBO: rcp_frame(vec2) + 2 pads = 16 bytes.
 const FXAA_PARAMS_SIZE: u64 = 16;
 
-/// TAA params UBO: prev_vp(64) + inv_vp(64) + jitter(8) + rcp_frame(8) + blend_alpha(4) + frame_index(4) + pad(8) = 160 bytes.
-const STAA_PARAMS_SIZE: u64 = 160;
+/// TAA params UBO: prev_vp(64) + inv_vp(64) + jitter(8) + rcp_frame(8) + blend_alpha(4)
+/// + frame_index(4) + depth_scale(8) + prev_jitter(8) + pad(8) = 176 bytes.
+const STAA_PARAMS_SIZE: u64 = 176;
 
 /// SSR params UBO: inv_view_proj(64) + proj(64) + view(64) + misc(32) = 224 bytes.
 const SSR_PARAMS_SIZE: u64 = 224;
@@ -908,7 +913,6 @@ impl Default for RenderInfo3d {
 /// end of render_frame and passed to extracted `record_*` pass methods. all Copy.
 struct FrameContext {
     view_proj: Mat4,
-    view_proj_unjittered: Mat4,
     staa_jitter_ndc: Vec2,
     cam_pos: Vec3,
     cam_wt: WorldTransform3d,
@@ -1130,8 +1134,8 @@ pub struct RenderEngine3d {
     // staa_bg_odd  reads history_b, writes to [swapchain, history_a].
     staa_enabled: bool,
     staa_frame_index: u32,
-    staa_prev_vp: Mat4,              // unjittered view_proj from previous frame (camera_stationary check)
     staa_prev_vp_jittered: Mat4,     // jittered view_proj from previous frame (shader history reprojection)
+    staa_prev_jitter: Vec2,          // previous frame jitter (uv space) for un-jittering velocity
     staa_history_a_texture: wgpu::Texture,
     staa_history_a_view: wgpu::TextureView,
     staa_history_b_texture: wgpu::Texture,
@@ -2864,7 +2868,7 @@ impl RenderEngine3d {
             size: wgpu::Extent3d { width: config.width, height: config.height, depth_or_array_layers: 1 },
             mip_level_count: 1, sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format,
+            format: STAA_HISTORY_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -2875,7 +2879,7 @@ impl RenderEngine3d {
             size: wgpu::Extent3d { width: config.width, height: config.height, depth_or_array_layers: 1 },
             mip_level_count: 1, sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format,
+            format: STAA_HISTORY_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -2994,8 +2998,9 @@ impl RenderEngine3d {
                 module: &taa_shader,
                 entry_point: Some("fs_main"),
                 targets: &[
+                    // present → swapchain; history → higher precision for accumulation
                     Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL }),
-                    Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL }),
+                    Some(wgpu::ColorTargetState { format: STAA_HISTORY_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL }),
                 ],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
@@ -4219,8 +4224,8 @@ impl RenderEngine3d {
             fxaa_pipeline,
             staa_enabled,
             staa_frame_index: 0,
-            staa_prev_vp: Mat4::IDENTITY,
             staa_prev_vp_jittered: Mat4::IDENTITY,
+            staa_prev_jitter: Vec2::ZERO,
             staa_history_a_texture,
             staa_history_a_view,
             staa_history_b_texture,
@@ -6306,13 +6311,12 @@ impl RenderEngine3d {
         });
 
         // rebuild taa history textures and bind groups at the new resolution
-        let fmt = self.surface_config.format;
         let staa_history_a_texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("[staa] history A"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
             mip_level_count: 1, sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: fmt,
+            format: STAA_HISTORY_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -6322,7 +6326,7 @@ impl RenderEngine3d {
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
             mip_level_count: 1, sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: fmt,
+            format: STAA_HISTORY_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -7267,7 +7271,7 @@ impl RenderEngine3d {
     /// shadow, motion vectors, composite, taa, fxaa) into the frame encoder, ending at
     /// the swapchain. `view` is the surface view (moved in; not used after).
     fn record_post_processing(&mut self, fc: &FrameContext, world: &World, encoder: &mut wgpu::CommandEncoder, view: wgpu::TextureView) {
-        let &FrameContext { view_proj, view_proj_unjittered, staa_jitter_ndc, cam_pos, cam_wt, dev_bloom, dev_ssao, dev_ssr, dev_fog, dev_fxaa, dev_staa, dev_vignette, dev_chrom_ab, dev_film_grain, dev_contact_shadows, upscale_mode, dir_color, dir_direction, sky_color, .. } = fc;
+        let &FrameContext { view_proj, staa_jitter_ndc, cam_pos, cam_wt, dev_bloom, dev_ssao, dev_ssr, dev_fog, dev_fxaa, dev_staa, dev_vignette, dev_chrom_ab, dev_film_grain, dev_contact_shadows, upscale_mode, dir_color, dir_direction, sky_color, .. } = fc;
         // ── bloom passes ─────────────────────────────────────────────────
         if self.bloom_enabled && dev_bloom && !self.bloom_mip_views.is_empty() {
             let n = self.bloom_mip_views.len();
@@ -7776,6 +7780,11 @@ impl RenderEngine3d {
             // so we must scale the texel coordinates to stay in-bounds.
             taa_data[152..156].copy_from_slice(bytemuck::cast_slice(&[self.render_w as f32 / w as f32]));
             taa_data[156..160].copy_from_slice(bytemuck::cast_slice(&[self.render_h as f32 / h as f32]));
+            // previous frame jitter (uv space) so the shader can fully un-jitter velocity:
+            // without it a static camera reads ~0.4px phantom motion and never reaches
+            // zero-spatial (pure temporal ssaa) → soft edges when still.
+            taa_data[160..164].copy_from_slice(bytemuck::cast_slice(&[self.staa_prev_jitter.x]));
+            taa_data[164..168].copy_from_slice(bytemuck::cast_slice(&[self.staa_prev_jitter.y]));
             self.queue.write_buffer(&self.staa_params_buf, 0, &taa_data);
 
             // ping-pong: even frame writes to history_b (reads from history_a via bg_even)
@@ -7819,10 +7828,10 @@ impl RenderEngine3d {
             let _ = (write_a, write_b);
         }
 
-        // always track both vps regardless of staa state, so the first active frame
-        // has correct values (camera_stationary and history reprojection both need them).
-        self.staa_prev_vp          = view_proj_unjittered;
-        self.staa_prev_vp_jittered = view_proj; // jittered when camera stationary, unjittered when moving
+        // always track the jittered vp regardless of staa state, so the first active
+        // frame has a correct value for history reprojection.
+        self.staa_prev_vp_jittered = view_proj;          // jittered vp, matches history
+        self.staa_prev_jitter      = staa_jitter_ndc;    // this frame's jitter → "prev" next frame
 
         // ── FXAA pass → swapchain ─────────────────────────────────────────
         if dev_fxaa && !dev_staa {
@@ -9382,11 +9391,10 @@ impl RenderEngine3d {
         // jitter is depth-independent (constant screen-space offset for all vertices).
         // the jitter makes each frame sample a different sub-pixel position; TAA then accumulates
         // these samples to achieve effective temporal super-sampling on edge-adjacent pixels.
-        // jitter is only useful when there is stable history to accumulate against.
-        // during camera movement the history is being reprojected anyway and any
-        // remaining jitter in the output frame just oscillates visibly as stutter.
-        // compare to previous unjittered vp: any difference means the camera moved.
-        let camera_stationary = self.staa_prev_vp == view_proj_unjittered;
+        // we jitter EVERY frame (standard TAA): the shader reprojects + un-jitters history, so
+        // there is no motion stutter, and accumulation never resets. (it used to gate on an exact
+        // `prev_vp == vp` stationary check, but that flickered off on the tiniest mouse motion —
+        // resetting the accumulation before it could converge, which read as permanent softness.)
 
         // precompute before the jitter decision (full dev_staa is built below with the rest)
         // dev_staa is resolved below with the rest of the dev profile, but we need
@@ -9396,7 +9404,7 @@ impl RenderEngine3d {
             && world.get_resource::<QualitySettings>().map(|q| q.staa).unwrap_or(false)
             && self.staa_enabled; // staa_enabled = false on LowGles (no compute), true otherwise
 
-        let (view_proj, staa_jitter_ndc) = if staa_on && camera_stationary {
+        let (view_proj, staa_jitter_ndc) = if staa_on {
             // Halton low-discrepancy sequence: base 2 for x, base 3 for y.
             // use frame_index+1 so index 0 maps to a non-zero offset (avoids identity jitter).
             let idx = (self.staa_frame_index % 8 + 1) as u64;
@@ -10537,7 +10545,7 @@ impl RenderEngine3d {
         }
 
         // bundle read-only per-frame state once; shared by the pre-color and post passes
-        let fc = FrameContext { view_proj, view_proj_unjittered, staa_jitter_ndc, cam_pos, cam_wt, aspect, camera, sky, dir_illuminance, dir_enabled, vp_x, vp_y, vp_w, vp_h, dev_bloom, dev_ssao, dev_ssr, dev_fog, dev_fxaa, dev_staa, dev_vignette, dev_chrom_ab, dev_film_grain, dev_contact_shadows, upscale_mode, dir_color, dir_direction, sky_color };
+        let fc = FrameContext { view_proj, staa_jitter_ndc, cam_pos, cam_wt, aspect, camera, sky, dir_illuminance, dir_enabled, vp_x, vp_y, vp_w, vp_h, dev_bloom, dev_ssao, dev_ssr, dev_fog, dev_fxaa, dev_staa, dev_vignette, dev_chrom_ab, dev_film_grain, dev_contact_shadows, upscale_mode, dir_color, dir_direction, sky_color };
         self.record_gtao_reflection(&fc, world, &mut encoder);
         let draw_calls = self.record_scene_passes(&fc, world, &mut encoder);
         self.record_post_processing(&fc, world, &mut encoder, view);

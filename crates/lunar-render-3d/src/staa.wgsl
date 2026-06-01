@@ -33,6 +33,8 @@ struct TaaParams {
     // depth_scale: render_resolution / display_resolution.
     // staa runs at display resolution but depth_tex is at render resolution.
     depth_scale: vec2<f32>,
+    // prev_jitter: previous frame jitter in uv space, to fully un-jitter velocity.
+    prev_jitter: vec2<f32>,
 }
 
 @group(0) @binding(0) var<uniform> params:      TaaParams;
@@ -131,6 +133,39 @@ fn fxaa_resolve(uv: vec2<f32>, rc: vec2<f32>,
     return select(rgb_a, rgb_b, luma_b >= luma_min && luma_b <= luma_max);
 }
 
+// catmull-rom (bicubic) history sample — 9 bilinear taps via the standard weight
+// trick. preserves the high frequencies a single bilinear tap low-passes away, so
+// repeated reprojection keeps the accumulated image sharp instead of softening it.
+// negative side lobes can ring, but the aabb clip on the result tames that.
+fn sample_history_catmull_rom(uv: vec2<f32>, rc: vec2<f32>) -> vec3<f32> {
+    let tex_size   = 1.0 / rc;
+    let sample_pos = uv * tex_size;
+    let tex_pos1   = floor(sample_pos - 0.5) + 0.5;
+    let f          = sample_pos - tex_pos1;
+
+    let w0  = f * (-0.5 + f * (1.0 - 0.5 * f));
+    let w1  = 1.0 + f * f * (-2.5 + 1.5 * f);
+    let w2  = f * (0.5 + f * (2.0 - 1.5 * f));
+    let w3  = f * f * (-0.5 + 0.5 * f);
+    let w12 = w1 + w2;
+
+    let off0  = (tex_pos1 - 1.0)      * rc;
+    let off12 = (tex_pos1 + w2 / w12) * rc;
+    let off3  = (tex_pos1 + 2.0)      * rc;
+
+    var c = vec3<f32>(0.0);
+    c += textureSampleLevel(history_tex, linear_smp, vec2<f32>(off0.x,  off0.y ), 0.0).rgb * (w0.x  * w0.y);
+    c += textureSampleLevel(history_tex, linear_smp, vec2<f32>(off12.x, off0.y ), 0.0).rgb * (w12.x * w0.y);
+    c += textureSampleLevel(history_tex, linear_smp, vec2<f32>(off3.x,  off0.y ), 0.0).rgb * (w3.x  * w0.y);
+    c += textureSampleLevel(history_tex, linear_smp, vec2<f32>(off0.x,  off12.y), 0.0).rgb * (w0.x  * w12.y);
+    c += textureSampleLevel(history_tex, linear_smp, vec2<f32>(off12.x, off12.y), 0.0).rgb * (w12.x * w12.y);
+    c += textureSampleLevel(history_tex, linear_smp, vec2<f32>(off3.x,  off12.y), 0.0).rgb * (w3.x  * w12.y);
+    c += textureSampleLevel(history_tex, linear_smp, vec2<f32>(off0.x,  off3.y ), 0.0).rgb * (w0.x  * w3.y);
+    c += textureSampleLevel(history_tex, linear_smp, vec2<f32>(off12.x, off3.y ), 0.0).rgb * (w12.x * w3.y);
+    c += textureSampleLevel(history_tex, linear_smp, vec2<f32>(off3.x,  off3.y ), 0.0).rgb * (w3.x  * w3.y);
+    return c;
+}
+
 @fragment
 fn fs_main(in: VertOut) -> FragOut {
     let uv = in.uv;
@@ -192,15 +227,17 @@ fn fs_main(in: VertOut) -> FragOut {
 
     let in_bounds = all(prev_uv >= vec2<f32>(0.0)) && all(prev_uv <= vec2<f32>(1.0));
 
-    // velocity in screen-pixels (jitter removed) for blend adaptation
+    // velocity in screen-pixels, with BOTH frames' jitter removed. prev_uv is sampled
+    // from the jittered prev_vp (correct for history), so subtract prev_jitter here to
+    // recover true motion — otherwise a static camera reads ~0.5px of phantom speed.
     let curr_uv_unjittered = uv - params.jitter;
-    let velocity_uv        = curr_uv_unjittered - prev_uv;
+    let prev_uv_unjittered = prev_uv - params.prev_jitter;
+    let velocity_uv        = curr_uv_unjittered - prev_uv_unjittered;
     let speed_px           = length(velocity_uv) / max(rc.x, rc.y);
 
-    // ── history sample + clip ─────────────────────────────────────────────
-    let history_raw     = textureSample(history_tex, linear_smp, prev_uv).rgb;
-    let clipped_ycocg   = clip_aabb(rgb_to_ycocg(history_raw), aabb_min, aabb_max);
-    let history_clipped = ycocg_to_rgb(clipped_ycocg);
+    // ── history (cheap bilinear) for shimmer detection ────────────────────
+    let history_bilinear = textureSample(history_tex, linear_smp, prev_uv).rgb;
+    let detect_clipped   = ycocg_to_rgb(clip_aabb(rgb_to_ycocg(history_bilinear), aabb_min, aabb_max));
 
     // ── spatial edge resolve (the "S") ────────────────────────────────────
     // only the 4 extra taps run on edges. directional along the edge tangent, so it
@@ -218,23 +255,17 @@ fn fs_main(in: VertOut) -> FragOut {
     //     carries the edge AA while temporal just stabilizes it.
     let jitter_active = dot(params.jitter, params.jitter) > 1e-12;
     let ssaa_factor   = select(0.0, saturate(1.0 - speed_px * 0.5), jitter_active);
-    let spatial_amt   = edge_conf * (1.0 - 0.85 * ssaa_factor);
+    // fully hand edges to temporal ssaa when dead-still (no residual fxaa blur);
+    // ramp spatial back in as soon as motion starts and jitter accumulation stops.
+    let spatial_amt   = edge_conf * (1.0 - ssaa_factor);
     let current_aa    = mix(center, spatial, spatial_amt);
 
-    // ── temporal resolve (the "T") ────────────────────────────────────────
-    // shimmer: high luma delta between current and clipped history.
-    let hist_luma      = luma(history_clipped);
+    // ── shimmer detection ─────────────────────────────────────────────────
+    // high luma delta between current and clipped history → temporal stabilization.
+    let hist_luma      = luma(detect_clipped);
     let temporal_diff  = abs(curr_luma - hist_luma) / max(max(curr_luma, hist_luma), 0.01);
     let shimmer_weight = saturate((temporal_diff - 0.02) * 20.0);   // 0 below 2%, 1 at 7%
 
-    // faster motion → more current frame → less ghost risk.
-    let motion_alpha = min(0.5, speed_px * 0.05);
-    let alpha        = max(params.blend_alpha, motion_alpha);
-    // accumulate against the spatially-resolved current so history converges to an
-    // AA'd result rather than re-introducing the aliased center each frame.
-    let taa_blend    = mix(history_clipped, current_aa, alpha);
-
-    // ── selective combine ─────────────────────────────────────────────────
     var taa_mask = max(shimmer_weight, edge_conf);
     // no temporal for sky, out-of-frame reprojection, very fast motion (history is
     // probably wrong), or cold start. spatial still applies via current_aa.
@@ -242,8 +273,22 @@ fn fs_main(in: VertOut) -> FragOut {
         taa_mask = 0.0;
     }
 
-    // smooth surfaces: mask 0 → output = current_aa = center → unchanged.
-    let output = mix(current_aa, taa_blend, taa_mask);
+    // ── temporal resolve (the "T"), only where it contributes ─────────────
+    // smooth surfaces: taa_mask 0 → output stays current_aa (= center) → unchanged.
+    var output = current_aa;
+    if taa_mask > 0.0 {
+        // catmull-rom history fetch keeps the accumulation sharp (plain bilinear here
+        // is what softens a still image). clip afterwards to tame bicubic ringing.
+        let history_sharp   = sample_history_catmull_rom(prev_uv, rc);
+        let history_clipped = ycocg_to_rgb(clip_aabb(rgb_to_ycocg(history_sharp), aabb_min, aabb_max));
+        // faster motion → more current frame → less ghost risk.
+        let motion_alpha    = min(0.5, speed_px * 0.05);
+        let alpha           = max(params.blend_alpha, motion_alpha);
+        // accumulate against the spatially-resolved current so history converges to an
+        // AA'd result rather than re-introducing the aliased center each frame.
+        let taa_blend       = mix(history_clipped, current_aa, alpha);
+        output              = mix(current_aa, taa_blend, taa_mask);
+    }
 
     var result: FragOut;
     result.present = vec4<f32>(output, 1.0);

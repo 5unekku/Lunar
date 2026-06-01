@@ -77,10 +77,10 @@ fn setup(
     let quality = if std::env::args().any(|a| a == "--smoke") {
         QualitySettings::maximum()
     } else {
-        QualitySettings { staa: true, render_scale: 1.0, ..QualitySettings::minimum() }
+        QualitySettings { staa: true, msaa_samples: 4, render_scale: 1.0, ..QualitySettings::minimum() }
     };
     #[cfg(not(debug_assertions))]
-    let quality = QualitySettings { staa: true, render_scale: 1.0, ..QualitySettings::minimum() };
+    let quality = QualitySettings { staa: true, msaa_samples: 4, render_scale: 1.0, ..QualitySettings::minimum() };
     commands.insert_resource(quality);
 
     // lock cursor for mouse-look
@@ -222,10 +222,16 @@ fn render_scale_controller(input: Res<InputState>, mut quality: ResMut<QualitySe
     quality.render_scale = (quality.render_scale + delta).clamp(0.1, 1.0);
 }
 
-fn staa_toggle(input: Res<InputState>, mut quality: ResMut<QualitySettings>) {
-    if input.is_key_just_pressed(KeyCode::T) {
+fn staa_toggle(input: Res<InputState>, mut quality: ResMut<QualitySettings>, mut was_down: Local<bool>) {
+    // this runs in the fixed-rate Update stage, which fires ~60×/s while the render
+    // loop runs at 600+ fps — so the one-frame `just_pressed` pulse is usually cleared
+    // before we sample it. read the held state and detect the rising edge locally
+    // instead; held state persists across frames, so the press can't be missed.
+    let down = input.is_key_held(KeyCode::T);
+    if down && !*was_down {
         quality.staa = !quality.staa;
     }
+    *was_down = down;
 }
 
 fn quit_on_escape(input: Res<InputState>) {
