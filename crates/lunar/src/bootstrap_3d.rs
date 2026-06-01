@@ -92,11 +92,12 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
     let surface = unsafe {
         let display_handle = window.display_handle().unwrap();
         let window_handle = window.window_handle().unwrap();
-        // SAFETY: the SDL3 window is owned by this function's stack frame and
-        // outlives the wgpu surface (the surface is dropped when this function
-        // returns or panics, before `window` is dropped). the display and window
-        // handles point into `window`'s internal state and remain valid for
-        // that lifetime, satisfying wgpu's `create_surface_unsafe` contract.
+        // SAFETY: the display and window handles point into `window`'s internal
+        // state and must stay valid for the whole lifetime of the surface.
+        // `window` is moved into `host` below; the explicit `drop(app)` after the
+        // loop tears the surface down (it lives in the `RenderEngine3d` app
+        // resource) while `host` — and thus `window` — is still alive, so the
+        // window outlives the surface, satisfying `create_surface_unsafe`.
         instance
             .create_surface_unsafe(
                 wgpu::SurfaceTargetUnsafe::from_display_and_window(&display_handle, &window_handle)
@@ -152,6 +153,11 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
             }
         });
     });
+
+    // tear the surface down (lives in the RenderEngine3d app resource) before
+    // `host`/`window` drop at scope exit — wgpu requires the window to outlive
+    // the surface created from its handles.
+    drop(app);
 
     log::info!("lunar 3d engine shutting down...");
 }
