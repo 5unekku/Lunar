@@ -339,37 +339,62 @@ impl RenderEngine3d {
 
         // ── terrain pass — geometry clipmap heightmap rendering ─────────
         {
-            let mut terrain_query = world.query::<(Entity, &mut Terrain, &WorldTransform3d)>();
-            let terrain_entities: Vec<(Entity, Terrain, WorldTransform3d)> = terrain_query
-                .iter_mut(world)
-                .map(|(e, t, wt)| (e, t.clone(), *wt))
-                .collect();
+            // snapshot only the cheap per-frame fields — NOT `Terrain::heightmap` (a Vec<u8>).
+            // the heightmap is read by reference solely on the rare GPU-rebuild path below,
+            // so a clean terrain costs zero heap copies per frame.
+            struct TerrainSnap {
+                entity: Entity,
+                translation: Vec3,
+                dirty: bool,
+                world_size: f32,
+                clipmap_rings: u32,
+                ring_resolution: u32,
+                height_scale: f32,
+                tint: lunar_math::Color,
+            }
+            let mut terrain_snaps: Vec<TerrainSnap> = Vec::new();
+            {
+                let mut terrain_query = world.query::<(Entity, &Terrain, &WorldTransform3d)>();
+                for (entity, terrain, wt) in terrain_query.iter(world) {
+                    terrain_snaps.push(TerrainSnap {
+                        entity,
+                        translation: wt.translation,
+                        dirty: terrain.dirty,
+                        world_size: terrain.world_size,
+                        clipmap_rings: terrain.clipmap_rings,
+                        ring_resolution: terrain.ring_resolution,
+                        height_scale: terrain.height_scale,
+                        tint: terrain.tint,
+                    });
+                }
+            }
 
-            for (entity, terrain_comp, wt) in &terrain_entities {
-                // lazy-init GPU resources on first encounter or if dirty
-                let needs_rebuild = {
-                    let entry = self.terrain_gpu.get(entity);
-                    entry.is_none() || terrain_comp.dirty
-                };
+            for snap in &terrain_snaps {
+                let entity = snap.entity;
+                // lazy-init GPU resources on first encounter or if the component is dirty.
+                // only here do we touch the full Terrain (incl. heightmap), by reference.
+                let needs_rebuild = self.terrain_gpu.get(&entity).is_none() || snap.dirty;
                 if needs_rebuild {
-                    let gpu = Self::build_terrain_gpu(
-                        &self.device,
-                        &self.queue,
-                        &self.terrain_params_bgl,
-                        terrain_comp,
-                    );
-                    self.terrain_gpu.insert(*entity, gpu);
+                    if let Some(terrain) = world.get::<Terrain>(entity) {
+                        let gpu = Self::build_terrain_gpu(
+                            &self.device,
+                            &self.queue,
+                            &self.terrain_params_bgl,
+                            terrain,
+                        );
+                        self.terrain_gpu.insert(entity, gpu);
+                    }
                     // mark clean on the actual component
-                    if let Some(mut t) = world.get_mut::<Terrain>(*entity) {
+                    if let Some(mut t) = world.get_mut::<Terrain>(entity) {
                         t.dirty = false;
                     }
                 }
-                let Some(gpu) = self.terrain_gpu.get(entity) else { continue; };
+                let Some(gpu) = self.terrain_gpu.get(&entity) else { continue; };
 
-                let terrain_origin = wt.translation;
-                let world_size = terrain_comp.world_size;
-                let rings = terrain_comp.clipmap_rings.clamp(1, 8);
-                let resolution = terrain_comp.ring_resolution.clamp(4, 256) as f32;
+                let terrain_origin = snap.translation;
+                let world_size = snap.world_size;
+                let rings = snap.clipmap_rings.clamp(1, 8);
+                let resolution = snap.ring_resolution.clamp(4, 256) as f32;
 
                 // on low tier render a single LOD-0 patch covering the whole terrain
                 let effective_rings = if self.render_tier == RenderTier::LowGles { 1 } else { rings };
@@ -390,7 +415,7 @@ impl RenderEngine3d {
                     let sun_d = if dir_enabled != 0 { dir_direction } else { Vec3::Y };
                     let (sun_dx, sun_dy, sun_dz, sun_int) = (sun_d.x, sun_d.y, sun_d.z, dir_illuminance.max(1.0));
 
-                    let tint = [terrain_comp.tint.r, terrain_comp.tint.g, terrain_comp.tint.b, terrain_comp.tint.a];
+                    let tint = [snap.tint.r, snap.tint.g, snap.tint.b, snap.tint.a];
 
                     let mut data = [0u8; TERRAIN_PARAMS_SIZE as usize];
                     // ring_origin (vec4)
@@ -400,7 +425,7 @@ impl RenderEngine3d {
                     let to_arr: [f32; 4] = [terrain_origin.x, terrain_origin.y, terrain_origin.z, 0.0];
                     data[16..32].copy_from_slice(bytemuck::cast_slice(&to_arr));
                     // misc: lod_cell_size, world_size, height_scale, ring_resolution
-                    let misc: [f32; 4] = [lod_cell_size, world_size, terrain_comp.height_scale, resolution];
+                    let misc: [f32; 4] = [lod_cell_size, world_size, snap.height_scale, resolution];
                     data[32..48].copy_from_slice(bytemuck::cast_slice(&misc));
                     // tint (vec4)
                     data[48..64].copy_from_slice(bytemuck::cast_slice(&tint));
