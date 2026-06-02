@@ -4,8 +4,14 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let src_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("src");
 
+    // wgpu's vulkan backend always flips y via a negative-height viewport, so the
+    // precompiled spv must NOT also flip y (that would be a double flip = inverted).
+    // wgpu's own runtime wgsl compilation uses WriterFlags::empty() (no y flip),
+    // so we match that here to keep debug and release consistent.
     let options = naga::back::spv::Options {
         lang_version: (1, 1),
+        flags: naga::back::spv::WriterFlags::LABEL_VARYINGS
+            | naga::back::spv::WriterFlags::CLAMP_FRAG_DEPTH,
         ..Default::default()
     };
 

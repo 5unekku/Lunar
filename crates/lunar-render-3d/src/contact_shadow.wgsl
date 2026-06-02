@@ -44,8 +44,7 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertOut {
 
 // reconstruct view-space position from depth and screen UV
 fn view_pos_from_depth(uv: vec2<f32>, depth: f32) -> vec3<f32> {
-    // clip space is y-down (vulkan, no auto-flip): uv.y and ndc.y same direction.
-    let ndc = vec4<f32>(uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0, depth, 1.0);
+    let ndc = vec4<f32>(uv.x * 2.0 - 1.0, (1.0 - uv.y) * 2.0 - 1.0, depth, 1.0);
     let view4 = params.inv_proj * ndc;
     return view4.xyz / view4.w;
 }
@@ -56,7 +55,7 @@ fn project_to_uv(view_pos: vec3<f32>) -> vec2<f32> {
     // more correct: need proj matrix here, but inv_proj inverse is expensive.
     // use the ratio trick: view_pos.xy / (-view_pos.z) gives clip-space estimate.
     let clip_xy = view_pos.xy / max(-view_pos.z, 0.001);
-    return clip_xy * vec2<f32>(0.5, 0.5) + vec2<f32>(0.5);
+    return clip_xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
 }
 
 @fragment

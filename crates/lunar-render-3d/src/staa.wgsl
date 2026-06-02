@@ -216,14 +216,14 @@ fn fs_main(in: VertOut) -> FragOut {
     let depth  = textureLoad(depth_tex, texel, 0).r;
     let is_sky = depth >= 0.9999;
 
-    // clip space is y-down (vulkan, no auto-flip): uv.y and ndc.y go the same direction.
-    let ndc     = vec4<f32>(uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0, depth, 1.0);
+    // wgpu rasterizes y-up ndc into y-down uv, so y flips on the way in and out.
+    let ndc     = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
     let world_h = params.inv_vp * ndc;
     let world   = world_h.xyz / world_h.w;
 
     let prev_clip = params.prev_vp * vec4<f32>(world, 1.0);
     let prev_ndc  = prev_clip.xy / prev_clip.w;
-    let prev_uv   = vec2<f32>(prev_ndc.x * 0.5 + 0.5, prev_ndc.y * 0.5 + 0.5);
+    let prev_uv   = vec2<f32>(prev_ndc.x * 0.5 + 0.5, 0.5 - prev_ndc.y * 0.5);
 
     let in_bounds = all(prev_uv >= vec2<f32>(0.0)) && all(prev_uv <= vec2<f32>(1.0));
 
