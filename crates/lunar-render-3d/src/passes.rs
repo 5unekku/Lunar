@@ -899,10 +899,12 @@ impl RenderEngine3d {
                 for dirty in &mut self.point_shadow_dirty { *dirty = [true; 6]; }
                 self.point_shadow_last_draw_count = pt_draw_count;
             }
+            // ── phase A: compute face view-projections, upload per-face globals, ─
+            // and collect the depth-array layers that need re-recording this frame.
+            let mut render_layers: Vec<usize> = Vec::new();
             let mut pt_shadow_idx = 0usize;
-            for (light_i, &(light_pos, _, _, light_radius, casts, _)) in self.point_light_scratch.iter().enumerate() {
+            for &(light_pos, _, _, light_radius, casts, _) in self.point_light_scratch.iter() {
                 if !casts || pt_shadow_idx >= MAX_POINT_SHADOW_LIGHTS { break; }
-                let _ = light_i;
                 let lp = Vec3::from(light_pos);
                 let last_pos = self.point_shadow_last_positions[pt_shadow_idx];
                 if (lp - last_pos).length_squared() > 1e-6 {
@@ -924,7 +926,7 @@ impl RenderEngine3d {
                     if !self.point_shadow_dirty[pt_shadow_idx][face] { continue; }
                     let layer = pt_shadow_idx * 6 + face;
                     let (dir, up) = face_dirs[face];
-                    let view = Mat4::look_at_rh(Vec3::from(lp), Vec3::from(lp) + dir, up);
+                    let view = Mat4::look_at_rh(lp, lp + dir, up);
                     let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, near, far);
                     let face_vp = proj * view;
                     // upload face VP + light pos + radius to the per-face slot
@@ -934,39 +936,57 @@ impl RenderEngine3d {
                     slot_data[64..76].copy_from_slice(bytemuck::cast_slice(&[lp.x, lp.y, lp.z]));
                     slot_data[76..80].copy_from_slice(bytemuck::cast_slice(&[light_radius]));
                     self.queue.write_buffer(&self.point_shadow_globals_buf, slot_offset, &slot_data[..80]);
-                    // render shadow casters into this face layer
+                    render_layers.push(layer);
+                    self.point_shadow_dirty[pt_shadow_idx][face] = false;
+                }
+                pt_shadow_idx += 1;
+            }
+
+            // ── phase B: record each dirty face into a disjoint CommandEncoder ───
+            // up to 6×N faces fan out across rayon, mirroring the cascade pass.
+            // SAFETY: closures share a read-only &RenderEngine3d (no self writes here)
+            // and each writes its own encoder targeting a distinct depth-array layer.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use rayon::prelude::*;
+                let device     = &self.device;
+                let pt_pl      = &self.point_shadow_pipeline;
+                let pt_gbg     = &self.point_shadow_globals_bg;
+                let ent_bg     = &self.entity_bg;
+                let face_views = &self.point_shadow_face_views;
+                let mesh_gpu   = &self.mesh_gpu;
+                let draw_ref   = &self.draw_scratch;
+                let cmds: Vec<wgpu::CommandBuffer> = render_layers.par_iter().map(|&layer| {
+                    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("[point shadow] face encoder"),
+                    });
                     {
-                        let mut pt_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        let mut pt_pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("[point shadow] face pass"),
                             color_attachments: &[],
                             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                                view: &self.point_shadow_face_views[layer],
-                                depth_ops: Some(wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(1.0),
-                                    store: wgpu::StoreOp::Store,
-                                }),
+                                view: &face_views[layer],
+                                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
                                 stencil_ops: None,
                             }),
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                            multiview_mask: None,
+                            timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
                         });
-                        pt_pass.set_pipeline(&self.point_shadow_pipeline);
-                        pt_pass.set_bind_group(0, &self.point_shadow_globals_bg, &[layer as u32 * UNIFORM_STRIDE as u32]);
-                        pt_pass.set_bind_group(1, &self.entity_bg, &[]);
+                        pt_pass.set_pipeline(pt_pl);
+                        pt_pass.set_bind_group(0, pt_gbg, &[layer as u32 * UNIFORM_STRIDE as u32]);
+                        pt_pass.set_bind_group(1, ent_bg, &[]);
                         let mut last_mesh = u32::MAX;
                         let mut last_gs = 0usize;
-                        let sn = self.draw_scratch.len();
+                        let sn = draw_ref.len();
                         for si in 0..=sn {
-                            let cur_mesh = if si == sn { u32::MAX } else { self.draw_scratch[si].1 };
+                            let cur_mesh = if si == sn { u32::MAX } else { draw_ref[si].1 };
                             if cur_mesh != last_mesh {
                                 if si > last_gs
-                                    && let Some(gpu) = self.mesh_gpu.get(&last_mesh) {
+                                    && let Some(gpu) = mesh_gpu.get(&last_mesh) {
                                         let base = (ENTITY_SLOT_START + last_gs) as u32;
                                         pt_pass.draw_indexed(0..gpu.index_count, 0, base..base + (si - last_gs) as u32);
                                     }
                                 if si < sn {
-                                    if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
+                                    if let Some(gpu) = mesh_gpu.get(&cur_mesh) {
                                         pt_pass.set_vertex_buffer(0, gpu.pos_buf.slice(..));
                                         pt_pass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
                                     }
@@ -976,9 +996,47 @@ impl RenderEngine3d {
                             }
                         }
                     }
-                    self.point_shadow_dirty[pt_shadow_idx][face] = false;
+                    enc.finish()
+                }).collect();
+                if !cmds.is_empty() { self.queue.submit(cmds); }
+            }
+            // WASM: sequential recording on the main encoder
+            #[cfg(target_arch = "wasm32")]
+            for &layer in &render_layers {
+                let mut pt_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("[point shadow] face pass"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.point_shadow_face_views[layer],
+                        depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                });
+                pt_pass.set_pipeline(&self.point_shadow_pipeline);
+                pt_pass.set_bind_group(0, &self.point_shadow_globals_bg, &[layer as u32 * UNIFORM_STRIDE as u32]);
+                pt_pass.set_bind_group(1, &self.entity_bg, &[]);
+                let mut last_mesh = u32::MAX;
+                let mut last_gs = 0usize;
+                let sn = self.draw_scratch.len();
+                for si in 0..=sn {
+                    let cur_mesh = if si == sn { u32::MAX } else { self.draw_scratch[si].1 };
+                    if cur_mesh != last_mesh {
+                        if si > last_gs
+                            && let Some(gpu) = self.mesh_gpu.get(&last_mesh) {
+                                let base = (ENTITY_SLOT_START + last_gs) as u32;
+                                pt_pass.draw_indexed(0..gpu.index_count, 0, base..base + (si - last_gs) as u32);
+                            }
+                        if si < sn {
+                            if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
+                                pt_pass.set_vertex_buffer(0, gpu.pos_buf.slice(..));
+                                pt_pass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+                            }
+                            last_mesh = cur_mesh;
+                            last_gs = si;
+                        }
+                    }
                 }
-                pt_shadow_idx += 1;
             }
             // clear layers for unused shadow slots
             for unused in pt_shadow_idx..MAX_POINT_SHADOW_LIGHTS {
