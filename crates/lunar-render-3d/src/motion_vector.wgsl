@@ -45,8 +45,8 @@ fn fs_main(in: VertOut) -> @location(0) vec2<f32> {
     let depth = textureSample(depth_tex, depth_smp, in.uv);
     if depth >= 0.9999 { return vec2<f32>(0.0); }  // sky — no motion
 
-    // current NDC from screen UV
-    let cur_ndc = vec2<f32>(in.uv.x * 2.0 - 1.0, (1.0 - in.uv.y) * 2.0 - 1.0);
+    // clip space is y-down (vulkan, no auto-flip): uv.y and ndc.y go the same direction.
+    let cur_ndc = vec2<f32>(in.uv.x * 2.0 - 1.0, in.uv.y * 2.0 - 1.0);
 
     // reconstruct world position
     let clip = vec4<f32>(cur_ndc, depth, 1.0);

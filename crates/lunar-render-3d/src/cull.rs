@@ -5,6 +5,11 @@
 
 use super::*;
 
+// mapped BufferView is not guaranteed u32-aligned, so read without cast
+fn mapped_u32s(bytes: &[u8]) -> Vec<u32> {
+    bytes.chunks_exact(4).map(|c| u32::from_ne_bytes(c.try_into().unwrap())).collect()
+}
+
 impl RenderEngine3d {
     /// frustum + HZB occlusion culling for this frame. high tier reads the
     /// previous frame's GPU compute result (no stall) and dispatches this
@@ -32,7 +37,7 @@ impl RenderEngine3d {
                         {
                             let slice = staging.slice(0..(prev_count * 4) as u64);
                             let data = slice.get_mapped_range();
-                            let indices: &[u32] = bytemuck::cast_slice(&data);
+                            let indices = mapped_u32s(&data);
                             let soa = world.resource::<CullSoa>();
                             self.gpu_lod_indices.clear();
                             for (i, &entity) in soa.entities.iter().take(prev_count).enumerate() {
@@ -56,7 +61,7 @@ impl RenderEngine3d {
                         {
                             let staging_slice = staging_buf.slice(0..(prev_count * 4) as u64);
                             let data = staging_slice.get_mapped_range();
-                            let flags: &[u32] = bytemuck::cast_slice(&data);
+                            let flags = mapped_u32s(&data);
                             let soa = world.resource::<CullSoa>();
                             for (i, &entity) in soa.entities.iter().take(prev_count).enumerate() {
                                 if i < flags.len() && flags[i] != 0 {
@@ -271,7 +276,7 @@ impl RenderEngine3d {
                             {
                                 let slice = occ_staging.slice(0..(prev * 4) as u64);
                                 let data = slice.get_mapped_range();
-                                let flags: &[u32] = bytemuck::cast_slice(&data);
+                                let flags = mapped_u32s(&data);
                                 let soa = world.resource::<CullSoa>();
                                 for (i, &entity) in soa.entities.iter().take(prev).enumerate() {
                                     if i < flags.len() && flags[i] == 0 {

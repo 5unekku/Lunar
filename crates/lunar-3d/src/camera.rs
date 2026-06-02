@@ -30,14 +30,20 @@ impl Projection {
     /// build the projection matrix for the given viewport aspect ratio (width / height).
     #[must_use]
     pub fn matrix(self, aspect: f32) -> Mat4 {
+        // wgpu on vulkan does not auto-flip the viewport y-axis, so clip space is
+        // effectively y-down. negate the y column here so the scene renders right-side up.
         match self {
             Self::Perspective { fov_y, near, far } => {
-                Mat4::perspective_rh(fov_y, aspect, near, far)
+                let mut m = Mat4::perspective_rh(fov_y, aspect, near, far);
+                m.y_axis = -m.y_axis;
+                m
             }
             Self::Orthographic { width, near, far } => {
                 let half_w = width * 0.5;
                 let half_h = half_w / aspect;
-                Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, near, far)
+                let mut m = Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, near, far);
+                m.y_axis = -m.y_axis;
+                m
             }
         }
     }

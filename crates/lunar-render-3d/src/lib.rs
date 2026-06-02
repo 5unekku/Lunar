@@ -120,9 +120,16 @@ macro_rules! shader_source {
         #[cfg(any(debug_assertions, target_arch = "wasm32"))]
         let src = wgpu::ShaderSource::Wgsl($wgsl_src.into());
         #[cfg(all(not(debug_assertions), not(target_arch = "wasm32")))]
-        let src = wgpu::ShaderSource::SpirV(std::borrow::Cow::Borrowed(
-            bytemuck::cast_slice::<u8, u32>(include_bytes!(concat!(env!("OUT_DIR"), "/", $spv_file)))
-        ));
+        let src = {
+            // include_bytes! has 1-byte alignment; cast_slice::<u8,u32> would panic
+            // if the embedded data isn't 4-byte aligned (happens in release). copy once
+            // at init time — shaders load rarely so the alloc is inconsequential.
+            let bytes: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/", $spv_file));
+            let words: Vec<u32> = bytes.chunks_exact(4)
+                .map(|c| u32::from_ne_bytes(c.try_into().unwrap()))
+                .collect();
+            wgpu::ShaderSource::SpirV(std::borrow::Cow::Owned(words))
+        };
         src
     }};
 }
