@@ -95,8 +95,12 @@ fn sample_quat(keyframes: &[Keyframe<Quat>], time: f32) -> Option<Quat> {
 /// ```
 #[derive(Debug)]
 pub struct AnimationClip {
-    /// tracks keyed by joint name — O(1) lookup by `AnimationTarget::joint_name`.
-    pub tracks: HashMap<String, JointTrack>,
+    /// tracks stored by index; resolve a joint name to its index once via
+    /// [`Self::track_index`], then sample with [`Self::track`]. interning the
+    /// name → index lookup keeps `advance_animations` off the per-frame string hash.
+    tracks: Vec<JointTrack>,
+    /// joint name → index into `tracks`.
+    names: HashMap<String, usize>,
     /// total clip length in seconds.
     pub duration: f32,
 }
@@ -104,7 +108,13 @@ pub struct AnimationClip {
 impl AnimationClip {
     #[must_use]
     pub fn new(tracks: HashMap<String, JointTrack>, duration: f32) -> Self {
-        Self { tracks, duration }
+        let mut names = HashMap::default();
+        let mut indexed = Vec::with_capacity(tracks.len());
+        for (name, track) in tracks {
+            names.insert(name, indexed.len());
+            indexed.push(track);
+        }
+        Self { tracks: indexed, names, duration }
     }
 
     /// convenience: build from an iterator of `(name, track)` pairs.
@@ -113,13 +123,26 @@ impl AnimationClip {
         tracks: impl IntoIterator<Item = (impl Into<String>, JointTrack)>,
         duration: f32,
     ) -> Self {
-        Self {
-            tracks: tracks
-                .into_iter()
-                .map(|(name, track)| (name.into(), track))
-                .collect(),
-            duration,
+        let mut names = HashMap::default();
+        let mut indexed = Vec::new();
+        for (name, track) in tracks {
+            names.insert(name.into(), indexed.len());
+            indexed.push(track);
         }
+        Self { tracks: indexed, names, duration }
+    }
+
+    /// resolve a joint name to its stable track index, or `None` if absent.
+    /// callers cache this once and sample via [`Self::track`] thereafter.
+    #[must_use]
+    pub fn track_index(&self, joint_name: &str) -> Option<usize> {
+        self.names.get(joint_name).copied()
+    }
+
+    /// fetch a track by the index returned from [`Self::track_index`].
+    #[must_use]
+    pub fn track(&self, index: usize) -> Option<&JointTrack> {
+        self.tracks.get(index)
     }
 }
 
@@ -132,8 +155,20 @@ impl AnimationClip {
 pub struct AnimationTarget {
     /// the entity that holds the `AnimationPlayer` driving this joint.
     pub player: Entity,
-    /// matched against the key in `AnimationClip::tracks`.
+    /// matched against a joint name in the clip; resolved to a track index once and cached.
     pub joint_name: String,
+    /// cached `(clip pointer, resolved track index)`. `usize::MAX` index = no matching track.
+    /// re-resolved only when the player swaps to a different clip. interior to the type so the
+    /// per-frame sampler skips the name hash. construct via [`Self::new`].
+    cache: Option<(usize, usize)>,
+}
+
+impl AnimationTarget {
+    /// link a joint entity to the `player` entity driving it and the `joint_name` to follow.
+    #[must_use]
+    pub fn new(player: Entity, joint_name: impl Into<String>) -> Self {
+        Self { player, joint_name: joint_name.into(), cache: None }
+    }
 }
 
 /// playback state for a skeletal animation. attach to the root entity of a skeleton.
@@ -207,7 +242,7 @@ impl AnimationPlayer {
 pub fn advance_animations(
     time: Res<Time>,
     mut players: Query<(Entity, &mut AnimationPlayer)>,
-    mut targets: Query<(&AnimationTarget, &mut LocalTransform3d)>,
+    mut targets: Query<(&mut AnimationTarget, &mut LocalTransform3d)>,
     mut scratch: Local<Vec<(Entity, Arc<AnimationClip>, f32)>>,
 ) {
     scratch.clear();
@@ -231,22 +266,35 @@ pub fn advance_animations(
 
     scratch.sort_unstable_by_key(|&(entity, _, _)| entity);
 
-    for (target, mut transform) in &mut targets {
+    for (mut target, mut transform) in &mut targets {
         let Ok(idx) = scratch.binary_search_by_key(&target.player, |&(entity, _, _)| entity) else {
             continue;
         };
         let (_, clip, time) = &scratch[idx];
-        let Some(track) = clip.tracks.get(&target.joint_name) else {
+        let time = *time;
+
+        // resolve joint_name → track index once per (target, clip); the hashed name lookup
+        // only fires the first time a target is sampled, or when the player swaps clips.
+        let clip_ptr = Arc::as_ptr(clip) as usize;
+        let track_index = match target.cache {
+            Some((cached_ptr, track_index)) if cached_ptr == clip_ptr => track_index,
+            _ => {
+                let resolved = clip.track_index(&target.joint_name).unwrap_or(usize::MAX);
+                target.cache = Some((clip_ptr, resolved));
+                resolved
+            }
+        };
+        let Some(track) = clip.track(track_index) else {
             continue;
         };
 
-        if let Some(translation) = track.sample_translation(*time) {
+        if let Some(translation) = track.sample_translation(time) {
             transform.translation = translation;
         }
-        if let Some(rotation) = track.sample_rotation(*time) {
+        if let Some(rotation) = track.sample_rotation(time) {
             transform.rotation = rotation;
         }
-        if let Some(scale) = track.sample_scale(*time) {
+        if let Some(scale) = track.sample_scale(time) {
             transform.scale = scale;
         }
     }
