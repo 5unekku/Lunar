@@ -33,7 +33,7 @@ pub use baker::{BakeDirectional, BakeResult, LightmapBaker};
 /// common, game-facing lightmap components for `use lunar::prelude::*`.
 /// the baker API (`LightmapBaker`, `BakeResult`, …) stays at the crate root.
 pub mod prelude {
-    pub use crate::{DirectionalLightmap, Lightmap};
+	pub use crate::{DirectionalLightmap, Lightmap};
 }
 
 use bevy_ecs::prelude::*;
@@ -48,12 +48,12 @@ use lunar_assets::Handle;
 /// the appearance of correctly-oriented shading under dynamic relighting.
 #[derive(Debug, Clone, Component)]
 pub struct DirectionalLightmap {
-    /// RGBA8 irradiance texture (same format as `Lightmap.texture`).
-    pub irradiance: Handle<lunar_assets::Texture>,
-    /// RGBA8 direction texture; RGB = dominant_dir * 0.5 + 0.5.
-    pub direction: Handle<lunar_assets::Texture>,
-    /// intensity multiplier, same semantics as `Lightmap.intensity`.
-    pub intensity: f32,
+	/// RGBA8 irradiance texture (same format as `Lightmap.texture`).
+	pub irradiance: Handle<lunar_assets::Texture>,
+	/// RGBA8 direction texture; RGB = dominant_dir * 0.5 + 0.5.
+	pub direction: Handle<lunar_assets::Texture>,
+	/// intensity multiplier, same semantics as `Lightmap.intensity`.
+	pub intensity: f32,
 }
 
 /// component: pre-baked lightmap texture for a static `Mesh3d` entity.
@@ -67,10 +67,10 @@ pub struct DirectionalLightmap {
 /// dynamic entities (characters, doors) should not have a `Lightmap` component.
 #[derive(Debug, Clone, Component)]
 pub struct Lightmap {
-    /// RGBA8 linear lightmap texture. u=right, v=up, matching the glTF UV convention.
-    /// UV2 coordinates on the mesh (`uv_lightmap`) address into this texture.
-    pub texture: Handle<lunar_assets::Texture>,
-    /// multiplier applied to the lightmap sample before adding to the scene.
-    /// 1.0 = physically-based direct intensity. use < 1.0 for artistic darkening.
-    pub intensity: f32,
+	/// RGBA8 linear lightmap texture. u=right, v=up, matching the glTF UV convention.
+	/// UV2 coordinates on the mesh (`uv_lightmap`) address into this texture.
+	pub texture: Handle<lunar_assets::Texture>,
+	/// multiplier applied to the lightmap sample before adding to the scene.
+	/// 1.0 = physically-based direct intensity. use < 1.0 for artistic darkening.
+	pub intensity: f32,
 }

@@ -41,45 +41,45 @@ pub use lunar_macros::{Component, Event, Message, Resource, texture};
 pub use lunar_2d;
 #[cfg(feature = "3d")]
 pub use lunar_3d;
-#[cfg(feature = "3d")]
-pub use lunar_render_3d;
 pub use lunar_assets;
 pub use lunar_core;
 pub use lunar_input;
 pub use lunar_math;
 pub use lunar_render;
+#[cfg(feature = "3d")]
+pub use lunar_render_3d;
 
 // optional modules — re-exported under short, dimensionless names so game code
 // reaches them as `lunar::ui`, `lunar::physics2d`, etc. each is feature-gated and
 // pulls its own curated `prelude` into `lunar::prelude` (see prelude.rs).
-#[cfg(feature = "animation")]
-pub use lunar_plugin_animation as animation;
-#[cfg(feature = "tilemap")]
-pub use lunar_plugin_tilemap as tilemap;
-#[cfg(feature = "ui")]
-pub use lunar_plugin_ui as ui;
-#[cfg(feature = "particles")]
-pub use lunar_plugin_particles as particles;
-#[cfg(feature = "localization")]
-pub use lunar_plugin_localization as localization;
-#[cfg(feature = "dialogue")]
-pub use lunar_plugin_dialogue as dialogue;
-#[cfg(feature = "timeline")]
-pub use lunar_plugin_timeline as timeline;
+#[cfg(feature = "pathfinding")]
+pub use lunar_pathfinding_rt as pathfinding;
 #[cfg(feature = "ai")]
 pub use lunar_plugin_ai as ai;
-#[cfg(feature = "zones")]
-pub use lunar_plugin_zones as zones;
+#[cfg(feature = "animation")]
+pub use lunar_plugin_animation as animation;
+#[cfg(feature = "camera-3d")]
+pub use lunar_plugin_camera_3d as camera3d;
+#[cfg(feature = "dialogue")]
+pub use lunar_plugin_dialogue as dialogue;
+#[cfg(feature = "localization")]
+pub use lunar_plugin_localization as localization;
+#[cfg(feature = "particles")]
+pub use lunar_plugin_particles as particles;
 #[cfg(feature = "physics-2d")]
 pub use lunar_plugin_physics_2d as physics2d;
 #[cfg(feature = "physics-3d")]
 pub use lunar_plugin_physics_3d as physics3d;
 #[cfg(feature = "spline")]
 pub use lunar_plugin_spline as spline;
-#[cfg(feature = "camera-3d")]
-pub use lunar_plugin_camera_3d as camera3d;
-#[cfg(feature = "pathfinding")]
-pub use lunar_pathfinding_rt as pathfinding;
+#[cfg(feature = "tilemap")]
+pub use lunar_plugin_tilemap as tilemap;
+#[cfg(feature = "timeline")]
+pub use lunar_plugin_timeline as timeline;
+#[cfg(feature = "ui")]
+pub use lunar_plugin_ui as ui;
+#[cfg(feature = "zones")]
+pub use lunar_plugin_zones as zones;
 
 pub mod prelude;
 pub use prelude::*;
@@ -120,10 +120,10 @@ pub use lunar_assets::{AssetServer, AudioFormat, Font, Handle, Sound, Texture};
 pub use lunar_core::{App, GamePlugin, Time, WindowSettings};
 pub use lunar_input::{ActionMap, InputBinding, InputState, KeyCode, MouseButton};
 pub use lunar_math::{
-    Color, Mat2, Mat3, Mat4, Quat, Rect, ScreenRect, Transform, Vec2, Vec3, Vec4,
+	Color, Mat2, Mat3, Mat4, Quat, Rect, ScreenRect, Transform, Vec2, Vec3, Vec4,
 };
 pub use lunar_render::{
-    Camera, RenderConfig, RenderEngine, RenderInfo, RenderQueue, Sprite, Text, layers,
+	Camera, RenderConfig, RenderEngine, RenderInfo, RenderQueue, Sprite, Text, layers,
 };
 
 /// marker trait for components that can be used in game logic.

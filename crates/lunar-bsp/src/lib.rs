@@ -2,8 +2,8 @@
 //!
 //! two independent systems:
 //!
-//! **BVH (bounding volume hierarchy)**: replaces the O(n) CullSoa frustum test with
-//! a dynamic AABB tree. entities with [`Aabb3d`] are inserted each frame; the tree
+//! **BVH (bounding volume hierarchy)**: replaces the O(n) `CullSoa` frustum test with
+//! a dynamic AABB tree. entities with `Aabb3d` are inserted each frame; the tree
 //! is queried against the frustum to produce a compact visible set without scanning
 //! every entity. complexity: O(log n) per ray/frustum query.
 //!
@@ -32,16 +32,16 @@
 
 pub mod bvh;
 pub mod level;
-pub mod portal;
 pub mod plugin;
+pub mod portal;
 
 pub use bvh::{Bvh, BvhNode, BvhPlugin, BvhVisible};
 pub use level::{BspBlob, BspLevel, BspNode, PortalData};
-pub use portal::{Area, Portal, PortalCulling, PortalPlugin, VisibleAreas};
 pub use plugin::BspPlugin;
+pub use portal::{Area, Portal, PortalCulling, PortalPlugin, VisibleAreas};
 
 /// common, game-facing BSP/BVH types for `use lunar::prelude::*`.
 /// the full surface (BVH nodes, portal/level internals, …) stays at the crate root.
 pub mod prelude {
-    pub use crate::{Area, BspPlugin, BvhPlugin, PortalPlugin};
+	pub use crate::{Area, BspPlugin, BvhPlugin, PortalPlugin};
 }

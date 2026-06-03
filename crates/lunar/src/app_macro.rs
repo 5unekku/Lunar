@@ -33,12 +33,12 @@
 /// ```
 #[macro_export]
 macro_rules! lunar_app {
-    ($game_plugin:ty) => {
-        $crate::lunar_app!($game_plugin, $crate::RenderConfig::default());
-    };
-    ($game_plugin:ty, $render_config:expr) => {
-        fn main() {
-            $crate::bootstrap::<$game_plugin>($render_config);
-        }
-    };
+	($game_plugin:ty) => {
+		$crate::lunar_app!($game_plugin, $crate::RenderConfig::default());
+	};
+	($game_plugin:ty, $render_config:expr) => {
+		fn main() {
+			$crate::bootstrap::<$game_plugin>($render_config);
+		}
+	};
 }

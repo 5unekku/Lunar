@@ -33,128 +33,134 @@ pub struct Startup;
 /// // most code interacts through App instead
 /// ```
 pub struct Engine {
-    /// the ECS world containing all entities, components, and resources
-    world: World,
-    /// the startup schedule (run once before main loop)
-    startup_schedule: Schedule,
-    /// per-stage schedules for ordered system execution
-    stage_schedules: [Schedule; 5],
+	/// the ECS world containing all entities, components, and resources
+	world: World,
+	/// the startup schedule (run once before main loop)
+	startup_schedule: Schedule,
+	/// per-stage schedules for ordered system execution
+	stage_schedules: [Schedule; 5],
 }
 
 impl Engine {
-    /// create a new empty engine
-    ///
-    /// stage schedules use `ExecutorKind::MultiThreaded` on native targets:
-    /// systems that do not share mutable component/resource access run in parallel
-    /// on a thread pool. on WASM the executor falls back to single-threaded.
-    #[must_use]
-    pub fn new() -> Self {
-        use crate::schedule::UpdateStage;
-        let parallel = {
-            #[cfg(target_arch = "wasm32")]
-            { ExecutorKind::SingleThreaded }
-            #[cfg(not(target_arch = "wasm32"))]
-            { ExecutorKind::MultiThreaded }
-        };
-        let mut startup = Schedule::new(Startup);
-        startup.set_executor_kind(ExecutorKind::SingleThreaded);
-        let make_stage = |label: UpdateStage| {
-            let mut s = Schedule::new(label);
-            s.set_executor_kind(parallel);
-            s
-        };
-        Self {
-            world: World::new(),
-            startup_schedule: startup,
-            stage_schedules: [
-                make_stage(UpdateStage::Input),
-                make_stage(UpdateStage::Physics),
-                make_stage(UpdateStage::Update),
-                make_stage(UpdateStage::Render),
-                make_stage(UpdateStage::PostUpdate),
-            ],
-        }
-    }
+	/// create a new empty engine
+	///
+	/// stage schedules use `ExecutorKind::MultiThreaded` on native targets:
+	/// systems that do not share mutable component/resource access run in parallel
+	/// on a thread pool. on WASM the executor falls back to single-threaded.
+	#[must_use]
+	pub fn new() -> Self {
+		use crate::schedule::UpdateStage;
+		let parallel = {
+			#[cfg(target_arch = "wasm32")]
+			{
+				ExecutorKind::SingleThreaded
+			}
+			#[cfg(not(target_arch = "wasm32"))]
+			{
+				ExecutorKind::MultiThreaded
+			}
+		};
+		let mut startup = Schedule::new(Startup);
+		startup.set_executor_kind(ExecutorKind::SingleThreaded);
+		let make_stage = |label: UpdateStage| {
+			let mut s = Schedule::new(label);
+			s.set_executor_kind(parallel);
+			s
+		};
+		Self {
+			world: World::new(),
+			startup_schedule: startup,
+			stage_schedules: [
+				make_stage(UpdateStage::Input),
+				make_stage(UpdateStage::Physics),
+				make_stage(UpdateStage::Update),
+				make_stage(UpdateStage::Render),
+				make_stage(UpdateStage::PostUpdate),
+			],
+		}
+	}
 
-    /// get mutable access to the world
-    pub const fn world_mut(&mut self) -> &mut World {
-        &mut self.world
-    }
+	/// get mutable access to the world
+	pub const fn world_mut(&mut self) -> &mut World {
+		&mut self.world
+	}
 
-    /// get a reference to the world
-    pub const fn world(&self) -> &World {
-        &self.world
-    }
+	/// get a reference to the world
+	pub const fn world(&self) -> &World {
+		&self.world
+	}
 
-    /// get mutable access to the startup schedule
-    pub const fn startup_schedule_mut(&mut self) -> &mut Schedule {
-        &mut self.startup_schedule
-    }
+	/// get mutable access to the startup schedule
+	pub const fn startup_schedule_mut(&mut self) -> &mut Schedule {
+		&mut self.startup_schedule
+	}
 
-    /// get mutable access to a stage schedule
-    pub const fn stage_schedule_mut(
-        &mut self,
-        stage: crate::schedule::UpdateStage,
-    ) -> &mut Schedule {
-        &mut self.stage_schedules[stage as usize]
-    }
+	/// get mutable access to a stage schedule
+	pub const fn stage_schedule_mut(
+		&mut self,
+		stage: crate::schedule::UpdateStage,
+	) -> &mut Schedule {
+		&mut self.stage_schedules[stage as usize]
+	}
 
-    /// run all startup systems once
-    pub fn run_startup(&mut self) {
-        self.startup_schedule.run(&mut self.world);
-    }
+	/// run all startup systems once
+	pub fn run_startup(&mut self) {
+		self.startup_schedule.run(&mut self.world);
+	}
 
-    /// run all stage schedules in order: Input → Physics → Update → Render → PostUpdate
-    /// applies deferred commands between each stage so entity changes are visible.
-    pub fn run_stages(&mut self) {
-        const STAGE_COUNT: usize = 5;
-        for i in 0..STAGE_COUNT {
-            self.stage_schedules[i].run(&mut self.world);
-            if i < STAGE_COUNT - 1 {
-                self.world.flush();
-            }
-        }
-    }
+	/// run all stage schedules in order: Input → Physics → Update → Render → PostUpdate
+	/// applies deferred commands between each stage so entity changes are visible.
+	pub fn run_stages(&mut self) {
+		const STAGE_COUNT: usize = 5;
+		for i in 0..STAGE_COUNT {
+			self.stage_schedules[i].run(&mut self.world);
+			if i < STAGE_COUNT - 1 {
+				self.world.flush();
+			}
+		}
+	}
 
-    /// run all stages except Render (index 3).
-    ///
-    /// used for non-final ticks in a multi-tick frame so the render pass
-    /// (which blocks on vsync) only fires once per display frame, preventing
-    /// the spiral-of-death and avoiding the camera-rotation stutter that occurs
-    /// when two renders back-to-back both show the same rotation.
-    pub fn run_stages_no_render(&mut self) {
-        const STAGE_COUNT: usize = 5;
-        const RENDER_IDX: usize = 3;
-        for i in 0..STAGE_COUNT {
-            if i == RENDER_IDX { continue; }
-            self.stage_schedules[i].run(&mut self.world);
-            if i < STAGE_COUNT - 1 {
-                self.world.flush();
-            }
-        }
-    }
+	/// run all stages except Render (index 3).
+	///
+	/// used for non-final ticks in a multi-tick frame so the render pass
+	/// (which blocks on vsync) only fires once per display frame, preventing
+	/// the spiral-of-death and avoiding the camera-rotation stutter that occurs
+	/// when two renders back-to-back both show the same rotation.
+	pub fn run_stages_no_render(&mut self) {
+		const STAGE_COUNT: usize = 5;
+		const RENDER_IDX: usize = 3;
+		for i in 0..STAGE_COUNT {
+			if i == RENDER_IDX {
+				continue;
+			}
+			self.stage_schedules[i].run(&mut self.world);
+			if i < STAGE_COUNT - 1 {
+				self.world.flush();
+			}
+		}
+	}
 
-    /// run only the logic stages: Input(0), Physics(1), Update(2).
-    /// does not run Render or PostUpdate — those are handled once per display
-    /// frame via run_render_and_post, decoupled from the tick count.
-    pub fn run_logic_tick(&mut self) {
-        for i in 0..3usize {
-            self.stage_schedules[i].run(&mut self.world);
-            self.world.flush();
-        }
-    }
+	/// run only the logic stages: Input(0), Physics(1), Update(2).
+	/// does not run Render or PostUpdate — those are handled once per display
+	/// frame via run_render_and_post, decoupled from the tick count.
+	pub fn run_logic_tick(&mut self) {
+		for i in 0..3usize {
+			self.stage_schedules[i].run(&mut self.world);
+			self.world.flush();
+		}
+	}
 
-    /// run Render(3) then PostUpdate(4) — called exactly once per display frame
-    /// regardless of how many logic ticks fired (including zero).
-    pub fn run_render_and_post(&mut self) {
-        self.stage_schedules[3].run(&mut self.world);
-        self.world.flush();
-        self.stage_schedules[4].run(&mut self.world);
-    }
+	/// run Render(3) then PostUpdate(4) — called exactly once per display frame
+	/// regardless of how many logic ticks fired (including zero).
+	pub fn run_render_and_post(&mut self) {
+		self.stage_schedules[3].run(&mut self.world);
+		self.world.flush();
+		self.stage_schedules[4].run(&mut self.world);
+	}
 }
 
 impl Default for Engine {
-    fn default() -> Self {
-        Self::new()
-    }
+	fn default() -> Self {
+		Self::new()
+	}
 }

@@ -33,7 +33,6 @@
 //! ```
 
 pub mod animation;
-pub mod surface_shader;
 pub mod bundles;
 pub mod collision;
 pub mod decals;
@@ -41,6 +40,7 @@ pub mod fog;
 pub mod mesh_registry;
 pub mod particles;
 pub mod primitives;
+pub mod surface_shader;
 pub mod terrain;
 pub mod visibility;
 pub mod water;
@@ -54,56 +54,56 @@ mod systems;
 mod transform;
 
 pub use animation::{
-    AnimationClip, AnimationPlayer, AnimationTarget, JointTrack, Keyframe, advance_animations,
+	AnimationClip, AnimationPlayer, AnimationTarget, JointTrack, Keyframe, advance_animations,
 };
 pub use bundles::{
-    Camera3dBundle, DirectionalLightBundle, Mesh3dBundle, PointLightBundle, ShadowMesh3dBundle,
-    SpotLightBundle,
+	Camera3dBundle, DirectionalLightBundle, Mesh3dBundle, PointLightBundle, ShadowMesh3dBundle,
+	SpotLightBundle,
 };
 pub use camera::{
-    ActiveCamera3d, ActiveViewports, AmbientLight, Camera3d, Projection,
-    ViewportRect, update_active_camera, update_active_viewports,
+	ActiveCamera3d, ActiveViewports, AmbientLight, Camera3d, Projection, ViewportRect,
+	update_active_camera, update_active_viewports,
 };
 pub use collision::{
-    Collider3d, ColliderEntryRef, ColliderShape3d, CollisionWorld3d, Ray3d, RayHit3d,
-    build_collision_world_3d, raycast_3d,
+	Collider3d, ColliderEntryRef, ColliderShape3d, CollisionWorld3d, Ray3d, RayHit3d,
+	build_collision_world_3d, raycast_3d,
 };
 pub use decals::Decal;
 pub use fog::{Fog, FogFalloff};
-pub use terrain::Terrain;
-pub use surface_shader::{AlphaGen, BlendMode, SurfaceShader, SurfaceStage, TcGen, UvTransform};
-pub use water::Water;
-pub use particles::ParticleEmitter;
 pub use light::{AmbientProbeGrid, DirectionalLight, IrradianceSH, PointLight, SpotLight};
 pub use material::{CullMode, Material3d, MaterialData, ShadingModel};
 pub use mesh::{
-    DetailDensity, ImpostorAtlas, IndexBuffer, Mesh3d, MeshData, MeshImpostor, MeshLod,
-    MeshUsage, PlanarReflector, PrevWorldTransform3d, SkinWeights, StaticMesh, Vertex3d,
+	DetailDensity, ImpostorAtlas, IndexBuffer, Mesh3d, MeshData, MeshImpostor, MeshLod, MeshUsage,
+	PlanarReflector, PrevWorldTransform3d, SkinWeights, StaticMesh, Vertex3d,
 };
 pub use mesh_registry::MeshRegistry;
+pub use particles::ParticleEmitter;
 pub use plugin::Plugin3d;
+pub use surface_shader::{AlphaGen, BlendMode, SurfaceShader, SurfaceStage, TcGen, UvTransform};
 pub use systems::{TransformScratch3d, copy_prev_transforms, propagate_transforms_3d};
+pub use terrain::Terrain;
 pub use transform::{LocalTransform3d, WorldTransform3d};
 pub use visibility::{
-    Aabb3d, ComputedVisibility, CullSoa, Frustum, RenderLayers, ShadowCaster, ShadowReceiver,
-    Visibility, ViewportAspect, VisibilityScratch, build_cull_soa, propagate_visibility,
-    update_frustum,
+	Aabb3d, ComputedVisibility, CullSoa, Frustum, RenderLayers, ShadowCaster, ShadowReceiver,
+	ViewportAspect, Visibility, VisibilityScratch, build_cull_soa, propagate_visibility,
+	update_frustum,
 };
+pub use water::Water;
 
 /// common, game-facing 3D types for `use lunar::prelude::*`.
 ///
 /// the full surface (mesh internals, surface shaders, probe grids, propagation
 /// systems, …) stays at the crate root — reach it via `lunar::lunar_3d::X`.
 pub mod prelude {
-    // note: skeletal-animation types (`AnimationClip`, `AnimationPlayer`, …) are
-    // intentionally NOT here — they'd clash with the 2D sprite `animation` plugin's
-    // `AnimationClip`. reach them via `lunar::lunar_3d::AnimationClip`.
-    pub use crate::{
-        ActiveCamera3d, AmbientLight, Camera3d, Camera3dBundle, Collider3d, ColliderShape3d,
-        CollisionWorld3d, DirectionalLight, DirectionalLightBundle, Fog, FogFalloff,
-        LocalTransform3d, Material3d, MaterialData, Mesh3d, Mesh3dBundle, MeshData, MeshRegistry,
-        Plugin3d, PointLight, PointLightBundle, Projection, Ray3d, RayHit3d, RenderLayers,
-        ShadingModel, ShadowCaster, ShadowMesh3dBundle, ShadowReceiver, SpotLight, SpotLightBundle,
-        StaticMesh, Visibility, WorldTransform3d, primitives, raycast_3d,
-    };
+	// note: skeletal-animation types (`AnimationClip`, `AnimationPlayer`, …) are
+	// intentionally NOT here — they'd clash with the 2D sprite `animation` plugin's
+	// `AnimationClip`. reach them via `lunar::lunar_3d::AnimationClip`.
+	pub use crate::{
+		ActiveCamera3d, AmbientLight, Camera3d, Camera3dBundle, Collider3d, ColliderShape3d,
+		CollisionWorld3d, DirectionalLight, DirectionalLightBundle, Fog, FogFalloff,
+		LocalTransform3d, Material3d, MaterialData, Mesh3d, Mesh3dBundle, MeshData, MeshRegistry,
+		Plugin3d, PointLight, PointLightBundle, Projection, Ray3d, RayHit3d, RenderLayers,
+		ShadingModel, ShadowCaster, ShadowMesh3dBundle, ShadowReceiver, SpotLight, SpotLightBundle,
+		StaticMesh, Visibility, WorldTransform3d, primitives, raycast_3d,
+	};
 }

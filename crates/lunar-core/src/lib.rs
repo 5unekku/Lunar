@@ -48,7 +48,7 @@ mod window;
 mod world_manifest;
 
 /// app builder and time resource
-pub use app::{App, GamePlugin, LoopConfig, Time, TickRateConfig};
+pub use app::{App, GamePlugin, LoopConfig, TickRateConfig, Time};
 /// command registry for console commands
 pub use command::{Command, CommandRegistry};
 /// engine wrapper around `bevy_ecs` world and schedule
@@ -63,8 +63,8 @@ pub use hierarchy::{Children, HierarchyPlugin, Parent, PostUpdate, sync_children
 pub use scene::{Scene, SceneManager};
 /// scene definition format: RON authoring and binary runtime
 pub use scene_format::{
-    EntityDefinition, SceneData, SceneDefinition, SceneEntity, SceneInstance, SceneLayer,
-    SceneLoader, SceneSprite, SceneTags, SceneText, SpriteDef, TextDef, TransformDef,
+	EntityDefinition, SceneData, SceneDefinition, SceneEntity, SceneInstance, SceneLayer,
+	SceneLoader, SceneSprite, SceneTags, SceneText, SpriteDef, TextDef, TransformDef,
 };
 /// system scheduling: the built-in update stages
 pub use schedule::UpdateStage;
@@ -73,20 +73,20 @@ pub use state::EngineState;
 /// world manifest: XML-based world definition with scenes and spatial chunks.
 /// authoring + runtime types a game uses directly.
 pub use world_manifest::{
-    AdvancedSceneLoader, ChunkEntry, ComponentScene, EntityData, LoadMode, LoadedScenes,
-    SceneEntry, StreamingConfig, StreamingState, WorldManifest,
+	AdvancedSceneLoader, ChunkEntry, ComponentScene, EntityData, LoadMode, LoadedScenes,
+	SceneEntry, StreamingConfig, StreamingState, WorldManifest,
 };
 /// compiled/interned manifest internals — reachable for tooling, but not part of
 /// the game-facing contract (the manifest pipeline produces these; games don't author them).
 #[doc(hidden)]
 pub use world_manifest::{
-    CompiledChunkEntry, CompiledSceneEntry, CompiledWorld, StringInterner, builtin_components,
+	CompiledChunkEntry, CompiledSceneEntry, CompiledWorld, StringInterner, builtin_components,
 };
 
 /// window state resource, display resolution helpers, and available-resolutions resource
 pub use window::{
-    WindowSettings, DisplayResolution, AvailableResolutions,
-    STANDARD_RESOLUTIONS, resolutions_for_aspect,
+	AvailableResolutions, DisplayResolution, STANDARD_RESOLUTIONS, WindowSettings,
+	resolutions_for_aspect,
 };
 
 /// full prelude for game development

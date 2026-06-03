@@ -1,9 +1,6 @@
 //! dialogue system for lunar.
 //!
-//! conversations are flat arrays of [`Block`]s linked by integer indices.
-//! branching is handled by [`Next::Choice`] — each choice carries a label and
-//! a target block index, so selecting option `i` jumps to `choices[i].target`.
-//!
+//! supports linear and branching conversations between named characters.
 //! use [`ScriptBuilder`] to author scripts in code, or [`parse_script`] for
 //! RON files. register characters first with [`DialogueManager::add_character`].
 //!
@@ -34,11 +31,13 @@ mod dialogue;
 mod parser;
 
 pub use dialogue::{
-    Block, Character, Choice, DialogueManager, DialoguePlugin, Next, Script, ScriptBuilder,
+	Block, Character, Choice, DialogueManager, DialoguePlugin, Next, Script, ScriptBuilder,
 };
 pub use parser::{parse_script, parse_script_file};
 
 /// common, game-facing dialogue types for `use lunar::prelude::*`.
 pub mod prelude {
-    pub use crate::{Block, Character, Choice, DialogueManager, DialoguePlugin, Next, Script, ScriptBuilder};
+	pub use crate::{
+		Block, Character, Choice, DialogueManager, DialoguePlugin, Next, Script, ScriptBuilder,
+	};
 }

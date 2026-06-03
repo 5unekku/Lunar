@@ -35,8 +35,8 @@ pathfinding  = ["dep:lunar-pathfinding-rt"]
 
 # everything — convenience for examples / docs / "kitchen sink" builds.
 full = [
-    "2d", "3d", "animation", "tilemap", "ui", "particles", "localization", "dialogue",
-    "timeline", "ai", "zones", "physics-2d", "physics-3d", "spline", "camera-3d", "pathfinding",
+		"2d", "3d", "animation", "tilemap", "ui", "particles", "localization", "dialogue",
+		"timeline", "ai", "zones", "physics-2d", "physics-3d", "spline", "camera-3d", "pathfinding",
 ]
 
 [dependencies]

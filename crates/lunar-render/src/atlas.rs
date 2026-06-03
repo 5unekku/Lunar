@@ -25,53 +25,53 @@ use lunar_atlas::{AtlasManifest, AtlasRegion};
 
 /// a loaded texture atlas with GPU texture handle and region lookup.
 pub struct TextureAtlas {
-    /// handle to the atlas GPU texture
-    pub texture: Handle<Texture>,
-    /// manifest describing region layout
-    pub manifest: AtlasManifest,
-    /// pre-computed UV regions for fast lookup
-    regions: rustc_hash::FxHashMap<String, AtlasRegion>,
+	/// handle to the atlas GPU texture
+	pub texture: Handle<Texture>,
+	/// manifest describing region layout
+	pub manifest: AtlasManifest,
+	/// pre-computed UV regions for fast lookup
+	regions: rustc_hash::FxHashMap<String, AtlasRegion>,
 }
 
 impl TextureAtlas {
-    /// create a new texture atlas from a loaded texture and manifest.
-    #[must_use]
-    pub fn new(texture: Handle<Texture>, manifest: AtlasManifest) -> Self {
-        let regions = manifest.resolve_regions();
-        Self {
-            texture,
-            manifest,
-            regions,
-        }
-    }
+	/// create a new texture atlas from a loaded texture and manifest.
+	#[must_use]
+	pub fn new(texture: Handle<Texture>, manifest: AtlasManifest) -> Self {
+		let regions = manifest.resolve_regions();
+		Self {
+			texture,
+			manifest,
+			regions,
+		}
+	}
 
-    /// look up a region by name.
-    ///
-    /// returns the [`AtlasRegion`] with UV coordinates for this sprite.
-    /// # Panics
-    ///
-    /// panics if the region does not exist.
-    #[must_use]
-    pub fn region(&self, name: &str) -> &AtlasRegion {
-        self.regions
-            .get(name)
-            .unwrap_or_else(|| panic!("atlas region '{name}' not found"))
-    }
+	/// look up a region by name.
+	///
+	/// returns the [`AtlasRegion`] with UV coordinates for this sprite.
+	/// # Panics
+	///
+	/// panics if the region does not exist.
+	#[must_use]
+	pub fn region(&self, name: &str) -> &AtlasRegion {
+		self.regions
+			.get(name)
+			.unwrap_or_else(|| panic!("atlas region '{name}' not found"))
+	}
 
-    /// look up a region by name, returning None if not found.
-    #[must_use]
-    pub fn try_region(&self, name: &str) -> Option<&AtlasRegion> {
-        self.regions.get(name)
-    }
+	/// look up a region by name, returning None if not found.
+	#[must_use]
+	pub fn try_region(&self, name: &str) -> Option<&AtlasRegion> {
+		self.regions.get(name)
+	}
 
-    /// get the atlas texture handle.
-    #[must_use]
-    pub const fn texture_handle(&self) -> &Handle<Texture> {
-        &self.texture
-    }
+	/// get the atlas texture handle.
+	#[must_use]
+	pub const fn texture_handle(&self) -> &Handle<Texture> {
+		&self.texture
+	}
 
-    /// get all region names.
-    pub fn region_names(&self) -> impl Iterator<Item = &String> {
-        self.regions.keys()
-    }
+	/// get all region names.
+	pub fn region_names(&self) -> impl Iterator<Item = &String> {
+		self.regions.keys()
+	}
 }

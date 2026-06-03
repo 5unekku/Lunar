@@ -30,13 +30,13 @@ pub use crate::engine::Engine;
 pub use crate::error::{EngineError, EngineResult, ErrorEvent, ErrorSource};
 pub use crate::game_loop::{GameLoop, TickRate};
 pub use crate::hierarchy::{Children, Parent};
-pub use crate::scene::{Scene, SceneManager};
-pub use crate::scene_format::{
-    EntityDefinition, SceneEntity, SceneInstance, SceneLayer, SceneLoader, SceneSprite, SceneTags,
-    SceneText, SpriteDef, TextDef, TransformDef,
-};
-pub use crate::schedule::UpdateStage;
 pub use crate::persist::{self, PersistError};
 pub use crate::pool::Pool;
+pub use crate::scene::{Scene, SceneManager};
+pub use crate::scene_format::{
+	EntityDefinition, SceneEntity, SceneInstance, SceneLayer, SceneLoader, SceneSprite, SceneTags,
+	SceneText, SpriteDef, TextDef, TransformDef,
+};
+pub use crate::schedule::UpdateStage;
 pub use crate::state::EngineState;
 pub use crate::world_manifest::{AdvancedSceneLoader, LoadMode, LoadedScenes, WorldManifest};

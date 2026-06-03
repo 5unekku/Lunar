@@ -40,108 +40,119 @@ use bevy_ecs::prelude::*;
 /// reactivates one; release puts it back. grows automatically when empty.
 #[derive(Resource)]
 pub struct Pool {
-    available: Vec<Entity>,
+	available: Vec<Entity>,
 }
 
 impl Pool {
-    /// create a pool with `capacity` pre-spawned entities. `seed` is called once
-    /// per entity to insert initial components (position, state, etc.).
-    pub fn new<B: Bundle, F: FnMut() -> B>(world: &mut World, capacity: usize, mut seed: F) -> Self {
-        let available = (0..capacity)
-            .map(|_| world.spawn(seed()).id())
-            .collect();
-        Self { available }
-    }
+	/// create a pool with `capacity` pre-spawned entities. `seed` is called once
+	/// per entity to insert initial components (position, state, etc.).
+	pub fn new<B: Bundle, F: FnMut() -> B>(
+		world: &mut World,
+		capacity: usize,
+		mut seed: F,
+	) -> Self {
+		let available = (0..capacity).map(|_| world.spawn(seed()).id()).collect();
+		Self { available }
+	}
 
-    /// create an empty pool. entities are spawned on-demand when `acquire` is called.
-    #[must_use]
-    pub fn empty() -> Self {
-        Self { available: Vec::new() }
-    }
+	/// create an empty pool. entities are spawned on-demand when `acquire` is called.
+	#[must_use]
+	pub fn empty() -> Self {
+		Self {
+			available: Vec::new(),
+		}
+	}
 
-    /// take a dormant entity from the pool. if the pool is empty, spawns a new entity.
-    pub fn acquire(&mut self, world: &mut World) -> Entity {
-        self.available.pop().unwrap_or_else(|| world.spawn_empty().id())
-    }
+	/// take a dormant entity from the pool. if the pool is empty, spawns a new entity.
+	pub fn acquire(&mut self, world: &mut World) -> Entity {
+		self.available
+			.pop()
+			.unwrap_or_else(|| world.spawn_empty().id())
+	}
 
-    /// return an entity to the pool for future reuse.
-    ///
-    /// game code is responsible for resetting the entity's components before release,
-    /// or after the next acquire, depending on the use pattern.
-    pub fn release(&mut self, entity: Entity) {
-        self.available.push(entity);
-    }
+	/// return an entity to the pool for future reuse.
+	///
+	/// game code is responsible for resetting the entity's components before release,
+	/// or after the next acquire, depending on the use pattern.
+	pub fn release(&mut self, entity: Entity) {
+		self.available.push(entity);
+	}
 
-    /// number of entities currently waiting in the pool
-    #[must_use]
-    pub fn available(&self) -> usize {
-        self.available.len()
-    }
+	/// number of entities currently waiting in the pool
+	#[must_use]
+	pub fn available(&self) -> usize {
+		self.available.len()
+	}
 
-    /// pre-fill the pool with `count` more entities using the provided seed.
-    pub fn grow<B: Bundle, F: FnMut() -> B>(&mut self, world: &mut World, count: usize, mut seed: F) {
-        for _ in 0..count {
-            let entity = world.spawn(seed()).id();
-            self.available.push(entity);
-        }
-    }
+	/// pre-fill the pool with `count` more entities using the provided seed.
+	pub fn grow<B: Bundle, F: FnMut() -> B>(
+		&mut self,
+		world: &mut World,
+		count: usize,
+		mut seed: F,
+	) {
+		for _ in 0..count {
+			let entity = world.spawn(seed()).id();
+			self.available.push(entity);
+		}
+	}
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+	use super::*;
 
-    #[test]
-    fn acquire_returns_unique_entities() {
-        let mut world = World::new();
-        let mut pool = Pool::new(&mut world, 3, || ());
+	#[test]
+	fn acquire_returns_unique_entities() {
+		let mut world = World::new();
+		let mut pool = Pool::new(&mut world, 3, || ());
 
-        let a = pool.acquire(&mut world);
-        let b = pool.acquire(&mut world);
-        let c = pool.acquire(&mut world);
-        assert_ne!(a, b);
-        assert_ne!(b, c);
-        assert_ne!(a, c);
-    }
+		let a = pool.acquire(&mut world);
+		let b = pool.acquire(&mut world);
+		let c = pool.acquire(&mut world);
+		assert_ne!(a, b);
+		assert_ne!(b, c);
+		assert_ne!(a, c);
+	}
 
-    #[test]
-    fn release_returns_entity_to_pool() {
-        let mut world = World::new();
-        let mut pool = Pool::new(&mut world, 2, || ());
+	#[test]
+	fn release_returns_entity_to_pool() {
+		let mut world = World::new();
+		let mut pool = Pool::new(&mut world, 2, || ());
 
-        let entity = pool.acquire(&mut world);
-        assert_eq!(pool.available(), 1);
-        pool.release(entity);
-        assert_eq!(pool.available(), 2);
-    }
+		let entity = pool.acquire(&mut world);
+		assert_eq!(pool.available(), 1);
+		pool.release(entity);
+		assert_eq!(pool.available(), 2);
+	}
 
-    #[test]
-    fn acquire_from_empty_pool_spawns_new() {
-        let mut world = World::new();
-        let mut pool = Pool::empty();
-        assert_eq!(pool.available(), 0);
+	#[test]
+	fn acquire_from_empty_pool_spawns_new() {
+		let mut world = World::new();
+		let mut pool = Pool::empty();
+		assert_eq!(pool.available(), 0);
 
-        let entity = pool.acquire(&mut world);
-        assert!(world.get_entity(entity).is_ok());
-        assert_eq!(pool.available(), 0);
-    }
+		let entity = pool.acquire(&mut world);
+		assert!(world.get_entity(entity).is_ok());
+		assert_eq!(pool.available(), 0);
+	}
 
-    #[test]
-    fn acquire_release_acquire_reuses_entity() {
-        let mut world = World::new();
-        let mut pool = Pool::new(&mut world, 1, || ());
+	#[test]
+	fn acquire_release_acquire_reuses_entity() {
+		let mut world = World::new();
+		let mut pool = Pool::new(&mut world, 1, || ());
 
-        let first = pool.acquire(&mut world);
-        pool.release(first);
-        let second = pool.acquire(&mut world);
-        assert_eq!(first, second);
-    }
+		let first = pool.acquire(&mut world);
+		pool.release(first);
+		let second = pool.acquire(&mut world);
+		assert_eq!(first, second);
+	}
 
-    #[test]
-    fn grow_increases_available_count() {
-        let mut world = World::new();
-        let mut pool = Pool::empty();
-        pool.grow(&mut world, 5, || ());
-        assert_eq!(pool.available(), 5);
-    }
+	#[test]
+	fn grow_increases_available_count() {
+		let mut world = World::new();
+		let mut pool = Pool::empty();
+		pool.grow(&mut world, 5, || ());
+		assert_eq!(pool.available(), 5);
+	}
 }

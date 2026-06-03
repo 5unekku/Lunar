@@ -14,19 +14,19 @@ use wasm_bindgen::prelude::*;
 struct WebDemo;
 
 impl GamePlugin for WebDemo {
-    fn name(&self) -> &str {
-        "WebDemo"
-    }
+	fn name(&self) -> &str {
+		"WebDemo"
+	}
 }
 
 fn main() {
-    #[cfg(not(target_arch = "wasm32"))]
-    panic!("lunar-web must be compiled for wasm32-unknown-unknown");
+	#[cfg(not(target_arch = "wasm32"))]
+	panic!("lunar-web must be compiled for wasm32-unknown-unknown");
 }
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(start)]
 pub async fn start() {
-    console_error_panic_hook::set_once();
-    lunar::bootstrap_wasm::<WebDemo>(RenderConfig::default()).await;
+	console_error_panic_hook::set_once();
+	lunar::bootstrap_wasm::<WebDemo>(RenderConfig::default()).await;
 }

@@ -13,26 +13,26 @@ use bevy_ecs::prelude::Resource;
 /// to trigger a graceful shutdown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
 pub enum EngineState {
-    /// engine is initializing
-    Initializing,
-    /// engine is running the game loop
-    Running,
-    /// engine is paused
-    Paused,
-    /// engine is shutting down
-    Stopping,
+	/// engine is initializing
+	Initializing,
+	/// engine is running the game loop
+	Running,
+	/// engine is paused
+	Paused,
+	/// engine is shutting down
+	Stopping,
 }
 
 impl EngineState {
-    /// check if the engine is running
-    #[must_use]
-    pub const fn is_running(&self) -> bool {
-        matches!(self, Self::Running)
-    }
+	/// check if the engine is running
+	#[must_use]
+	pub const fn is_running(&self) -> bool {
+		matches!(self, Self::Running)
+	}
 
-    /// check if the engine should stop
-    #[must_use]
-    pub const fn is_stopping(&self) -> bool {
-        matches!(self, Self::Stopping)
-    }
+	/// check if the engine should stop
+	#[must_use]
+	pub const fn is_stopping(&self) -> bool {
+		matches!(self, Self::Stopping)
+	}
 }

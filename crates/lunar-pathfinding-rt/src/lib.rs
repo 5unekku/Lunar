@@ -32,94 +32,97 @@ use bevy_ecs::prelude::Resource;
 /// insert as a [`Resource`] and update it when the level changes.
 #[derive(Resource)]
 pub struct NavGrid {
-    /// number of columns.
-    pub width: u32,
-    /// number of rows.
-    pub height: u32,
-    walkable: Vec<bool>,
-    /// per-tile movement cost multiplier (default 1.0). higher = more expensive.
-    cost: Vec<f32>,
-    /// running minimum of any tile cost ever set — used to keep the A* heuristic
-    /// admissible when cheap tiles exist. a monotone lower bound: never rises, so
-    /// it stays admissible even if a tile's cost is later raised.
-    min_cost: f32,
+	/// number of columns.
+	pub width: u32,
+	/// number of rows.
+	pub height: u32,
+	walkable: Vec<bool>,
+	/// per-tile movement cost multiplier (default 1.0). higher = more expensive.
+	cost: Vec<f32>,
+	/// running minimum of any tile cost ever set — used to keep the A* heuristic
+	/// admissible when cheap tiles exist. a monotone lower bound: never rises, so
+	/// it stays admissible even if a tile's cost is later raised.
+	min_cost: f32,
 }
 
 impl NavGrid {
-    /// create a fully walkable grid of size `width × height`.
-    #[must_use]
-    pub fn new(width: u32, height: u32) -> Self {
-        let n = (width * height) as usize;
-        Self {
-            width,
-            height,
-            walkable: vec![true; n],
-            cost: vec![1.0; n],
-            min_cost: 1.0,
-        }
-    }
+	/// create a fully walkable grid of size `width × height`.
+	#[must_use]
+	pub fn new(width: u32, height: u32) -> Self {
+		let n = (width * height) as usize;
+		Self {
+			width,
+			height,
+			walkable: vec![true; n],
+			cost: vec![1.0; n],
+			min_cost: 1.0,
+		}
+	}
 
-    /// mark a tile walkable or not.
-    pub fn set_walkable(&mut self, x: u32, y: u32, walkable: bool) {
-        if let Some(idx) = self.idx(x, y) {
-            self.walkable[idx] = walkable;
-        }
-    }
+	/// mark a tile walkable or not.
+	pub fn set_walkable(&mut self, x: u32, y: u32, walkable: bool) {
+		if let Some(idx) = self.idx(x, y) {
+			self.walkable[idx] = walkable;
+		}
+	}
 
-    /// true if the tile is within bounds and walkable.
-    #[must_use]
-    pub fn is_walkable(&self, x: u32, y: u32) -> bool {
-        self.idx(x, y).map(|i| self.walkable[i]).unwrap_or(false)
-    }
+	/// true if the tile is within bounds and walkable.
+	#[must_use]
+	pub fn is_walkable(&self, x: u32, y: u32) -> bool {
+		self.idx(x, y).map(|i| self.walkable[i]).unwrap_or(false)
+	}
 
-    /// set the movement cost multiplier for a tile. must be positive.
-    ///
-    /// `find_path` stays optimal for any positive cost: the heuristic is scaled
-    /// by the lowest cost seen, so it never overestimates the true path cost.
-    pub fn set_cost(&mut self, x: u32, y: u32, cost: f32) {
-        if let Some(idx) = self.idx(x, y) {
-            let clamped = cost.max(0.001);
-            self.cost[idx] = clamped;
-            self.min_cost = self.min_cost.min(clamped);
-        }
-    }
+	/// set the movement cost multiplier for a tile. must be positive.
+	///
+	/// `find_path` stays optimal for any positive cost: the heuristic is scaled
+	/// by the lowest cost seen, so it never overestimates the true path cost.
+	pub fn set_cost(&mut self, x: u32, y: u32, cost: f32) {
+		if let Some(idx) = self.idx(x, y) {
+			let clamped = cost.max(0.001);
+			self.cost[idx] = clamped;
+			self.min_cost = self.min_cost.min(clamped);
+		}
+	}
 
-    /// movement cost for the given tile (default 1.0).
-    #[must_use]
-    pub fn tile_cost(&self, x: u32, y: u32) -> f32 {
-        self.idx(x, y).map(|i| self.cost[i]).unwrap_or(1.0)
-    }
+	/// movement cost for the given tile (default 1.0).
+	#[must_use]
+	pub fn tile_cost(&self, x: u32, y: u32) -> f32 {
+		self.idx(x, y).map(|i| self.cost[i]).unwrap_or(1.0)
+	}
 
-    fn idx(&self, x: u32, y: u32) -> Option<usize> {
-        if x < self.width && y < self.height {
-            Some((y * self.width + x) as usize)
-        } else {
-            None
-        }
-    }
+	fn idx(&self, x: u32, y: u32) -> Option<usize> {
+		if x < self.width && y < self.height {
+			Some((y * self.width + x) as usize)
+		} else {
+			None
+		}
+	}
 
-    fn pack(&self, x: u32, y: u32) -> u32 {
-        y * self.width + x
-    }
+	fn pack(&self, x: u32, y: u32) -> u32 {
+		y * self.width + x
+	}
 
-    fn unpack(&self, node: u32) -> [u32; 2] {
-        [node % self.width, node / self.width]
-    }
+	fn unpack(&self, node: u32) -> [u32; 2] {
+		[node % self.width, node / self.width]
+	}
 }
 
 /// options that control the pathfinding search.
 pub struct PathOptions {
-    /// allow diagonal movement (8-directional). if false, only cardinal (4-dir).
-    pub diagonal: bool,
-    /// maximum number of nodes to expand before giving up. prevents runaway searches.
-    /// default 65536.
-    pub max_nodes: usize,
+	/// allow diagonal movement (8-directional). if false, only cardinal (4-dir).
+	pub diagonal: bool,
+	/// maximum number of nodes to expand before giving up. prevents runaway searches.
+	/// default 65536.
+	pub max_nodes: usize,
 }
 
 impl Default for PathOptions {
-    fn default() -> Self {
-        Self { diagonal: false, max_nodes: 65536 }
-    }
+	fn default() -> Self {
+		Self {
+			diagonal: false,
+			max_nodes: 65536,
+		}
+	}
 }
 
 /// reusable scratch buffers for `find_path` — avoids per-query heap allocation.
@@ -127,29 +130,29 @@ impl Default for PathOptions {
 /// create once and pass to repeated `find_path` calls. the buffers grow to
 /// fit the largest grid queried and are reused without reallocating afterward.
 pub struct PathScratch {
-    g_score: Vec<f32>,
-    parent: Vec<u32>,
+	g_score: Vec<f32>,
+	parent: Vec<u32>,
 }
 
 impl PathScratch {
-    /// create scratch buffers sized for a grid with `node_count` tiles.
-    #[must_use]
-    pub fn new(node_count: usize) -> Self {
-        Self {
-            g_score: vec![f32::MAX; node_count],
-            parent: vec![u32::MAX; node_count],
-        }
-    }
+	/// create scratch buffers sized for a grid with `node_count` tiles.
+	#[must_use]
+	pub fn new(node_count: usize) -> Self {
+		Self {
+			g_score: vec![f32::MAX; node_count],
+			parent: vec![u32::MAX; node_count],
+		}
+	}
 
-    fn prepare(&mut self, node_count: usize) {
-        if self.g_score.len() < node_count {
-            self.g_score.resize(node_count, f32::MAX);
-            self.parent.resize(node_count, u32::MAX);
-        } else {
-            self.g_score.fill(f32::MAX);
-            self.parent.fill(u32::MAX);
-        }
-    }
+	fn prepare(&mut self, node_count: usize) {
+		if self.g_score.len() < node_count {
+			self.g_score.resize(node_count, f32::MAX);
+			self.parent.resize(node_count, u32::MAX);
+		} else {
+			self.g_score.fill(f32::MAX);
+			self.parent.fill(u32::MAX);
+		}
+	}
 }
 
 /// find a path from `start` to `goal` using A* on the given grid.
@@ -165,231 +168,248 @@ impl PathScratch {
 /// are re-initialised each call so sharing across agents is safe (not concurrent).
 #[must_use]
 pub fn find_path(
-    grid: &NavGrid,
-    start: [u32; 2],
-    goal: [u32; 2],
-    options: PathOptions,
+	grid: &NavGrid,
+	start: [u32; 2],
+	goal: [u32; 2],
+	options: PathOptions,
 ) -> Option<Vec<[u32; 2]>> {
-    let mut scratch = PathScratch::new((grid.width * grid.height) as usize);
-    find_path_with_scratch(grid, start, goal, options, &mut scratch)
+	let mut scratch = PathScratch::new((grid.width * grid.height) as usize);
+	find_path_with_scratch(grid, start, goal, options, &mut scratch)
 }
 
 /// like [`find_path`] but reuses caller-supplied scratch buffers.
 #[must_use]
 pub fn find_path_with_scratch(
-    grid: &NavGrid,
-    start: [u32; 2],
-    goal: [u32; 2],
-    options: PathOptions,
-    scratch: &mut PathScratch,
+	grid: &NavGrid,
+	start: [u32; 2],
+	goal: [u32; 2],
+	options: PathOptions,
+	scratch: &mut PathScratch,
 ) -> Option<Vec<[u32; 2]>> {
-    if !grid.is_walkable(start[0], start[1]) || !grid.is_walkable(goal[0], goal[1]) {
-        return None;
-    }
+	if !grid.is_walkable(start[0], start[1]) || !grid.is_walkable(goal[0], goal[1]) {
+		return None;
+	}
 
-    let node_count = (grid.width * grid.height) as usize;
-    scratch.prepare(node_count);
+	let node_count = (grid.width * grid.height) as usize;
+	scratch.prepare(node_count);
 
-    let start_node = grid.pack(start[0], start[1]);
-    let goal_node = grid.pack(goal[0], goal[1]);
+	let start_node = grid.pack(start[0], start[1]);
+	let goal_node = grid.pack(goal[0], goal[1]);
 
-    if start_node == goal_node {
-        return Some(vec![start]);
-    }
+	if start_node == goal_node {
+		return Some(vec![start]);
+	}
 
-    let mut open: BinaryHeap<Reverse<(u32, u32)>> = BinaryHeap::new();
-    let mut expanded = 0usize;
+	let mut open: BinaryHeap<Reverse<(u32, u32)>> = BinaryHeap::new();
+	let mut expanded = 0usize;
 
-    scratch.g_score[start_node as usize] = 0.0;
-    let h = heuristic(start, goal, options.diagonal, grid.min_cost);
-    open.push(Reverse((f32::to_bits(h), start_node)));
+	scratch.g_score[start_node as usize] = 0.0;
+	let h = heuristic(start, goal, options.diagonal, grid.min_cost);
+	open.push(Reverse((f32::to_bits(h), start_node)));
 
-    while let Some(Reverse((_, current))) = open.pop() {
-        if current == goal_node {
-            return Some(reconstruct_path(grid, &scratch.parent, goal_node));
-        }
+	while let Some(Reverse((_, current))) = open.pop() {
+		if current == goal_node {
+			return Some(reconstruct_path(grid, &scratch.parent, goal_node));
+		}
 
-        expanded += 1;
-        if expanded > options.max_nodes {
-            return None;
-        }
+		expanded += 1;
+		if expanded > options.max_nodes {
+			return None;
+		}
 
-        let current_g = scratch.g_score[current as usize];
-        let [cx, cy] = grid.unpack(current);
+		let current_g = scratch.g_score[current as usize];
+		let [cx, cy] = grid.unpack(current);
 
-        for (nx, ny, step_cost) in neighbors(grid, cx, cy, options.diagonal) {
-            let neighbor = grid.pack(nx, ny);
-            let tentative_g = current_g + step_cost * grid.tile_cost(nx, ny);
-            if tentative_g < scratch.g_score[neighbor as usize] {
-                scratch.g_score[neighbor as usize] = tentative_g;
-                scratch.parent[neighbor as usize] = current;
-                let f = tentative_g + heuristic([nx, ny], goal, options.diagonal, grid.min_cost);
-                open.push(Reverse((f32::to_bits(f), neighbor)));
-            }
-        }
-    }
+		for (nx, ny, step_cost) in neighbors(grid, cx, cy, options.diagonal) {
+			let neighbor = grid.pack(nx, ny);
+			let tentative_g = current_g + step_cost * grid.tile_cost(nx, ny);
+			if tentative_g < scratch.g_score[neighbor as usize] {
+				scratch.g_score[neighbor as usize] = tentative_g;
+				scratch.parent[neighbor as usize] = current;
+				let f = tentative_g + heuristic([nx, ny], goal, options.diagonal, grid.min_cost);
+				open.push(Reverse((f32::to_bits(f), neighbor)));
+			}
+		}
+	}
 
-    None
+	None
 }
 
 /// admissible distance estimate, scaled by `min_cost` so it never overestimates
 /// when some tiles cost less than 1.0.
 fn heuristic(from: [u32; 2], to: [u32; 2], diagonal: bool, min_cost: f32) -> f32 {
-    let dx = from[0].abs_diff(to[0]) as f32;
-    let dy = from[1].abs_diff(to[1]) as f32;
-    let dist = if diagonal {
-        // octile distance — exact min steps for 8-dir movement with diagonal cost √2.
-        // tighter than Chebyshev (which assumes diagonal cost 1.0) so fewer nodes expand.
-        let (lo, hi) = if dx < dy { (dx, dy) } else { (dy, dx) };
-        lo * std::f32::consts::SQRT_2 + (hi - lo)
-    } else {
-        // Manhattan distance
-        dx + dy
-    };
-    dist * min_cost
+	let dx = from[0].abs_diff(to[0]) as f32;
+	let dy = from[1].abs_diff(to[1]) as f32;
+	let dist = if diagonal {
+		// octile distance — exact min steps for 8-dir movement with diagonal cost √2.
+		// tighter than Chebyshev (which assumes diagonal cost 1.0) so fewer nodes expand.
+		let (lo, hi) = if dx < dy { (dx, dy) } else { (dy, dx) };
+		lo * std::f32::consts::SQRT_2 + (hi - lo)
+	} else {
+		// Manhattan distance
+		dx + dy
+	};
+	dist * min_cost
 }
 
-fn neighbors(grid: &NavGrid, x: u32, y: u32, diagonal: bool) -> impl Iterator<Item = (u32, u32, f32)> {
-    let mut buf = [(0u32, 0u32, 0.0f32); 8];
-    let mut len = 0usize;
-    let dirs: &[(i32, i32, f32)] = if diagonal {
-        &[
-            (-1, 0, 1.0), (1, 0, 1.0), (0, -1, 1.0), (0, 1, 1.0),
-            (-1, -1, std::f32::consts::SQRT_2),
-            (1, -1, std::f32::consts::SQRT_2),
-            (-1, 1, std::f32::consts::SQRT_2),
-            (1, 1, std::f32::consts::SQRT_2),
-        ]
-    } else {
-        &[(-1, 0, 1.0), (1, 0, 1.0), (0, -1, 1.0), (0, 1, 1.0)]
-    };
-    for &(dx, dy, cost) in dirs {
-        let nx = x as i32 + dx;
-        let ny = y as i32 + dy;
-        if nx >= 0 && ny >= 0 {
-            let (nx, ny) = (nx as u32, ny as u32);
-            if grid.is_walkable(nx, ny) {
-                // for diagonal movement, also require both cardinal neighbors to be walkable
-                // to prevent cutting through wall corners
-                if cost > 1.0 {
-                    let clear_x = grid.is_walkable((x as i32 + dx) as u32, y);
-                    let clear_y = grid.is_walkable(x, (y as i32 + dy) as u32);
-                    if !clear_x || !clear_y {
-                        continue;
-                    }
-                }
-                buf[len] = (nx, ny, cost);
-                len += 1;
-            }
-        }
-    }
-    buf.into_iter().take(len)
+fn neighbors(
+	grid: &NavGrid,
+	x: u32,
+	y: u32,
+	diagonal: bool,
+) -> impl Iterator<Item = (u32, u32, f32)> {
+	let mut buf = [(0u32, 0u32, 0.0f32); 8];
+	let mut len = 0usize;
+	let dirs: &[(i32, i32, f32)] = if diagonal {
+		&[
+			(-1, 0, 1.0),
+			(1, 0, 1.0),
+			(0, -1, 1.0),
+			(0, 1, 1.0),
+			(-1, -1, std::f32::consts::SQRT_2),
+			(1, -1, std::f32::consts::SQRT_2),
+			(-1, 1, std::f32::consts::SQRT_2),
+			(1, 1, std::f32::consts::SQRT_2),
+		]
+	} else {
+		&[(-1, 0, 1.0), (1, 0, 1.0), (0, -1, 1.0), (0, 1, 1.0)]
+	};
+	for &(dx, dy, cost) in dirs {
+		let nx = x as i32 + dx;
+		let ny = y as i32 + dy;
+		if nx >= 0 && ny >= 0 {
+			let (nx, ny) = (nx as u32, ny as u32);
+			if grid.is_walkable(nx, ny) {
+				// for diagonal movement, also require both cardinal neighbors to be walkable
+				// to prevent cutting through wall corners
+				if cost > 1.0 {
+					let clear_x = grid.is_walkable((x as i32 + dx) as u32, y);
+					let clear_y = grid.is_walkable(x, (y as i32 + dy) as u32);
+					if !clear_x || !clear_y {
+						continue;
+					}
+				}
+				buf[len] = (nx, ny, cost);
+				len += 1;
+			}
+		}
+	}
+	buf.into_iter().take(len)
 }
 
 fn reconstruct_path(grid: &NavGrid, parent: &[u32], mut current: u32) -> Vec<[u32; 2]> {
-    let mut path = vec![grid.unpack(current)];
-    while parent[current as usize] != u32::MAX {
-        current = parent[current as usize];
-        path.push(grid.unpack(current));
-    }
-    path.reverse();
-    path
+	let mut path = vec![grid.unpack(current)];
+	while parent[current as usize] != u32::MAX {
+		current = parent[current as usize];
+		path.push(grid.unpack(current));
+	}
+	path.reverse();
+	path
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+	use super::*;
 
-    #[test]
-    fn straight_path_no_obstacles() {
-        let grid = NavGrid::new(10, 10);
-        let path = find_path(&grid, [0, 0], [5, 0], PathOptions::default()).unwrap();
-        assert_eq!(path.first(), Some(&[0u32, 0u32]));
-        assert_eq!(path.last(), Some(&[5u32, 0u32]));
-        assert_eq!(path.len(), 6);
-    }
+	#[test]
+	fn straight_path_no_obstacles() {
+		let grid = NavGrid::new(10, 10);
+		let path = find_path(&grid, [0, 0], [5, 0], PathOptions::default()).unwrap();
+		assert_eq!(path.first(), Some(&[0u32, 0u32]));
+		assert_eq!(path.last(), Some(&[5u32, 0u32]));
+		assert_eq!(path.len(), 6);
+	}
 
-    #[test]
-    fn path_around_wall() {
-        let mut grid = NavGrid::new(5, 3);
-        // block the whole middle column
-        for y in 0..3 {
-            grid.set_walkable(2, y, false);
-        }
-        // open a gap at y=2
-        grid.set_walkable(2, 2, true);
-        let path = find_path(&grid, [0, 1], [4, 1], PathOptions::default()).unwrap();
-        assert_eq!(path.first(), Some(&[0u32, 1u32]));
-        assert_eq!(path.last(), Some(&[4u32, 1u32]));
-        // path must pass through the gap
-        assert!(path.iter().any(|&[x, y]| x == 2 && y == 2));
-    }
+	#[test]
+	fn path_around_wall() {
+		let mut grid = NavGrid::new(5, 3);
+		// block the whole middle column
+		for y in 0..3 {
+			grid.set_walkable(2, y, false);
+		}
+		// open a gap at y=2
+		grid.set_walkable(2, 2, true);
+		let path = find_path(&grid, [0, 1], [4, 1], PathOptions::default()).unwrap();
+		assert_eq!(path.first(), Some(&[0u32, 1u32]));
+		assert_eq!(path.last(), Some(&[4u32, 1u32]));
+		// path must pass through the gap
+		assert!(path.iter().any(|&[x, y]| x == 2 && y == 2));
+	}
 
-    #[test]
-    fn no_path_when_blocked() {
-        let mut grid = NavGrid::new(5, 5);
-        for y in 0..5 {
-            grid.set_walkable(2, y, false);
-        }
-        assert!(find_path(&grid, [0, 2], [4, 2], PathOptions::default()).is_none());
-    }
+	#[test]
+	fn no_path_when_blocked() {
+		let mut grid = NavGrid::new(5, 5);
+		for y in 0..5 {
+			grid.set_walkable(2, y, false);
+		}
+		assert!(find_path(&grid, [0, 2], [4, 2], PathOptions::default()).is_none());
+	}
 
-    #[test]
-    fn start_equals_goal() {
-        let grid = NavGrid::new(5, 5);
-        let path = find_path(&grid, [2, 2], [2, 2], PathOptions::default()).unwrap();
-        assert_eq!(path, vec![[2u32, 2u32]]);
-    }
+	#[test]
+	fn start_equals_goal() {
+		let grid = NavGrid::new(5, 5);
+		let path = find_path(&grid, [2, 2], [2, 2], PathOptions::default()).unwrap();
+		assert_eq!(path, vec![[2u32, 2u32]]);
+	}
 
-    #[test]
-    fn diagonal_movement_shorter() {
-        let grid = NavGrid::new(5, 5);
-        let opts_4dir = PathOptions::default();
-        let opts_8dir = PathOptions { diagonal: true, ..Default::default() };
-        let path_4 = find_path(&grid, [0, 0], [3, 3], opts_4dir).unwrap();
-        let path_8 = find_path(&grid, [0, 0], [3, 3], opts_8dir).unwrap();
-        // diagonal path should be shorter (4 vs 7 steps)
-        assert!(path_8.len() < path_4.len());
-    }
+	#[test]
+	fn diagonal_movement_shorter() {
+		let grid = NavGrid::new(5, 5);
+		let opts_4dir = PathOptions::default();
+		let opts_8dir = PathOptions {
+			diagonal: true,
+			..Default::default()
+		};
+		let path_4 = find_path(&grid, [0, 0], [3, 3], opts_4dir).unwrap();
+		let path_8 = find_path(&grid, [0, 0], [3, 3], opts_8dir).unwrap();
+		// diagonal path should be shorter (4 vs 7 steps)
+		assert!(path_8.len() < path_4.len());
+	}
 
-    #[test]
-    fn high_cost_tile_avoided() {
-        let mut grid = NavGrid::new(5, 1);
-        grid.set_cost(2, 0, 100.0);
-        // with a very high cost tile in the middle of a 1-row grid there is no
-        // alternate route, so the path must go through it — but find_path should
-        // still succeed
-        let path = find_path(&grid, [0, 0], [4, 0], PathOptions::default());
-        assert!(path.is_some());
-        assert!(path.unwrap().iter().any(|&[x, _y]| x == 2));
-    }
+	#[test]
+	fn high_cost_tile_avoided() {
+		let mut grid = NavGrid::new(5, 1);
+		grid.set_cost(2, 0, 100.0);
+		// with a very high cost tile in the middle of a 1-row grid there is no
+		// alternate route, so the path must go through it — but find_path should
+		// still succeed
+		let path = find_path(&grid, [0, 0], [4, 0], PathOptions::default());
+		assert!(path.is_some());
+		assert!(path.unwrap().iter().any(|&[x, _y]| x == 2));
+	}
 
-    #[test]
-    fn prefers_cheaper_low_cost_lane() {
-        // direct lane (y=1) costs 1.0/tile; a parallel lane (y=0) costs 0.1/tile.
-        // the detour through the cheap lane is longer in steps but far cheaper, so
-        // the optimal path must use it. an unscaled heuristic would (wrongly) keep
-        // the direct route; scaling by the lowest tile cost restores optimality.
-        let mut grid = NavGrid::new(10, 3);
-        for x in 0..10 {
-            grid.set_cost(x, 0, 0.1);
-        }
-        let path = find_path(&grid, [0, 1], [9, 1], PathOptions::default()).unwrap();
-        assert_eq!(path.first(), Some(&[0u32, 1u32]));
-        assert_eq!(path.last(), Some(&[9u32, 1u32]));
-        assert!(path.iter().any(|&[_, y]| y == 0), "optimal path must detour through the cheap lane");
-    }
+	#[test]
+	fn prefers_cheaper_low_cost_lane() {
+		// direct lane (y=1) costs 1.0/tile; a parallel lane (y=0) costs 0.1/tile.
+		// the detour through the cheap lane is longer in steps but far cheaper, so
+		// the optimal path must use it. an unscaled heuristic would (wrongly) keep
+		// the direct route; scaling by the lowest tile cost restores optimality.
+		let mut grid = NavGrid::new(10, 3);
+		for x in 0..10 {
+			grid.set_cost(x, 0, 0.1);
+		}
+		let path = find_path(&grid, [0, 1], [9, 1], PathOptions::default()).unwrap();
+		assert_eq!(path.first(), Some(&[0u32, 1u32]));
+		assert_eq!(path.last(), Some(&[9u32, 1u32]));
+		assert!(
+			path.iter().any(|&[_, y]| y == 0),
+			"optimal path must detour through the cheap lane"
+		);
+	}
 
-    #[test]
-    fn max_nodes_limit_returns_none() {
-        let grid = NavGrid::new(100, 100);
-        let opts = PathOptions { diagonal: false, max_nodes: 2 };
-        // path is long enough that 2 nodes won't be enough
-        assert!(find_path(&grid, [0, 0], [99, 99], opts).is_none());
-    }
+	#[test]
+	fn max_nodes_limit_returns_none() {
+		let grid = NavGrid::new(100, 100);
+		let opts = PathOptions {
+			diagonal: false,
+			max_nodes: 2,
+		};
+		// path is long enough that 2 nodes won't be enough
+		assert!(find_path(&grid, [0, 0], [99, 99], opts).is_none());
+	}
 }
 
 /// common, game-facing pathfinding API for `use lunar::prelude::*`.
 pub mod prelude {
-    pub use crate::{NavGrid, PathOptions, find_path};
+	pub use crate::{NavGrid, PathOptions, find_path};
 }

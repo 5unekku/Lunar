@@ -21,38 +21,38 @@ use std::time::{Duration, Instant};
 /// 30hz is a last-resort for potato hardware — prefer 60hz as the minimum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TickRate {
-    /// 30hz — emergency low-end mode only
-    Hz30,
-    /// 60hz — standard minimum
-    Hz60,
-    /// 120hz — for competitive or highly responsive games
-    Hz120,
-    /// 240hz — for games that need sub-frame input precision
-    Hz240,
+	/// 30hz — emergency low-end mode only
+	Hz30,
+	/// 60hz — standard minimum
+	Hz60,
+	/// 120hz — for competitive or highly responsive games
+	Hz120,
+	/// 240hz — for games that need sub-frame input precision
+	Hz240,
 }
 
 impl TickRate {
-    /// fixed tick interval for this rate
-    #[must_use]
-    pub fn interval(&self) -> Duration {
-        match self {
-            Self::Hz30  => Duration::from_secs_f64(1.0 / 30.0),
-            Self::Hz60  => Duration::from_secs_f64(1.0 / 60.0),
-            Self::Hz120 => Duration::from_secs_f64(1.0 / 120.0),
-            Self::Hz240 => Duration::from_secs_f64(1.0 / 240.0),
-        }
-    }
+	/// fixed tick interval for this rate
+	#[must_use]
+	pub fn interval(&self) -> Duration {
+		match self {
+			Self::Hz30 => Duration::from_secs_f64(1.0 / 30.0),
+			Self::Hz60 => Duration::from_secs_f64(1.0 / 60.0),
+			Self::Hz120 => Duration::from_secs_f64(1.0 / 120.0),
+			Self::Hz240 => Duration::from_secs_f64(1.0 / 240.0),
+		}
+	}
 
-    /// fixed delta in seconds — what `Time::delta_seconds()` returns each tick
-    #[must_use]
-    pub const fn delta_seconds(&self) -> f32 {
-        match self {
-            Self::Hz30  => 1.0 / 30.0,
-            Self::Hz60  => 1.0 / 60.0,
-            Self::Hz120 => 1.0 / 120.0,
-            Self::Hz240 => 1.0 / 240.0,
-        }
-    }
+	/// fixed delta in seconds — what `Time::delta_seconds()` returns each tick
+	#[must_use]
+	pub const fn delta_seconds(&self) -> f32 {
+		match self {
+			Self::Hz30 => 1.0 / 30.0,
+			Self::Hz60 => 1.0 / 60.0,
+			Self::Hz120 => 1.0 / 120.0,
+			Self::Hz240 => 1.0 / 240.0,
+		}
+	}
 }
 
 /// game loop state — manages the fixed-step accumulator and frame rate limiting.
@@ -63,133 +63,133 @@ impl TickRate {
 ///
 /// then advance `Time` by `tick_rate.delta_seconds()` per tick.
 pub struct GameLoop {
-    /// target frame cap (0 = uncapped / vsync-limited)
-    frame_cap: u32,
-    /// logic tick rate — independent of frame cap
-    tick_rate: TickRate,
-    /// accumulator for fixed timestep
-    accumulator: Duration,
-    /// last render frame timestamp
-    last_frame: Instant,
-    /// whether the loop should continue
-    running: bool,
+	/// target frame cap (0 = uncapped / vsync-limited)
+	frame_cap: u32,
+	/// logic tick rate — independent of frame cap
+	tick_rate: TickRate,
+	/// accumulator for fixed timestep
+	accumulator: Duration,
+	/// last render frame timestamp
+	last_frame: Instant,
+	/// whether the loop should continue
+	running: bool,
 }
 
 impl GameLoop {
-    /// create a new game loop.
-    ///
-    /// `frame_cap` is the render frame cap (0 = uncapped). `tick_rate` is the
-    /// fixed logic rate and is completely independent of the render rate.
-    #[must_use]
-    pub fn new(frame_cap: u32, tick_rate: TickRate) -> Self {
-        log::info!("game loop: frame_cap={frame_cap}, tick_rate={tick_rate:?}");
-        Self {
-            frame_cap,
-            tick_rate,
-            accumulator: Duration::ZERO,
-            last_frame: Instant::now(),
-            running: true,
-        }
-    }
+	/// create a new game loop.
+	///
+	/// `frame_cap` is the render frame cap (0 = uncapped). `tick_rate` is the
+	/// fixed logic rate and is completely independent of the render rate.
+	#[must_use]
+	pub fn new(frame_cap: u32, tick_rate: TickRate) -> Self {
+		log::info!("game loop: frame_cap={frame_cap}, tick_rate={tick_rate:?}");
+		Self {
+			frame_cap,
+			tick_rate,
+			accumulator: Duration::ZERO,
+			last_frame: Instant::now(),
+			running: true,
+		}
+	}
 
-    /// get the current frame cap
-    #[must_use]
-    pub const fn frame_cap(&self) -> u32 {
-        self.frame_cap
-    }
+	/// get the current frame cap
+	#[must_use]
+	pub const fn frame_cap(&self) -> u32 {
+		self.frame_cap
+	}
 
-    /// set the render frame cap without changing the tick rate
-    pub fn set_frame_cap(&mut self, frame_cap: u32) {
-        self.frame_cap = frame_cap;
-        log::info!("game loop: frame_cap changed to {frame_cap}");
-    }
+	/// set the render frame cap without changing the tick rate
+	pub fn set_frame_cap(&mut self, frame_cap: u32) {
+		self.frame_cap = frame_cap;
+		log::info!("game loop: frame_cap changed to {frame_cap}");
+	}
 
-    /// get the current tick rate
-    #[must_use]
-    pub const fn tick_rate(&self) -> TickRate {
-        self.tick_rate
-    }
+	/// get the current tick rate
+	#[must_use]
+	pub const fn tick_rate(&self) -> TickRate {
+		self.tick_rate
+	}
 
-    /// change the logic tick rate at runtime.
-    ///
-    /// the accumulator is reset to avoid a burst of ticks after the change.
-    pub fn set_tick_rate(&mut self, tick_rate: TickRate) {
-        self.tick_rate = tick_rate;
-        self.accumulator = Duration::ZERO;
-        log::info!("game loop: tick_rate changed to {tick_rate:?}");
-    }
+	/// change the logic tick rate at runtime.
+	///
+	/// the accumulator is reset to avoid a burst of ticks after the change.
+	pub fn set_tick_rate(&mut self, tick_rate: TickRate) {
+		self.tick_rate = tick_rate;
+		self.accumulator = Duration::ZERO;
+		log::info!("game loop: tick_rate changed to {tick_rate:?}");
+	}
 
-    /// check if the loop should continue
-    #[must_use]
-    pub const fn is_running(&self) -> bool {
-        self.running
-    }
+	/// check if the loop should continue
+	#[must_use]
+	pub const fn is_running(&self) -> bool {
+		self.running
+	}
 
-    /// stop the game loop
-    pub fn stop(&mut self) {
-        self.running = false;
-    }
+	/// stop the game loop
+	pub fn stop(&mut self) {
+		self.running = false;
+	}
 
-    /// advance the loop by one render frame.
-    ///
-    /// returns `(ticks, frame_delta)`:
-    /// - `ticks`: how many logic ticks to run this frame (0-5)
-    /// - `frame_delta`: wall-clock seconds since last render frame
-    ///
-    /// advance `Time` by `tick_rate.delta_seconds()` per tick, and by
-    /// `frame_delta` for `real_delta_seconds` (once per render frame).
-    pub fn tick(&mut self) -> (u32, f32) {
-        let now = Instant::now();
-        let delta = now - self.last_frame;
-        self.last_frame = now;
-        let frame_delta = delta.as_secs_f32();
+	/// advance the loop by one render frame.
+	///
+	/// returns `(ticks, frame_delta)`:
+	/// - `ticks`: how many logic ticks to run this frame (0-5)
+	/// - `frame_delta`: wall-clock seconds since last render frame
+	///
+	/// advance `Time` by `tick_rate.delta_seconds()` per tick, and by
+	/// `frame_delta` for `real_delta_seconds` (once per render frame).
+	pub fn tick(&mut self) -> (u32, f32) {
+		let now = Instant::now();
+		let delta = now - self.last_frame;
+		self.last_frame = now;
+		let frame_delta = delta.as_secs_f32();
 
-        self.accumulator += delta;
+		self.accumulator += delta;
 
-        let tick_interval = self.tick_rate.interval();
-        let mut ticks = 0u32;
-        while self.accumulator >= tick_interval {
-            self.accumulator -= tick_interval;
-            ticks += 1;
-        }
+		let tick_interval = self.tick_rate.interval();
+		let mut ticks = 0u32;
+		while self.accumulator >= tick_interval {
+			self.accumulator -= tick_interval;
+			ticks += 1;
+		}
 
-        (ticks.min(5), frame_delta)
-    }
+		(ticks.min(5), frame_delta)
+	}
 
-    /// how far we are between the last tick and the next, in [0, 1].
-    ///
-    /// 0 = just ticked, 1 = accumulator has reached the next tick interval.
-    /// use this to lerp render-side entity transforms for smooth motion at any frame rate.
-    #[must_use]
-    pub fn interpolation_alpha(&self) -> f32 {
-        let interval = self.tick_rate.interval().as_secs_f32();
-        (self.accumulator.as_secs_f32() / interval).clamp(0.0, 1.0)
-    }
+	/// how far we are between the last tick and the next, in [0, 1].
+	///
+	/// 0 = just ticked, 1 = accumulator has reached the next tick interval.
+	/// use this to lerp render-side entity transforms for smooth motion at any frame rate.
+	#[must_use]
+	pub fn interpolation_alpha(&self) -> f32 {
+		let interval = self.tick_rate.interval().as_secs_f32();
+		(self.accumulator.as_secs_f32() / interval).clamp(0.0, 1.0)
+	}
 
-    /// apply render frame rate limiting.
-    ///
-    /// uses a hybrid sleep + spin-wait: sleep for all but the last 1ms,
-    /// then spin-wait for precision. no-op when frame_cap is 0 (vsync-limited).
-    /// no-op on wasm — the browser drives frame timing via requestAnimationFrame.
-    pub fn apply_frame_cap(&self) {
-        #[cfg(target_arch = "wasm32")]
-        return;
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if self.frame_cap == 0 {
-                return;
-            }
-            let frame_duration = Duration::from_secs_f64(1.0 / f64::from(self.frame_cap));
-            let elapsed = self.last_frame.elapsed();
-            if elapsed < frame_duration {
-                let remaining = frame_duration - elapsed;
-                if remaining > Duration::from_millis(1) {
-                    std::thread::sleep(remaining - Duration::from_millis(1));
-                }
-                while self.last_frame.elapsed() < frame_duration {
-                    std::hint::spin_loop();
-                }
-            }
-        }
-    }
+	/// apply render frame rate limiting.
+	///
+	/// uses a hybrid sleep + spin-wait: sleep for all but the last 1ms,
+	/// then spin-wait for precision. no-op when frame_cap is 0 (vsync-limited).
+	/// no-op on wasm — the browser drives frame timing via requestAnimationFrame.
+	pub fn apply_frame_cap(&self) {
+		#[cfg(target_arch = "wasm32")]
+		return;
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			if self.frame_cap == 0 {
+				return;
+			}
+			let frame_duration = Duration::from_secs_f64(1.0 / f64::from(self.frame_cap));
+			let elapsed = self.last_frame.elapsed();
+			if elapsed < frame_duration {
+				let remaining = frame_duration - elapsed;
+				if remaining > Duration::from_millis(1) {
+					std::thread::sleep(remaining - Duration::from_millis(1));
+				}
+				while self.last_frame.elapsed() < frame_duration {
+					std::hint::spin_loop();
+				}
+			}
+		}
+	}
 }

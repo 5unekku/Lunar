@@ -26,30 +26,30 @@ use crate::transform::WorldTransform3d;
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C)]
 pub struct Vertex3d {
-    pub position: Vec3,
-    pub normal: Vec3,
-    /// tangent xyz + handedness w (±1.0). bitangent = cross(normal, tangent.xyz) * tangent.w.
-    pub tangent: [f32; 4],
-    pub uv: Vec2,
-    /// secondary UV for lightmap sampling. mirrors `uv` if no lightmap.
-    pub uv_lightmap: Vec2,
-    /// per-vertex RGBA8 linear color. `[255,255,255,255]` = no tint.
-    pub color: [u8; 4],
+	pub position: Vec3,
+	pub normal: Vec3,
+	/// tangent xyz + handedness w (±1.0). bitangent = cross(normal, tangent.xyz) * tangent.w.
+	pub tangent: [f32; 4],
+	pub uv: Vec2,
+	/// secondary UV for lightmap sampling. mirrors `uv` if no lightmap.
+	pub uv_lightmap: Vec2,
+	/// per-vertex RGBA8 linear color. `[255,255,255,255]` = no tint.
+	pub color: [u8; 4],
 }
 
 impl Vertex3d {
-    /// create a vertex with sensible defaults (white, uv_lightmap mirrors uv).
-    #[must_use]
-    pub fn new(position: Vec3, normal: Vec3, tangent: [f32; 4], uv: Vec2) -> Self {
-        Self {
-            position,
-            normal,
-            tangent,
-            uv,
-            uv_lightmap: uv,
-            color: [255, 255, 255, 255],
-        }
-    }
+	/// create a vertex with sensible defaults (white, uv_lightmap mirrors uv).
+	#[must_use]
+	pub fn new(position: Vec3, normal: Vec3, tangent: [f32; 4], uv: Vec2) -> Self {
+		Self {
+			position,
+			normal,
+			tangent,
+			uv,
+			uv_lightmap: uv,
+			color: [255, 255, 255, 255],
+		}
+	}
 }
 
 /// additional per-vertex data for skeletal (skinned) meshes.
@@ -64,27 +64,27 @@ impl Vertex3d {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C)]
 pub struct SkinWeights {
-    /// indices into the bone matrix array. max 255 joints per mesh.
-    pub bone_indices: [u8; 4],
-    /// blend weights. must sum to 1.0. unused influences = 0.0.
-    pub bone_weights: [f32; 4],
+	/// indices into the bone matrix array. max 255 joints per mesh.
+	pub bone_indices: [u8; 4],
+	/// blend weights. must sum to 1.0. unused influences = 0.0.
+	pub bone_weights: [f32; 4],
 }
 
 impl SkinWeights {
-    /// rigid binding to a single joint (weight 1.0 on bone 0, rest zero).
-    #[must_use]
-    pub const fn rigid(bone: u8) -> Self {
-        Self {
-            bone_indices: [bone, 0, 0, 0],
-            bone_weights: [1.0, 0.0, 0.0, 0.0],
-        }
-    }
+	/// rigid binding to a single joint (weight 1.0 on bone 0, rest zero).
+	#[must_use]
+	pub const fn rigid(bone: u8) -> Self {
+		Self {
+			bone_indices: [bone, 0, 0, 0],
+			bone_weights: [1.0, 0.0, 0.0, 0.0],
+		}
+	}
 }
 
 impl Default for SkinWeights {
-    fn default() -> Self {
-        Self::rigid(0)
-    }
+	fn default() -> Self {
+		Self::rigid(0)
+	}
 }
 
 /// index format — 16-bit for meshes under 65536 verts, 32-bit for larger ones.
@@ -92,23 +92,23 @@ impl Default for SkinWeights {
 /// prefer u16 where possible: half the index buffer size, better GPU cache utilization.
 #[derive(Debug, Clone)]
 pub enum IndexBuffer {
-    U16(Vec<u16>),
-    U32(Vec<u32>),
+	U16(Vec<u16>),
+	U32(Vec<u32>),
 }
 
 impl IndexBuffer {
-    #[must_use]
-    pub fn len(&self) -> usize {
-        match self {
-            Self::U16(v) => v.len(),
-            Self::U32(v) => v.len(),
-        }
-    }
+	#[must_use]
+	pub fn len(&self) -> usize {
+		match self {
+			Self::U16(v) => v.len(),
+			Self::U32(v) => v.len(),
+		}
+	}
 
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
+	#[must_use]
+	pub fn is_empty(&self) -> bool {
+		self.len() == 0
+	}
 }
 
 /// how often this mesh's vertex data changes on the GPU.
@@ -121,10 +121,10 @@ impl IndexBuffer {
 /// - `Streaming`: rebuilt and re-uploaded every frame. particles, cloth, water, debug lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MeshUsage {
-    #[default]
-    Static,
-    Cached,
-    Streaming,
+	#[default]
+	Static,
+	Cached,
+	Streaming,
 }
 
 /// raw mesh data: vertex and index buffers in CPU memory.
@@ -134,82 +134,82 @@ pub enum MeshUsage {
 ///
 /// skinned meshes additionally provide [`SkinWeights`] parallel to `vertices`.
 pub struct MeshData {
-    pub vertices: Vec<Vertex3d>,
-    pub indices: IndexBuffer,
-    /// per-vertex skin weights. `None` for rigid (non-animated) meshes.
-    /// when `Some`, must have the same length as `vertices`.
-    pub skin: Option<Vec<SkinWeights>>,
-    pub usage: MeshUsage,
-    /// when true, the renderer drops vertex/index data from MeshRegistry after GPU upload.
-    /// safe to set after collision world is built — Collider3d holds its own vertex copy.
-    /// do not set for skinned meshes (cpu data needed for bone blending).
-    pub gpu_only: bool,
+	pub vertices: Vec<Vertex3d>,
+	pub indices: IndexBuffer,
+	/// per-vertex skin weights. `None` for rigid (non-animated) meshes.
+	/// when `Some`, must have the same length as `vertices`.
+	pub skin: Option<Vec<SkinWeights>>,
+	pub usage: MeshUsage,
+	/// when true, the renderer drops vertex/index data from MeshRegistry after GPU upload.
+	/// safe to set after collision world is built — Collider3d holds its own vertex copy.
+	/// do not set for skinned meshes (cpu data needed for bone blending).
+	pub gpu_only: bool,
 }
 
 impl MeshData {
-    /// create a rigid (non-skinned) static mesh.
-    #[must_use]
-    pub fn new(vertices: Vec<Vertex3d>, indices: IndexBuffer) -> Self {
-        Self {
-            vertices,
-            indices,
-            skin: None,
-            usage: MeshUsage::Static,
-            gpu_only: false,
-        }
-    }
+	/// create a rigid (non-skinned) static mesh.
+	#[must_use]
+	pub fn new(vertices: Vec<Vertex3d>, indices: IndexBuffer) -> Self {
+		Self {
+			vertices,
+			indices,
+			skin: None,
+			usage: MeshUsage::Static,
+			gpu_only: false,
+		}
+	}
 
-    /// create a skinned mesh with bone weights.
-    ///
-    /// # Panics
-    /// panics if `skin.len() != vertices.len()`.
-    #[must_use]
-    pub fn new_skinned(
-        vertices: Vec<Vertex3d>,
-        indices: IndexBuffer,
-        skin: Vec<SkinWeights>,
-    ) -> Self {
-        assert_eq!(
-            vertices.len(),
-            skin.len(),
-            "skin weights must match vertex count"
-        );
-        Self {
-            vertices,
-            indices,
-            skin: Some(skin),
-            usage: MeshUsage::Cached,
-            gpu_only: false,
-        }
-    }
+	/// create a skinned mesh with bone weights.
+	///
+	/// # Panics
+	/// panics if `skin.len() != vertices.len()`.
+	#[must_use]
+	pub fn new_skinned(
+		vertices: Vec<Vertex3d>,
+		indices: IndexBuffer,
+		skin: Vec<SkinWeights>,
+	) -> Self {
+		assert_eq!(
+			vertices.len(),
+			skin.len(),
+			"skin weights must match vertex count"
+		);
+		Self {
+			vertices,
+			indices,
+			skin: Some(skin),
+			usage: MeshUsage::Cached,
+			gpu_only: false,
+		}
+	}
 
-    #[must_use]
-    pub fn with_usage(mut self, usage: MeshUsage) -> Self {
-        self.usage = usage;
-        self
-    }
+	#[must_use]
+	pub fn with_usage(mut self, usage: MeshUsage) -> Self {
+		self.usage = usage;
+		self
+	}
 
-    /// compute flat (faceted) normals from triangle faces. overwrites existing normals.
-    ///
-    /// for smooth shading, average normals across shared vertices instead.
-    pub fn compute_flat_normals(&mut self) {
-        let indices: Vec<usize> = match &self.indices {
-            IndexBuffer::U16(v) => v.iter().map(|&i| i as usize).collect(),
-            IndexBuffer::U32(v) => v.iter().map(|&i| i as usize).collect(),
-        };
-        for vertex in &mut self.vertices {
-            vertex.normal = Vec3::ZERO;
-        }
-        for tri in indices.chunks_exact(3) {
-            let a = self.vertices[tri[0]].position;
-            let b = self.vertices[tri[1]].position;
-            let c = self.vertices[tri[2]].position;
-            let n = (b - a).cross(c - a).normalize_or_zero();
-            self.vertices[tri[0]].normal = n;
-            self.vertices[tri[1]].normal = n;
-            self.vertices[tri[2]].normal = n;
-        }
-    }
+	/// compute flat (faceted) normals from triangle faces. overwrites existing normals.
+	///
+	/// for smooth shading, average normals across shared vertices instead.
+	pub fn compute_flat_normals(&mut self) {
+		let indices: Vec<usize> = match &self.indices {
+			IndexBuffer::U16(v) => v.iter().map(|&i| i as usize).collect(),
+			IndexBuffer::U32(v) => v.iter().map(|&i| i as usize).collect(),
+		};
+		for vertex in &mut self.vertices {
+			vertex.normal = Vec3::ZERO;
+		}
+		for tri in indices.chunks_exact(3) {
+			let a = self.vertices[tri[0]].position;
+			let b = self.vertices[tri[1]].position;
+			let c = self.vertices[tri[2]].position;
+			let n = (b - a).cross(c - a).normalize_or_zero();
+			self.vertices[tri[0]].normal = n;
+			self.vertices[tri[1]].normal = n;
+			self.vertices[tri[2]].normal = n;
+		}
+	}
 }
 
 impl Asset for MeshData {}
@@ -218,32 +218,32 @@ impl Asset for MeshData {}
 ///
 /// the atlas stores `angle_count` images arranged in a single row:
 /// column i = the object rendered from azimuth `i * (360 / angle_count)` degrees.
-/// generated offline (or by [`MeshImpostor::bake`]) and loaded as a regular texture.
+/// generated offline (or by a bake tool) and loaded as a regular texture.
 #[derive(Debug, Clone)]
 pub struct ImpostorAtlas {
-    /// texture handle for the multi-angle atlas
-    pub texture: Handle<lunar_assets::Texture>,
-    /// number of angles baked into the atlas (equally spaced around 360°)
-    pub angle_count: u32,
-    /// width × height in texels of each individual angle frame
-    pub frame_width: u32,
-    pub frame_height: u32,
+	/// texture handle for the multi-angle atlas
+	pub texture: Handle<lunar_assets::Texture>,
+	/// number of angles baked into the atlas (equally spaced around 360°)
+	pub angle_count: u32,
+	/// width × height in texels of each individual angle frame
+	pub frame_width: u32,
+	pub frame_height: u32,
 }
 
 impl ImpostorAtlas {
-    /// UV rect for the closest pre-baked angle to `view_angle_rad` (azimuth around Y).
-    ///
-    /// returns `(u_min, u_max, v_min, v_max)` in atlas UV space [0,1].
-    #[must_use]
-    pub fn uv_rect(&self, view_angle_rad: f32) -> (f32, f32, f32, f32) {
-        use std::f32::consts::TAU;
-        let angle_step = TAU / self.angle_count as f32;
-        let norm = ((view_angle_rad % TAU) + TAU) % TAU;
-        let frame = ((norm / angle_step).round() as u32) % self.angle_count;
-        let u_step = 1.0 / self.angle_count as f32;
-        let u_min = frame as f32 * u_step;
-        (u_min, u_min + u_step, 0.0, 1.0)
-    }
+	/// UV rect for the closest pre-baked angle to `view_angle_rad` (azimuth around Y).
+	///
+	/// returns `(u_min, u_max, v_min, v_max)` in atlas UV space `[0,1]`.
+	#[must_use]
+	pub fn uv_rect(&self, view_angle_rad: f32) -> (f32, f32, f32, f32) {
+		use std::f32::consts::TAU;
+		let angle_step = TAU / self.angle_count as f32;
+		let norm = ((view_angle_rad % TAU) + TAU) % TAU;
+		let frame = ((norm / angle_step).round() as u32) % self.angle_count;
+		let u_step = 1.0 / self.angle_count as f32;
+		let u_min = frame as f32 * u_step;
+		(u_min, u_min + u_step, 0.0, 1.0)
+	}
 }
 
 /// impostor billboard for far-distance rendering.
@@ -263,13 +263,13 @@ impl ImpostorAtlas {
 /// 4. spawn the entity with `Mesh3d`, optional `MeshLod`, and `MeshImpostor`
 #[derive(Debug, Clone, Component)]
 pub struct MeshImpostor {
-    /// squared camera distance beyond which the impostor is used instead of the mesh
-    pub min_dist_sq: f32,
-    /// the multi-angle pre-rendered atlas
-    pub atlas: ImpostorAtlas,
-    /// world-space half-extents of the impostor billboard quad (matches the object's visual size)
-    pub half_width: f32,
-    pub half_height: f32,
+	/// squared camera distance beyond which the impostor is used instead of the mesh
+	pub min_dist_sq: f32,
+	/// the multi-angle pre-rendered atlas
+	pub atlas: ImpostorAtlas,
+	/// world-space half-extents of the impostor billboard quad (matches the object's visual size)
+	pub half_width: f32,
+	pub half_height: f32,
 }
 
 /// planar reflection surface.
@@ -282,18 +282,22 @@ pub struct MeshImpostor {
 /// uses a simple Y-mirror; oblique clipping prevents underwater geometry from appearing.
 #[derive(Debug, Clone, Copy, Component)]
 pub struct PlanarReflector {
-    /// world-space Y coordinate of the reflection plane (horizontal reflectors only).
-    pub plane_y: f32,
-    /// render resolution divisor: 1 = full-res, 2 = half-res (default).
-    pub resolution_divisor: u32,
-    /// max render distance for the reflected scene (clip objects beyond this).
-    pub clip_dist: f32,
+	/// world-space Y coordinate of the reflection plane (horizontal reflectors only).
+	pub plane_y: f32,
+	/// render resolution divisor: 1 = full-res, 2 = half-res (default).
+	pub resolution_divisor: u32,
+	/// max render distance for the reflected scene (clip objects beyond this).
+	pub clip_dist: f32,
 }
 
 impl Default for PlanarReflector {
-    fn default() -> Self {
-        Self { plane_y: 0.0, resolution_divisor: 2, clip_dist: 300.0 }
-    }
+	fn default() -> Self {
+		Self {
+			plane_y: 0.0,
+			resolution_divisor: 2,
+			clip_dist: 300.0,
+		}
+	}
 }
 
 /// GPU-driven ground cover sprites.
@@ -303,24 +307,24 @@ impl Default for PlanarReflector {
 /// a compute pass generates instance data each frame; one instanced draw per entity.
 #[derive(Debug, Clone, Component)]
 pub struct DetailDensity {
-    /// sprite atlas texture (horizontal strip of variants).
-    pub texture: Handle<Texture>,
-    /// density map: R channel = sprites per m², 0-1 normalized to density_scale.
-    pub density_map: Handle<Texture>,
-    /// world-space XZ origin of the density map region.
-    pub world_origin: Vec2,
-    /// XZ extent of the density map in world units.
-    pub world_size: Vec2,
-    /// max distance at which sprites render.
-    pub max_dist: f32,
-    /// sprite half-height range [min, max] in world units.
-    pub size_range: [f32; 2],
-    /// number of sprite variants in the atlas (horizontal strip).
-    pub variant_count: u32,
-    /// maximum sprites per m² at full density.
-    pub density_scale: f32,
-    /// grid cell spacing in world units (default 0.5).
-    pub grid_step: f32,
+	/// sprite atlas texture (horizontal strip of variants).
+	pub texture: Handle<Texture>,
+	/// density map: R channel = sprites per m², 0-1 normalized to density_scale.
+	pub density_map: Handle<Texture>,
+	/// world-space XZ origin of the density map region.
+	pub world_origin: Vec2,
+	/// XZ extent of the density map in world units.
+	pub world_size: Vec2,
+	/// max distance at which sprites render.
+	pub max_dist: f32,
+	/// sprite half-height range [min, max] in world units.
+	pub size_range: [f32; 2],
+	/// number of sprite variants in the atlas (horizontal strip).
+	pub variant_count: u32,
+	/// maximum sprites per m² at full density.
+	pub density_scale: f32,
+	/// grid cell spacing in world units (default 0.5).
+	pub grid_step: f32,
 }
 
 /// stores the world transform from the previous tick for render interpolation.
@@ -340,9 +344,8 @@ pub struct Mesh3d(pub Handle<MeshData>);
 
 /// marker: this entity's mesh, material, and transform are immutable across frames.
 ///
-/// the renderer records a `wgpu::RenderBundle` once for all `StaticMesh` entities
-/// and replays it each frame at near-zero CPU cost. add to level geometry (walls,
-/// floors, ceilings) that never moves. do NOT add to animated objects or physics bodies.
+/// add to level geometry (walls, floors, ceilings) that never moves for a significant
+/// CPU-side rendering cost reduction. do NOT add to animated objects or physics bodies.
 #[derive(Debug, Clone, Copy, Default, Component)]
 pub struct StaticMesh;
 
@@ -366,27 +369,28 @@ pub struct StaticMesh;
 /// ```
 #[derive(Debug, Clone, Component)]
 pub struct MeshLod {
-    /// `(max_dist_sq, mesh_handle)` sorted ascending by `max_dist_sq`.
-    pub levels: Vec<(f32, Handle<MeshData>)>,
+	/// `(max_dist_sq, mesh_handle)` sorted ascending by `max_dist_sq`.
+	pub levels: Vec<(f32, Handle<MeshData>)>,
 }
 
 impl MeshLod {
-    /// construct and sort levels by `max_dist_sq`.
-    #[must_use]
-    pub fn new(mut levels: Vec<(f32, Handle<MeshData>)>) -> Self {
-        levels.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        Self { levels }
-    }
+	/// construct and sort levels by `max_dist_sq`.
+	#[must_use]
+	pub fn new(mut levels: Vec<(f32, Handle<MeshData>)>) -> Self {
+		levels.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+		Self { levels }
+	}
 
-    /// select the mesh handle for `dist_sq` (squared camera distance).
-    ///
-    /// returns the first level whose `max_dist_sq >= dist_sq`, or the last
-    /// (coarsest) level if all thresholds are exceeded.
-    #[must_use]
-    pub fn select(&self, dist_sq: f32) -> Option<Handle<MeshData>> {
-        self.levels.iter()
-            .find(|(max_d_sq, _)| dist_sq <= *max_d_sq)
-            .or_else(|| self.levels.last())
-            .map(|(_, handle)| *handle)
-    }
+	/// select the mesh handle for `dist_sq` (squared camera distance).
+	///
+	/// returns the first level whose `max_dist_sq >= dist_sq`, or the last
+	/// (coarsest) level if all thresholds are exceeded.
+	#[must_use]
+	pub fn select(&self, dist_sq: f32) -> Option<Handle<MeshData>> {
+		self.levels
+			.iter()
+			.find(|(max_d_sq, _)| dist_sq <= *max_d_sq)
+			.or_else(|| self.levels.last())
+			.map(|(_, handle)| *handle)
+	}
 }

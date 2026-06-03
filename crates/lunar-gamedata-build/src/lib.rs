@@ -39,8 +39,8 @@
 
 use rustc_hash::FxHashMap as HashMap;
 
-use lunar_gamedata::{DataRecord, DataTable, DataValue, GameData};
 use lunar_core::{SceneDefinition, WorldManifest};
+use lunar_gamedata::{DataRecord, DataTable, DataValue, GameData};
 
 /// compile a TOML source string into a binary blob.
 ///
@@ -54,120 +54,131 @@ use lunar_core::{SceneDefinition, WorldManifest};
 /// - duplicate ids exist within the same table
 /// - a field value type is not supported (array, inline table, datetime)
 pub fn compile_toml(source: &str) -> Result<Vec<u8>, String> {
-    let root: toml::Value =
-        source.parse().map_err(|e| format!("toml parse error: {e}"))?;
+	let root: toml::Value = source
+		.parse()
+		.map_err(|e| format!("toml parse error: {e}"))?;
 
-    let table_map = root.as_table().ok_or("root toml value must be a table")?;
+	let table_map = root.as_table().ok_or("root toml value must be a table")?;
 
-    let mut strings: Vec<String> = Vec::new();
-    let mut string_index: HashMap<String, u32> = HashMap::default();
-    let mut tables: HashMap<String, DataTable> = HashMap::default();
+	let mut strings: Vec<String> = Vec::new();
+	let mut string_index: HashMap<String, u32> = HashMap::default();
+	let mut tables: HashMap<String, DataTable> = HashMap::default();
 
-    let intern = |s: &str, strings: &mut Vec<String>, index: &mut HashMap<String, u32>| -> u32 {
-        if let Some(&id) = index.get(s) {
-            return id;
-        }
-        let id = strings.len() as u32;
-        strings.push(s.to_string());
-        index.insert(s.to_string(), id);
-        id
-    };
+	let intern = |s: &str, strings: &mut Vec<String>, index: &mut HashMap<String, u32>| -> u32 {
+		if let Some(&id) = index.get(s) {
+			return id;
+		}
+		let id = strings.len() as u32;
+		strings.push(s.to_string());
+		index.insert(s.to_string(), id);
+		id
+	};
 
-    for (table_name, value) in table_map {
-        let records_toml = match value.as_array() {
-            Some(arr) => arr,
-            None => {
-                println!("cargo:warning=gamedata: top-level key '{table_name}' is not an array-of-tables and will be skipped");
-                continue;
-            }
-        };
+	for (table_name, value) in table_map {
+		let records_toml = match value.as_array() {
+			Some(arr) => arr,
+			None => {
+				println!(
+					"cargo:warning=gamedata: top-level key '{table_name}' is not an array-of-tables and will be skipped"
+				);
+				continue;
+			}
+		};
 
-        // check first element to see if it's a table (array-of-tables)
-        let is_table_array = records_toml.first().is_some_and(|v| v.is_table());
-        if !is_table_array {
-            continue;
-        }
+		// check first element to see if it's a table (array-of-tables)
+		let is_table_array = records_toml.first().is_some_and(|v| v.is_table());
+		if !is_table_array {
+			continue;
+		}
 
-        let mut records: Vec<DataRecord> = Vec::new();
-        let mut id_seen: HashMap<String, usize> = HashMap::default();
+		let mut records: Vec<DataRecord> = Vec::new();
+		let mut id_seen: HashMap<String, usize> = HashMap::default();
 
-        for (record_index, record_value) in records_toml.iter().enumerate() {
-            let fields_toml = record_value
-                .as_table()
-                .ok_or_else(|| format!("record {record_index} in table '{table_name}' is not a TOML table"))?;
+		for (record_index, record_value) in records_toml.iter().enumerate() {
+			let fields_toml = record_value.as_table().ok_or_else(|| {
+				format!("record {record_index} in table '{table_name}' is not a TOML table")
+			})?;
 
-            // require 'id' field
-            let id_str = fields_toml
-                .get("id")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    format!("record {record_index} in table '{table_name}' is missing required 'id' string field")
-                })?;
+			// require 'id' field
+			let id_str = fields_toml
+				.get("id")
+				.and_then(|v| v.as_str())
+				.ok_or_else(|| {
+					format!(
+						"record {record_index} in table '{table_name}' is missing required 'id' string field"
+					)
+				})?;
 
-            if let Some(prev) = id_seen.get(id_str) {
-                return Err(format!(
-                    "duplicate id '{id_str}' in table '{table_name}' (first at record {prev}, again at record {record_index})"
-                ));
-            }
-            id_seen.insert(id_str.to_string(), record_index);
+			if let Some(prev) = id_seen.get(id_str) {
+				return Err(format!(
+					"duplicate id '{id_str}' in table '{table_name}' (first at record {prev}, again at record {record_index})"
+				));
+			}
+			id_seen.insert(id_str.to_string(), record_index);
 
-            let id_interned = intern(id_str, &mut strings, &mut string_index);
+			let id_interned = intern(id_str, &mut strings, &mut string_index);
 
-            let mut field_vec: Vec<(u32, DataValue)> = Vec::new();
-            for (field_name, field_value) in fields_toml {
-                if field_name == "id" {
-                    continue; // id is not stored as a field
-                }
-                let field_id = intern(field_name, &mut strings, &mut string_index);
-                let data_value = toml_to_data_value(field_value, field_name, table_name, &mut strings, &mut string_index)?;
-                field_vec.push((field_id, data_value));
-            }
+			let mut field_vec: Vec<(u32, DataValue)> = Vec::new();
+			for (field_name, field_value) in fields_toml {
+				if field_name == "id" {
+					continue; // id is not stored as a field
+				}
+				let field_id = intern(field_name, &mut strings, &mut string_index);
+				let data_value = toml_to_data_value(
+					field_value,
+					field_name,
+					table_name,
+					&mut strings,
+					&mut string_index,
+				)?;
+				field_vec.push((field_id, data_value));
+			}
 
-            records.push(DataRecord {
-                id: id_interned,
-                fields: field_vec,
-            });
-        }
+			records.push(DataRecord {
+				id: id_interned,
+				fields: field_vec,
+			});
+		}
 
-        let mut index: HashMap<u32, usize> = HashMap::default();
-        for (i, record) in records.iter().enumerate() {
-            index.insert(record.id, i);
-        }
+		let mut index: HashMap<u32, usize> = HashMap::default();
+		for (i, record) in records.iter().enumerate() {
+			index.insert(record.id, i);
+		}
 
-        tables.insert(table_name.clone(), DataTable { records, index });
-    }
+		tables.insert(table_name.clone(), DataTable { records, index });
+	}
 
-    let game_data = GameData { strings, tables };
-    bincode::serialize(&game_data).map_err(|e| format!("serialization error: {e}"))
+	let game_data = GameData { strings, tables };
+	bincode::serialize(&game_data).map_err(|e| format!("serialization error: {e}"))
 }
 
 fn toml_to_data_value(
-    value: &toml::Value,
-    field_name: &str,
-    table_name: &str,
-    strings: &mut Vec<String>,
-    string_index: &mut HashMap<String, u32>,
+	value: &toml::Value,
+	field_name: &str,
+	table_name: &str,
+	strings: &mut Vec<String>,
+	string_index: &mut HashMap<String, u32>,
 ) -> Result<DataValue, String> {
-    match value {
-        toml::Value::String(s) => {
-            let id = if let Some(&existing) = string_index.get(s.as_str()) {
-                existing
-            } else {
-                let id = strings.len() as u32;
-                strings.push(s.clone());
-                string_index.insert(s.clone(), id);
-                id
-            };
-            Ok(DataValue::Str(id))
-        }
-        toml::Value::Integer(n) => Ok(DataValue::Int(*n)),
-        toml::Value::Float(f) => Ok(DataValue::Float(*f)),
-        toml::Value::Boolean(b) => Ok(DataValue::Bool(*b)),
-        _ => Err(format!(
-            "unsupported value type for field '{field_name}' in table '{table_name}': \
+	match value {
+		toml::Value::String(s) => {
+			let id = if let Some(&existing) = string_index.get(s.as_str()) {
+				existing
+			} else {
+				let id = strings.len() as u32;
+				strings.push(s.clone());
+				string_index.insert(s.clone(), id);
+				id
+			};
+			Ok(DataValue::Str(id))
+		}
+		toml::Value::Integer(n) => Ok(DataValue::Int(*n)),
+		toml::Value::Float(f) => Ok(DataValue::Float(*f)),
+		toml::Value::Boolean(b) => Ok(DataValue::Bool(*b)),
+		_ => Err(format!(
+			"unsupported value type for field '{field_name}' in table '{table_name}': \
              only string, integer, float, and boolean are supported"
-        )),
-    }
+		)),
+	}
 }
 
 /// compile a TOML file to a binary blob.
@@ -178,9 +189,9 @@ fn toml_to_data_value(
 ///
 /// returns an error string if the file cannot be read or compilation fails.
 pub fn compile_toml_file(path: &str) -> Result<Vec<u8>, String> {
-    let source =
-        std::fs::read_to_string(path).map_err(|e| format!("failed to read '{path}': {e}"))?;
-    compile_toml(&source)
+	let source =
+		std::fs::read_to_string(path).map_err(|e| format!("failed to read '{path}': {e}"))?;
+	compile_toml(&source)
 }
 
 /// compile a RON scene source string into the compact binary format.
@@ -204,7 +215,7 @@ pub fn compile_toml_file(path: &str) -> Result<Vec<u8>, String> {
 ///
 /// returns an error if the RON source fails to parse or binary serialization fails.
 pub fn compile_scene(source: &str) -> Result<Vec<u8>, String> {
-    SceneDefinition::from_ron(source)?.to_binary()
+	SceneDefinition::from_ron(source)?.to_binary()
 }
 
 /// compile a RON scene file into the compact binary format.
@@ -213,9 +224,9 @@ pub fn compile_scene(source: &str) -> Result<Vec<u8>, String> {
 ///
 /// returns an error if the file cannot be read or compilation fails.
 pub fn compile_scene_file(path: &str) -> Result<Vec<u8>, String> {
-    let source =
-        std::fs::read_to_string(path).map_err(|e| format!("failed to read '{path}': {e}"))?;
-    compile_scene(&source)
+	let source =
+		std::fs::read_to_string(path).map_err(|e| format!("failed to read '{path}': {e}"))?;
+	compile_scene(&source)
 }
 
 /// compile a world manifest XML source string into the compact binary format.
@@ -226,7 +237,7 @@ pub fn compile_scene_file(path: &str) -> Result<Vec<u8>, String> {
 ///
 /// returns an error if the XML source fails to parse or binary serialization fails.
 pub fn compile_world_manifest(source: &str) -> Result<Vec<u8>, String> {
-    WorldManifest::from_xml(source)?.compile()?.to_binary()
+	WorldManifest::from_xml(source)?.compile()?.to_binary()
 }
 
 /// compile a world manifest XML file into the compact binary format.
@@ -235,16 +246,16 @@ pub fn compile_world_manifest(source: &str) -> Result<Vec<u8>, String> {
 ///
 /// returns an error if the file cannot be read or compilation fails.
 pub fn compile_world_manifest_file(path: &str) -> Result<Vec<u8>, String> {
-    let source =
-        std::fs::read_to_string(path).map_err(|e| format!("failed to read '{path}': {e}"))?;
-    compile_world_manifest(&source)
+	let source =
+		std::fs::read_to_string(path).map_err(|e| format!("failed to read '{path}': {e}"))?;
+	compile_world_manifest(&source)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+	use super::*;
 
-    const SAMPLE: &str = r#"
+	const SAMPLE: &str = r#"
 [[enemies]]
 id = "goblin"
 health = 100
@@ -264,51 +275,54 @@ damage = 25
 weight = 3.0
 "#;
 
-    #[test]
-    fn compile_and_read() {
-        let blob = compile_toml(SAMPLE).unwrap();
-        let gd = GameData::from_binary(&blob).unwrap();
+	#[test]
+	fn compile_and_read() {
+		let blob = compile_toml(SAMPLE).unwrap();
+		let gd = GameData::from_binary(&blob).unwrap();
 
-        assert_eq!(gd.get_int("enemies", "goblin", "health"), Some(100));
-        assert!((gd.get_float("enemies", "goblin", "speed").unwrap() - 2.5).abs() < 1e-9);
-        assert_eq!(gd.get_bool("enemies", "goblin", "boss"), Some(false));
-        assert_eq!(gd.get_str("enemies", "goblin", "sprite"), Some("goblin.png"));
+		assert_eq!(gd.get_int("enemies", "goblin", "health"), Some(100));
+		assert!((gd.get_float("enemies", "goblin", "speed").unwrap() - 2.5).abs() < 1e-9);
+		assert_eq!(gd.get_bool("enemies", "goblin", "boss"), Some(false));
+		assert_eq!(
+			gd.get_str("enemies", "goblin", "sprite"),
+			Some("goblin.png")
+		);
 
-        assert_eq!(gd.get_int("enemies", "orc", "health"), Some(250));
-        assert_eq!(gd.get_float("items", "sword", "damage"), None);
-        assert_eq!(gd.get_int("items", "sword", "damage"), Some(25));
-    }
+		assert_eq!(gd.get_int("enemies", "orc", "health"), Some(250));
+		assert_eq!(gd.get_float("items", "sword", "damage"), None);
+		assert_eq!(gd.get_int("items", "sword", "damage"), Some(25));
+	}
 
-    #[test]
-    fn missing_id_is_error() {
-        let bad = "[[enemies]]\nhealth = 100\n";
-        assert!(compile_toml(bad).is_err());
-    }
+	#[test]
+	fn missing_id_is_error() {
+		let bad = "[[enemies]]\nhealth = 100\n";
+		assert!(compile_toml(bad).is_err());
+	}
 
-    #[test]
-    fn duplicate_id_is_error() {
-        let bad = "[[enemies]]\nid = \"goblin\"\n[[enemies]]\nid = \"goblin\"\n";
-        assert!(compile_toml(bad).is_err());
-    }
+	#[test]
+	fn duplicate_id_is_error() {
+		let bad = "[[enemies]]\nid = \"goblin\"\n[[enemies]]\nid = \"goblin\"\n";
+		assert!(compile_toml(bad).is_err());
+	}
 
-    #[test]
-    fn unsupported_value_type_is_error() {
-        let bad = "[[things]]\nid = \"x\"\ntags = [\"a\", \"b\"]\n";
-        assert!(compile_toml(bad).is_err());
-    }
+	#[test]
+	fn unsupported_value_type_is_error() {
+		let bad = "[[things]]\nid = \"x\"\ntags = [\"a\", \"b\"]\n";
+		assert!(compile_toml(bad).is_err());
+	}
 
-    #[test]
-    fn empty_table_compiles() {
-        let blob = compile_toml("").unwrap();
-        let gd = GameData::from_binary(&blob).unwrap();
-        assert!(gd.table("anything").is_none());
-    }
+	#[test]
+	fn empty_table_compiles() {
+		let blob = compile_toml("").unwrap();
+		let gd = GameData::from_binary(&blob).unwrap();
+		assert!(gd.table("anything").is_none());
+	}
 
-    #[test]
-    fn table_len() {
-        let blob = compile_toml(SAMPLE).unwrap();
-        let gd = GameData::from_binary(&blob).unwrap();
-        assert_eq!(gd.table("enemies").unwrap().len(), 2);
-        assert_eq!(gd.table("items").unwrap().len(), 1);
-    }
+	#[test]
+	fn table_len() {
+		let blob = compile_toml(SAMPLE).unwrap();
+		let gd = GameData::from_binary(&blob).unwrap();
+		assert_eq!(gd.table("enemies").unwrap().len(), 2);
+		assert_eq!(gd.table("items").unwrap().len(), 1);
+	}
 }

@@ -39,19 +39,17 @@ pub type Mat2 = glam::Mat2;
 
 /// 3x3 matrix type alias.
 ///
-/// backed by [`glam::Mat3`]. re-exported from glam at zero cost; not used by
-/// the engine API.
+/// backed by [`glam::Mat3`]. useful for 2D affine transforms and normal matrix computation.
 pub type Mat3 = glam::Mat3;
 
 /// 4x4 matrix type alias.
 ///
-/// backed by [`glam::Mat4`]. used internally for shader projection uniforms;
-/// game code rarely needs it directly.
+/// backed by [`glam::Mat4`]. useful for custom projection matrices and 3D transforms.
 pub type Mat4 = glam::Mat4;
 
 /// quaternion type alias.
 ///
-/// backed by [`glam::Quat`]. used for 3D rotation in `Transform3d`.
+/// backed by [`glam::Quat`]. used for 3D rotation in `LocalTransform3d`.
 /// quaternions avoid gimbal lock and interpolate cleanly via slerp.
 pub type Quat = glam::Quat;
 

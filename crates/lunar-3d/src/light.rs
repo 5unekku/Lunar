@@ -17,19 +17,19 @@ use lunar_math::{Color, Vec3};
 /// - L2 others: × (π/4 × 1.092548) or (π/4 × 0.546274) as appropriate
 #[derive(Resource, Debug, Clone)]
 pub struct IrradianceSH {
-    /// 9 pre-scaled SH irradiance coefficients as linear-space RGB.
-    pub coefficients: [[f32; 3]; 9],
+	/// 9 pre-scaled SH irradiance coefficients as linear-space RGB.
+	pub coefficients: [[f32; 3]; 9],
 }
 
 impl Default for IrradianceSH {
-    fn default() -> Self {
-        // L0 set to (0.5, 0.5, 0.5) × pre-scale ≈ modest uniform ambient
-        // all higher bands zero → uniform hemisphere like flat ambient
-        let mut c = [[0.0f32; 3]; 9];
-        let l0_scale = std::f32::consts::PI * 0.282095;
-        c[0] = [0.3 * l0_scale, 0.3 * l0_scale, 0.3 * l0_scale];
-        Self { coefficients: c }
-    }
+	fn default() -> Self {
+		// L0 set to (0.5, 0.5, 0.5) × pre-scale ≈ modest uniform ambient
+		// all higher bands zero → uniform hemisphere like flat ambient
+		let mut c = [[0.0f32; 3]; 9];
+		let l0_scale = std::f32::consts::PI * 0.282095;
+		c[0] = [0.3 * l0_scale, 0.3 * l0_scale, 0.3 * l0_scale];
+		Self { coefficients: c }
+	}
 }
 
 /// 3D grid of L2 spherical harmonic ambient probes.
@@ -42,40 +42,40 @@ impl Default for IrradianceSH {
 /// populate offline with `tools/bake-probes/` or set manually for hand-authored lighting.
 #[derive(Resource, Clone)]
 pub struct AmbientProbeGrid {
-    /// world-space corner of the grid (minimum x/y/z).
-    pub origin: Vec3,
-    /// spacing between probe centres in world units.
-    pub cell_size: f32,
-    /// grid cell counts [x, y, z].
-    pub dims: [u32; 3],
-    /// packed SH data: `dims.x * dims.y * dims.z * 9` entries, each `[R, G, B]`.
-    /// order: x varies fastest, then y, then z (row-major C order).
-    pub coefficients: Vec<[f32; 3]>,
+	/// world-space corner of the grid (minimum x/y/z).
+	pub origin: Vec3,
+	/// spacing between probe centres in world units.
+	pub cell_size: f32,
+	/// grid cell counts [x, y, z].
+	pub dims: [u32; 3],
+	/// packed SH data: `dims.x * dims.y * dims.z * 9` entries, each `[R, G, B]`.
+	/// order: x varies fastest, then y, then z (row-major C order).
+	pub coefficients: Vec<[f32; 3]>,
 }
 
 impl AmbientProbeGrid {
-    /// look up the 9 L2 SH coefficients for a world position.
-    /// clamps to grid bounds — no extrapolation outside the grid.
-    #[must_use]
-    pub fn sample(&self, pos: Vec3) -> [[f32; 3]; 9] {
-        let rel = pos - self.origin;
-        let cx = ((rel.x / self.cell_size) as i32).clamp(0, self.dims[0] as i32 - 1) as usize;
-        let cy = ((rel.y / self.cell_size) as i32).clamp(0, self.dims[1] as i32 - 1) as usize;
-        let cz = ((rel.z / self.cell_size) as i32).clamp(0, self.dims[2] as i32 - 1) as usize;
-        let base = (cz * self.dims[1] as usize + cy) * self.dims[0] as usize + cx;
-        let base = base * 9;
-        let mut out = [[0.0f32; 3]; 9];
-        for (i, slot) in out.iter_mut().enumerate() {
-            *slot = self.coefficients.get(base + i).copied().unwrap_or([0.0; 3]);
-        }
-        out
-    }
+	/// look up the 9 L2 SH coefficients for a world position.
+	/// clamps to grid bounds — no extrapolation outside the grid.
+	#[must_use]
+	pub fn sample(&self, pos: Vec3) -> [[f32; 3]; 9] {
+		let rel = pos - self.origin;
+		let cx = ((rel.x / self.cell_size) as i32).clamp(0, self.dims[0] as i32 - 1) as usize;
+		let cy = ((rel.y / self.cell_size) as i32).clamp(0, self.dims[1] as i32 - 1) as usize;
+		let cz = ((rel.z / self.cell_size) as i32).clamp(0, self.dims[2] as i32 - 1) as usize;
+		let base = (cz * self.dims[1] as usize + cy) * self.dims[0] as usize + cx;
+		let base = base * 9;
+		let mut out = [[0.0f32; 3]; 9];
+		for (i, slot) in out.iter_mut().enumerate() {
+			*slot = self.coefficients.get(base + i).copied().unwrap_or([0.0; 3]);
+		}
+		out
+	}
 
-    /// total number of probe cells.
-    #[must_use]
-    pub fn cell_count(&self) -> usize {
-        self.dims[0] as usize * self.dims[1] as usize * self.dims[2] as usize
-    }
+	/// total number of probe cells.
+	#[must_use]
+	pub fn cell_count(&self) -> usize {
+		self.dims[0] as usize * self.dims[1] as usize * self.dims[2] as usize
+	}
 }
 
 /// directional light — infinite distance, uniform direction across the scene.
@@ -84,20 +84,20 @@ impl AmbientProbeGrid {
 /// forward vector. equivalent to a sun or moon — no falloff, no position.
 #[derive(Debug, Clone, Copy, Component)]
 pub struct DirectionalLight {
-    pub color: Color,
-    /// light strength in lux. 80_000 ≈ full sun, 1_000 ≈ overcast, 100 ≈ indoor.
-    pub illuminance: f32,
-    pub casts_shadows: bool,
+	pub color: Color,
+	/// light strength in lux. 80_000 ≈ full sun, 1_000 ≈ overcast, 100 ≈ indoor.
+	pub illuminance: f32,
+	pub casts_shadows: bool,
 }
 
 impl Default for DirectionalLight {
-    fn default() -> Self {
-        Self {
-            color: Color::WHITE,
-            illuminance: 80_000.0,
-            casts_shadows: false,
-        }
-    }
+	fn default() -> Self {
+		Self {
+			color: Color::WHITE,
+			illuminance: 80_000.0,
+			casts_shadows: false,
+		}
+	}
 }
 
 /// point light — emits uniformly in all directions from the entity's world position.
@@ -120,59 +120,50 @@ impl Default for DirectionalLight {
 /// (inverse-square in the falloff region) and well-behaved at the origin.
 #[derive(Debug, Clone, Copy, Component)]
 pub struct PointLight {
-    pub color: Color,
-    /// luminous intensity in candela. combined with attenuation for final contribution.
-    pub intensity: f32,
-    /// world-space radius. light reaches zero at this distance (hard culling boundary).
-    pub radius: f32,
-    pub casts_shadows: bool,
+	pub color: Color,
+	/// luminous intensity in candela. combined with attenuation for final contribution.
+	pub intensity: f32,
+	/// world-space radius. light reaches zero at this distance (hard culling boundary).
+	pub radius: f32,
+	pub casts_shadows: bool,
 }
 
 impl Default for PointLight {
-    fn default() -> Self {
-        Self {
-            color: Color::WHITE,
-            intensity: 800.0,
-            radius: 20.0,
-            casts_shadows: false,
-        }
-    }
+	fn default() -> Self {
+		Self {
+			color: Color::WHITE,
+			intensity: 800.0,
+			radius: 20.0,
+			casts_shadows: false,
+		}
+	}
 }
 
 /// spot light — cone of light from the entity's position in its forward direction.
 ///
-/// uses the same radial attenuation formula as [`PointLight`] plus an angular
-/// falloff between `inner_angle` and `outer_angle` (analogous to the Doom 3
-/// light projection texture approach, computed analytically here).
-///
-/// angular attenuation in the shader:
-/// ```text
-/// cos_inner = cos(inner_angle)
-/// cos_outer = cos(outer_angle)
-/// cos_theta = dot(normalize(fragment_to_light), spot_direction)
-/// spot_factor = clamp((cos_theta - cos_outer) / (cos_inner - cos_outer), 0.0, 1.0)
-/// ```
+/// `inner_angle` is the fully-lit cone (radians); `outer_angle` is where the light
+/// fades to zero. set them equal for a hard edge, or widen `outer_angle` for a soft penumbra.
 #[derive(Debug, Clone, Copy, Component)]
 pub struct SpotLight {
-    pub color: Color,
-    pub intensity: f32,
-    pub radius: f32,
-    /// inner cone half-angle in radians — fully lit inside this cone.
-    pub inner_angle: f32,
-    /// outer cone half-angle in radians — no light outside this cone.
-    pub outer_angle: f32,
-    pub casts_shadows: bool,
+	pub color: Color,
+	pub intensity: f32,
+	pub radius: f32,
+	/// inner cone half-angle in radians — fully lit inside this cone.
+	pub inner_angle: f32,
+	/// outer cone half-angle in radians — no light outside this cone.
+	pub outer_angle: f32,
+	pub casts_shadows: bool,
 }
 
 impl Default for SpotLight {
-    fn default() -> Self {
-        Self {
-            color: Color::WHITE,
-            intensity: 800.0,
-            radius: 20.0,
-            inner_angle: std::f32::consts::FRAC_PI_8,
-            outer_angle: std::f32::consts::FRAC_PI_4,
-            casts_shadows: false,
-        }
-    }
+	fn default() -> Self {
+		Self {
+			color: Color::WHITE,
+			intensity: 800.0,
+			radius: 20.0,
+			inner_angle: std::f32::consts::FRAC_PI_8,
+			outer_angle: std::f32::consts::FRAC_PI_4,
+			casts_shadows: false,
+		}
+	}
 }

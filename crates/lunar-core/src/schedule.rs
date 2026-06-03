@@ -20,16 +20,16 @@ use bevy_ecs::schedule::ScheduleLabel;
 /// use these to group systems into logical phases of the frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ScheduleLabel)]
 pub enum UpdateStage {
-    /// poll input, update input state
-    Input,
-    /// collision detection, physics simulation
-    Physics,
-    /// general game logic
-    Update,
-    /// queue render commands
-    Render,
-    /// end-of-tick cleanup — runs after Render
-    PostUpdate,
+	/// poll input, update input state
+	Input,
+	/// collision detection, physics simulation
+	Physics,
+	/// general game logic
+	Update,
+	/// queue render commands
+	Render,
+	/// end-of-tick cleanup — runs after Render
+	PostUpdate,
 }
 
 /// relative stage ordering for custom stage placement.
@@ -39,12 +39,12 @@ pub enum UpdateStage {
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum StageOrder {
-    /// run before the given stage
-    Before(UpdateStage),
-    /// run after the given stage
-    After(UpdateStage),
-    /// run between two stages
-    Between(UpdateStage, UpdateStage),
+	/// run before the given stage
+	Before(UpdateStage),
+	/// run after the given stage
+	After(UpdateStage),
+	/// run between two stages
+	Between(UpdateStage, UpdateStage),
 }
 
 /// trait for custom stage labels.
@@ -53,6 +53,6 @@ pub enum StageOrder {
 /// relative to the built-in [`UpdateStage`] variants.
 #[allow(dead_code)]
 pub trait StageLabelExt: ScheduleLabel {
-    /// get the ordering relative to built-in stages
-    fn stage_order(&self) -> StageOrder;
+	/// get the ordering relative to built-in stages
+	fn stage_order(&self) -> StageOrder;
 }

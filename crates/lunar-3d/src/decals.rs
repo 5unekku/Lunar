@@ -8,12 +8,14 @@ use lunar_math::Color;
 /// the decal is projected down the local -Y axis onto any geometry inside the box.
 #[derive(Component, Clone, Copy)]
 pub struct Decal {
-    /// tint colour and alpha. alpha controls decal opacity.
-    pub color: Color,
+	/// tint colour and alpha. alpha controls decal opacity.
+	pub color: Color,
 }
 
 impl Default for Decal {
-    fn default() -> Self {
-        Self { color: Color::rgba(0.2, 0.1, 0.05, 0.8) }
-    }
+	fn default() -> Self {
+		Self {
+			color: Color::rgba(0.2, 0.1, 0.05, 0.8),
+		}
+	}
 }

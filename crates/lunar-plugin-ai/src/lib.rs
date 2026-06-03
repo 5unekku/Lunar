@@ -1,8 +1,7 @@
 //! behavior tree AI — Selector, Sequence, Condition, and Action nodes.
 //!
-//! the tree structure and tick loop live here; leaf logic is written by game code.
-//! attach a [`BehaviorTree`] component to an AI entity, call [`tick_behavior_trees`]
-//! each frame, and implement [`Action`] for your game-specific actions.
+//! attach a [`BehaviorTree`] component to an AI entity and implement [`Action`]
+//! for your game-specific leaf logic. add [`BehaviorTreePlugin`] to register the tick system.
 //!
 //! # usage
 //!
@@ -32,12 +31,12 @@ use bevy_ecs::prelude::*;
 /// result of ticking a behavior tree node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
-    /// node completed successfully.
-    Success,
-    /// node failed.
-    Failure,
-    /// node is still in progress (multi-frame actions).
-    Running,
+	/// node completed successfully.
+	Success,
+	/// node failed.
+	Failure,
+	/// node is still in progress (multi-frame actions).
+	Running,
 }
 
 /// a leaf action — game code implements this to define AI behavior.
@@ -45,12 +44,12 @@ pub enum Status {
 /// each call to `tick` should represent one frame's worth of work.
 /// return [`Status::Running`] to keep the node active next frame.
 pub trait Action: Send + Sync + 'static {
-    fn tick(&mut self, entity: Entity, world: &mut World) -> Status;
+	fn tick(&mut self, entity: Entity, world: &mut World) -> Status;
 }
 
 /// a leaf condition — pure read-only predicate evaluated against the world.
 pub trait Condition: Send + Sync + 'static {
-    fn check(&self, entity: Entity, world: &World) -> bool;
+	fn check(&self, entity: Entity, world: &World) -> bool;
 }
 
 /// internal node storage: boxed trait objects so the tree is data-driven.
@@ -59,48 +58,48 @@ type BoxCondition = Box<dyn Condition>;
 
 /// a single node in a behavior tree.
 pub enum BtNode {
-    /// tries children left-to-right, returns Success on first Success, Failure if all fail.
-    Selector(Vec<BtNode>),
-    /// tries children left-to-right, returns Failure on first Failure, Success if all succeed.
-    Sequence(Vec<BtNode>),
-    /// inverts the child's result (Success↔Failure; Running stays Running).
-    Invert(Box<BtNode>),
-    /// evaluates a condition; returns Success if true, Failure if false.
-    Condition(BoxCondition),
-    /// executes a leaf action.
-    Action(BoxAction),
+	/// tries children left-to-right, returns Success on first Success, Failure if all fail.
+	Selector(Vec<BtNode>),
+	/// tries children left-to-right, returns Failure on first Failure, Success if all succeed.
+	Sequence(Vec<BtNode>),
+	/// inverts the child's result (Success↔Failure; Running stays Running).
+	Invert(Box<BtNode>),
+	/// evaluates a condition; returns Success if true, Failure if false.
+	Condition(BoxCondition),
+	/// executes a leaf action.
+	Action(BoxAction),
 }
 
 impl BtNode {
-    /// construct a Selector node.
-    #[must_use]
-    pub fn selector(children: Vec<BtNode>) -> Self {
-        Self::Selector(children)
-    }
+	/// construct a Selector node.
+	#[must_use]
+	pub fn selector(children: Vec<BtNode>) -> Self {
+		Self::Selector(children)
+	}
 
-    /// construct a Sequence node.
-    #[must_use]
-    pub fn sequence(children: Vec<BtNode>) -> Self {
-        Self::Sequence(children)
-    }
+	/// construct a Sequence node.
+	#[must_use]
+	pub fn sequence(children: Vec<BtNode>) -> Self {
+		Self::Sequence(children)
+	}
 
-    /// construct an Invert decorator.
-    #[must_use]
-    pub fn invert(child: BtNode) -> Self {
-        Self::Invert(Box::new(child))
-    }
+	/// construct an Invert decorator.
+	#[must_use]
+	pub fn invert(child: BtNode) -> Self {
+		Self::Invert(Box::new(child))
+	}
 
-    /// construct a Condition leaf.
-    #[must_use]
-    pub fn condition(cond: impl Condition) -> Self {
-        Self::Condition(Box::new(cond))
-    }
+	/// construct a Condition leaf.
+	#[must_use]
+	pub fn condition(cond: impl Condition) -> Self {
+		Self::Condition(Box::new(cond))
+	}
 
-    /// construct an Action leaf.
-    #[must_use]
-    pub fn action(action: impl Action) -> Self {
-        Self::Action(Box::new(action))
-    }
+	/// construct an Action leaf.
+	#[must_use]
+	pub fn action(action: impl Action) -> Self {
+		Self::Action(Box::new(action))
+	}
 }
 
 /// component — attach to an entity to give it a behavior tree.
@@ -108,17 +107,20 @@ impl BtNode {
 /// the tree is ticked once per frame by [`tick_behavior_trees`].
 #[derive(Component)]
 pub struct BehaviorTree {
-    root: BtNode,
-    /// last tick's result — readable by game code for debugging.
-    pub last_status: Status,
+	root: BtNode,
+	/// last tick's result — readable by game code for debugging.
+	pub last_status: Status,
 }
 
 impl BehaviorTree {
-    /// create a behavior tree with the given root node.
-    #[must_use]
-    pub fn new(root: BtNode) -> Self {
-        Self { root, last_status: Status::Failure }
-    }
+	/// create a behavior tree with the given root node.
+	#[must_use]
+	pub fn new(root: BtNode) -> Self {
+		Self {
+			root,
+			last_status: Status::Failure,
+		}
+	}
 }
 
 /// cached list of entities with [`BehaviorTree`] components.
@@ -132,18 +134,18 @@ pub struct BehaviorTreeEntities(pub Vec<Entity>);
 ///
 /// run this in PreUpdate (before `tick_behavior_trees`) so the cache is always current.
 pub fn sync_behavior_tree_entities(
-    mut cache: ResMut<BehaviorTreeEntities>,
-    added: Query<Entity, Added<BehaviorTree>>,
-    all: Query<Entity, With<BehaviorTree>>,
+	mut cache: ResMut<BehaviorTreeEntities>,
+	added: Query<Entity, Added<BehaviorTree>>,
+	all: Query<Entity, With<BehaviorTree>>,
 ) {
-    if !added.is_empty() {
-        // rebuild on any addition; removal is handled by retaining only live entities
-        cache.0.clear();
-        cache.0.extend(all.iter());
-    } else {
-        // prune entities that no longer have the component (despawned or removed)
-        cache.0.retain(|e| all.contains(*e));
-    }
+	if !added.is_empty() {
+		// rebuild on any addition; removal is handled by retaining only live entities
+		cache.0.clear();
+		cache.0.extend(all.iter());
+	} else {
+		// prune entities that no longer have the component (despawned or removed)
+		cache.0.retain(|e| all.contains(*e));
+	}
 }
 
 /// tick all [`BehaviorTree`] components in the world.
@@ -151,254 +153,306 @@ pub fn sync_behavior_tree_entities(
 /// runs in Update stage. takes exclusive world access so actions can mutate freely.
 /// if [`BehaviorTreeEntities`] is present, uses the cached list to avoid a per-frame collect.
 pub fn tick_behavior_trees(world: &mut World) {
-    let entities: Vec<Entity> = if let Some(cache) = world.get_resource::<BehaviorTreeEntities>() {
-        cache.0.clone()
-    } else {
-        world
-            .query_filtered::<Entity, With<BehaviorTree>>()
-            .iter(world)
-            .collect()
-    };
+	let entities: Vec<Entity> = if let Some(cache) = world.get_resource::<BehaviorTreeEntities>() {
+		cache.0.clone()
+	} else {
+		world
+			.query_filtered::<Entity, With<BehaviorTree>>()
+			.iter(world)
+			.collect()
+	};
 
-    for entity in entities {
-        let Some(mut tree_component) = world.get_mut::<BehaviorTree>(entity) else {
-            continue;
-        };
-        // pull the root out to avoid borrowing world through the component
-        let root = std::mem::replace(
-            &mut tree_component.root,
-            BtNode::Sequence(vec![]),
-        );
+	for entity in entities {
+		let Some(mut tree_component) = world.get_mut::<BehaviorTree>(entity) else {
+			continue;
+		};
+		// pull the root out to avoid borrowing world through the component
+		let root = std::mem::replace(&mut tree_component.root, BtNode::Sequence(vec![]));
 
-        let status = tick_node(root, entity, world, &mut |node, entity, world| {
-            tick_node_recursive(node, entity, world)
-        });
+		let status = tick_node(root, entity, world, &mut |node, entity, world| {
+			tick_node_recursive(node, entity, world)
+		});
 
-        // re-borrow to put the root back
-        if let Some(mut tree_component) = world.get_mut::<BehaviorTree>(entity) {
-            tree_component.last_status = status;
-        }
-    }
+		// re-borrow to put the root back
+		if let Some(mut tree_component) = world.get_mut::<BehaviorTree>(entity) {
+			tree_component.last_status = status;
+		}
+	}
 }
 
 fn tick_node_recursive(node: BtNode, entity: Entity, world: &mut World) -> (Status, BtNode) {
-    match node {
-        BtNode::Selector(mut children) => {
-            let mut new_children = Vec::with_capacity(children.len());
-            let mut result = Status::Failure;
-            let mut short_circuited = false;
-            for child in children.drain(..) {
-                if short_circuited {
-                    new_children.push(child);
-                    continue;
-                }
-                let (status, new_child) = tick_node_recursive(child, entity, world);
-                new_children.push(new_child);
-                match status {
-                    Status::Success | Status::Running => {
-                        result = status;
-                        short_circuited = true;
-                    }
-                    Status::Failure => {}
-                }
-            }
-            (result, BtNode::Selector(new_children))
-        }
-        BtNode::Sequence(mut children) => {
-            let mut new_children = Vec::with_capacity(children.len());
-            let mut result = Status::Success;
-            let mut short_circuited = false;
-            for child in children.drain(..) {
-                if short_circuited {
-                    new_children.push(child);
-                    continue;
-                }
-                let (status, new_child) = tick_node_recursive(child, entity, world);
-                new_children.push(new_child);
-                match status {
-                    Status::Failure | Status::Running => {
-                        result = status;
-                        short_circuited = true;
-                    }
-                    Status::Success => {}
-                }
-            }
-            (result, BtNode::Sequence(new_children))
-        }
-        BtNode::Invert(child) => {
-            let (status, new_child) = tick_node_recursive(*child, entity, world);
-            let inverted = match status {
-                Status::Success => Status::Failure,
-                Status::Failure => Status::Success,
-                Status::Running => Status::Running,
-            };
-            (inverted, BtNode::Invert(Box::new(new_child)))
-        }
-        BtNode::Condition(cond) => {
-            let result = if cond.check(entity, world) { Status::Success } else { Status::Failure };
-            (result, BtNode::Condition(cond))
-        }
-        BtNode::Action(mut action) => {
-            let status = action.tick(entity, world);
-            (status, BtNode::Action(action))
-        }
-    }
+	match node {
+		BtNode::Selector(mut children) => {
+			let mut new_children = Vec::with_capacity(children.len());
+			let mut result = Status::Failure;
+			let mut short_circuited = false;
+			for child in children.drain(..) {
+				if short_circuited {
+					new_children.push(child);
+					continue;
+				}
+				let (status, new_child) = tick_node_recursive(child, entity, world);
+				new_children.push(new_child);
+				match status {
+					Status::Success | Status::Running => {
+						result = status;
+						short_circuited = true;
+					}
+					Status::Failure => {}
+				}
+			}
+			(result, BtNode::Selector(new_children))
+		}
+		BtNode::Sequence(mut children) => {
+			let mut new_children = Vec::with_capacity(children.len());
+			let mut result = Status::Success;
+			let mut short_circuited = false;
+			for child in children.drain(..) {
+				if short_circuited {
+					new_children.push(child);
+					continue;
+				}
+				let (status, new_child) = tick_node_recursive(child, entity, world);
+				new_children.push(new_child);
+				match status {
+					Status::Failure | Status::Running => {
+						result = status;
+						short_circuited = true;
+					}
+					Status::Success => {}
+				}
+			}
+			(result, BtNode::Sequence(new_children))
+		}
+		BtNode::Invert(child) => {
+			let (status, new_child) = tick_node_recursive(*child, entity, world);
+			let inverted = match status {
+				Status::Success => Status::Failure,
+				Status::Failure => Status::Success,
+				Status::Running => Status::Running,
+			};
+			(inverted, BtNode::Invert(Box::new(new_child)))
+		}
+		BtNode::Condition(cond) => {
+			let result = if cond.check(entity, world) {
+				Status::Success
+			} else {
+				Status::Failure
+			};
+			(result, BtNode::Condition(cond))
+		}
+		BtNode::Action(mut action) => {
+			let status = action.tick(entity, world);
+			(status, BtNode::Action(action))
+		}
+	}
 }
 
 fn tick_node(
-    node: BtNode,
-    entity: Entity,
-    world: &mut World,
-    recurse: &mut impl FnMut(BtNode, Entity, &mut World) -> (Status, BtNode),
+	node: BtNode,
+	entity: Entity,
+	world: &mut World,
+	recurse: &mut impl FnMut(BtNode, Entity, &mut World) -> (Status, BtNode),
 ) -> Status {
-    let (status, new_root) = recurse(node, entity, world);
-    if let Some(mut tree) = world.get_mut::<BehaviorTree>(entity) {
-        tree.root = new_root;
-    }
-    status
+	let (status, new_root) = recurse(node, entity, world);
+	if let Some(mut tree) = world.get_mut::<BehaviorTree>(entity) {
+		tree.root = new_root;
+	}
+	status
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+	use super::*;
 
-    // --- helpers ---
+	// --- helpers ---
 
-    struct AlwaysSucceed;
-    impl Action for AlwaysSucceed {
-        fn tick(&mut self, _entity: Entity, _world: &mut World) -> Status { Status::Success }
-    }
+	struct AlwaysSucceed;
+	impl Action for AlwaysSucceed {
+		fn tick(&mut self, _entity: Entity, _world: &mut World) -> Status {
+			Status::Success
+		}
+	}
 
-    struct AlwaysFail;
-    impl Action for AlwaysFail {
-        fn tick(&mut self, _entity: Entity, _world: &mut World) -> Status { Status::Failure }
-    }
+	struct AlwaysFail;
+	impl Action for AlwaysFail {
+		fn tick(&mut self, _entity: Entity, _world: &mut World) -> Status {
+			Status::Failure
+		}
+	}
 
-    #[derive(Default)]
-    struct CountTicks(u32);
-    impl Action for CountTicks {
-        fn tick(&mut self, _entity: Entity, _world: &mut World) -> Status {
-            self.0 += 1;
-            if self.0 >= 3 { Status::Success } else { Status::Running }
-        }
-    }
+	#[derive(Default)]
+	struct CountTicks(u32);
+	impl Action for CountTicks {
+		fn tick(&mut self, _entity: Entity, _world: &mut World) -> Status {
+			self.0 += 1;
+			if self.0 >= 3 {
+				Status::Success
+			} else {
+				Status::Running
+			}
+		}
+	}
 
-    struct TrueCondition;
-    impl Condition for TrueCondition {
-        fn check(&self, _entity: Entity, _world: &World) -> bool { true }
-    }
+	struct TrueCondition;
+	impl Condition for TrueCondition {
+		fn check(&self, _entity: Entity, _world: &World) -> bool {
+			true
+		}
+	}
 
-    struct FalseCondition;
-    impl Condition for FalseCondition {
-        fn check(&self, _entity: Entity, _world: &World) -> bool { false }
-    }
+	struct FalseCondition;
+	impl Condition for FalseCondition {
+		fn check(&self, _entity: Entity, _world: &World) -> bool {
+			false
+		}
+	}
 
-    fn tick_once(world: &mut World) {
-        tick_behavior_trees(world);
-    }
+	fn tick_once(world: &mut World) {
+		tick_behavior_trees(world);
+	}
 
-    // --- tests ---
+	// --- tests ---
 
-    #[test]
-    fn action_success() {
-        let mut world = World::new();
-        let entity = world.spawn(BehaviorTree::new(BtNode::action(AlwaysSucceed))).id();
-        tick_once(&mut world);
-        assert_eq!(world.get::<BehaviorTree>(entity).unwrap().last_status, Status::Success);
-    }
+	#[test]
+	fn action_success() {
+		let mut world = World::new();
+		let entity = world
+			.spawn(BehaviorTree::new(BtNode::action(AlwaysSucceed)))
+			.id();
+		tick_once(&mut world);
+		assert_eq!(
+			world.get::<BehaviorTree>(entity).unwrap().last_status,
+			Status::Success
+		);
+	}
 
-    #[test]
-    fn action_failure() {
-        let mut world = World::new();
-        let entity = world.spawn(BehaviorTree::new(BtNode::action(AlwaysFail))).id();
-        tick_once(&mut world);
-        assert_eq!(world.get::<BehaviorTree>(entity).unwrap().last_status, Status::Failure);
-    }
+	#[test]
+	fn action_failure() {
+		let mut world = World::new();
+		let entity = world
+			.spawn(BehaviorTree::new(BtNode::action(AlwaysFail)))
+			.id();
+		tick_once(&mut world);
+		assert_eq!(
+			world.get::<BehaviorTree>(entity).unwrap().last_status,
+			Status::Failure
+		);
+	}
 
-    #[test]
-    fn sequence_fails_on_first_failure() {
-        let mut world = World::new();
-        let tree = BtNode::sequence(vec![
-            BtNode::action(AlwaysSucceed),
-            BtNode::action(AlwaysFail),
-            BtNode::action(AlwaysSucceed),
-        ]);
-        let entity = world.spawn(BehaviorTree::new(tree)).id();
-        tick_once(&mut world);
-        assert_eq!(world.get::<BehaviorTree>(entity).unwrap().last_status, Status::Failure);
-    }
+	#[test]
+	fn sequence_fails_on_first_failure() {
+		let mut world = World::new();
+		let tree = BtNode::sequence(vec![
+			BtNode::action(AlwaysSucceed),
+			BtNode::action(AlwaysFail),
+			BtNode::action(AlwaysSucceed),
+		]);
+		let entity = world.spawn(BehaviorTree::new(tree)).id();
+		tick_once(&mut world);
+		assert_eq!(
+			world.get::<BehaviorTree>(entity).unwrap().last_status,
+			Status::Failure
+		);
+	}
 
-    #[test]
-    fn selector_succeeds_on_first_success() {
-        let mut world = World::new();
-        let tree = BtNode::selector(vec![
-            BtNode::action(AlwaysFail),
-            BtNode::action(AlwaysSucceed),
-            BtNode::action(AlwaysFail),
-        ]);
-        let entity = world.spawn(BehaviorTree::new(tree)).id();
-        tick_once(&mut world);
-        assert_eq!(world.get::<BehaviorTree>(entity).unwrap().last_status, Status::Success);
-    }
+	#[test]
+	fn selector_succeeds_on_first_success() {
+		let mut world = World::new();
+		let tree = BtNode::selector(vec![
+			BtNode::action(AlwaysFail),
+			BtNode::action(AlwaysSucceed),
+			BtNode::action(AlwaysFail),
+		]);
+		let entity = world.spawn(BehaviorTree::new(tree)).id();
+		tick_once(&mut world);
+		assert_eq!(
+			world.get::<BehaviorTree>(entity).unwrap().last_status,
+			Status::Success
+		);
+	}
 
-    #[test]
-    fn invert_flips_success() {
-        let mut world = World::new();
-        let tree = BtNode::invert(BtNode::action(AlwaysSucceed));
-        let entity = world.spawn(BehaviorTree::new(tree)).id();
-        tick_once(&mut world);
-        assert_eq!(world.get::<BehaviorTree>(entity).unwrap().last_status, Status::Failure);
-    }
+	#[test]
+	fn invert_flips_success() {
+		let mut world = World::new();
+		let tree = BtNode::invert(BtNode::action(AlwaysSucceed));
+		let entity = world.spawn(BehaviorTree::new(tree)).id();
+		tick_once(&mut world);
+		assert_eq!(
+			world.get::<BehaviorTree>(entity).unwrap().last_status,
+			Status::Failure
+		);
+	}
 
-    #[test]
-    fn condition_true_returns_success() {
-        let mut world = World::new();
-        let entity = world.spawn(BehaviorTree::new(BtNode::condition(TrueCondition))).id();
-        tick_once(&mut world);
-        assert_eq!(world.get::<BehaviorTree>(entity).unwrap().last_status, Status::Success);
-    }
+	#[test]
+	fn condition_true_returns_success() {
+		let mut world = World::new();
+		let entity = world
+			.spawn(BehaviorTree::new(BtNode::condition(TrueCondition)))
+			.id();
+		tick_once(&mut world);
+		assert_eq!(
+			world.get::<BehaviorTree>(entity).unwrap().last_status,
+			Status::Success
+		);
+	}
 
-    #[test]
-    fn condition_false_returns_failure() {
-        let mut world = World::new();
-        let entity = world.spawn(BehaviorTree::new(BtNode::condition(FalseCondition))).id();
-        tick_once(&mut world);
-        assert_eq!(world.get::<BehaviorTree>(entity).unwrap().last_status, Status::Failure);
-    }
+	#[test]
+	fn condition_false_returns_failure() {
+		let mut world = World::new();
+		let entity = world
+			.spawn(BehaviorTree::new(BtNode::condition(FalseCondition)))
+			.id();
+		tick_once(&mut world);
+		assert_eq!(
+			world.get::<BehaviorTree>(entity).unwrap().last_status,
+			Status::Failure
+		);
+	}
 
-    #[test]
-    fn running_action_stays_running_multi_tick() {
-        let mut world = World::new();
-        let entity = world.spawn(BehaviorTree::new(BtNode::action(CountTicks::default()))).id();
-        tick_once(&mut world);
-        assert_eq!(world.get::<BehaviorTree>(entity).unwrap().last_status, Status::Running);
-        tick_once(&mut world);
-        assert_eq!(world.get::<BehaviorTree>(entity).unwrap().last_status, Status::Running);
-        tick_once(&mut world);
-        assert_eq!(world.get::<BehaviorTree>(entity).unwrap().last_status, Status::Success);
-    }
+	#[test]
+	fn running_action_stays_running_multi_tick() {
+		let mut world = World::new();
+		let entity = world
+			.spawn(BehaviorTree::new(BtNode::action(CountTicks::default())))
+			.id();
+		tick_once(&mut world);
+		assert_eq!(
+			world.get::<BehaviorTree>(entity).unwrap().last_status,
+			Status::Running
+		);
+		tick_once(&mut world);
+		assert_eq!(
+			world.get::<BehaviorTree>(entity).unwrap().last_status,
+			Status::Running
+		);
+		tick_once(&mut world);
+		assert_eq!(
+			world.get::<BehaviorTree>(entity).unwrap().last_status,
+			Status::Success
+		);
+	}
 }
 
-/// drop-in plugin: inserts the [`BehaviorTreeEntities`] cache and runs
-/// [`sync_behavior_tree_entities`] then [`tick_behavior_trees`] in `Update`.
+/// drop-in plugin: registers the behavior tree tick system.
 /// implement [`Action`] for your leaf logic and attach [`BehaviorTree`] components.
 #[derive(Default)]
 pub struct BehaviorTreePlugin;
 
 impl lunar_core::GamePlugin for BehaviorTreePlugin {
-    fn name(&self) -> &str {
-        "BehaviorTreePlugin"
-    }
-    fn build(&mut self, app: &mut lunar_core::App) {
-        app.insert_resource(BehaviorTreeEntities::default());
-        app.add_ordered_systems_to_stage(
-            lunar_core::UpdateStage::Update,
-            (sync_behavior_tree_entities, tick_behavior_trees),
-        );
-    }
+	fn name(&self) -> &str {
+		"BehaviorTreePlugin"
+	}
+	fn build(&mut self, app: &mut lunar_core::App) {
+		app.insert_resource(BehaviorTreeEntities::default());
+		app.add_ordered_systems_to_stage(
+			lunar_core::UpdateStage::Update,
+			(sync_behavior_tree_entities, tick_behavior_trees),
+		);
+	}
 }
 
 /// common, game-facing behavior-tree types for `use lunar::prelude::*`.
 pub mod prelude {
-    pub use crate::{Action, BehaviorTree, BehaviorTreePlugin, BtNode, Status};
+	pub use crate::{Action, BehaviorTree, BehaviorTreePlugin, BtNode, Status};
 }

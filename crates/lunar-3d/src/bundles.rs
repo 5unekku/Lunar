@@ -29,9 +29,7 @@ use crate::light::{DirectionalLight, PointLight, SpotLight};
 use crate::material::Material3d;
 use crate::mesh::Mesh3d;
 use crate::transform::{LocalTransform3d, WorldTransform3d};
-use crate::visibility::{
-    Aabb3d, ComputedVisibility, RenderLayers, ShadowCaster, Visibility,
-};
+use crate::visibility::{Aabb3d, ComputedVisibility, RenderLayers, ShadowCaster, Visibility};
 
 /// bundle for a 3D camera.
 ///
@@ -39,25 +37,25 @@ use crate::visibility::{
 /// override `local` to position the camera.
 #[derive(Bundle)]
 pub struct Camera3dBundle {
-    pub local: LocalTransform3d,
-    pub world: WorldTransform3d,
-    pub camera: Camera3d,
-    pub render_layers: RenderLayers,
-    pub visibility: Visibility,
-    pub computed: ComputedVisibility,
+	pub local: LocalTransform3d,
+	pub world: WorldTransform3d,
+	pub camera: Camera3d,
+	pub render_layers: RenderLayers,
+	pub visibility: Visibility,
+	pub computed: ComputedVisibility,
 }
 
 impl Default for Camera3dBundle {
-    fn default() -> Self {
-        Self {
-            local: LocalTransform3d::default(),
-            world: WorldTransform3d::default(),
-            camera: Camera3d::default(),
-            render_layers: RenderLayers::DEFAULT,
-            visibility: Visibility::Visible,
-            computed: ComputedVisibility(true),
-        }
-    }
+	fn default() -> Self {
+		Self {
+			local: LocalTransform3d::default(),
+			world: WorldTransform3d::default(),
+			camera: Camera3d::default(),
+			render_layers: RenderLayers::DEFAULT,
+			visibility: Visibility::Visible,
+			computed: ComputedVisibility(true),
+		}
+	}
 }
 
 /// bundle for a static (non-animated) mesh entity.
@@ -67,36 +65,36 @@ impl Default for Camera3dBundle {
 /// add [`Aabb3d`] manually to enable CPU-side frustum culling.
 #[derive(Bundle)]
 pub struct Mesh3dBundle {
-    pub local: LocalTransform3d,
-    pub world: WorldTransform3d,
-    pub mesh: Mesh3d,
-    pub material: Material3d,
-    pub visibility: Visibility,
-    pub computed: ComputedVisibility,
-    pub render_layers: RenderLayers,
+	pub local: LocalTransform3d,
+	pub world: WorldTransform3d,
+	pub mesh: Mesh3d,
+	pub material: Material3d,
+	pub visibility: Visibility,
+	pub computed: ComputedVisibility,
+	pub render_layers: RenderLayers,
 }
 
 impl Default for Mesh3dBundle {
-    fn default() -> Self {
-        Self {
-            local: LocalTransform3d::default(),
-            world: WorldTransform3d::default(),
-            mesh: Mesh3d(lunar_assets::Handle::new(0, 0)),
-            material: Material3d(lunar_assets::Handle::new(0, 0)),
-            visibility: Visibility::Inherited,
-            computed: ComputedVisibility::default(),
-            render_layers: RenderLayers::DEFAULT,
-        }
-    }
+	fn default() -> Self {
+		Self {
+			local: LocalTransform3d::default(),
+			world: WorldTransform3d::default(),
+			mesh: Mesh3d(lunar_assets::Handle::new(0, 0)),
+			material: Material3d(lunar_assets::Handle::new(0, 0)),
+			visibility: Visibility::Inherited,
+			computed: ComputedVisibility::default(),
+			render_layers: RenderLayers::DEFAULT,
+		}
+	}
 }
 
 /// [`Mesh3dBundle`] plus shadow casting and AABB bounds — for any geometry that
 /// should cast shadows and participate in frustum culling.
 #[derive(Bundle)]
 pub struct ShadowMesh3dBundle {
-    pub base: Mesh3dBundle,
-    pub aabb: Aabb3d,
-    pub shadow_caster: ShadowCaster,
+	pub base: Mesh3dBundle,
+	pub aabb: Aabb3d,
+	pub shadow_caster: ShadowCaster,
 }
 
 /// bundle for a directional light (sun/moon).
@@ -105,23 +103,23 @@ pub struct ShadowMesh3dBundle {
 /// position is irrelevant for directional lights — only rotation matters.
 #[derive(Bundle, Default)]
 pub struct DirectionalLightBundle {
-    pub local: LocalTransform3d,
-    pub world: WorldTransform3d,
-    pub light: DirectionalLight,
+	pub local: LocalTransform3d,
+	pub world: WorldTransform3d,
+	pub light: DirectionalLight,
 }
 
 /// bundle for a point light.
 #[derive(Bundle, Default)]
 pub struct PointLightBundle {
-    pub local: LocalTransform3d,
-    pub world: WorldTransform3d,
-    pub light: PointLight,
+	pub local: LocalTransform3d,
+	pub world: WorldTransform3d,
+	pub light: PointLight,
 }
 
 /// bundle for a spot light.
 #[derive(Bundle, Default)]
 pub struct SpotLightBundle {
-    pub local: LocalTransform3d,
-    pub world: WorldTransform3d,
-    pub light: SpotLight,
+	pub local: LocalTransform3d,
+	pub world: WorldTransform3d,
+	pub light: SpotLight,
 }

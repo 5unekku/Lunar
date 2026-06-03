@@ -11,9 +11,11 @@ use crate::{BvhPlugin, PortalPlugin};
 pub struct BspPlugin;
 
 impl GamePlugin for BspPlugin {
-    fn name(&self) -> &str { "BspPlugin" }
-    fn build(&mut self, app: &mut App) {
-        BvhPlugin.build(app);
-        PortalPlugin.build(app);
-    }
+	fn name(&self) -> &str {
+		"BspPlugin"
+	}
+	fn build(&mut self, app: &mut App) {
+		BvhPlugin.build(app);
+		PortalPlugin.build(app);
+	}
 }

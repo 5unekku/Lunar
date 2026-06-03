@@ -11,13 +11,13 @@ use crate::transform::WorldTransform3d;
 /// if an entity has no parent, `Inherited` and `Visible` are equivalent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component, Default)]
 pub enum Visibility {
-    /// inherit from parent — hidden if any ancestor is `Hidden`.
-    #[default]
-    Inherited,
-    /// always hidden regardless of parent or children.
-    Hidden,
-    /// always visible regardless of parent.
-    Visible,
+	/// inherit from parent — hidden if any ancestor is `Hidden`.
+	#[default]
+	Inherited,
+	/// always hidden regardless of parent or children.
+	Hidden,
+	/// always visible regardless of parent.
+	Visible,
 }
 
 /// computed visibility — propagated from [`Visibility`] through the entity hierarchy.
@@ -28,9 +28,9 @@ pub enum Visibility {
 pub struct ComputedVisibility(pub bool);
 
 impl Default for ComputedVisibility {
-    fn default() -> Self {
-        Self(true)
-    }
+	fn default() -> Self {
+		Self(true)
+	}
 }
 
 /// render layer membership bitmask.
@@ -43,39 +43,39 @@ impl Default for ComputedVisibility {
 pub struct RenderLayers(pub u64);
 
 impl RenderLayers {
-    /// layer 0 only — the standard default for all entities and cameras.
-    pub const DEFAULT: Self = Self(1);
-    /// no layers — entity is invisible to all cameras.
-    pub const NONE: Self = Self(0);
+	/// layer 0 only — the standard default for all entities and cameras.
+	pub const DEFAULT: Self = Self(1);
+	/// no layers — entity is invisible to all cameras.
+	pub const NONE: Self = Self(0);
 
-    /// bitmask with only `layer` set (0-indexed, max 63).
-    #[must_use]
-    pub const fn layer(index: u32) -> Self {
-        Self(1 << index)
-    }
+	/// bitmask with only `layer` set (0-indexed, max 63).
+	#[must_use]
+	pub const fn layer(index: u32) -> Self {
+		Self(1 << index)
+	}
 
-    /// bitmask with `index` added.
-    #[must_use]
-    pub const fn with(self, index: u32) -> Self {
-        Self(self.0 | (1 << index))
-    }
+	/// bitmask with `index` added.
+	#[must_use]
+	pub const fn with(self, index: u32) -> Self {
+		Self(self.0 | (1 << index))
+	}
 
-    /// bitmask with `index` removed.
-    #[must_use]
-    pub const fn without(self, index: u32) -> Self {
-        Self(self.0 & !(1 << index))
-    }
+	/// bitmask with `index` removed.
+	#[must_use]
+	pub const fn without(self, index: u32) -> Self {
+		Self(self.0 & !(1 << index))
+	}
 
-    #[must_use]
-    pub const fn intersects(self, other: Self) -> bool {
-        self.0 & other.0 != 0
-    }
+	#[must_use]
+	pub const fn intersects(self, other: Self) -> bool {
+		self.0 & other.0 != 0
+	}
 }
 
 impl Default for RenderLayers {
-    fn default() -> Self {
-        Self::DEFAULT
-    }
+	fn default() -> Self {
+		Self::DEFAULT
+	}
 }
 
 /// axis-aligned bounding box in local model space.
@@ -88,28 +88,28 @@ impl Default for RenderLayers {
 /// in SIMD registers on both SSE2 and NEON targets.
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub struct Aabb3d {
-    /// center in local model space.
-    pub center: Vec3A,
-    /// half-extents along each axis. always positive.
-    pub half_extents: Vec3A,
+	/// center in local model space.
+	pub center: Vec3A,
+	/// half-extents along each axis. always positive.
+	pub half_extents: Vec3A,
 }
 
 impl Aabb3d {
-    /// compute a tight AABB from a slice of positions.
-    #[must_use]
-    pub fn from_positions(positions: &[Vec3]) -> Self {
-        let mut min = Vec3A::splat(f32::MAX);
-        let mut max = Vec3A::splat(f32::MIN);
-        for &pos in positions {
-            let p = Vec3A::from(pos);
-            min = min.min(p);
-            max = max.max(p);
-        }
-        Self {
-            center: (min + max) * 0.5,
-            half_extents: (max - min) * 0.5,
-        }
-    }
+	/// compute a tight AABB from a slice of positions.
+	#[must_use]
+	pub fn from_positions(positions: &[Vec3]) -> Self {
+		let mut min = Vec3A::splat(f32::MAX);
+		let mut max = Vec3A::splat(f32::MIN);
+		for &pos in positions {
+			let p = Vec3A::from(pos);
+			min = min.min(p);
+			max = max.max(p);
+		}
+		Self {
+			center: (min + max) * 0.5,
+			half_extents: (max - min) * 0.5,
+		}
+	}
 }
 
 /// camera frustum — 6 half-space planes bounding the view volume.
@@ -121,59 +121,59 @@ impl Aabb3d {
 /// tests pass: `dot(plane.xyz, point) + plane.w >= 0`.
 #[derive(Debug, Clone, Copy, Resource)]
 pub struct Frustum {
-    /// [left, right, bottom, top, near, far]. each Vec4 is (nx, ny, nz, d).
-    pub planes: [Vec4; 6],
+	/// [left, right, bottom, top, near, far]. each Vec4 is (nx, ny, nz, d).
+	pub planes: [Vec4; 6],
 }
 
 impl Frustum {
-    /// extract frustum planes from a combined view-projection matrix.
-    ///
-    /// uses the Gribb/Hartmann method (column-major, right-handed clip space).
-    /// planes are not normalized — use for overlap tests only.
-    #[must_use]
-    pub fn from_view_proj(vp: Mat4) -> Self {
-        let cols = vp.to_cols_array_2d();
-        let row = |i: usize| Vec4::new(cols[0][i], cols[1][i], cols[2][i], cols[3][i]);
-        let r0 = row(0);
-        let r1 = row(1);
-        let r2 = row(2);
-        let r3 = row(3);
-        Self {
-            planes: [
-                r3 + r0, // left
-                r3 - r0, // right
-                r3 + r1, // bottom
-                r3 - r1, // top
-                r3 + r2, // near
-                r3 - r2, // far
-            ],
-        }
-    }
+	/// extract frustum planes from a combined view-projection matrix.
+	///
+	/// uses the Gribb/Hartmann method (column-major, right-handed clip space).
+	/// planes are not normalized — use for overlap tests only.
+	#[must_use]
+	pub fn from_view_proj(vp: Mat4) -> Self {
+		let cols = vp.to_cols_array_2d();
+		let row = |i: usize| Vec4::new(cols[0][i], cols[1][i], cols[2][i], cols[3][i]);
+		let r0 = row(0);
+		let r1 = row(1);
+		let r2 = row(2);
+		let r3 = row(3);
+		Self {
+			planes: [
+				r3 + r0, // left
+				r3 - r0, // right
+				r3 + r1, // bottom
+				r3 - r1, // top
+				r3 + r2, // near
+				r3 - r2, // far
+			],
+		}
+	}
 
-    /// conservative AABB visibility test.
-    ///
-    /// returns false only when the AABB is provably outside the frustum. false positives
-    /// are safe — they result in a redundant draw call, not a visual artifact.
-    #[must_use]
-    pub fn intersects_aabb(self, center: Vec3A, half_extents: Vec3A) -> bool {
-        for plane in &self.planes {
-            let normal = Vec3A::new(plane.x, plane.y, plane.z);
-            let signed_radius = (half_extents * normal.abs()).dot(Vec3A::ONE);
-            if normal.dot(center) + plane.w + signed_radius < 0.0 {
-                return false;
-            }
-        }
-        true
-    }
+	/// conservative AABB visibility test.
+	///
+	/// returns false only when the AABB is provably outside the frustum. false positives
+	/// are safe — they result in a redundant draw call, not a visual artifact.
+	#[must_use]
+	pub fn intersects_aabb(self, center: Vec3A, half_extents: Vec3A) -> bool {
+		for plane in &self.planes {
+			let normal = Vec3A::new(plane.x, plane.y, plane.z);
+			let signed_radius = (half_extents * normal.abs()).dot(Vec3A::ONE);
+			if normal.dot(center) + plane.w + signed_radius < 0.0 {
+				return false;
+			}
+		}
+		true
+	}
 }
 
 impl Default for Frustum {
-    /// pass-everything default — replaced on the first frame by `update_frustum`.
-    fn default() -> Self {
-        Self {
-            planes: [Vec4::new(0.0, 0.0, 0.0, f32::MAX); 6],
-        }
-    }
+	/// pass-everything default — replaced on the first frame by `update_frustum`.
+	fn default() -> Self {
+		Self {
+			planes: [Vec4::new(0.0, 0.0, 0.0, f32::MAX); 6],
+		}
+	}
 }
 
 /// aspect ratio (width / height) of the primary render viewport.
@@ -186,16 +186,16 @@ impl Default for Frustum {
 pub struct ViewportAspect(pub f32);
 
 impl ViewportAspect {
-    #[must_use]
-    pub fn from_size(width: f32, height: f32) -> Self {
-        Self(width / height.max(f32::EPSILON))
-    }
+	#[must_use]
+	pub fn from_size(width: f32, height: f32) -> Self {
+		Self(width / height.max(f32::EPSILON))
+	}
 }
 
 impl Default for ViewportAspect {
-    fn default() -> Self {
-        Self(16.0 / 9.0)
-    }
+	fn default() -> Self {
+		Self(16.0 / 9.0)
+	}
 }
 
 /// marker component — this entity casts shadows.
@@ -213,17 +213,17 @@ pub struct ShadowReceiver;
 /// uses parallel Vecs keyed by snapshot index rather than HashMaps keyed by Entity.
 #[derive(Resource, Default)]
 pub struct VisibilityScratch {
-    snapshot: Vec<(Entity, Visibility, Option<Entity>)>,
-    // sorted (entity, snapshot_index) pairs for binary-search lookup
-    entity_idx: Vec<(Entity, usize)>,
-    // parallel to snapshot: snapshot index of parent, or None
-    parent_idx: Vec<Option<usize>>,
-    // parallel to snapshot: computed depth (u32::MAX = not yet computed)
-    depths: Vec<u32>,
-    // snapshot indices in depth order (parents before children)
-    order: Vec<usize>,
-    // parallel to snapshot: computed visibility
-    computed: Vec<bool>,
+	snapshot: Vec<(Entity, Visibility, Option<Entity>)>,
+	// sorted (entity, snapshot_index) pairs for binary-search lookup
+	entity_idx: Vec<(Entity, usize)>,
+	// parallel to snapshot: snapshot index of parent, or None
+	parent_idx: Vec<Option<usize>>,
+	// parallel to snapshot: computed depth (u32::MAX = not yet computed)
+	depths: Vec<u32>,
+	// snapshot indices in depth order (parents before children)
+	order: Vec<usize>,
+	// parallel to snapshot: computed visibility
+	computed: Vec<bool>,
 }
 
 /// propagate [`Visibility`] through the entity hierarchy to produce [`ComputedVisibility`].
@@ -234,84 +234,89 @@ pub struct VisibilityScratch {
 ///
 /// O(N log N) sort + binary-search lookups. all scratch vecs are reused each frame.
 pub fn propagate_visibility(world: &mut World) {
-    let mut scratch = world
-        .remove_resource::<VisibilityScratch>()
-        .unwrap_or_default();
+	let mut scratch = world
+		.remove_resource::<VisibilityScratch>()
+		.unwrap_or_default();
 
-    scratch.snapshot.clear();
-    world
-        .query::<(Entity, &Visibility, Option<&Parent>)>()
-        .iter(world)
-        .for_each(|(entity, vis, parent)| {
-            scratch.snapshot.push((entity, *vis, parent.map(|p| p.0)));
-        });
+	scratch.snapshot.clear();
+	world
+		.query::<(Entity, &Visibility, Option<&Parent>)>()
+		.iter(world)
+		.for_each(|(entity, vis, parent)| {
+			scratch.snapshot.push((entity, *vis, parent.map(|p| p.0)));
+		});
 
-    if scratch.snapshot.is_empty() {
-        world.insert_resource(scratch);
-        return;
-    }
+	if scratch.snapshot.is_empty() {
+		world.insert_resource(scratch);
+		return;
+	}
 
-    let n = scratch.snapshot.len();
+	let n = scratch.snapshot.len();
 
-    scratch.entity_idx.clear();
-    for (i, &(entity, _, _)) in scratch.snapshot.iter().enumerate() {
-        scratch.entity_idx.push((entity, i));
-    }
-    scratch.entity_idx.sort_unstable_by_key(|&(entity, _)| entity);
+	scratch.entity_idx.clear();
+	for (i, &(entity, _, _)) in scratch.snapshot.iter().enumerate() {
+		scratch.entity_idx.push((entity, i));
+	}
+	scratch
+		.entity_idx
+		.sort_unstable_by_key(|&(entity, _)| entity);
 
-    scratch.parent_idx.clear();
-    scratch.parent_idx.resize(n, None);
-    for (i, &(_, _, parent_entity)) in scratch.snapshot.iter().enumerate() {
-        if let Some(parent_entity) = parent_entity
-            && let Ok(j) = scratch.entity_idx.binary_search_by_key(&parent_entity, |&(e, _)| e) {
-                scratch.parent_idx[i] = Some(scratch.entity_idx[j].1);
-            }
-    }
+	scratch.parent_idx.clear();
+	scratch.parent_idx.resize(n, None);
+	for (i, &(_, _, parent_entity)) in scratch.snapshot.iter().enumerate() {
+		if let Some(parent_entity) = parent_entity
+			&& let Ok(j) = scratch
+				.entity_idx
+				.binary_search_by_key(&parent_entity, |&(e, _)| e)
+		{
+			scratch.parent_idx[i] = Some(scratch.entity_idx[j].1);
+		}
+	}
 
-    scratch.depths.clear();
-    scratch.depths.resize(n, u32::MAX);
-    for i in 0..n {
-        vis_depth_of(i, &scratch.parent_idx, &mut scratch.depths);
-    }
+	scratch.depths.clear();
+	scratch.depths.resize(n, u32::MAX);
+	for i in 0..n {
+		vis_depth_of(i, &scratch.parent_idx, &mut scratch.depths);
+	}
 
-    scratch.order.clear();
-    scratch.order.extend(0..n);
-    scratch.order.sort_unstable_by_key(|&i| scratch.depths[i]);
+	scratch.order.clear();
+	scratch.order.extend(0..n);
+	scratch.order.sort_unstable_by_key(|&i| scratch.depths[i]);
 
-    scratch.computed.clear();
-    scratch.computed.resize(n, true);
-    for &i in &scratch.order {
-        let (entity, visibility, _) = scratch.snapshot[i];
-        let parent_visible = scratch.parent_idx[i]
-            .map(|parent_i| scratch.computed[parent_i])
-            .unwrap_or(true);
-        let visible = match visibility {
-            Visibility::Visible => true,
-            Visibility::Hidden => false,
-            Visibility::Inherited => parent_visible,
-        };
-        scratch.computed[i] = visible;
+	scratch.computed.clear();
+	scratch.computed.resize(n, true);
+	for &i in &scratch.order {
+		let (entity, visibility, _) = scratch.snapshot[i];
+		let parent_visible = scratch.parent_idx[i]
+			.map(|parent_i| scratch.computed[parent_i])
+			.unwrap_or(true);
+		let visible = match visibility {
+			Visibility::Visible => true,
+			Visibility::Hidden => false,
+			Visibility::Inherited => parent_visible,
+		};
+		scratch.computed[i] = visible;
 
-        let cv = ComputedVisibility(visible);
-        if let Some(mut existing) = world.get_mut::<ComputedVisibility>(entity) {
-            *existing = cv;
-        } else if let Ok(mut entity_ref) = world.get_entity_mut(entity) {
-            entity_ref.insert(cv);
-        }
-    }
+		let cv = ComputedVisibility(visible);
+		if let Some(mut existing) = world.get_mut::<ComputedVisibility>(entity) {
+			*existing = cv;
+		} else if let Ok(mut entity_ref) = world.get_entity_mut(entity) {
+			entity_ref.insert(cv);
+		}
+	}
 
-    world.insert_resource(scratch);
+	world.insert_resource(scratch);
 }
 
 fn vis_depth_of(idx: usize, parent_idx: &[Option<usize>], depths: &mut [u32]) -> u32 {
-    if depths[idx] != u32::MAX {
-        return depths[idx];
-    }
-    let depth = parent_idx[idx]
-        .map(|parent| vis_depth_of(parent, parent_idx, depths) + 1)
-        .unwrap_or(0);
-    depths[idx] = depth;
-    depth
+	if depths[idx] != u32::MAX {
+		return depths[idx];
+	}
+	let depth = parent_idx[idx]
+		.map(|parent| vis_depth_of(parent, parent_idx, depths) + 1)
+		.unwrap_or(0);
+	depths[idx] = depth;
+	depth
 }
 
 /// recompute the [`Frustum`] resource from the active camera each frame.
@@ -319,18 +324,18 @@ fn vis_depth_of(idx: usize, parent_idx: &[Option<usize>], depths: &mut [u32]) ->
 /// reads [`ViewportAspect`] for the projection matrix — set this resource from the
 /// render/windowing layer whenever the window is resized.
 pub fn update_frustum(
-    active: Res<ActiveCamera3d>,
-    cameras: Query<(&Camera3d, &WorldTransform3d)>,
-    aspect: Res<ViewportAspect>,
-    mut frustum: ResMut<Frustum>,
+	active: Res<ActiveCamera3d>,
+	cameras: Query<(&Camera3d, &WorldTransform3d)>,
+	aspect: Res<ViewportAspect>,
+	mut frustum: ResMut<Frustum>,
 ) {
-    let Some(camera_entity) = active.entity else {
-        return;
-    };
-    let Ok((camera, transform)) = cameras.get(camera_entity) else {
-        return;
-    };
-    *frustum = Frustum::from_view_proj(camera.view_proj(*transform, aspect.0));
+	let Some(camera_entity) = active.entity else {
+		return;
+	};
+	let Ok((camera, transform)) = cameras.get(camera_entity) else {
+		return;
+	};
+	*frustum = Frustum::from_view_proj(camera.view_proj(*transform, aspect.0));
 }
 
 /// parallel arrays of world-space AABBs for all visible, cullable entities.
@@ -342,9 +347,9 @@ pub fn update_frustum(
 /// indices in all three vecs correspond to the same entity.
 #[derive(Resource, Default)]
 pub struct CullSoa {
-    pub entities: Vec<Entity>,
-    pub centers: Vec<Vec3A>,
-    pub half_extents: Vec<Vec3A>,
+	pub entities: Vec<Entity>,
+	pub centers: Vec<Vec3A>,
+	pub half_extents: Vec<Vec3A>,
 }
 
 /// populate [`CullSoa`] from all entities with an [`Aabb3d`] and a world transform.
@@ -357,13 +362,13 @@ pub struct CullSoa {
 /// `world_he[i] = sum_j(|R[i][j]| * scale[j] * local_he[j])` rotate-expands the box.
 #[inline]
 fn world_space_aabb(aabb: &Aabb3d, world: &WorldTransform3d) -> (Vec3A, Vec3A) {
-    let rot = Mat3::from_quat(world.rotation);
-    let local_center = Vec3::from(aabb.center) * world.scale;
-    let world_center = Vec3A::from(world.translation + rot * local_center);
-    let scaled_he = Vec3::from(aabb.half_extents) * world.scale;
-    let abs_rot = Mat3::from_cols(rot.x_axis.abs(), rot.y_axis.abs(), rot.z_axis.abs());
-    let world_half = Vec3A::from(abs_rot * scaled_he);
-    (world_center, world_half)
+	let rot = Mat3::from_quat(world.rotation);
+	let local_center = Vec3::from(aabb.center) * world.scale;
+	let world_center = Vec3A::from(world.translation + rot * local_center);
+	let scaled_he = Vec3::from(aabb.half_extents) * world.scale;
+	let abs_rot = Mat3::from_cols(rot.x_axis.abs(), rot.y_axis.abs(), rot.z_axis.abs());
+	let world_half = Vec3A::from(abs_rot * scaled_he);
+	(world_center, world_half)
 }
 
 /// native build: snapshot visible entities sequentially (cheap component copies), then
@@ -371,58 +376,58 @@ fn world_space_aabb(aabb: &Aabb3d, world: &WorldTransform3d) -> (Vec3A, Vec3A) {
 /// renderer's index-aligned `frustum_visible` / GPU readback stay consistent with `CullSoa`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn build_cull_soa(
-    query: Query<(Entity, &Aabb3d, &WorldTransform3d, &ComputedVisibility)>,
-    mut soa: ResMut<CullSoa>,
-    mut scratch: Local<Vec<(Entity, Aabb3d, WorldTransform3d)>>,
+	query: Query<(Entity, &Aabb3d, &WorldTransform3d, &ComputedVisibility)>,
+	mut soa: ResMut<CullSoa>,
+	mut scratch: Local<Vec<(Entity, Aabb3d, WorldTransform3d)>>,
 ) {
-    use rayon::prelude::*;
+	use rayon::prelude::*;
 
-    scratch.clear();
-    for (entity, aabb, world, vis) in query.iter() {
-        if vis.0 {
-            scratch.push((entity, *aabb, *world));
-        }
-    }
-    let items = scratch.as_slice();
-    let n = items.len();
+	scratch.clear();
+	for (entity, aabb, world, vis) in query.iter() {
+		if vis.0 {
+			scratch.push((entity, *aabb, *world));
+		}
+	}
+	let items = scratch.as_slice();
+	let n = items.len();
 
-    soa.entities.clear();
-    soa.entities.extend(items.iter().map(|(e, _, _)| *e));
-    soa.centers.clear();
-    soa.centers.resize(n, Vec3A::ZERO);
-    soa.half_extents.clear();
-    soa.half_extents.resize(n, Vec3A::ZERO);
+	soa.entities.clear();
+	soa.entities.extend(items.iter().map(|(e, _, _)| *e));
+	soa.centers.clear();
+	soa.centers.resize(n, Vec3A::ZERO);
+	soa.half_extents.clear();
+	soa.half_extents.resize(n, Vec3A::ZERO);
 
-    let soa = &mut *soa;
-    soa.centers
-        .par_iter_mut()
-        .zip(soa.half_extents.par_iter_mut())
-        .enumerate()
-        .for_each(|(i, (center, half))| {
-            let (_, aabb, world) = &items[i];
-            let (c, h) = world_space_aabb(aabb, world);
-            *center = c;
-            *half = h;
-        });
+	let soa = &mut *soa;
+	soa.centers
+		.par_iter_mut()
+		.zip(soa.half_extents.par_iter_mut())
+		.enumerate()
+		.for_each(|(i, (center, half))| {
+			let (_, aabb, world) = &items[i];
+			let (c, h) = world_space_aabb(aabb, world);
+			*center = c;
+			*half = h;
+		});
 }
 
 /// wasm build: single-threaded fallback (no rayon on wasm).
 #[cfg(target_arch = "wasm32")]
 pub fn build_cull_soa(
-    query: Query<(Entity, &Aabb3d, &WorldTransform3d, &ComputedVisibility)>,
-    mut soa: ResMut<CullSoa>,
+	query: Query<(Entity, &Aabb3d, &WorldTransform3d, &ComputedVisibility)>,
+	mut soa: ResMut<CullSoa>,
 ) {
-    soa.entities.clear();
-    soa.centers.clear();
-    soa.half_extents.clear();
+	soa.entities.clear();
+	soa.centers.clear();
+	soa.half_extents.clear();
 
-    for (entity, aabb, world, vis) in query.iter() {
-        if !vis.0 {
-            continue;
-        }
-        let (world_center, world_half) = world_space_aabb(aabb, world);
-        soa.entities.push(entity);
-        soa.centers.push(world_center);
-        soa.half_extents.push(world_half);
-    }
+	for (entity, aabb, world, vis) in query.iter() {
+		if !vis.0 {
+			continue;
+		}
+		let (world_center, world_half) = world_space_aabb(aabb, world);
+		soa.entities.push(entity);
+		soa.centers.push(world_center);
+		soa.half_extents.push(world_half);
+	}
 }
