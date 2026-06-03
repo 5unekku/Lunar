@@ -43,13 +43,67 @@ jobs:
           cat > site/index.html << 'EOF'
           <!DOCTYPE html>
           <html lang="en">
-          <head><meta charset="utf-8"><title>Lunar Docs</title></head>
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Lunar Docs</title>
+            <style>
+              *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+              body {
+                font-family: system-ui, -apple-system, sans-serif;
+                background: #0d1117;
+                color: #e6edf3;
+                min-height: 100vh;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                padding: 2rem;
+              }
+              header { text-align: center; margin-bottom: 3rem; }
+              h1 { font-size: 2.5rem; font-weight: 700; letter-spacing: -0.5px; }
+              h1 span { color: #7aa2f7; }
+              .tagline { margin-top: 0.5rem; color: #8b949e; font-size: 1rem; }
+              .cards {
+                display: flex;
+                gap: 1.5rem;
+                flex-wrap: wrap;
+                justify-content: center;
+                width: 100%;
+                max-width: 720px;
+              }
+              a.card {
+                flex: 1 1 280px;
+                background: #161b22;
+                border: 1px solid #30363d;
+                border-radius: 8px;
+                padding: 1.75rem;
+                text-decoration: none;
+                color: inherit;
+                transition: border-color 0.15s, background 0.15s;
+              }
+              a.card:hover { border-color: #7aa2f7; background: #1c2333; }
+              .card-title { font-size: 1.1rem; font-weight: 600; color: #e6edf3; margin-bottom: 0.5rem; }
+              .card-desc { font-size: 0.9rem; color: #8b949e; line-height: 1.5; }
+              footer { margin-top: 3rem; font-size: 0.75rem; color: #484f58; }
+            </style>
+          </head>
           <body>
-          <h1>Lunar Documentation</h1>
-          <ul>
-            <li><a href="api/">API Reference</a> — using Lunar in a project</li>
-            <li><a href="internal/">Internals</a> — contributing to the engine</li>
-          </ul>
+            <header>
+              <h1><span>Lunar</span></h1>
+              <p class="tagline">a game engine for Rust</p>
+            </header>
+            <div class="cards">
+              <a href="api/" class="card">
+                <div class="card-title">API Reference</div>
+                <div class="card-desc">Public API for building games with Lunar. Types, traits, and plugins exposed through the <code>lunar</code> crate.</div>
+              </a>
+              <a href="internal/" class="card">
+                <div class="card-title">Internals</div>
+                <div class="card-desc">Full workspace documentation including private items. For contributors working on the engine itself.</div>
+              </a>
+            </div>
+            <footer>generated on push to master</footer>
           </body>
           </html>
           EOF
