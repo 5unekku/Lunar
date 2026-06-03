@@ -19,6 +19,7 @@ members = [
 		"crates/lunar-lightmap",
 		"crates/lunar-gamedata",
 		"crates/lunar-gamedata-build",
+		"crates/lunar-audio",
 		"tests/api_seal",
 ]
 resolver = "2"
