@@ -110,7 +110,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 name = "api-seal-test"
 version = "0.0.0"
 dependencies = [
- "lunar-lib",
+ "lunar-engine",
 ]
 
 [[package]]
@@ -1671,13 +1671,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunar-engine"
+version = "1.0.0"
+dependencies = [
+ "bevy_ecs",
+ "console_error_panic_hook",
+ "console_log",
+ "env_logger",
+ "js-sys",
+ "log",
+ "lunar-2d",
+ "lunar-3d",
+ "lunar-assets",
+ "lunar-bsp",
+ "lunar-core",
+ "lunar-gamedata",
+ "lunar-input",
+ "lunar-lightmap",
+ "lunar-macros",
+ "lunar-math",
+ "lunar-pathfinding-rt",
+ "lunar-render",
+ "lunar-render-3d",
+ "pollster",
+ "raw-window-handle",
+ "sdl3",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu",
+]
+
+[[package]]
 name = "lunar-game"
 version = "1.0.0"
 dependencies = [
  "bevy_ecs",
  "console_error_panic_hook",
  "log",
- "lunar-lib",
+ "lunar-engine",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -1728,38 +1760,6 @@ dependencies = [
  "sdl3",
  "wasm-bindgen",
  "web-sys",
-]
-
-[[package]]
-name = "lunar-lib"
-version = "1.0.0"
-dependencies = [
- "bevy_ecs",
- "console_error_panic_hook",
- "console_log",
- "env_logger",
- "js-sys",
- "log",
- "lunar-2d",
- "lunar-3d",
- "lunar-assets",
- "lunar-bsp",
- "lunar-core",
- "lunar-gamedata",
- "lunar-input",
- "lunar-lightmap",
- "lunar-macros",
- "lunar-math",
- "lunar-pathfinding-rt",
- "lunar-render",
- "lunar-render-3d",
- "pollster",
- "raw-window-handle",
- "sdl3",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "wgpu",
 ]
 
 [[package]]

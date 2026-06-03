@@ -76,7 +76,7 @@ path = "examples/shooter_example/main.rs"
 [dependencies]
 # `lunar` is the only dependency a real game needs. enable optional modules
 # via feature flags.
-lunar = { path = "crates/lunar", package = "lunar-lib", features = ["3d"] }
+lunar = { path = "crates/lunar", package = "lunar-engine", features = ["3d"] }
 
 bevy_ecs = { workspace = true }
 log = { workspace = true }
