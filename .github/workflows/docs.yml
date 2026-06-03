@@ -20,7 +20,6 @@ jobs:
     container: rust:slim-trixie
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
       - uses: Swatinem/rust-cache@v2
       - run: apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev clang
 

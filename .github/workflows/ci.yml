@@ -14,7 +14,6 @@ jobs:
     container: rust:slim-trixie
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
       - uses: Swatinem/rust-cache@v2
       - run: apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev clang
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -24,7 +23,6 @@ jobs:
     container: rust:slim-trixie
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
       - uses: Swatinem/rust-cache@v2
       - run: apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev clang
       - run: cargo test --workspace
@@ -34,7 +32,6 @@ jobs:
     container: rust:slim-trixie
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --target wasm32-unknown-unknown --package lunar-lib
 
@@ -43,7 +40,6 @@ jobs:
     container: rust:slim-trixie
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
       - uses: Swatinem/rust-cache@v2
       - run: apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev xvfb mesa-vulkan-drivers libvulkan1
       - run: WGPU_BACKEND=vulkan xvfb-run -a cargo run --example platform_demo -- --smoke
@@ -64,12 +60,10 @@ jobs:
           - aarch64-pc-windows-gnullvm
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: cross-${{ matrix.target }}
       - run: apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev python3-pip
+      - run: rustup target add ${{ matrix.target }}
       - run: pip install cargo-zigbuild --break-system-packages
       - run: cargo zigbuild --workspace --target ${{ matrix.target }}
