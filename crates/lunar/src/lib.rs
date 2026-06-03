@@ -49,37 +49,8 @@ pub use lunar_render;
 #[cfg(feature = "3d")]
 pub use lunar_render_3d;
 
-// optional modules — re-exported under short, dimensionless names so game code
-// reaches them as `lunar::ui`, `lunar::physics2d`, etc. each is feature-gated and
-// pulls its own curated `prelude` into `lunar::prelude` (see prelude.rs).
 #[cfg(feature = "pathfinding")]
 pub use lunar_pathfinding_rt as pathfinding;
-#[cfg(feature = "ai")]
-pub use lunar_plugin_ai as ai;
-#[cfg(feature = "animation")]
-pub use lunar_plugin_animation as animation;
-#[cfg(feature = "camera-3d")]
-pub use lunar_plugin_camera_3d as camera3d;
-#[cfg(feature = "dialogue")]
-pub use lunar_plugin_dialogue as dialogue;
-#[cfg(feature = "localization")]
-pub use lunar_plugin_localization as localization;
-#[cfg(feature = "particles")]
-pub use lunar_plugin_particles as particles;
-#[cfg(feature = "physics-2d")]
-pub use lunar_plugin_physics_2d as physics2d;
-#[cfg(feature = "physics-3d")]
-pub use lunar_plugin_physics_3d as physics3d;
-#[cfg(feature = "spline")]
-pub use lunar_plugin_spline as spline;
-#[cfg(feature = "tilemap")]
-pub use lunar_plugin_tilemap as tilemap;
-#[cfg(feature = "timeline")]
-pub use lunar_plugin_timeline as timeline;
-#[cfg(feature = "ui")]
-pub use lunar_plugin_ui as ui;
-#[cfg(feature = "zones")]
-pub use lunar_plugin_zones as zones;
 
 pub mod prelude;
 pub use prelude::*;

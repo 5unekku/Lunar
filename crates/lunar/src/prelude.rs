@@ -113,37 +113,8 @@ pub use lunar_assets::{
 // texture! macro — embeds and converts image assets at compile time
 pub use crate::texture;
 
-// optional modules — each pulls its curated prelude in when its feature is enabled,
-// so `use lunar::prelude::*` lights up exactly the modules the game opted into.
-// the full surface of each stays at its module path (`lunar::ui::X`, etc.).
 #[cfg(feature = "pathfinding")]
 pub use lunar_pathfinding_rt::prelude::*;
-#[cfg(feature = "ai")]
-pub use lunar_plugin_ai::prelude::*;
-#[cfg(feature = "animation")]
-pub use lunar_plugin_animation::prelude::*;
-#[cfg(feature = "camera-3d")]
-pub use lunar_plugin_camera_3d::prelude::*;
-#[cfg(feature = "dialogue")]
-pub use lunar_plugin_dialogue::prelude::*;
-#[cfg(feature = "localization")]
-pub use lunar_plugin_localization::prelude::*;
-#[cfg(feature = "particles")]
-pub use lunar_plugin_particles::prelude::*;
-#[cfg(feature = "physics-2d")]
-pub use lunar_plugin_physics_2d::prelude::*;
-#[cfg(feature = "physics-3d")]
-pub use lunar_plugin_physics_3d::prelude::*;
-#[cfg(feature = "spline")]
-pub use lunar_plugin_spline::prelude::*;
-#[cfg(feature = "tilemap")]
-pub use lunar_plugin_tilemap::prelude::*;
-#[cfg(feature = "timeline")]
-pub use lunar_plugin_timeline::prelude::*;
-#[cfg(feature = "ui")]
-pub use lunar_plugin_ui::prelude::*;
-#[cfg(feature = "zones")]
-pub use lunar_plugin_zones::prelude::*;
 
 // lunar marker traits
 pub use crate::{GameComponent, GameResource};

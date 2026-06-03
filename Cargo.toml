@@ -12,24 +12,11 @@ members = [
 		"crates/lunar-assets",
 		"crates/lunar-image",
 		"crates/lunar-atlas",
-		"crates/lunar-plugin-dialogue",
-		"crates/lunar-plugin-localization",
-		"crates/lunar-plugin-zones",
-		"crates/lunar-plugin-animation",
-		"crates/lunar-plugin-tilemap",
-		"crates/lunar-plugin-ui",
-		"crates/lunar-plugin-physics-2d",
-		"crates/lunar-plugin-particles",
 		"crates/lunar-pathfinding-rt",
 		"crates/lunar-pathfinding-pre",
-		"crates/lunar-plugin-ai",
-		"crates/lunar-plugin-physics-3d",
-		"crates/lunar-plugin-camera-3d",
-		"crates/lunar-plugin-spline",
 		"crates/lunar-bsp",
 		"crates/lunar-bsp-build",
 		"crates/lunar-lightmap",
-		"crates/lunar-plugin-timeline",
 		"crates/lunar-gamedata",
 		"crates/lunar-gamedata-build",
 		"tests/api_seal",
@@ -78,10 +65,6 @@ name = "lunar-web"
 path = "src/web.rs"
 
 [[example]]
-name = "rpg_example"
-path = "examples/rpg_example/main.rs"
-
-[[example]]
 name = "platform_demo"
 path = "examples/platform_demo/main.rs"
 
@@ -92,7 +75,7 @@ path = "examples/shooter_example/main.rs"
 [dependencies]
 # `lunar` is the only dependency a real game needs. enable optional modules
 # via feature flags.
-lunar = { path = "crates/lunar", package = "lunar-lib", features = ["dialogue", "3d"] }
+lunar = { path = "crates/lunar", package = "lunar-lib", features = ["3d"] }
 
 bevy_ecs = { workspace = true }
 log = { workspace = true }
