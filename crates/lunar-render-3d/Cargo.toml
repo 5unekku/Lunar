@@ -16,12 +16,12 @@ bytemuck = "1"
 
 [dependencies]
 rustc-hash = { workspace = true }
-lunar-3d       = { path = "../lunar-3d" }
-lunar-assets   = { path = "../lunar-assets" }
-lunar-bsp      = { path = "../lunar-bsp" }
-lunar-core     = { path = "../lunar-core" }
-lunar-lightmap = { path = "../lunar-lightmap" }
-lunar-math     = { path = "../lunar-math" }
+lunar-3d       = { path = "../lunar-3d", version = "1.0.0" }
+lunar-assets   = { path = "../lunar-assets", version = "1.0.0" }
+lunar-bsp      = { path = "../lunar-bsp", version = "1.0.0" }
+lunar-core     = { path = "../lunar-core", version = "1.0.0" }
+lunar-lightmap = { path = "../lunar-lightmap", version = "1.0.0" }
+lunar-math     = { path = "../lunar-math", version = "1.0.0" }
 bevy_ecs    = { workspace = true }
 wgpu        = { workspace = true, features = ["wgsl", "spirv"] }
 log         = { workspace = true }

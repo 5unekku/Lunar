@@ -13,10 +13,10 @@ keywords.workspace = true
 rustc-hash = { workspace = true }
 wgpu = { workspace = true, features = ["vulkan", "metal", "gles", "wgsl"] }
 raw-window-handle = "0.6"
-lunar-math = { path = "../lunar-math" }
-lunar-core = { path = "../lunar-core" }
-lunar-assets = { path = "../lunar-assets" }
-lunar-atlas = { path = "../lunar-atlas" }
+lunar-math = { path = "../lunar-math", version = "1.0.0" }
+lunar-core = { path = "../lunar-core", version = "1.0.0" }
+lunar-assets = { path = "../lunar-assets", version = "1.0.0" }
+lunar-atlas = { path = "../lunar-atlas", version = "1.0.0" }
 bevy_ecs = { workspace = true }
 log = { workspace = true }
 bytemuck = "1.23"

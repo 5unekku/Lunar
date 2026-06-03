@@ -23,21 +23,21 @@ full = ["2d", "3d", "pathfinding"]
 
 [dependencies]
 bevy_ecs = { workspace = true }
-lunar-macros = { path = "../lunar-macros" }
-lunar-math = { path = "../lunar-math" }
-lunar-core = { path = "../lunar-core" }
-lunar-2d = { path = "../lunar-2d", optional = true }
-lunar-3d = { path = "../lunar-3d", optional = true }
-lunar-render-3d = { path = "../lunar-render-3d", optional = true }
-lunar-bsp      = { path = "../lunar-bsp", optional = true }
-lunar-lightmap = { path = "../lunar-lightmap", optional = true }
-lunar-render = { path = "../lunar-render" }
-lunar-input = { path = "../lunar-input" }
-lunar-assets = { path = "../lunar-assets" }
-lunar-gamedata = { path = "../lunar-gamedata" }
+lunar-macros = { path = "../lunar-macros", version = "1.0.0" }
+lunar-math = { path = "../lunar-math", version = "1.0.0" }
+lunar-core = { path = "../lunar-core", version = "1.0.0" }
+lunar-2d = { path = "../lunar-2d", version = "1.0.0", optional = true }
+lunar-3d = { path = "../lunar-3d", version = "1.0.0", optional = true }
+lunar-render-3d = { path = "../lunar-render-3d", version = "1.0.0", optional = true }
+lunar-bsp      = { path = "../lunar-bsp", version = "1.0.0", optional = true }
+lunar-lightmap = { path = "../lunar-lightmap", version = "1.0.0", optional = true }
+lunar-render = { path = "../lunar-render", version = "1.0.0" }
+lunar-input = { path = "../lunar-input", version = "1.0.0" }
+lunar-assets = { path = "../lunar-assets", version = "1.0.0" }
+lunar-gamedata = { path = "../lunar-gamedata", version = "1.0.0" }
 
 # libraries (no plugin)
-lunar-pathfinding-rt = { path = "../lunar-pathfinding-rt", optional = true }
+lunar-pathfinding-rt = { path = "../lunar-pathfinding-rt", version = "1.0.0", optional = true }
 
 log = { workspace = true }
 env_logger = { workspace = true }

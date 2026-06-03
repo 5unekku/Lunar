@@ -11,9 +11,9 @@ keywords.workspace = true
 
 [dependencies]
 rustc-hash = { workspace = true }
-lunar-core = { path = "../lunar-core" }
-lunar-math = { path = "../lunar-math" }
-lunar-assets = { path = "../lunar-assets" }
+lunar-core = { path = "../lunar-core", version = "1.0.0" }
+lunar-math = { path = "../lunar-math", version = "1.0.0" }
+lunar-assets = { path = "../lunar-assets", version = "1.0.0" }
 bevy_ecs = { workspace = true }
 log = { workspace = true }
 

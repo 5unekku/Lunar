@@ -11,10 +11,10 @@ keywords.workspace = true
 
 [dependencies]
 rustc-hash = { workspace = true }
-lunar-core = { path = "../lunar-core" }
+lunar-core = { path = "../lunar-core", version = "1.0.0" }
 bevy_ecs = { workspace = true }
 log = { workspace = true }
-lunar-image = { path = "../lunar-image" }
+lunar-image = { path = "../lunar-image", version = "1.0.0" }
 crossbeam-channel = "0.5"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "webp", "gif"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

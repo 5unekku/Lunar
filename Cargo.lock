@@ -1575,7 +1575,7 @@ dependencies = [
 
 [[package]]
 name = "lunar-2d"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bevy_ecs",
  "lunar-core",
@@ -1584,7 +1584,7 @@ dependencies = [
 
 [[package]]
 name = "lunar-3d"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bevy_ecs",
  "log",
@@ -1597,7 +1597,7 @@ dependencies = [
 
 [[package]]
 name = "lunar-assets"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bevy_ecs",
  "crossbeam-channel",
@@ -1616,7 +1616,7 @@ dependencies = [
 
 [[package]]
 name = "lunar-atlas"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bevy_ecs",
  "log",
@@ -1629,7 +1629,7 @@ dependencies = [
 
 [[package]]
 name = "lunar-bsp"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bevy_ecs",
  "bincode",
@@ -1642,7 +1642,7 @@ dependencies = [
 
 [[package]]
 name = "lunar-bsp-build"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bincode",
  "gltf",
@@ -1654,7 +1654,7 @@ dependencies = [
 
 [[package]]
 name = "lunar-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bevy_ecs",
  "bincode",
@@ -1672,7 +1672,7 @@ dependencies = [
 
 [[package]]
 name = "lunar-game"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bevy_ecs",
  "console_error_panic_hook",
@@ -1685,7 +1685,7 @@ dependencies = [
 
 [[package]]
 name = "lunar-gamedata"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bincode",
  "rustc-hash 2.1.2",
@@ -1694,7 +1694,7 @@ dependencies = [
 
 [[package]]
 name = "lunar-gamedata-build"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bincode",
  "lunar-core",
@@ -1706,7 +1706,7 @@ dependencies = [
 
 [[package]]
 name = "lunar-image"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "image",
  "rayon",
@@ -1716,7 +1716,7 @@ dependencies = [
 
 [[package]]
 name = "lunar-input"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bevy_ecs",
  "js-sys",
@@ -1732,7 +1732,7 @@ dependencies = [
 
 [[package]]
 name = "lunar-lib"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bevy_ecs",
  "console_error_panic_hook",
@@ -1764,7 +1764,7 @@ dependencies = [
 
 [[package]]
 name = "lunar-lightmap"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bevy_ecs",
  "lunar-3d",
@@ -1776,7 +1776,7 @@ dependencies = [
 
 [[package]]
 name = "lunar-macros"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "image",
  "lunar-image",
@@ -1787,7 +1787,7 @@ dependencies = [
 
 [[package]]
 name = "lunar-math"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.0",
@@ -1795,7 +1795,7 @@ dependencies = [
 
 [[package]]
 name = "lunar-pathfinding-pre"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bevy_ecs",
  "lunar-pathfinding-rt",
@@ -1803,14 +1803,14 @@ dependencies = [
 
 [[package]]
 name = "lunar-pathfinding-rt"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bevy_ecs",
 ]
 
 [[package]]
 name = "lunar-render"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bevy_ecs",
  "bytemuck",
@@ -1833,7 +1833,7 @@ dependencies = [
 
 [[package]]
 name = "lunar-render-3d"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bevy_ecs",
  "bytemuck",

@@ -11,4 +11,4 @@ keywords.workspace = true
 
 [dependencies]
 bevy_ecs = { workspace = true }
-lunar-pathfinding-rt = { path = "../lunar-pathfinding-rt" }
+lunar-pathfinding-rt = { path = "../lunar-pathfinding-rt", version = "1.0.0" }

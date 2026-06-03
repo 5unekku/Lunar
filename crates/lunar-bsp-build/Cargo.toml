@@ -3,11 +3,13 @@ name = "lunar-bsp-build"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "offline BSP tree and PVS compiler for Lunar levels"
 
 [dependencies]
-lunar-bsp  = { path = "../lunar-bsp" }
-lunar-math = { path = "../lunar-math" }
+lunar-bsp  = { path = "../lunar-bsp", version = "1.0.0" }
+lunar-math = { path = "../lunar-math", version = "1.0.0" }
 serde      = { version = "1", features = ["derive"] }
 bincode    = "1"
 rayon      = { workspace = true }

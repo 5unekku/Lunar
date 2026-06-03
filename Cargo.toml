@@ -24,7 +24,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 license = "MPL-2.0"
 description = "a game engine for Rust with ECS, wgpu rendering, and WASM support"
@@ -52,6 +52,7 @@ name = "lunar-game"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [features]
 debug = ["bevy_ecs/debug"]

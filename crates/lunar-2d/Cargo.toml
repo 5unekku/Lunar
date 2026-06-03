@@ -10,6 +10,6 @@ categories.workspace = true
 keywords.workspace = true
 
 [dependencies]
-lunar-core = { path = "../lunar-core" }
-lunar-math = { path = "../lunar-math" }
+lunar-core = { path = "../lunar-core", version = "1.0.0" }
+lunar-math = { path = "../lunar-math", version = "1.0.0" }
 bevy_ecs = { workspace = true }

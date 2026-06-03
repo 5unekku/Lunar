@@ -12,8 +12,8 @@ keywords.workspace = true
 [dependencies]
 rustc-hash = { workspace = true }
 bevy_ecs = { workspace = true }
-lunar-core = { path = "../lunar-core" }
-lunar-math = { path = "../lunar-math" }
+lunar-core = { path = "../lunar-core", version = "1.0.0" }
+lunar-math = { path = "../lunar-math", version = "1.0.0" }
 log = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
