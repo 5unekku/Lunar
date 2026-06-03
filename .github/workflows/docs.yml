@@ -1,0 +1,70 @@
+name: docs
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# only one deploy at a time; don't cancel in-flight so a finishing deploy isn't abandoned
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev clang
+
+      # api docs — public items only (for game developers)
+      - run: cargo doc --workspace --no-deps
+      - run: |
+          mkdir -p site/api
+          cp -r target/doc/* site/api/
+          echo '<meta http-equiv="refresh" content="0; url=lunar_lib">' > site/api/index.html
+
+      # internal docs — all items including private (for contributors)
+      # RUSTDOCFLAGS change is tracked by cargo's fingerprint, so rustdoc reruns
+      - run: RUSTDOCFLAGS="--document-private-items" cargo doc --workspace --no-deps
+      - run: |
+          mkdir -p site/internal
+          cp -r target/doc/* site/internal/
+          echo '<meta http-equiv="refresh" content="0; url=lunar_lib">' > site/internal/index.html
+
+      - name: root index
+        run: |
+          cat > site/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head><meta charset="utf-8"><title>Lunar Docs</title></head>
+          <body>
+          <h1>Lunar Documentation</h1>
+          <ul>
+            <li><a href="api/">API Reference</a> — using Lunar in a project</li>
+            <li><a href="internal/">Internals</a> — contributing to the engine</li>
+          </ul>
+          </body>
+          </html>
+          EOF
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
