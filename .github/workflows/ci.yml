@@ -44,7 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - run: apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev xvfb mesa-vulkan-drivers libvulkan1
+      - run: apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev clang xvfb mesa-vulkan-drivers libvulkan1 libx11-dev libxext-dev libxi-dev libxrandr-dev
       # SDL_VIDEODRIVER=x11 prevents SDL3 from trying Wayland (unavailable in container)
       - run: SDL_VIDEODRIVER=x11 WGPU_BACKEND=vulkan xvfb-run -a cargo run --example platform_demo -- --smoke
 
