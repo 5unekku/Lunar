@@ -45,7 +45,7 @@ impl CubebBackend {
         let mut flat: Vec<f32> = Vec::new();
 
         let mut builder = cubeb::StreamBuilder::<StereoFrame<f32>>::new();
-        // 512 frames ≈ 11 ms at 44100 Hz — low latency without underruns
+        // 512 frames ≈ 10 ms at 48000 Hz — low latency without underruns
         builder
             .name("lunar")
             .default_output(&params)

@@ -20,4 +20,4 @@ pub trait AudioSource: Send + Sync + 'static {
 
 /// sample rate all sources must produce. resampling to device rate is handled
 /// by the backend if the device disagrees.
-pub const SAMPLE_RATE: u32 = 44_100;
+pub const SAMPLE_RATE: u32 = 48_000;
