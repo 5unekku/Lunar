@@ -20,6 +20,7 @@ members = [
 		"crates/lunar-gamedata",
 		"crates/lunar-gamedata-build",
 		"crates/lunar-audio",
+		"crates/lunar-nav",
 		"tests/api_seal",
 	"tools/navmesh-bench",
 ]

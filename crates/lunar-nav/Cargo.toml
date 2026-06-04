@@ -1,0 +1,27 @@
+[package]
+name = "lunar-nav"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "3d navigation: rerecast baking, navmesh pathfinding, dodgy_3d crowd avoidance"
+repository.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
+
+[dependencies]
+lunar-core = { path = "../lunar-core", version = "1.0.0" }
+bevy_ecs   = { workspace = true }
+log        = { workspace = true }
+glam       = { workspace = true }
+
+# baking pipeline
+rerecast = "0.3"
+# pin rerecast's glam version under a local alias so our baker uses the same
+# type instances as rerecast and the types unify at compile time
+glam-rc = { package = "glam", version = "0.30", default-features = false }
+
+# runtime pathfinding
+navmesh  = "0.12"
+# per-frame crowd avoidance (orca); re-exports its own glam as dodgy_3d::Vec3
+dodgy_3d = "0.5"

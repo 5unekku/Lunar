@@ -53,6 +53,8 @@ pub use lunar_render_3d;
 pub use lunar_pathfinding_rt as pathfinding;
 #[cfg(feature = "audio")]
 pub use lunar_audio;
+#[cfg(feature = "nav")]
+pub use lunar_nav;
 
 pub mod prelude;
 pub use prelude::*;
