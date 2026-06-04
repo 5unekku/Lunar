@@ -21,6 +21,7 @@ members = [
 		"crates/lunar-gamedata-build",
 		"crates/lunar-audio",
 		"tests/api_seal",
+	"tools/navmesh-bench",
 ]
 resolver = "2"
 
