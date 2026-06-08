@@ -38,6 +38,10 @@ pub struct TransformScratch3d {
 	// so the structural-insert pass only fires for entities genuinely missing it
 	wt_written: Vec<bool>,
 	cv_written: Vec<bool>,
+	// change-detection state for the early-out: count of transform/visibility entities at the
+	// last run, and whether we've run at least once (the first run must always execute).
+	last_count: usize,
+	initialized: bool,
 }
 
 /// propagate [`LocalTransform3d`] and [`Visibility`] through the entity hierarchy in one pass.
@@ -50,6 +54,34 @@ pub fn propagate_transforms_3d(world: &mut World) {
 	let mut scratch = world
 		.remove_resource::<TransformScratch3d>()
 		.unwrap_or_default();
+
+	// ── change-detection early-out ────────────────────────────────────────
+	// skip the whole O(n) snapshot/sort/writeback when nothing relevant changed since the
+	// last run. `Changed<T>` covers mutations and spawns (Added implies Changed) and is
+	// near-free when idle (bevy skips archetypes whose change tick is older than last run).
+	// a relevant-entity count delta covers despawns and component removals, which `Changed`
+	// can't observe. conservative by construction: any ambiguity falls through to a full run.
+	{
+		let count = world
+			.query_filtered::<(), Or<(With<LocalTransform3d>, With<Visibility>)>>()
+			.iter(world)
+			.count();
+		let any_changed = world
+			.query_filtered::<(), Or<(
+				Changed<LocalTransform3d>,
+				Changed<Visibility>,
+				Changed<Parent>,
+			)>>()
+			.iter(world)
+			.next()
+			.is_some();
+		if scratch.initialized && count == scratch.last_count && !any_changed {
+			world.insert_resource(scratch);
+			return;
+		}
+		scratch.last_count = count;
+		scratch.initialized = true;
+	}
 
 	scratch.snapshot.clear();
 	// collect all entities that have a transform or a visibility component (or both)
@@ -347,6 +379,57 @@ mod tests {
 		propagate_transforms_3d(&mut world);
 		let wt = world.get::<WorldTransform3d>(e).unwrap();
 		assert!(close(wt.translation, Vec3::new(7.0, 8.0, 9.0)));
+	}
+
+	// the change-detection early-out skips an unchanged frame (world transform stays correct)
+	// and re-runs the moment a local transform is mutated. clear_trackers() between runs
+	// simulates the schedule's per-frame change-tick reset.
+	#[test]
+	fn early_out_skips_unchanged_then_reruns_on_change() {
+		let mut world = World::new();
+		world.init_resource::<TransformScratch3d>();
+		let e = world.spawn(LocalTransform3d::from_xyz(1.0, 2.0, 3.0)).id();
+
+		propagate_transforms_3d(&mut world); // first run creates WorldTransform3d
+		assert!(close(
+			world.get::<WorldTransform3d>(e).unwrap().translation,
+			Vec3::new(1.0, 2.0, 3.0)
+		));
+
+		// frame boundary, then an unchanged frame: must skip yet leave the result intact
+		world.clear_trackers();
+		propagate_transforms_3d(&mut world);
+		assert!(close(
+			world.get::<WorldTransform3d>(e).unwrap().translation,
+			Vec3::new(1.0, 2.0, 3.0)
+		));
+
+		// frame boundary, then a mutation: the early-out must detect it and propagate
+		world.clear_trackers();
+		world.get_mut::<LocalTransform3d>(e).unwrap().translation = Vec3::new(7.0, 8.0, 9.0);
+		propagate_transforms_3d(&mut world);
+		assert!(close(
+			world.get::<WorldTransform3d>(e).unwrap().translation,
+			Vec3::new(7.0, 8.0, 9.0)
+		));
+	}
+
+	// a despawn (which Changed can't see) is caught by the entity-count delta and re-runs.
+	#[test]
+	fn early_out_reruns_after_despawn() {
+		let mut world = World::new();
+		world.init_resource::<TransformScratch3d>();
+		let a = world.spawn(LocalTransform3d::from_xyz(1.0, 0.0, 0.0)).id();
+		let b = world.spawn(LocalTransform3d::from_xyz(2.0, 0.0, 0.0)).id();
+		propagate_transforms_3d(&mut world);
+		world.clear_trackers();
+		world.despawn(b);
+		// b is gone; a must still resolve correctly on the post-despawn run (count delta forces it)
+		propagate_transforms_3d(&mut world);
+		assert!(close(
+			world.get::<WorldTransform3d>(a).unwrap().translation,
+			Vec3::new(1.0, 0.0, 0.0)
+		));
 	}
 
 	// a 3-level chain composes through both ancestors (exercises the depth sort).
