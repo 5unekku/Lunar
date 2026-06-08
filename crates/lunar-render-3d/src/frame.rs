@@ -206,6 +206,12 @@ impl RenderEngine3d {
 			.get_resource::<DevRenderProfile>()
 			.map(|d| d.contact_shadows)
 			.unwrap_or(false);
+		// visual style options — lighting model, vertex snap, affine textures.
+		// neutral by default; every globals slot stays unchanged when not set.
+		let dev_style = world
+			.get_resource::<DevRenderProfile>()
+			.map(|d| d.style)
+			.unwrap_or_default();
 
 		// upscale resources — set_render_scale already ran above, just check active state
 		self.upscale_active = self.render_scale < 0.999;
@@ -1224,10 +1230,12 @@ impl RenderEngine3d {
 			d[18] = cam_pos.z;
 			d[19] = time.elapsed_seconds();
 			d[20] = time.delta_seconds();
-			// d[21] = shading_era (u32, stays 0 = ERA_MODERN)
+			// d[21] = lighting_model (u32 bits): 0=Pbr, 1=Lambert, 2=Baked
+			d[21] = f32::from_bits(dev_style.lighting.shader_value());
 			// d[22] = render_flags (u32 packed as f32 bits)
 			//   bit 0: soft_shadows (PCSS directional + soft point)
 			//   bit 1: contact_shadows (screen-space contact shadow pass active)
+			//   bit 2: affine_textures (disable perspective-correct UV on surface path)
 			let mut render_flags = 0u32;
 			if dev_soft_shadows {
 				render_flags |= 1;
@@ -1235,7 +1243,12 @@ impl RenderEngine3d {
 			if dev_contact_shadows {
 				render_flags |= 2;
 			}
+			if dev_style.affine_textures {
+				render_flags |= 4;
+			}
 			d[22] = f32::from_bits(render_flags);
+			// d[23] = vertex snap grid resolution (plain f32; 0.0 = off)
+			d[23] = dev_style.vertex_snap;
 			d
 		};
 		self.queue

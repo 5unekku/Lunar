@@ -232,8 +232,9 @@ const MAX_BLOOM_MIPS: usize = 7;
 /// bloom params UBO size: texel_size(8) + filter_radius(4) + threshold(4) = 16 bytes.
 const BLOOM_PARAMS_SIZE: u64 = 16;
 
-/// composite params UBO size: 8 × f32 = 32 bytes.
-const COMPOSITE_PARAMS_SIZE: u64 = 32;
+/// composite params UBO size: 12 × f32 = 48 bytes
+/// (8 core + 4 style: color_bits, dither_size, dither_amount, _pad).
+const COMPOSITE_PARAMS_SIZE: u64 = 48;
 
 /// GTAO params UBO size: inv_proj(64) + proj(64) + 8×f32(32) = 160 bytes.
 const GTAO_PARAMS_SIZE: u64 = 160;
@@ -716,6 +717,132 @@ impl Default for AutoQuality {
 	}
 }
 
+// ── visual style / lighting model ────────────────────────────────────────────
+
+/// global lighting model for lit meshes — a quality tier that controls how much
+/// shading work the GPU does per pixel, independent of per-material [`lunar_3d::ShadingModel`].
+///
+/// cheaper tiers skip whole shader blocks, so a simpler look automatically costs
+/// less GPU time. `Pbr` is the default and runs the full PBR path unchanged. maps
+/// onto the `lighting_model` slot the mesh shaders reserve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LightingModel {
+	/// full PBR: GGX specular, Fresnel, Smith geometry, SH ambient, soft shadows.
+	#[default]
+	Pbr,
+	/// Lambert diffuse only — no specular, no Fresnel. keeps dynamic lights and
+	/// shadows but drops the expensive microfacet terms.
+	Lambert,
+	/// lightmap + ambient only — no runtime light or shadow loops at all.
+	/// the cheapest lit path; pair with baked GI.
+	Baked,
+}
+
+impl LightingModel {
+	/// raw `lighting_model` value handed to the shaders (`LIGHTING_PBR`/`LIGHTING_LAMBERT`/`LIGHTING_BAKED`).
+	#[must_use]
+	pub fn shader_value(self) -> u32 {
+		match self {
+			Self::Pbr => 0,
+			Self::Lambert => 1,
+			Self::Baked => 2,
+		}
+	}
+}
+
+/// ordered (Bayer) dithering pattern applied before colour quantization in the
+/// composite pass. larger matrices spread banding over more pixels (smoother gradients,
+/// coarser dots). only has an effect when [`VisualStyle::color_bits`] is set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DitherMode {
+	/// no dithering — quantization produces hard colour bands.
+	#[default]
+	Off,
+	/// 2×2 Bayer matrix.
+	Bayer2,
+	/// 4×4 Bayer matrix.
+	Bayer4,
+	/// 8×8 Bayer matrix — finest dot pattern, smoothest gradients.
+	Bayer8,
+}
+
+impl DitherMode {
+	/// matrix edge length passed to the composite shader (`0` = off).
+	#[must_use]
+	pub fn shader_size(self) -> u32 {
+		match self {
+			Self::Off => 0,
+			Self::Bayer2 => 2,
+			Self::Bayer4 => 4,
+			Self::Bayer8 => 8,
+		}
+	}
+}
+
+/// composable render style knobs. every field is neutral by default, so a default
+/// `VisualStyle` is a guaranteed no-op that renders exactly as before.
+///
+/// each option is a genuine cost reduction when enabled — never an added pass on top
+/// of the default path. the quantize/dither is a few ALU ops at the tail of the
+/// existing composite pass; a lighting downgrade removes shader work; vertex snapping
+/// is two vertex ops. a simpler look automatically costs less.
+///
+/// stored on [`DevRenderProfile`]; build inline with the `DevRenderProfile::with_*`
+/// helpers or construct one directly.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VisualStyle {
+	/// bits per colour channel in the final image. `0` = full 8-bit (off).
+	/// e.g. `5` ≈ 32 levels/channel, `3` ≈ 8 levels/channel.
+	/// applied as a screen-space quantization in the composite pass.
+	pub color_bits: u32,
+	/// ordered dithering applied before quantization to break up banding.
+	/// no effect unless `color_bits` is also set.
+	pub dither: DitherMode,
+	/// dither strength in `[0, 1]`. `1.0` = a full quantization step of patterned noise.
+	pub dither_amount: f32,
+	/// global lighting model for lit meshes. `Pbr` (default) is unchanged full shading.
+	pub lighting: LightingModel,
+	/// vertex position snap grid resolution, in clip-space-xy steps. `0.0` = off.
+	/// higher values = finer grid = subtler snapping. a sensible starting point is
+	/// the render height (e.g. `240.0`).
+	pub vertex_snap: f32,
+	/// disable perspective-correct texture interpolation on the textured/unlit surface
+	/// path, producing affine UV distortion. default `false`.
+	pub affine_textures: bool,
+}
+
+impl Default for VisualStyle {
+	fn default() -> Self {
+		Self::neutral()
+	}
+}
+
+impl VisualStyle {
+	/// the no-op configuration: full colour, no dither, full PBR, no snapping.
+	/// renders byte-for-byte as if `VisualStyle` were never set.
+	#[must_use]
+	pub const fn neutral() -> Self {
+		Self {
+			color_bits: 0,
+			dither: DitherMode::Off,
+			dither_amount: 1.0,
+			lighting: LightingModel::Pbr,
+			vertex_snap: 0.0,
+			affine_textures: false,
+		}
+	}
+
+	/// true when every option is at its default — lets the renderer skip all style work.
+	#[must_use]
+	pub fn is_neutral(&self) -> bool {
+		self.color_bits == 0
+			&& self.dither.shader_size() == 0
+			&& self.lighting == LightingModel::Pbr
+			&& self.vertex_snap == 0.0
+			&& !self.affine_textures
+	}
+}
+
 // ── dev render profile ────────────────────────────────────────────────────
 
 /// what the game is designed to use — a per-feature ceiling the developer controls.
@@ -760,7 +887,7 @@ pub struct DevRenderProfile {
 	pub max_shadow_cascades: u32,
 	/// maximum MSAA sample count the game supports (1, 2, 4, or 8).
 	pub max_msaa: u32,
-	/// maximum particle cap. keep low for simple retro games, high for effects-heavy titles.
+	/// maximum particle cap. keep low for lightweight games, high for effects-heavy titles.
 	pub max_particles: u32,
 	/// point light cube shadow maps. off by default — enable for doom/hl2 style flashlight games.
 	/// requires `with_point_light_shadows(true)` since `classic()` leaves this off.
@@ -778,6 +905,9 @@ pub struct DevRenderProfile {
 	/// `None` = let the user's `QualitySettings::upscale_mode` decide.
 	/// example: `Some(UpscaleMode::Nearest)` for pixel art games.
 	pub forced_upscale_mode: Option<UpscaleMode>,
+	/// composable render style options (colour quantization, dithering, lighting model,
+	/// vertex snapping, affine textures). neutral by default — costs nothing until set.
+	pub style: VisualStyle,
 }
 
 impl Default for DevRenderProfile {
@@ -814,6 +944,7 @@ impl DevRenderProfile {
 			soft_shadows: false,
 			contact_shadows: false,
 			forced_upscale_mode: None,
+			style: VisualStyle::neutral(),
 		}
 	}
 
@@ -840,6 +971,7 @@ impl DevRenderProfile {
 			soft_shadows: false,
 			contact_shadows: false,
 			forced_upscale_mode: None,
+			style: VisualStyle::neutral(),
 		}
 	}
 
@@ -866,6 +998,7 @@ impl DevRenderProfile {
 			soft_shadows: true,
 			contact_shadows: true,
 			forced_upscale_mode: None,
+			style: VisualStyle::neutral(),
 		}
 	}
 
@@ -955,6 +1088,53 @@ impl DevRenderProfile {
 	#[must_use]
 	pub fn with_max_particles(mut self, cap: u32) -> Self {
 		self.max_particles = cap;
+		self
+	}
+
+	// ── visual style options (all neutral by default) ────────────────────────
+
+	/// set the whole [`VisualStyle`] block at once.
+	#[must_use]
+	pub fn with_visual_style(mut self, style: VisualStyle) -> Self {
+		self.style = style;
+		self
+	}
+	/// quantize the final image to `bits` per colour channel (`0` = full 8-bit, off).
+	#[must_use]
+	pub fn with_color_depth(mut self, bits: u32) -> Self {
+		self.style.color_bits = bits;
+		self
+	}
+	/// ordered dithering applied before colour quantization. pair with `with_color_depth`.
+	#[must_use]
+	pub fn with_dither(mut self, mode: DitherMode) -> Self {
+		self.style.dither = mode;
+		self
+	}
+	/// dither strength in `[0, 1]`.
+	#[must_use]
+	pub fn with_dither_amount(mut self, amount: f32) -> Self {
+		self.style.dither_amount = amount;
+		self
+	}
+	/// global mesh lighting model. `Pbr` (default) is unchanged full shading; cheaper
+	/// models drop shader work.
+	#[must_use]
+	pub fn with_lighting_model(mut self, model: LightingModel) -> Self {
+		self.style.lighting = model;
+		self
+	}
+	/// vertex snap grid resolution in clip-space-xy steps (`0.0` = off).
+	#[must_use]
+	pub fn with_vertex_snap(mut self, grid: f32) -> Self {
+		self.style.vertex_snap = grid;
+		self
+	}
+	/// disable perspective-correct texture interpolation (affine UV distortion) on the
+	/// textured/unlit surface path.
+	#[must_use]
+	pub fn with_affine_textures(mut self, enabled: bool) -> Self {
+		self.style.affine_textures = enabled;
 		self
 	}
 }
@@ -1746,4 +1926,68 @@ pub mod prelude {
 		QualityPreset, QualitySettings, RenderConfig3d, RenderEngine3d, RenderInfo3d,
 		RenderPlugin3d, Sky, UpscaleMode,
 	};
+}
+
+#[cfg(test)]
+mod visual_style_tests {
+	use super::{DevRenderProfile, DitherMode, LightingModel, VisualStyle};
+
+	#[test]
+	fn neutral_is_a_no_op() {
+		let style = VisualStyle::neutral();
+		assert!(style.is_neutral());
+		assert_eq!(style, VisualStyle::default());
+	}
+
+	#[test]
+	fn any_active_option_breaks_neutrality() {
+		assert!(!VisualStyle { color_bits: 5, ..VisualStyle::neutral() }.is_neutral());
+		assert!(!VisualStyle { dither: DitherMode::Bayer4, ..VisualStyle::neutral() }.is_neutral());
+		assert!(!VisualStyle { lighting: LightingModel::Lambert, ..VisualStyle::neutral() }.is_neutral());
+		assert!(!VisualStyle { vertex_snap: 240.0, ..VisualStyle::neutral() }.is_neutral());
+		assert!(!VisualStyle { affine_textures: true, ..VisualStyle::neutral() }.is_neutral());
+	}
+
+	#[test]
+	fn lighting_model_maps_to_shader_values() {
+		// must match the LIGHTING_* constants in shader.wgsl
+		assert_eq!(LightingModel::Pbr.shader_value(), 0);
+		assert_eq!(LightingModel::Lambert.shader_value(), 1);
+		assert_eq!(LightingModel::Baked.shader_value(), 2);
+	}
+
+	#[test]
+	fn dither_mode_maps_to_matrix_edge() {
+		assert_eq!(DitherMode::Off.shader_size(), 0);
+		assert_eq!(DitherMode::Bayer2.shader_size(), 2);
+		assert_eq!(DitherMode::Bayer4.shader_size(), 4);
+		assert_eq!(DitherMode::Bayer8.shader_size(), 8);
+	}
+
+	#[test]
+	fn all_presets_start_neutral() {
+		assert!(DevRenderProfile::classic().style.is_neutral());
+		assert!(DevRenderProfile::standard().style.is_neutral());
+		assert!(DevRenderProfile::full().style.is_neutral());
+		assert!(DevRenderProfile::default().style.is_neutral());
+	}
+
+	#[test]
+	fn builder_composes_style() {
+		let profile = DevRenderProfile::classic()
+			.with_color_depth(5)
+			.with_dither(DitherMode::Bayer4)
+			.with_dither_amount(0.75)
+			.with_lighting_model(LightingModel::Lambert)
+			.with_vertex_snap(240.0)
+			.with_affine_textures(true);
+
+		assert_eq!(profile.style.color_bits, 5);
+		assert_eq!(profile.style.dither, DitherMode::Bayer4);
+		assert_eq!(profile.style.dither_amount, 0.75);
+		assert_eq!(profile.style.lighting, LightingModel::Lambert);
+		assert_eq!(profile.style.vertex_snap, 240.0);
+		assert!(profile.style.affine_textures);
+		assert!(!profile.style.is_neutral());
+	}
 }

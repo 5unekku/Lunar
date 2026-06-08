@@ -449,6 +449,10 @@ impl RenderEngine3d {
 		{
 			let time = world.resource::<lunar_core::Time>();
 			let quality = world.get_resource::<QualitySettings>();
+			let style = world
+				.get_resource::<crate::DevRenderProfile>()
+				.map(|d| d.style)
+				.unwrap_or_default();
 			let (
 				bloom_strength,
 				vignette_strength,
@@ -517,7 +521,7 @@ impl RenderEngine3d {
 				}
 				(bloom_s, vig_s, vig_r, ca_s, grain_s, f)
 			};
-			let composite_data: [f32; 8] = [
+			let composite_data: [f32; 12] = [
 				bloom_strength,
 				vignette_strength,
 				vignette_radius,
@@ -526,6 +530,11 @@ impl RenderEngine3d {
 				time.elapsed_seconds().fract(),
 				f32::from_bits(flags),
 				0.0, // _pad
+				// colour quantization + dither (neutral when color_bits == 0)
+				f32::from_bits(style.color_bits),
+				f32::from_bits(style.dither.shader_size()),
+				style.dither_amount,
+				0.0, // _pad2
 			];
 			self.queue.write_buffer(
 				&self.composite_params_buf,
