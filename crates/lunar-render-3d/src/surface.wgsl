@@ -4,13 +4,13 @@
 
 // group 0: globals (view + time)
 struct Globals {
-    view_proj:    mat4x4<f32>,
-    cam_pos:      vec3<f32>,
-    elapsed_secs: f32,
-    delta_secs:   f32,
-    shading_era:  u32,
-    _pad1:        f32,
-    _pad2:        f32,
+    view_proj:      mat4x4<f32>,
+    cam_pos:        vec3<f32>,
+    elapsed_secs:   f32,
+    delta_secs:     f32,
+    lighting_model: u32,
+    render_flags:   u32,  // bit 2 = affine_textures (disable perspective-correct UV)
+    vertex_snap:    f32,  // snap grid resolution (0 = off)
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 
@@ -62,6 +62,19 @@ struct VertOut {
     @location(1)       uv_lightmap: vec2<f32>,
     @location(2)       color:       vec4<f32>,
     @location(3) @interpolate(flat) instance_id: u32,
+    // same base uv but interpolated screen-linearly (no perspective correction).
+    // selected in the fragment shader when affine_textures is on → the classic UV "swim".
+    @location(4) @interpolate(linear) uv_affine: vec2<f32>,
+}
+
+// vertex snapping (matches shader.wgsl); returns input unchanged when off.
+fn snap_vertex(clip: vec4<f32>) -> vec4<f32> {
+    if globals.vertex_snap <= 0.0 {
+        return clip;
+    }
+    let g = globals.vertex_snap;
+    let snapped = round(clip.xy / clip.w * g) / g * clip.w;
+    return vec4<f32>(snapped, clip.z, clip.w);
 }
 
 @vertex
@@ -69,11 +82,12 @@ fn vs_surface(in: VertIn, @builtin(instance_index) instance_id: u32) -> VertOut 
     let inst = instances[instance_id];
     let world_pos4 = inst.model * vec4<f32>(in.position, 1.0);
     var out: VertOut;
-    out.clip_pos    = globals.view_proj * world_pos4;
+    out.clip_pos    = snap_vertex(globals.view_proj * world_pos4);
     out.uv          = in.uv;
     out.uv_lightmap = in.uv_lightmap;
     out.color       = in.color;
     out.instance_id = instance_id;
+    out.uv_affine   = in.uv;
     return out;
 }
 
@@ -107,11 +121,14 @@ fn blend_stage(acc: vec4<f32>, sample: vec4<f32>, stage: StageData) -> vec4<f32>
 
 @fragment
 fn fs_surface(in: VertOut) -> @location(0) vec4<f32> {
+    // affine_textures (render_flags bit 2): swap perspective-correct uv for the
+    // screen-linear interpolant to recreate early-3D texture warping.
+    let base_uv = select(in.uv, in.uv_affine, (globals.render_flags & 4u) != 0u);
     var acc = vec4<f32>(0.0, 0.0, 0.0, 1.0);
     for (var s = 0u; s < 4u; s++) {
         let stage = surface_params.stages[s];
         if stage.enabled == 0u { continue; }
-        let uv = apply_uv(in.uv, in.uv_lightmap, stage);
+        let uv = apply_uv(base_uv, in.uv_lightmap, stage);
         let sampled = sample_stage(s, uv);
         acc = blend_stage(acc, sampled * in.color, stage);
     }

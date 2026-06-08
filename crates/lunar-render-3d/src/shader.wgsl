@@ -1,17 +1,17 @@
-// shading_era values — matches ShadingEra enum on the CPU
-const ERA_MODERN:  u32 = 0u;  // full PBR (GGX, SH, shadows)
-const ERA_RETRO:   u32 = 1u;  // q3-style: diffuse × lightmap, simple lambert, no specular
-const ERA_CLASSIC: u32 = 2u;  // q1-style: diffuse × lightmap only, no runtime lights
+// lighting_model values — matches LightingModel enum on the CPU
+const LIGHTING_PBR:     u32 = 0u;  // full PBR (GGX specular, SH ambient, shadows)
+const LIGHTING_LAMBERT: u32 = 1u;  // diffuse-only, no microfacet specular
+const LIGHTING_BAKED:   u32 = 2u;  // lightmap + ambient only, no runtime lights
 
 // group 0: view-global — set once per pass
 struct Globals {
-    view_proj:    mat4x4<f32>,  // 64 bytes
-    cam_pos:      vec3<f32>,    // 12 bytes (offset 64)
-    elapsed_secs: f32,          //  4 bytes (offset 76)
-    delta_secs:    f32,           //  4 bytes (offset 80)
-    shading_era:   u32,           //  4 bytes (offset 84)
-    render_flags:  u32,           //  4 bytes (offset 88) — bit 0: soft_shadows, bit 1: contact_shadows
-    _pad2:         f32,           //  4 bytes — total: 96 bytes
+    view_proj:      mat4x4<f32>,  // 64 bytes
+    cam_pos:        vec3<f32>,    // 12 bytes (offset 64)
+    elapsed_secs:   f32,          //  4 bytes (offset 76)
+    delta_secs:     f32,          //  4 bytes (offset 80)
+    lighting_model: u32,          //  4 bytes (offset 84)
+    render_flags:   u32,          //  4 bytes (offset 88) — bit 0: soft_shadows, bit 1: contact_shadows, bit 2: affine_textures
+    vertex_snap:    f32,          //  4 bytes (offset 92) — snap grid (0 = off). total: 96 bytes
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 
@@ -144,6 +144,18 @@ struct VertOut {
     @location(6) @interpolate(flat) instance_id:  u32,
 }
 
+// vertex snapping: quantize clip-space xy onto a low-resolution grid.
+// returns the input unchanged when off (vertex_snap <= 0).
+// w is preserved so view-space depth and perspective division stay correct.
+fn snap_vertex(clip: vec4<f32>) -> vec4<f32> {
+    if globals.vertex_snap <= 0.0 {
+        return clip;
+    }
+    let g = globals.vertex_snap;
+    let snapped = round(clip.xy / clip.w * g) / g * clip.w;
+    return vec4<f32>(snapped, clip.z, clip.w);
+}
+
 @vertex
 fn vs_main(in: VertIn, @builtin(instance_index) instance_id: u32) -> VertOut {
     let inst       = instances[instance_id];
@@ -155,7 +167,7 @@ fn vs_main(in: VertIn, @builtin(instance_index) instance_id: u32) -> VertOut {
         inst.normal_c2.xyz,
     );
     var out: VertOut;
-    out.clip_pos     = view_pos4;
+    out.clip_pos     = snap_vertex(view_pos4);
     out.world_pos    = world_pos4.xyz;
     out.world_normal = normalize(normal_mat * in.normal.xyz);
     out.uv           = in.uv;
@@ -174,7 +186,8 @@ fn vs_depth(
     @builtin(instance_index) instance_id: u32,
 ) -> @builtin(position) vec4<f32> {
     let model = instances[instance_id].model;
-    return globals.view_proj * model * vec4<f32>(position, 1.0);
+    // snap identically to vs_main so a depth-prepass matches the colour pass exactly.
+    return snap_vertex(globals.view_proj * model * vec4<f32>(position, 1.0));
 }
 
 // ── PBR helpers ────────────────────────────────────────────────────────────
@@ -220,6 +233,20 @@ fn pbr_light(
     let specular = (d * g * f) / max(4.0 * max(dot(n, v), 0.0) * ndotl, 0.001);
     let kd = (vec3<f32>(1.0) - f) * (1.0 - metallic);
     return (kd * albedo / PI + specular) * irradiance * ndotl;
+}
+
+// per-light contribution dispatched by lighting_model. LIGHTING_PBR is the full
+// Cook-Torrance path; LIGHTING_LAMBERT drops microfacet specular. LIGHTING_BAKED
+// never reaches here (its light loops are skipped entirely).
+fn lit(
+    n: vec3<f32>, v: vec3<f32>, l: vec3<f32>,
+    albedo: vec3<f32>, metallic: f32, roughness: f32,
+    irradiance: vec3<f32>, ndotl: f32,
+) -> vec3<f32> {
+    if globals.lighting_model == LIGHTING_LAMBERT {
+        return albedo / PI * irradiance * ndotl;
+    }
+    return pbr_light(n, v, l, albedo, metallic, roughness, irradiance, ndotl);
 }
 
 // ── Poisson disk sample sets ───────────────────────────────────────────────
@@ -391,21 +418,25 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     let n = normalize(in.world_normal);
     let v = normalize(globals.cam_pos - in.world_pos);
 
+    // LIGHTING_BAKED skips all runtime dynamic lights (ambient + lightmap only).
+    // Pbr/Lambert run the loops below; lit() picks the per-light shading model.
+    let dynamic_lighting = globals.lighting_model != LIGHTING_BAKED;
+
     // directional light with cascaded shadow — separate from point lights for lightmap path
     var dir_lo = vec3<f32>(0.0);
-    if lights.dir_enabled != 0u {
+    if dynamic_lighting && lights.dir_enabled != 0u {
         let l = normalize(-lights.dir_direction);
         let ndotl = max(dot(n, l), 0.0);
         if ndotl > 0.0 {
             let irradiance = lights.dir_color * (lights.dir_illuminance / 80000.0);
             let shadow = shadow_factor(in.world_pos, n, in.view_depth);
-            dir_lo += pbr_light(n, v, l, albedo, metallic, roughness, irradiance, ndotl) * shadow;
+            dir_lo += lit(n, v, l, albedo, metallic, roughness, irradiance, ndotl) * shadow;
         }
     }
 
     // point lights — clustered lookup from group 5 storage buffers
     var point_lo = vec3<f32>(0.0);
-    if cluster_params_f.light_count > 0u {
+    if dynamic_lighting && cluster_params_f.light_count > 0u {
         // determine cluster cell for this fragment
         let screen_x = in.clip_pos.x;
         let screen_y = in.clip_pos.y;
@@ -461,7 +492,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
                     shadow_fac = textureSampleCompare(point_shadow_maps, shadow_sampler, luv.xy, i32(luv.z), ref_depth);
                 }
             }
-            point_lo += shadow_fac * pbr_light(n, v, l, albedo, metallic, roughness, irradiance, ndotl);
+            point_lo += shadow_fac * lit(n, v, l, albedo, metallic, roughness, irradiance, ndotl);
         }
     }
 
