@@ -47,9 +47,10 @@
 //! |---------|----------------|
 //! | `2d` *(default)* | 2d sprite/text rendering, 2d collision |
 //! | `3d` | clustered-forward PBR renderer, BSP/PVS culling, lightmaps |
-//! | `full` | `2d` + `3d` |
+//! | `audio` | symphonia decoding, cubeb (native) / WebAudio (WASM) |
+//! | `full` | `2d` + `3d` + `audio` |
 //!
-//! audio, navigation, pathfinding, physics, particles, UI, and other opt-in
+//! navigation, pathfinding, physics, particles, UI, and other opt-in
 //! functionality live in the
 //! [`lunar-plugins`](https://gitlab.com/5unekku/lunar-plugins) workspace.
 //!
@@ -83,6 +84,8 @@ pub use lunar_math;
 pub use lunar_render;
 #[cfg(feature = "3d")]
 pub use lunar_render_3d;
+#[cfg(feature = "audio")]
+pub use lunar_audio;
 
 pub mod prelude;
 pub use prelude::*;

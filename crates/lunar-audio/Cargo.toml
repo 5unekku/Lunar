@@ -1,0 +1,27 @@
+[package]
+name = "lunar-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+categories.workspace = true
+keywords.workspace = true
+description = "audio system: AudioSource trait, mixer, symphonia decoding, cubeb/cpal backends"
+
+[dependencies]
+lunar-core   = { path = "../lunar-core",   version = "1.0.0" }
+lunar-assets = { path = "../lunar-assets", version = "1.0.0" }
+bevy_ecs     = { workspace = true }
+log          = { workspace = true }
+crossbeam-channel = "0.5"
+
+symphonia = { version = "0.5", default-features = false, features = [
+    "ogg", "vorbis", "wav", "flac",
+] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cubeb = "0.34"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+cpal = { version = "0.15", features = ["wasm-bindgen"] }

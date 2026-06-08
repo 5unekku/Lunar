@@ -23,8 +23,6 @@ small, friendly public API.
 
 ## non-goals
 
-- **Audio** — handled by Moonwalker, a separate project. Will return as a crate when
-  mature. Not part of this workspace today.
 - **Visual editor** — a downstream project that will consume `lunar`, not part of this repo.
 
 ## architecture
@@ -78,7 +76,7 @@ Game code depends only on `lunar`. The rest are internal or opt-in.
 
 All live in the [`lunar-plugins`](https://gitlab.com/5unekku/lunar-plugins) workspace.
 
-`lunar-plugin-audio`, `lunar-plugin-nav`, `lunar-plugin-pathfinding-rt`,
+`lunar-plugin-nav`, `lunar-plugin-pathfinding-rt`,
 `lunar-plugin-pathfinding-pre`, `lunar-plugin-physics-2d`, `lunar-plugin-physics-3d`,
 `lunar-plugin-particles`, `lunar-plugin-ai`, `lunar-plugin-spline`, `lunar-plugin-timeline`,
 `lunar-plugin-animation`, `lunar-plugin-tilemap`, `lunar-plugin-dialogue`, `lunar-plugin-ui`,
@@ -239,7 +237,7 @@ what you use:
   ~14.5k LOC plus every post-FX shader) is never compiled. This is the path for sprite/tile
   games that should be a handful of megabytes.
 - **3D game** (`features = ["3d"]`): adds the PBR renderer.
-- **plugins** (audio, nav, pathfinding, physics, particles, tilemap, UI, AI, …) live in the
+- **plugins** (nav, pathfinding, physics, particles, tilemap, UI, AI, …) live in the
   [`lunar-plugins`](https://gitlab.com/5unekku/lunar-plugins) workspace and are added to a
   game's `Cargo.toml` only when needed.
 

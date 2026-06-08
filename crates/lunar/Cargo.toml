@@ -14,9 +14,10 @@ keywords.workspace = true
 default = ["2d"]
 2d = ["dep:lunar-2d"]
 3d = ["dep:lunar-3d", "dep:lunar-render-3d", "dep:lunar-bsp", "dep:lunar-lightmap"]
+audio = ["dep:lunar-audio"]
 
 # convenience for examples / docs / "kitchen sink" builds.
-full = ["2d", "3d"]
+full = ["2d", "3d", "audio"]
 
 [dependencies]
 bevy_ecs = { workspace = true }
@@ -32,7 +33,7 @@ lunar-render = { path = "../lunar-render", version = "1.0.0" }
 lunar-input = { path = "../lunar-input", version = "1.0.0" }
 lunar-assets = { path = "../lunar-assets", version = "1.0.0" }
 lunar-gamedata = { path = "../lunar-gamedata", version = "1.0.0" }
-
+lunar-audio   = { path = "../lunar-audio",    version = "1.0.0", optional = true }
 
 log = { workspace = true }
 env_logger = { workspace = true }
