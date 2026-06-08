@@ -32,17 +32,23 @@ impl RenderEngine3d {
 			*t
 		};
 
+		// read the two render-config resources once per frame instead of the ~20 separate
+		// resource lookups that follow. both are small and Clone (no heap allocation), so a
+		// single copy is far cheaper than re-hashing the resource id for every field read.
+		let dev_profile = world.get_resource::<DevRenderProfile>().cloned();
+		let quality = world.get_resource::<QualitySettings>().cloned();
+
 		// apply render scale and MSAA changes before computing viewport
 		{
-			let desired_scale = world
-				.get_resource::<QualitySettings>()
+			let desired_scale = quality
+				.as_ref()
 				.map(|q| q.render_scale.clamp(0.1, 1.0))
 				.unwrap_or(1.0);
 			if (desired_scale - self.render_scale).abs() > 1e-4 {
 				self.set_render_scale(desired_scale);
 			}
-			let desired_msaa = world
-				.get_resource::<QualitySettings>()
+			let desired_msaa = quality
+				.as_ref()
 				.map(|q| q.msaa_samples.clamp(1, 8))
 				.unwrap_or(self.msaa_samples);
 			if desired_msaa != self.msaa_samples {
@@ -90,12 +96,12 @@ impl RenderEngine3d {
 		// dev_staa is resolved below with the rest of the dev profile, but we need
 		// the combined (dev+quality) staa decision here for the jitter gate. duplicate
 		// the short reads rather than restructure the whole function.
-		let staa_on = world
-			.get_resource::<DevRenderProfile>()
+		let staa_on = dev_profile
+			.as_ref()
 			.map(|d| d.staa)
 			.unwrap_or(true)
-			&& world
-				.get_resource::<QualitySettings>()
+			&& quality
+				.as_ref()
 				.map(|q| q.staa)
 				.unwrap_or(false)
 			&& self.staa_enabled; // staa_enabled = false on LowGles (no compute), true otherwise
@@ -142,76 +148,46 @@ impl RenderEngine3d {
 		// regardless of user quality settings or hardware tier.
 		// fxaa/staa/ssr also AND with QualitySettings so runtime toggles take effect
 		// without having to restart (the pipelines and textures are always built).
-		let dev_bloom = world
-			.get_resource::<DevRenderProfile>()
-			.map(|d| d.bloom)
-			.unwrap_or(true);
-		let dev_ssao = world
-			.get_resource::<DevRenderProfile>()
-			.map(|d| d.ssao)
-			.unwrap_or(true);
-		let dev_ssr = world
-			.get_resource::<DevRenderProfile>()
-			.map(|d| d.ssr)
-			.unwrap_or(true)
-			&& world
-				.get_resource::<QualitySettings>()
-				.map(|q| q.ssr)
-				.unwrap_or(false);
-		let dev_fog = world
-			.get_resource::<DevRenderProfile>()
+		let dev_bloom = dev_profile.as_ref().map(|d| d.bloom).unwrap_or(true);
+		let dev_ssao = dev_profile.as_ref().map(|d| d.ssao).unwrap_or(true);
+		let dev_ssr = dev_profile.as_ref().map(|d| d.ssr).unwrap_or(true)
+			&& quality.as_ref().map(|q| q.ssr).unwrap_or(false);
+		let dev_fog = dev_profile
+			.as_ref()
 			.map(|d| d.volumetric_fog)
 			.unwrap_or(true);
-		let dev_fxaa = world
-			.get_resource::<DevRenderProfile>()
-			.map(|d| d.fxaa)
-			.unwrap_or(true)
-			&& world
-				.get_resource::<QualitySettings>()
-				.map(|q| q.fxaa)
-				.unwrap_or(false);
-		let dev_staa = world
-			.get_resource::<DevRenderProfile>()
-			.map(|d| d.staa)
-			.unwrap_or(true)
-			&& world
-				.get_resource::<QualitySettings>()
-				.map(|q| q.staa)
-				.unwrap_or(false);
-		let dev_vignette = world
-			.get_resource::<DevRenderProfile>()
-			.map(|d| d.vignette)
-			.unwrap_or(true);
-		let dev_chrom_ab = world
-			.get_resource::<DevRenderProfile>()
+		let dev_fxaa = dev_profile.as_ref().map(|d| d.fxaa).unwrap_or(true)
+			&& quality.as_ref().map(|q| q.fxaa).unwrap_or(false);
+		let dev_staa = dev_profile.as_ref().map(|d| d.staa).unwrap_or(true)
+			&& quality.as_ref().map(|q| q.staa).unwrap_or(false);
+		let dev_vignette = dev_profile.as_ref().map(|d| d.vignette).unwrap_or(true);
+		let dev_chrom_ab = dev_profile
+			.as_ref()
 			.map(|d| d.chromatic_aberration)
 			.unwrap_or(true);
-		let dev_film_grain = world
-			.get_resource::<DevRenderProfile>()
+		let dev_film_grain = dev_profile
+			.as_ref()
 			.map(|d| d.film_grain)
 			.unwrap_or(true);
-		let dev_point_shadows = world
-			.get_resource::<DevRenderProfile>()
+		let dev_point_shadows = dev_profile
+			.as_ref()
 			.map(|d| d.point_light_shadows)
 			.unwrap_or(true);
-		let dev_max_point_lights = world
-			.get_resource::<DevRenderProfile>()
+		let dev_max_point_lights = dev_profile
+			.as_ref()
 			.map(|d| d.max_point_lights as usize)
 			.unwrap_or(MAX_CLUSTERED_LIGHTS);
-		let dev_soft_shadows = world
-			.get_resource::<DevRenderProfile>()
+		let dev_soft_shadows = dev_profile
+			.as_ref()
 			.map(|d| d.soft_shadows)
 			.unwrap_or(false);
-		let dev_contact_shadows = world
-			.get_resource::<DevRenderProfile>()
+		let dev_contact_shadows = dev_profile
+			.as_ref()
 			.map(|d| d.contact_shadows)
 			.unwrap_or(false);
 		// visual style options — lighting model, vertex snap, affine textures.
 		// neutral by default; every globals slot stays unchanged when not set.
-		let dev_style = world
-			.get_resource::<DevRenderProfile>()
-			.map(|d| d.style)
-			.unwrap_or_default();
+		let dev_style = dev_profile.as_ref().map(|d| d.style).unwrap_or_default();
 
 		// upscale resources — set_render_scale already ran above, just check active state
 		self.upscale_active = self.render_scale < 0.999;
@@ -225,14 +201,10 @@ impl RenderEngine3d {
 		}
 
 		// resolve upscale mode: dev forced_upscale_mode takes priority over user setting
-		let upscale_mode = world
-			.get_resource::<DevRenderProfile>()
+		let upscale_mode = dev_profile
+			.as_ref()
 			.and_then(|d| d.forced_upscale_mode)
-			.or_else(|| {
-				world
-					.get_resource::<QualitySettings>()
-					.map(|q| q.upscale_mode)
-			})
+			.or_else(|| quality.as_ref().map(|q| q.upscale_mode))
 			.unwrap_or(UpscaleMode::Lanczos);
 
 		// ── gather sky ────────────────────────────────────────────────────
@@ -1023,8 +995,10 @@ impl RenderEngine3d {
 			self.queue
 				.write_buffer(&self.cluster_params_buf, 0, &cp_data);
 
-			if !cluster_needs_compute {
-				// CPU path: all clusters point to the full light list
+			// CPU path: every cluster points to the whole light list. that table is
+			// camera- and position-independent, so it only changes when light_count does —
+			// rebuilding+uploading ~432KB every frame is pure waste. gate on the cached count.
+			if !cluster_needs_compute && light_count != self.cpu_cluster_last_count {
 				self.cluster_counts_scratch.clear();
 				self.cluster_counts_scratch.resize(NUM_CLUSTERS, 0);
 				self.cluster_indices_scratch.clear();
@@ -1046,6 +1020,11 @@ impl RenderEngine3d {
 					0,
 					bytemuck::cast_slice(&self.cluster_indices_scratch),
 				);
+				self.cpu_cluster_last_count = light_count;
+			} else if cluster_needs_compute {
+				// the compute path (dispatched below) overwrites these buffers, so invalidate
+				// the cache: a later CPU frame with a matching count must re-upload, not skip.
+				self.cpu_cluster_last_count = usize::MAX;
 			}
 		}
 

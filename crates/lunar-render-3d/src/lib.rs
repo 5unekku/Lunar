@@ -1664,6 +1664,10 @@ pub struct RenderEngine3d {
 	// CPU clustered-lighting fallback: per-cluster light counts + index table
 	cluster_counts_scratch: Vec<u32>,
 	cluster_indices_scratch: Vec<u32>,
+	// light_count the CPU cluster buffers were last filled+uploaded for. the CPU path
+	// writes the same camera-independent table for every cluster, so it only needs a
+	// rebuild when the count changes — usize::MAX forces the first frame to upload.
+	cpu_cluster_last_count: usize,
 	// late indirect-cull upload data (draw_scratch order): AABBs + draw params
 	late_aabb_scratch: Vec<f32>,
 	dp_data_scratch: Vec<u32>,

@@ -3540,6 +3540,7 @@ impl RenderEngine3d {
 			light_data_scratch: Vec::new(),
 			cluster_counts_scratch: Vec::new(),
 			cluster_indices_scratch: Vec::new(),
+			cpu_cluster_last_count: usize::MAX,
 			late_aabb_scratch: Vec::new(),
 			dp_data_scratch: Vec::new(),
 			mesh_evict_scratch: Vec::new(),
