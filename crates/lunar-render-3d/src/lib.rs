@@ -105,8 +105,6 @@ const TERRAIN_SHADER_SRC: &str = include_str!("terrain.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const CONTACT_SHADOW_SHADER_SRC: &str = include_str!("contact_shadow.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
-const MOTION_VECTOR_SHADER_SRC: &str = include_str!("motion_vector.wgsl");
-#[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const DETAIL_SPRITE_SHADER_SRC: &str = include_str!("detail_sprite.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const STAA_SHADER_SRC: &str = include_str!("staa.wgsl");
@@ -286,9 +284,6 @@ const PARTICLE_SIM_PARAMS_SIZE: u64 = 16;
 const FSR_PARAMS_SIZE: u64 = 32;
 /// contact shadow params UBO: inv_proj(64)+light_dir_vs(12)+step_count(4)+step_size(4)+w(4)+h(4)+pad(4) = 96 bytes.
 const CONTACT_SHADOW_PARAMS_SIZE: u64 = 96;
-
-/// motion vector params UBO: inv_view_proj(64)+prev_view_proj(64)+screen_wh(8)+pad(8) = 144 bytes.
-const MOTION_VECTOR_PARAMS_SIZE: u64 = 144;
 
 /// one particle in the GPU storage buffer: position(12)+life(4)+vel(12)+maxlife(4)+col_s(16)+col_e(16)+size_s(4)+size_e(4)+pad×2 = 80 bytes.
 const PARTICLE_STRIDE: u64 = 80;
@@ -1806,15 +1801,6 @@ pub struct RenderEngine3d {
 	contact_shadow_fallback_view: wgpu::TextureView,
 	// set true when contact_shadow_tex is first created to trigger composite_bg rebuild
 	composite_bg_dirty: bool,
-
-	// ── motion vectors ────────────────────────────────────────────────────
-	motion_vec_tex: Option<wgpu::Texture>,
-	motion_vec_view: Option<wgpu::TextureView>,
-	motion_vec_bgl: Option<wgpu::BindGroupLayout>,
-	motion_vec_pipeline: Option<wgpu::RenderPipeline>,
-	motion_vec_params_buf: Option<wgpu::Buffer>,
-	/// view_proj from the previous frame for motion vector reprojection
-	prev_view_proj: Mat4,
 
 	// ── planar reflections ────────────────────────────────────────────────
 	reflection_tex: Option<wgpu::Texture>,

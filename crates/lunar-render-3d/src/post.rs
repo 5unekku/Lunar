@@ -382,68 +382,8 @@ impl RenderEngine3d {
 			}
 		}
 
-		// ── motion vector pass (after main color, before composite) ─────
-		{
-			let width = self.surface_config.width;
-			let height = self.surface_config.height;
-			self.ensure_motion_vector_resources(width, height);
-			let inv_vp = view_proj.inverse();
-			let inv_vp_cols = inv_vp.to_cols_array();
-			let prev_vp_cols = self.prev_view_proj.to_cols_array();
-			if let Some(params_buf) = self.motion_vec_params_buf.as_ref() {
-				let mut mv_data = [0u8; MOTION_VECTOR_PARAMS_SIZE as usize];
-				mv_data[0..64].copy_from_slice(bytemuck::cast_slice(&inv_vp_cols));
-				mv_data[64..128].copy_from_slice(bytemuck::cast_slice(&prev_vp_cols));
-				mv_data[128..132].copy_from_slice(&(width as f32).to_le_bytes());
-				mv_data[132..136].copy_from_slice(&(height as f32).to_le_bytes());
-				self.queue.write_buffer(params_buf, 0, &mv_data);
-			}
-			if let (Some(pipeline), Some(bgl), Some(params_buf), Some(mv_view)) = (
-				self.motion_vec_pipeline.as_ref(),
-				self.motion_vec_bgl.as_ref(),
-				self.motion_vec_params_buf.as_ref(),
-				self.motion_vec_view.as_ref(),
-			) {
-				let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-					label: Some("[motion vec] bg"),
-					layout: bgl,
-					entries: &[
-						wgpu::BindGroupEntry {
-							binding: 0,
-							resource: params_buf.as_entire_binding(),
-						},
-						wgpu::BindGroupEntry {
-							binding: 1,
-							resource: wgpu::BindingResource::TextureView(&self.gtao_depth_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 2,
-							resource: wgpu::BindingResource::Sampler(&self.staa_nearest_sampler),
-						},
-					],
-				});
-				let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-					label: Some("[motion vec] pass"),
-					color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-						view: mv_view,
-						resolve_target: None,
-						ops: wgpu::Operations {
-							load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-							store: wgpu::StoreOp::Store,
-						},
-						depth_slice: None,
-					})],
-					depth_stencil_attachment: None,
-					timestamp_writes: None,
-					occlusion_query_set: None,
-					multiview_mask: None,
-				});
-				pass.set_pipeline(pipeline);
-				pass.set_bind_group(0, &bg, &[]);
-				pass.draw(0..3, 0..1);
-			}
-			self.prev_view_proj = view_proj;
-		}
+		// (no motion-vector pass: STAA reprojects from depth + prev/inv view-proj matrices, so
+		// the old motion-vector texture was written every frame and sampled by nothing. removed.)
 
 		// ── composite pass → swapchain ────────────────────────────────────
 		{

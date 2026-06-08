@@ -3599,12 +3599,6 @@ impl RenderEngine3d {
 			contact_shadow_fallback_view,
 			composite_bg_dirty: false,
 
-			motion_vec_tex: None,
-			motion_vec_view: None,
-			motion_vec_bgl: None,
-			motion_vec_pipeline: None,
-			motion_vec_params_buf: None,
-			prev_view_proj: Mat4::IDENTITY,
 
 			reflection_tex: None,
 			reflection_view: None,
