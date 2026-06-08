@@ -3,28 +3,63 @@
 //! this crate re-exports everything a game project needs from the engine.
 //! game code should depend only on `lunar` and use its re-exports.
 //!
+//! # quick start
+//!
+//! implement [`GamePlugin`] to define your game, then hand it to a bootstrap function:
+//!
+//! ```ignore
+//! use lunar::prelude::*;
+//!
+//! #[derive(Default)]
+//! struct MyGame;
+//!
+//! impl GamePlugin for MyGame {
+//!     fn name(&self) -> &str { "MyGame" }
+//!     fn build(&mut self, app: &mut App) {
+//!         app.add_startup_system(setup);
+//!         app.add_system(update);
+//!     }
+//! }
+//!
+//! fn setup(mut commands: Commands) {
+//!     commands.spawn(Transform::from_xy(0.0, 0.0));
+//! }
+//!
+//! fn update(time: Res<Time>) {
+//!     // runs every tick
+//! }
+//!
+//! // generates a native main() that calls bootstrap::<MyGame>()
+//! lunar_app!(MyGame);
+//! ```
+//!
+//! for a 3d game, use [`bootstrap_3d`] instead:
+//!
+//! ```ignore
+//! fn main() {
+//!     lunar::bootstrap_3d::<MyGame>(lunar::lunar_render_3d::RenderConfig3d::default());
+//! }
+//! ```
+//!
+//! # features
+//!
+//! | feature | what it enables |
+//! |---------|----------------|
+//! | `2d` *(default)* | 2d sprite/text rendering, 2d collision |
+//! | `3d` | clustered-forward PBR renderer, BSP/PVS culling, lightmaps |
+//! | `full` | `2d` + `3d` |
+//!
+//! audio, navigation, pathfinding, physics, particles, UI, and other opt-in
+//! functionality live in the
+//! [`lunar-plugins`](https://gitlab.com/5unekku/lunar-plugins) workspace.
+//!
 //! # architecture
 //!
 //! the engine follows a handle-based design:
 //! - assets (textures, sounds, fonts) are accessed through typed `Handle`s from `lunar_assets`
 //! - game logic registers systems via the `App` builder from `lunar_core`
 //! - all game state lives in the ECS [`World`], never in global singletons
-//!
-//! # quick start
-//!
-//! ```ignore
-//! use lunar::prelude::*;
-//!
-//! fn main() {
-//!     let mut app = App::new();
-//!     app.add_system(my_system);
-//!     app.run(60);
-//! }
-//!
-//! fn my_system(time: Res<Time>) {
-//!     // game logic here
-//! }
-//! ```
+//! - the ECS backend (bevy_ecs) is sealed behind this crate's prelude — game code never names it
 
 // `__bevy_ecs` is the internal path the lunar-macros derives target. It
 // MUST keep this exact name — the derive macros emit `::lunar::__bevy_ecs::…`
@@ -48,13 +83,6 @@ pub use lunar_math;
 pub use lunar_render;
 #[cfg(feature = "3d")]
 pub use lunar_render_3d;
-
-#[cfg(feature = "pathfinding")]
-pub use lunar_pathfinding_rt as pathfinding;
-#[cfg(feature = "audio")]
-pub use lunar_audio;
-#[cfg(feature = "nav")]
-pub use lunar_nav;
 
 pub mod prelude;
 pub use prelude::*;

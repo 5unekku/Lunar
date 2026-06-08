@@ -76,9 +76,13 @@ Game code depends only on `lunar`. The rest are internal or opt-in.
 
 **opt-in plugins** (added to a game's `Cargo.toml` only when needed)
 
-`lunar-physics-2d`, `lunar-physics-3d`, `lunar-particles`, `lunar-pathfinding-rt`,
-`lunar-pathfinding-pre`, `lunar-ai`, `lunar-spline`, `lunar-timeline`, `lunar-animation`,
-`lunar-tilemap`, `lunar-dialogue`, `lunar-ui`, `lunar-zones`, `lunar-localization`.
+All live in the [`lunar-plugins`](https://gitlab.com/5unekku/lunar-plugins) workspace.
+
+`lunar-plugin-audio`, `lunar-plugin-nav`, `lunar-plugin-pathfinding-rt`,
+`lunar-plugin-pathfinding-pre`, `lunar-plugin-physics-2d`, `lunar-plugin-physics-3d`,
+`lunar-plugin-particles`, `lunar-plugin-ai`, `lunar-plugin-spline`, `lunar-plugin-timeline`,
+`lunar-plugin-animation`, `lunar-plugin-tilemap`, `lunar-plugin-dialogue`, `lunar-plugin-ui`,
+`lunar-plugin-zones`, `lunar-plugin-localization`.
 
 ## getting started
 
@@ -87,8 +91,7 @@ Game code depends only on `lunar`. The rest are internal or opt-in.
 ```bash
 cargo run                              # smoke test (boots the engine, opens a window)
 cargo run --features debug             # same, with ECS debug instrumentation
-cargo run --example rpg_example        # RPG-style example
-cargo run --example platform_demo      # 2D platformer
+cargo run --example platform_demo      # 3D first-person scene (grass, sky, sun)
 cargo run --example shooter_example    # top-down shooter
 ```
 
@@ -236,9 +239,9 @@ what you use:
   ~14.5k LOC plus every post-FX shader) is never compiled. This is the path for sprite/tile
   games that should be a handful of megabytes.
 - **3D game** (`features = ["3d"]`): adds the PBR renderer.
-- **plugins** (physics, particles, tilemap, UI, AI, …) live in a separate
+- **plugins** (audio, nav, pathfinding, physics, particles, tilemap, UI, AI, …) live in the
   [`lunar-plugins`](https://gitlab.com/5unekku/lunar-plugins) workspace and are added to a
-  game's `Cargo.toml` only when used.
+  game's `Cargo.toml` only when needed.
 
 Performance target for the default path: a moderate-complexity 3D scene at 60fps / 1080p on
 midrange **integrated** graphics. Reach for `DevRenderProfile::classic()`/`standard()` plus a
@@ -279,7 +282,7 @@ impl GamePlugin for MyPlugin {
 ```
 lunar/
 ├── crates/              # the engine — one crate per subsystem (see table above)
-├── examples/            # rpg_example, platform_demo, shooter_example
+├── examples/            # platform_demo, shooter_example
 ├── tools/               # offline pipeline: texture compression, LOD gen, PVS bake, asset gen
 ├── scripts/             # build_all.go (multiarch), run_wasm.go (wasm dev server)
 ├── plans/               # design documents

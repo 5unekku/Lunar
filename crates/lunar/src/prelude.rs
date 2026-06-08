@@ -113,8 +113,5 @@ pub use lunar_assets::{
 // texture! macro — embeds and converts image assets at compile time
 pub use crate::texture;
 
-#[cfg(feature = "pathfinding")]
-pub use lunar_pathfinding_rt::prelude::*;
-
 // lunar marker traits
 pub use crate::{GameComponent, GameResource};
