@@ -1317,22 +1317,18 @@ impl RenderEngine3d {
 			cpass.dispatch_workgroups(CLUSTER_X, CLUSTER_Y, CLUSTER_Z);
 		}
 
-		// ── render graph pass ordering ────────────────────────────────────
-		// the graph's topological sort drives pass execution order.
-		// each frame we log the ordered pass names (debug only) so the DAG
-		// is actually driving execution, not just present as dead data.
+		// ── render graph pass ordering (debug diagnostic only) ────────────
+		// log the topological pass order so the DAG is visibly driving intent.
+		// compile-time gated: in release this whole block — including the sorted_pass_ids
+		// copy — is gone, instead of allocating a Vec every frame that nothing then reads.
+		#[cfg(debug_assertions)]
 		{
-			// compute the topological pass order and log it in debug builds.
-			// this is the render graph DAG driving execution; the sorted order
-			// replaces the hardcoded sequential pass list.
 			let pass_ids: Vec<_> = self.render_graph.sorted_pass_ids().to_vec();
-			if cfg!(debug_assertions) {
-				let names: Vec<&str> = pass_ids
-					.iter()
-					.map(|&id| self.render_graph.pass_name(id))
-					.collect();
-				log::trace!("[render-graph] pass order: {names:?}");
-			}
+			let names: Vec<&str> = pass_ids
+				.iter()
+				.map(|&id| self.render_graph.pass_name(id))
+				.collect();
+			log::trace!("[render-graph] pass order: {names:?}");
 		}
 
 		// ── upload mesh + material buffers ───────────────────────────────
