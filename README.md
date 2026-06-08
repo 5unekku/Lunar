@@ -191,6 +191,63 @@ fn hud_background(mut queue: ResMut<RenderQueue>) {
 Internals (`DrawCommand`, `DrawKind`, `RenderQueue::push`) are hidden — game code never
 constructs them.
 
+### scalable fidelity (a simpler look costs less)
+
+The renderer is built around opt-in complexity — a simpler look automatically runs lighter
+and ships smaller. Three orthogonal layers, lowest to highest priority:
+
+- **`RenderTier`** — auto-detected hardware capability (GLES / compute / indirect).
+- **`QualitySettings`** — the *player's* slider (Minimum→Ultra, MSAA, shadow res, render scale).
+- **`DevRenderProfile`** — the *developer's* ceiling. `classic()` (no runtime lighting, no
+  post — lightmapped style), `standard()` (shadows + bloom), or `full()` (modern PBR).
+
+`DevRenderProfile` also exposes composable **visual style options** (`VisualStyle`). Every
+option is off by default (a default profile renders exactly as before) and every one is a
+genuine cost reduction — never an added pass on top:
+
+```rust
+use lunar::lunar_render_3d::{DevRenderProfile, VisualStyle, LightingModel, DitherMode};
+
+fn build(&mut self, app: &mut App) {
+    app.insert_resource(
+        DevRenderProfile::classic()                        // start from the cheapest path
+            .with_lighting_model(LightingModel::Lambert)   // diffuse-only, no GGX specular
+            .with_color_depth(5)                           // ~15-bit colour quantization
+            .with_dither(DitherMode::Bayer4)               // ordered dithering hides banding
+            .with_vertex_snap(240.0)                       // quantize clip-space XY to a grid
+            .with_affine_textures(true),                   // disable perspective-correct UV
+    );
+}
+```
+
+| option | what it does | where the cost goes |
+|--------|--------------|---------------------|
+| `with_lighting_model(Lambert)` | Lambert diffuse, drops microfacet specular/Fresnel | **less** GPU per pixel |
+| `with_lighting_model(Baked)` | lightmap + ambient only, no runtime light loops | **least** GPU per pixel |
+| `with_color_depth(bits)` | per-channel quantization in the composite pass | a few ALU ops at frame end |
+| `with_dither(mode)` | ordered Bayer dithering before quantization | a few ALU ops at frame end |
+| `with_vertex_snap(grid)` | quantizes clip-space XY onto a grid | two vertex ops |
+| `with_affine_textures(true)` | screen-linear UV on the textured/unlit path | free (swaps an interpolant) |
+
+Binary size scales the same way, at compile time, through Cargo features — you link only
+what you use:
+
+- **2D-only game** (`lunar`'s default feature): the entire 3D renderer (`lunar-render-3d`,
+  ~14.5k LOC plus every post-FX shader) is never compiled. This is the path for sprite/tile
+  games that should be a handful of megabytes.
+- **3D game** (`features = ["3d"]`): adds the PBR renderer.
+- **plugins** (physics, particles, tilemap, UI, AI, …) live in a separate
+  [`lunar-plugins`](https://gitlab.com/5unekku/lunar-plugins) workspace and are added to a
+  game's `Cargo.toml` only when used.
+
+Performance target for the default path: a moderate-complexity 3D scene at 60fps / 1080p on
+midrange **integrated** graphics. Reach for `DevRenderProfile::classic()`/`standard()` plus a
+`LightingModel` downgrade (and `QualitySettings::render_scale` if needed) to hold that budget.
+
+> Note: per-pass Cargo features that compile out *individual* 3D effects (SSR, GTAO,
+> volumetric fog, …) are a planned follow-up; today the coarse `2d`/`3d` split is the
+> compile-time lever and `DevRenderProfile`/`VisualStyle` are the runtime levers.
+
 ### assets
 
 ```rust
