@@ -286,31 +286,43 @@ impl RenderEngine3d {
 					.write_buffer(params_buf, 64, bytemuck::cast_slice(&light_dir_data));
 			}
 
-			if let (Some(pipeline), Some(bgl), Some(params_buf), Some(cs_view), Some(depth_view)) = (
+			// (re)build the pass bind group only when missing — first use or after a resize
+			// invalidated it. references params_buf (stable), gtao_depth_view (rebuilt on
+			// resize), and post_sampler (stable), so it's otherwise identical every frame.
+			if self.contact_shadow_bg.is_none() {
+				self.contact_shadow_bg = match (
+					self.contact_shadow_bgl.as_ref(),
+					self.contact_shadow_params_buf.as_ref(),
+				) {
+					(Some(bgl), Some(params_buf)) => {
+						Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+							label: Some("[contact shadow] bg"),
+							layout: bgl,
+							entries: &[
+								wgpu::BindGroupEntry {
+									binding: 0,
+									resource: params_buf.as_entire_binding(),
+								},
+								wgpu::BindGroupEntry {
+									binding: 1,
+									resource: wgpu::BindingResource::TextureView(&self.gtao_depth_view),
+								},
+								wgpu::BindGroupEntry {
+									binding: 2,
+									resource: wgpu::BindingResource::Sampler(&self.post_sampler),
+								},
+							],
+						}))
+					},
+					_ => None,
+				};
+			}
+
+			if let (Some(pipeline), Some(bg), Some(cs_view)) = (
 				self.contact_shadow_pipeline.as_ref(),
-				self.contact_shadow_bgl.as_ref(),
-				self.contact_shadow_params_buf.as_ref(),
+				self.contact_shadow_bg.as_ref(),
 				self.contact_shadow_view.as_ref(),
-				Some(&self.gtao_depth_view),
 			) {
-				let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-					label: Some("[contact shadow] bg"),
-					layout: bgl,
-					entries: &[
-						wgpu::BindGroupEntry {
-							binding: 0,
-							resource: params_buf.as_entire_binding(),
-						},
-						wgpu::BindGroupEntry {
-							binding: 1,
-							resource: wgpu::BindingResource::TextureView(depth_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 2,
-							resource: wgpu::BindingResource::Sampler(&self.post_sampler),
-						},
-					],
-				});
 				let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 					label: Some("[contact shadow] pass"),
 					color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -328,7 +340,7 @@ impl RenderEngine3d {
 					multiview_mask: None,
 				});
 				pass.set_pipeline(pipeline);
-				pass.set_bind_group(0, &bg, &[]);
+				pass.set_bind_group(0, bg, &[]);
 				pass.draw(0..3, 0..1);
 			}
 

@@ -64,6 +64,8 @@ impl RenderEngine3d {
 		let ao_w = (render_w / 2).max(1);
 		let ao_h = (render_h / 2).max(1);
 		self.gtao_depth_view = Self::make_depth_view(&self.device, render_w, render_h, 1);
+		// the contact-shadow pass bind group references gtao_depth_view — invalidate it
+		self.contact_shadow_bg = None;
 		let gtao_ao_a = self.device.create_texture(&wgpu::TextureDescriptor {
 			label: Some("[gtao] ao ping"),
 			size: wgpu::Extent3d {

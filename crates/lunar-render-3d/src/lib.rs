@@ -1796,6 +1796,8 @@ pub struct RenderEngine3d {
 	contact_shadow_bgl: Option<wgpu::BindGroupLayout>,
 	contact_shadow_pipeline: Option<wgpu::RenderPipeline>,
 	contact_shadow_params_buf: Option<wgpu::Buffer>,
+	// cached pass bind group (params + gtao depth + sampler); invalidated to None on resize
+	contact_shadow_bg: Option<wgpu::BindGroup>,
 	// 1×1 zero R8Unorm fallback for when contact shadows are disabled
 	contact_shadow_fallback_tex: wgpu::Texture,
 	contact_shadow_fallback_view: wgpu::TextureView,

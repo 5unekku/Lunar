@@ -3595,6 +3595,7 @@ impl RenderEngine3d {
 			contact_shadow_bgl: None,
 			contact_shadow_pipeline: None,
 			contact_shadow_params_buf: None,
+			contact_shadow_bg: None,
 			contact_shadow_fallback_tex,
 			contact_shadow_fallback_view,
 			composite_bg_dirty: false,
