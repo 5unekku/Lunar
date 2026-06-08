@@ -39,6 +39,7 @@ impl ScreenRect {
 		}
 	}
 
+	/// rect from explicit (inclusive) corner coordinates.
 	#[must_use]
 	pub const fn new(x1: i16, y1: i16, x2: i16, y2: i16) -> Self {
 		Self { x1, y1, x2, y2 }

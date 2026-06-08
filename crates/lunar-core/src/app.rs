@@ -18,6 +18,7 @@ use crate::state::EngineState;
 /// the game loop detects the change each frame and calls `GameLoop::set_tick_rate`.
 #[derive(Resource, Clone, Copy, PartialEq, Eq)]
 pub struct TickRateConfig {
+	/// the active logic tick rate. write this from game code to change tick rate at runtime.
 	pub rate: TickRate,
 }
 

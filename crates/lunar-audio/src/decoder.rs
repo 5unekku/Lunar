@@ -17,6 +17,7 @@ use symphonia::core::{
 pub struct PlaybackOptions {
     /// linear volume scalar in 0.0..=1.0
     pub volume: f32,
+    /// repeat from the beginning when playback reaches the end
     pub looping: bool,
 }
 

@@ -15,6 +15,7 @@ pub struct DisplayResolution {
 }
 
 impl DisplayResolution {
+	/// create a resolution from explicit pixel dimensions.
 	#[must_use]
 	pub const fn new(width: u32, height: u32) -> Self {
 		Self { width, height }
@@ -148,6 +149,8 @@ pub struct WindowSettings {
 }
 
 impl WindowSettings {
+	/// create window settings with the given dimensions and vsync preference.
+	/// all other fields default to sensible values (windowed, cursor unlocked, free resize).
 	#[must_use]
 	pub const fn new(width: u32, height: u32, vsync: bool) -> Self {
 		Self {

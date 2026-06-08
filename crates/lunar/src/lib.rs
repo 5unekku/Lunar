@@ -62,6 +62,8 @@
 //! - all game state lives in the ECS [`World`], never in global singletons
 //! - the ECS backend (bevy_ecs) is sealed behind this crate's prelude — game code never names it
 
+#![warn(missing_docs)]
+
 // `__bevy_ecs` is the internal path the lunar-macros derives target. It
 // MUST keep this exact name — the derive macros emit `::lunar::__bevy_ecs::…`
 // paths. Hidden from rustdoc; not part of the public API contract.
@@ -90,10 +92,13 @@ pub use lunar_audio;
 pub mod prelude;
 pub use prelude::*;
 
+// private module names use a `_impl` suffix to avoid rustdoc collision with the
+// same-named public functions they export.
 #[cfg(not(target_arch = "wasm32"))]
-mod bootstrap;
+#[path = "bootstrap.rs"]
+mod bootstrap_impl;
 #[cfg(not(target_arch = "wasm32"))]
-pub use bootstrap::bootstrap;
+pub use bootstrap_impl::bootstrap;
 
 // `lunar_app!` lives here; it expands to a native `main` that calls `bootstrap`.
 // `#[macro_export]` hoists the macro to the crate root once the module compiles.
@@ -107,19 +112,22 @@ mod window_host;
 pub use window_host::WindowHost;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "3d"))]
-mod bootstrap_3d;
+#[path = "bootstrap_3d.rs"]
+mod bootstrap_3d_impl;
 #[cfg(all(not(target_arch = "wasm32"), feature = "3d"))]
-pub use bootstrap_3d::bootstrap_3d;
+pub use bootstrap_3d_impl::bootstrap_3d;
 
 #[cfg(target_arch = "wasm32")]
-mod bootstrap_wasm;
+#[path = "bootstrap_wasm.rs"]
+mod bootstrap_wasm_impl;
 #[cfg(target_arch = "wasm32")]
-pub use bootstrap_wasm::bootstrap_wasm;
+pub use bootstrap_wasm_impl::bootstrap_wasm;
 
 #[cfg(all(target_arch = "wasm32", feature = "3d"))]
-mod bootstrap_wasm_3d;
+#[path = "bootstrap_wasm_3d.rs"]
+mod bootstrap_wasm_3d_impl;
 #[cfg(all(target_arch = "wasm32", feature = "3d"))]
-pub use bootstrap_wasm_3d::bootstrap_wasm_3d;
+pub use bootstrap_wasm_3d_impl::bootstrap_wasm_3d;
 
 // types re-exported at crate root for direct access (prelude covers glob imports)
 pub use lunar_assets::{AssetServer, AudioFormat, Font, Handle, Sound, Texture};
