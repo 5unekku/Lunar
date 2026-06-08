@@ -27,6 +27,11 @@ impl RenderEngine3d {
 		let has_indirect = adapter
 			.features()
 			.contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
+		// PIPELINE_CACHE (Vulkan/DX12) lets the driver persist compiled PSOs across runs —
+		// without it the create_pipeline_cache calls below are inert, so request it up front.
+		let has_pipeline_cache = adapter
+			.features()
+			.contains(wgpu::Features::PIPELINE_CACHE);
 		let mut required_features = if has_r11 {
 			wgpu::Features::RG11B10UFLOAT_RENDERABLE
 		} else {
@@ -34,6 +39,9 @@ impl RenderEngine3d {
 		};
 		if has_indirect {
 			required_features |= wgpu::Features::INDIRECT_FIRST_INSTANCE;
+		}
+		if has_pipeline_cache {
+			required_features |= wgpu::Features::PIPELINE_CACHE;
 		}
 		let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
 			label: Some("lunar-render-3d device"),
@@ -492,8 +500,11 @@ impl RenderEngine3d {
 
 		// ── pipeline cache (Vulkan/DX12 only) ─────────────────────────────
 		// load compiled shader binaries from previous run to skip recompilation.
+		// keyed per adapter (vendor/device/backend) so a multi-GPU box doesn't clobber.
 		#[cfg(not(target_arch = "wasm32"))]
-		let pipeline_cache = Self::load_pipeline_cache(&device);
+		let pipeline_cache_path = Self::pipeline_cache_path(adapter);
+		#[cfg(not(target_arch = "wasm32"))]
+		let pipeline_cache = Self::load_pipeline_cache(&device, pipeline_cache_path.as_deref());
 		// PipelineCache is Vulkan/DX12 only — WebGPU has no equivalent
 		#[cfg(not(target_arch = "wasm32"))]
 		let pipeline_cache_ref: Option<&wgpu::PipelineCache> = pipeline_cache.as_ref();
@@ -3490,6 +3501,8 @@ impl RenderEngine3d {
 			msaa_particle_render_shader: particle_render_shader,
 			#[cfg(not(target_arch = "wasm32"))]
 			pipeline_cache,
+			#[cfg(not(target_arch = "wasm32"))]
+			pipeline_cache_path,
 			// 4 MiB chunk — larger than any single write, handles most scene sizes
 			#[cfg(not(target_arch = "wasm32"))]
 			staging_belt: wgpu::util::StagingBelt::new(device_for_belt, 4 * 1024 * 1024),
@@ -3659,39 +3672,53 @@ impl RenderEngine3d {
 	}
 	/// load the 3d pipeline cache from disk if available (Vulkan/DX12 only).
 	#[cfg(not(target_arch = "wasm32"))]
-	pub(crate) fn load_pipeline_cache(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
-		let path = std::path::Path::new(".pipeline_cache_3d.bin");
-		if path.exists() {
-			match std::fs::read(path) {
-				Ok(data) => {
-					log::info!("[render-3d] loaded pipeline cache ({} bytes)", data.len());
-					// SAFETY: fallback=true so wgpu rebuilds a fresh cache if validation
-					// fails; this only runs on Vulkan/DX12 where the format is stable.
-					Some(unsafe {
-						device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
-							label: Some("[render-3d] pipeline cache"),
-							data: Some(&data),
-							fallback: true,
-						})
-					})
-				}
-				Err(err) => {
-					log::warn!("[render-3d] pipeline cache load failed: {err}");
-					None
-				}
-			}
-		} else {
-			None
+	/// disk path for this adapter's pipeline cache, or `None` if the device lacks the
+	/// `PIPELINE_CACHE` feature. keyed on vendor/device/backend so different GPUs or a
+	/// driver that reports a different backend don't overwrite each other's blob.
+	#[cfg(not(target_arch = "wasm32"))]
+	pub(crate) fn pipeline_cache_path(adapter: &wgpu::Adapter) -> Option<std::path::PathBuf> {
+		if !adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
+			return None;
 		}
+		let info = adapter.get_info();
+		// short stable key; wgpu also validates an internal header on load (fallback=true),
+		// so this is just to avoid cross-GPU churn, not the correctness guard.
+		let key = format!("{:04x}_{:04x}_{:?}", info.vendor, info.device, info.backend);
+		Some(std::path::PathBuf::from(format!(".pipeline_cache_3d_{key}.bin")))
+	}
+	/// load (or bootstrap) the pipeline cache. returns `None` when the feature is off or no
+	/// path was resolved. when the file is absent it still creates an empty cache so the
+	/// driver has somewhere to accumulate PSOs that `save_pipeline_cache` can persist.
+	pub(crate) fn load_pipeline_cache(
+		device: &wgpu::Device,
+		path: Option<&std::path::Path>,
+	) -> Option<wgpu::PipelineCache> {
+		let path = path?;
+		// reading a wrong-GPU blob is harmless: create_pipeline_cache validates the header and,
+		// with fallback=true, silently starts fresh. so we always pass whatever data we have.
+		let data = std::fs::read(path).ok();
+		match &data {
+			Some(bytes) => log::info!("[render-3d] loaded pipeline cache ({} bytes)", bytes.len()),
+			None => log::info!("[render-3d] no pipeline cache yet — bootstrapping empty"),
+		}
+		// SAFETY: fallback=true so wgpu rebuilds a fresh cache if validation fails; only runs
+		// on Vulkan/DX12 (gated by the PIPELINE_CACHE feature) where the format is stable.
+		Some(unsafe {
+			device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
+				label: Some("[render-3d] pipeline cache"),
+				data: data.as_deref(),
+				fallback: true,
+			})
+		})
 	}
 	/// persist pipeline cache to disk. call before engine shutdown to speed up
 	/// shader compilation on the next launch (Vulkan/DX12 only).
 	#[cfg(not(target_arch = "wasm32"))]
 	pub fn save_pipeline_cache(&self) {
 		if let Some(ref cache) = self.pipeline_cache
+			&& let Some(ref path) = self.pipeline_cache_path
 			&& let Some(data) = cache.get_data()
 		{
-			let path = std::path::Path::new(".pipeline_cache_3d.bin");
 			match std::fs::write(path, &data) {
 				Ok(()) => log::info!("[render-3d] saved pipeline cache ({} bytes)", data.len()),
 				Err(err) => log::warn!("[render-3d] pipeline cache save failed: {err}"),
@@ -3700,4 +3727,13 @@ impl RenderEngine3d {
 	}
 
 	// ── helpers ────────────────────────────────────────────────────────────
+}
+
+/// persist the pipeline cache on shutdown so the next launch skips PSO recompilation.
+/// mirrors the 2D `RenderEngine` Drop; no-op when the feature is unavailable (path is None).
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for RenderEngine3d {
+	fn drop(&mut self) {
+		self.save_pipeline_cache();
+	}
 }

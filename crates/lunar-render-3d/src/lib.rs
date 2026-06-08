@@ -1581,6 +1581,10 @@ pub struct RenderEngine3d {
 	// pipeline cache — persists compiled shader binaries across runs (Vulkan/DX12 only)
 	#[cfg(not(target_arch = "wasm32"))]
 	pipeline_cache: Option<wgpu::PipelineCache>,
+	// disk path the cache is loaded from / saved to, keyed per adapter so a different
+	// GPU or driver doesn't clobber another's cache. None when the feature is unavailable.
+	#[cfg(not(target_arch = "wasm32"))]
+	pipeline_cache_path: Option<std::path::PathBuf>,
 
 	// staging belt — explicit frame-temporary upload staging for large buffers (native only)
 	#[cfg(not(target_arch = "wasm32"))]
