@@ -1,4 +1,4 @@
-# 2d rendering and collision
+# 2d rendering
 
 requires the `2d` feature (default).
 
@@ -43,11 +43,11 @@ fn setup(mut commands: Commands, mut assets: ResMut<AssetServer>) {
 
 ```rust
 Sprite::new(texture)
-    .with_size(Vec2::new(64.0, 64.0))      // explicit pixel size; default = texture native size
-    .with_color(Color::rgba(1.0, 0.5, 0.5, 1.0))  // tint; default = white (no tint)
-    .with_layer(layers::FOREGROUND)         // render order; default = layers::GAME
-    .with_origin(Vec2::new(32.0, 64.0))    // pivot in pixels from top-left; default = center
-    .with_source_rect(                      // UV sub-rect for atlas sampling
+    .with_size(Vec2::new(64.0, 64.0))               // explicit pixel size; default = texture native size
+    .with_color(Color::rgba(1.0, 0.5, 0.5, 1.0))   // tint; default = white (no tint)
+    .with_layer(layers::FOREGROUND)                  // render order; default = layers::GAME
+    .with_origin(Vec2::new(32.0, 64.0))             // pivot in pixels from top-left; default = center
+    .with_source_rect(                               // UV sub-rect for atlas sampling
         Vec2::new(0.0, 0.0),
         Vec2::new(0.5, 0.5),
     )
@@ -136,7 +136,7 @@ for HUDs, debug overlays, or one-off shapes that don't need a persistent entity,
 write directly to `RenderQueue`:
 
 ```rust
-fn draw_hud(mut queue: ResMut<RenderQueue>, score: Res<Score>) {
+fn draw_hud(mut queue: ResMut<RenderQueue>) {
     // filled rect
     queue.draw_rect(Vec2::new(10.0, 10.0), Vec2::new(200.0, 40.0), Color::rgba(0.0, 0.0, 0.0, 0.6));
 
@@ -149,85 +149,3 @@ fn draw_hud(mut queue: ResMut<RenderQueue>, score: Res<Score>) {
 ```
 
 layer variants exist for all draw calls: `draw_sprite_on_layer`, `draw_rect_on_layer`, etc.
-
-## sprite animation
-
-`SpriteAnimation` drives frame-based atlas animation. attach it alongside `Sprite`:
-
-```rust
-#[derive(Component)]
-struct WalkAnimation;
-
-fn setup(mut commands: Commands, mut assets: ResMut<AssetServer>) {
-    let sheet = assets.load_texture("player_sheet.png");
-
-    commands.spawn((
-        Transform::from_xy(100.0, 100.0),
-        Sprite::new(sheet),
-        SpriteAnimation {
-            frame_count: 8,
-            frame_size: Vec2::new(32.0, 32.0),
-            fps: 12.0,
-            looping: true,
-            current_frame: 0,
-            timer: 0.0,
-        },
-    ));
-}
-```
-
-`Plugin2d` advances all `SpriteAnimation` components automatically each tick and
-writes the correct `source_rect` into the paired `Sprite`.
-
-## 2d collision
-
-`Plugin2d` builds and maintains a `CollisionWorld` each physics tick.
-spawn entities with `Collider` to register them:
-
-```rust
-commands.spawn((
-    Transform::from_xy(200.0, 200.0),
-    Collider { shape: ColliderShape::Rect(32.0, 64.0) },
-));
-
-commands.spawn((
-    Transform::from_xy(300.0, 200.0),
-    Collider { shape: ColliderShape::Circle(16.0) },
-));
-```
-
-query overlaps in a Physics or Update system:
-
-```rust
-fn check_pickups(
-    collision_world: Res<CollisionWorld>,
-    players: Query<(Entity, &Transform), With<Player>>,
-    pickups: Query<Entity, With<Pickup>>,
-    mut commands: Commands,
-) {
-    for (player_entity, player_transform) in &players {
-        let overlapping = collision_world.overlapping(player_entity);
-        for other in overlapping {
-            if pickups.get(other).is_ok() {
-                commands.entity(other).despawn();
-            }
-        }
-    }
-}
-```
-
-raycasting:
-
-```rust
-use lunar::lunar_2d::ray_cast_2d;
-
-fn shoot(
-    collision_world: Res<CollisionWorld>,
-    transforms: Query<&Transform>,
-) {
-    let hits = ray_cast_2d(&collision_world, Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), 500.0);
-    for hit in hits {
-        println!("hit entity {:?} at distance {}", hit.entity, hit.distance);
-    }
-}
-```
