@@ -115,30 +115,54 @@ const STAA_SHADER_SRC: &str = include_str!("staa.wgsl");
 // accumulation keeps sub-lsb detail instead of quantizing back to softness each frame.
 const STAA_HISTORY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
-/// create a shader module from pre-compiled spirv (release) or wgsl (debug).
-/// in release, `source` is the spirv bytes from OUT_DIR; in debug, the wgsl string.
-macro_rules! shader_source {
-	($wgsl_src:ident, $spv_file:literal) => {{
-		// wasm/webgpu only accepts wgsl; native release uses pre-compiled spirv
+/// build a `wgpu::ShaderModule`, taking the SPIR-V passthrough path when `$passthrough` is set.
+///
+/// passthrough hands the precompiled SPIR-V straight to the driver, skipping wgpu's runtime naga
+/// re-validation — safe here because `build.rs` already validated every module at compile time.
+/// only ever enabled on Vulkan with the `PASSTHROUGH_SHADERS` feature; otherwise this is exactly
+/// the old `create_shader_module(shader_source!(…))` behaviour (wgsl in debug/wasm, spirv in
+/// native release). all pipelines use explicit layouts, so the lack of reflection is fine.
+macro_rules! make_shader {
+	($device:expr, $passthrough:expr, $label:expr, $wgsl_src:ident, $spv_file:literal) => {{
 		#[cfg(any(debug_assertions, target_arch = "wasm32"))]
-		let src = wgpu::ShaderSource::Wgsl($wgsl_src.into());
+		let module = {
+			let _ = &$passthrough; // unused off the native-release path
+			$device.create_shader_module(wgpu::ShaderModuleDescriptor {
+				label: Some($label),
+				source: wgpu::ShaderSource::Wgsl($wgsl_src.into()),
+			})
+		};
 		#[cfg(all(not(debug_assertions), not(target_arch = "wasm32")))]
-		let src = {
-			// include_bytes! has 1-byte alignment; cast_slice::<u8,u32> would panic
-			// if the embedded data isn't 4-byte aligned (happens in release). copy once
-			// at init time — shaders load rarely so the alloc is inconsequential.
+		let module = {
 			let bytes: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/", $spv_file));
 			let words: Vec<u32> = bytes
 				.chunks_exact(4)
 				.map(|c| u32::from_ne_bytes(c.try_into().unwrap()))
 				.collect();
-			wgpu::ShaderSource::SpirV(std::borrow::Cow::Owned(words))
+			if $passthrough {
+				// SAFETY: bytes were produced + validated by build.rs's naga validator, so runtime
+				// re-validation is redundant. gated to Vulkan + PASSTHROUGH_SHADERS by the caller.
+				unsafe {
+					$device.create_shader_module_passthrough(
+						wgpu::ShaderModuleDescriptorPassthrough {
+							label: Some($label),
+							spirv: Some(std::borrow::Cow::Owned(words)),
+							..Default::default()
+						},
+					)
+				}
+			} else {
+				$device.create_shader_module(wgpu::ShaderModuleDescriptor {
+					label: Some($label),
+					source: wgpu::ShaderSource::SpirV(std::borrow::Cow::Owned(words)),
+				})
+			}
 		};
-		src
+		module
 	}};
 }
 
-// method impls split across sibling modules — declared after `shader_source!`
+// method impls split across sibling modules — declared after `make_shader!`
 // so the macro is in textual scope for the modules that expand it.
 mod config;
 mod cull;
@@ -1697,6 +1721,9 @@ pub struct RenderEngine3d {
 	// phase 2: CPU builds DrawIndexedIndirect args, issues draw_indexed_indirect per batch.
 	// phase 4: GPU cull shader writes draw args directly, CPU issues one multi_draw call.
 	has_indirect: bool,
+	// true when shaders are created via SPIR-V passthrough (Vulkan + PASSTHROUGH_SHADERS),
+	// skipping runtime naga re-validation. always false on wasm / non-Vulkan / debug.
+	shader_passthrough: bool,
 	// DrawIndexedIndirect × entity_capacity — CPU-filled in phase 2, GPU-filled in phase 4
 	indirect_buf: Option<wgpu::Buffer>,
 	indirect_args: Vec<u32>, // scratch: 5 u32s per entry (index_count, inst_count, first_idx, base_vert, first_inst)

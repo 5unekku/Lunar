@@ -306,12 +306,7 @@ impl RenderEngine3d {
 						bind_group_layouts: &[Some(&bgl)],
 						immediate_size: 0,
 					});
-				let module = self
-					.device
-					.create_shader_module(wgpu::ShaderModuleDescriptor {
-						label: Some("[cull] shader"),
-						source: shader_source!(CULL_SHADER_SRC, "cull.spv"),
-					});
+				let module = make_shader!(self.device, self.shader_passthrough, "[cull] shader", CULL_SHADER_SRC, "cull.spv");
 				self.cull_pipeline = Some(self.device.create_compute_pipeline(
 					&wgpu::ComputePipelineDescriptor {
 						label: Some("[cull] pipeline"),
@@ -376,14 +371,7 @@ impl RenderEngine3d {
 								immediate_size: 0,
 							});
 					let indirect_module =
-						self.device
-							.create_shader_module(wgpu::ShaderModuleDescriptor {
-								label: Some("[cull indirect] shader"),
-								source: shader_source!(
-									CULL_INDIRECT_SHADER_SRC,
-									"cull_indirect.spv"
-								),
-							});
+						make_shader!(self.device, self.shader_passthrough, "[cull indirect] shader", CULL_INDIRECT_SHADER_SRC, "cull_indirect.spv");
 					self.cull_indirect_pipeline = Some(self.device.create_compute_pipeline(
 						&wgpu::ComputePipelineDescriptor {
 							label: Some("[cull indirect] pipeline"),
@@ -566,12 +554,7 @@ impl RenderEngine3d {
 					},
 				],
 			});
-		let hzb_module = self
-			.device
-			.create_shader_module(wgpu::ShaderModuleDescriptor {
-				label: Some("[hzb] shader"),
-				source: shader_source!(HZB_SHADER_SRC, "hzb.spv"),
-			});
+		let hzb_module = make_shader!(self.device, self.shader_passthrough, "[hzb] shader", HZB_SHADER_SRC, "hzb.spv");
 		let copy_layout = self
 			.device
 			.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -791,12 +774,7 @@ impl RenderEngine3d {
 					bind_group_layouts: &[Some(&bgl)],
 					immediate_size: 0,
 				});
-			let shader = self
-				.device
-				.create_shader_module(wgpu::ShaderModuleDescriptor {
-					label: Some("[contact shadow] shader"),
-					source: shader_source!(CONTACT_SHADOW_SHADER_SRC, "contact_shadow.spv"),
-				});
+			let shader = make_shader!(self.device, self.shader_passthrough, "[contact shadow] shader", CONTACT_SHADOW_SHADER_SRC, "contact_shadow.spv");
 			self.contact_shadow_pipeline = Some(self.device.create_render_pipeline(
 				&wgpu::RenderPipelineDescriptor {
 					label: Some("[contact shadow] pipeline"),
@@ -911,12 +889,7 @@ impl RenderEngine3d {
 					bind_group_layouts: &[Some(&bgl)],
 					immediate_size: 0,
 				});
-			let shader = self
-				.device
-				.create_shader_module(wgpu::ShaderModuleDescriptor {
-					label: Some("[motion vec] shader"),
-					source: shader_source!(MOTION_VECTOR_SHADER_SRC, "motion_vector.spv"),
-				});
+			let shader = make_shader!(self.device, self.shader_passthrough, "[motion vec] shader", MOTION_VECTOR_SHADER_SRC, "motion_vector.spv");
 			self.motion_vec_pipeline = Some(self.device.create_render_pipeline(
 				&wgpu::RenderPipelineDescriptor {
 					label: Some("[motion vec] pipeline"),
@@ -1025,12 +998,7 @@ impl RenderEngine3d {
 				bind_group_layouts: &[Some(&compute_bgl)],
 				immediate_size: 0,
 			});
-		let compute_shader = self
-			.device
-			.create_shader_module(wgpu::ShaderModuleDescriptor {
-				label: Some("[detail sprite] compute shader"),
-				source: shader_source!(DETAIL_SPRITE_SHADER_SRC, "detail_sprite.spv"),
-			});
+		let compute_shader = make_shader!(self.device, self.shader_passthrough, "[detail sprite] compute shader", DETAIL_SPRITE_SHADER_SRC, "detail_sprite.spv");
 		self.detail_sprite_compute_pipeline = Some(self.device.create_compute_pipeline(
 			&wgpu::ComputePipelineDescriptor {
 				label: Some("[detail sprite] compute pipeline"),
@@ -1085,12 +1053,7 @@ impl RenderEngine3d {
 				bind_group_layouts: &[Some(&render_bgl_0)],
 				immediate_size: 0,
 			});
-		let render_shader = self
-			.device
-			.create_shader_module(wgpu::ShaderModuleDescriptor {
-				label: Some("[detail sprite] render shader"),
-				source: shader_source!(DETAIL_SPRITE_SHADER_SRC, "detail_sprite.spv"),
-			});
+		let render_shader = make_shader!(self.device, self.shader_passthrough, "[detail sprite] render shader", DETAIL_SPRITE_SHADER_SRC, "detail_sprite.spv");
 		self.detail_sprite_pipeline = Some(self.device.create_render_pipeline(
 			&wgpu::RenderPipelineDescriptor {
 				label: Some("[detail sprite] pipeline"),
@@ -1605,12 +1568,7 @@ impl RenderEngine3d {
 
 		// create all upscale pipelines once (shared layout, different entry points)
 		if self.fsr_easu_pipeline.is_none() {
-			let shader = self
-				.device
-				.create_shader_module(wgpu::ShaderModuleDescriptor {
-					label: Some("[upscale] shader"),
-					source: shader_source!(UPSCALE_SHADER_SRC, "upscale.spv"),
-				});
+			let shader = make_shader!(self.device, self.shader_passthrough, "[upscale] shader", UPSCALE_SHADER_SRC, "upscale.spv");
 			let layout = self
 				.device
 				.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
