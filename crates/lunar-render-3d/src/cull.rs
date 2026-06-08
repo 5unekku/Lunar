@@ -691,11 +691,25 @@ impl RenderEngine3d {
 		// sort opaque entities by (mesh_id, mat_id, lm_id, dir_lm_id) so consecutive entities
 		// can share VBO/IBO and bind groups, batched into a single draw_indexed call.
 		// transparents are sorted separately by depth after this.
-		self.draw_scratch.sort_unstable_by_key(
-			|&(_, mesh_id, mat_id, _, _, _, _, alpha, _, lm_id, dir_lm_id)| {
+		//
+		// sort a small (key, source_index) array rather than draw_scratch in place: that moves
+		// 24-byte keys through sort_unstable instead of the ~128-byte draw tuples, then gathers
+		// each tuple exactly once. draw_scratch ends up identically ordered, so every downstream
+		// consumer is unchanged. the keys/gather bufs are reused, so there's no per-frame alloc.
+		self.draw_sort_keys.clear();
+		self.draw_sort_keys.extend(self.draw_scratch.iter().enumerate().map(
+			|(i, &(_, mesh_id, mat_id, _, _, _, _, alpha, _, lm_id, dir_lm_id))| {
 				let transparent = if alpha < 1.0 { 1u8 } else { 0u8 };
-				(transparent, mesh_id, mat_id, lm_id, dir_lm_id)
+				(transparent, mesh_id, mat_id, lm_id, dir_lm_id, i as u32)
 			},
+		));
+		self.draw_sort_keys.sort_unstable();
+		self.draw_sorted_scratch.clear();
+		self.draw_sorted_scratch.extend(
+			self.draw_sort_keys
+				.iter()
+				.map(|&(_, _, _, _, _, i)| self.draw_scratch[i as usize]),
 		);
+		std::mem::swap(&mut self.draw_scratch, &mut self.draw_sorted_scratch);
 	}
 }

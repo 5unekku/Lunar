@@ -3528,6 +3528,8 @@ impl RenderEngine3d {
 			frustum_visible: HashSet::default(),
 			raw_scratch: Vec::new(),
 			draw_scratch: Vec::new(),
+			draw_sort_keys: Vec::new(),
+			draw_sorted_scratch: Vec::new(),
 			impostor_scratch: Vec::new(),
 			uniform_staging,
 			point_light_scratch: Vec::new(),

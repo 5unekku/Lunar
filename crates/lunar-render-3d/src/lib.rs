@@ -1647,6 +1647,12 @@ pub struct RenderEngine3d {
 	// sorted by (alpha_bit, mesh_id, mat_id, lm_id, dir_lm_id) for batching
 	#[allow(clippy::type_complexity)]
 	draw_scratch: Vec<(Entity, u32, u32, Color, f32, f32, Mat4, f32, u32, u32, u32)>,
+	// draw-list sort scratch: (sort_key…, source_index). sorting these 24-byte keys and then
+	// gathering the ~128-byte draw tuples once is far less memcpy than sorting draw_scratch
+	// in place (which moves the big tuples O(n log n) times). both bufs are reused per frame.
+	draw_sort_keys: Vec<(u8, u32, u32, u32, u32, u32)>,
+	#[allow(clippy::type_complexity)]
+	draw_sorted_scratch: Vec<(Entity, u32, u32, Color, f32, f32, Mat4, f32, u32, u32, u32)>,
 	uniform_staging: Vec<u8>,
 	point_light_scratch: Vec<(Vec3, Color, f32, f32, bool, f32)>, // (pos, color, intensity, radius, casts_shadows, dist_sq)
 	// BSP PVS visible-area set, rebuilt each frame; `active` mirrors the old Option::Some
