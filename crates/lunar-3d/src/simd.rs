@@ -12,6 +12,10 @@
 //! positive is harmless (a redundant draw); a false negative would drop geometry,
 //! so the scalar reference and the SIMD path use the same `>= 0` plane comparison.
 
+// the cull kernels take the six SoA axis slices as separate params by design — that's
+// the whole point of the layout — so the arg-count lint doesn't apply here.
+#![allow(clippy::too_many_arguments)]
+
 use lunar_math::Vec4;
 
 /// per-plane scalars used by the cull: inward normal `(nx, ny, nz)`, plane offset
