@@ -344,12 +344,57 @@ pub fn update_frustum(
 /// the renderer reads this instead of issuing per-entity ECS queries, so all
 /// frustum tests run over contiguous memory in one pass.
 ///
-/// indices in all three vecs correspond to the same entity.
+/// stored as a structure-of-arrays: each axis lives in its own contiguous `f32`
+/// slice so the frustum culler can load 8 boxes per AVX2 lane (see
+/// [`crate::simd::cull_aabbs_soa`]). this is also denser than `Vec<Vec3A>` — 12
+/// bytes/box instead of the 16 a padded `Vec3A` occupies — so the SIMD layout
+/// costs no extra memory over the old array-of-structs form.
+///
+/// all six axis vecs plus `entities` share the same length; index `i` is one box.
 #[derive(Resource, Default)]
 pub struct CullSoa {
 	pub entities: Vec<Entity>,
-	pub centers: Vec<Vec3A>,
-	pub half_extents: Vec<Vec3A>,
+	/// world-space AABB center, x axis.
+	pub center_x: Vec<f32>,
+	/// world-space AABB center, y axis.
+	pub center_y: Vec<f32>,
+	/// world-space AABB center, z axis.
+	pub center_z: Vec<f32>,
+	/// world-space AABB half-extent, x axis.
+	pub half_x: Vec<f32>,
+	/// world-space AABB half-extent, y axis.
+	pub half_y: Vec<f32>,
+	/// world-space AABB half-extent, z axis.
+	pub half_z: Vec<f32>,
+}
+
+impl CullSoa {
+	/// number of boxes (entities) in the set.
+	#[must_use]
+	pub fn len(&self) -> usize {
+		self.entities.len()
+	}
+
+	/// whether the set is empty.
+	#[must_use]
+	pub fn is_empty(&self) -> bool {
+		self.entities.is_empty()
+	}
+
+	/// reassemble box `i`'s center as a `Vec3A` for the scalar / non-SIMD consumers
+	/// (raycast, first-frame cull bootstrap). the SIMD culler reads the axis slices directly.
+	#[inline]
+	#[must_use]
+	pub fn center(&self, i: usize) -> Vec3A {
+		Vec3A::new(self.center_x[i], self.center_y[i], self.center_z[i])
+	}
+
+	/// reassemble box `i`'s half-extents as a `Vec3A`. see [`Self::center`].
+	#[inline]
+	#[must_use]
+	pub fn half_extent(&self, i: usize) -> Vec3A {
+		Vec3A::new(self.half_x[i], self.half_y[i], self.half_z[i])
+	}
 }
 
 /// populate [`CullSoa`] from all entities with an [`Aabb3d`] and a world transform.
@@ -391,23 +436,49 @@ pub fn build_cull_soa(
 	let items = scratch.as_slice();
 	let n = items.len();
 
+	let soa = &mut *soa;
 	soa.entities.clear();
 	soa.entities.extend(items.iter().map(|(e, _, _)| *e));
-	soa.centers.clear();
-	soa.centers.resize(n, Vec3A::ZERO);
-	soa.half_extents.clear();
-	soa.half_extents.resize(n, Vec3A::ZERO);
+	for axis in [
+		&mut soa.center_x,
+		&mut soa.center_y,
+		&mut soa.center_z,
+		&mut soa.half_x,
+		&mut soa.half_y,
+		&mut soa.half_z,
+	] {
+		axis.clear();
+		axis.resize(n, 0.0);
+	}
 
-	let soa = &mut *soa;
-	soa.centers
+	// rotate-expand each AABB to world space in parallel, scattering the result
+	// straight into the six SoA axis slices (disjoint chunks, no contention).
+	let CullSoa {
+		center_x,
+		center_y,
+		center_z,
+		half_x,
+		half_y,
+		half_z,
+		..
+	} = soa;
+	center_x
 		.par_iter_mut()
-		.zip(soa.half_extents.par_iter_mut())
+		.zip(center_y.par_iter_mut())
+		.zip(center_z.par_iter_mut())
+		.zip(half_x.par_iter_mut())
+		.zip(half_y.par_iter_mut())
+		.zip(half_z.par_iter_mut())
 		.enumerate()
-		.for_each(|(i, (center, half))| {
+		.for_each(|(i, (((((cx, cy), cz), hx), hy), hz))| {
 			let (_, aabb, world) = &items[i];
 			let (c, h) = world_space_aabb(aabb, world);
-			*center = c;
-			*half = h;
+			*cx = c.x;
+			*cy = c.y;
+			*cz = c.z;
+			*hx = h.x;
+			*hy = h.y;
+			*hz = h.z;
 		});
 }
 
@@ -418,8 +489,12 @@ pub fn build_cull_soa(
 	mut soa: ResMut<CullSoa>,
 ) {
 	soa.entities.clear();
-	soa.centers.clear();
-	soa.half_extents.clear();
+	soa.center_x.clear();
+	soa.center_y.clear();
+	soa.center_z.clear();
+	soa.half_x.clear();
+	soa.half_y.clear();
+	soa.half_z.clear();
 
 	for (entity, aabb, world, vis) in query.iter() {
 		if !vis.0 {
@@ -427,7 +502,11 @@ pub fn build_cull_soa(
 		}
 		let (world_center, world_half) = world_space_aabb(aabb, world);
 		soa.entities.push(entity);
-		soa.centers.push(world_center);
-		soa.half_extents.push(world_half);
+		soa.center_x.push(world_center.x);
+		soa.center_y.push(world_center.y);
+		soa.center_z.push(world_center.z);
+		soa.half_x.push(world_half.x);
+		soa.half_y.push(world_half.y);
+		soa.half_z.push(world_half.z);
 	}
 }

@@ -40,6 +40,7 @@ pub mod fog;
 pub mod mesh_registry;
 pub mod particles;
 pub mod primitives;
+pub mod simd;
 pub mod surface_shader;
 pub mod terrain;
 pub mod visibility;
@@ -83,6 +84,7 @@ pub use surface_shader::{AlphaGen, BlendMode, SurfaceShader, SurfaceStage, TcGen
 pub use systems::{TransformScratch3d, copy_prev_transforms, propagate_transforms_3d};
 pub use terrain::Terrain;
 pub use transform::{LocalTransform3d, WorldTransform3d};
+pub use simd::cull_aabbs_soa;
 pub use visibility::{
 	Aabb3d, ComputedVisibility, CullSoa, Frustum, RenderLayers, ShadowCaster, ShadowReceiver,
 	ViewportAspect, Visibility, VisibilityScratch, build_cull_soa, propagate_visibility,

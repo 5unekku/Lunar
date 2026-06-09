@@ -410,8 +410,8 @@ pub fn raycast_3d(
 	let mut nearest: Option<RayHit3d> = None;
 
 	for (idx, &entity) in soa.entities.iter().enumerate() {
-		let center = soa.centers[idx];
-		let half_extents = soa.half_extents[idx];
+		let center = soa.center(idx);
+		let half_extents = soa.half_extent(idx);
 
 		let Some(aabb_t) = ray_vs_aabb_3d(ray, center, half_extents, max_dist) else {
 			continue;

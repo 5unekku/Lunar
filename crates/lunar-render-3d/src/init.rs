@@ -3502,6 +3502,7 @@ impl RenderEngine3d {
 			mega_mesh_entries: HashMap::default(),
 			entity_draw_params_buf: None,
 			frustum_visible: HashSet::default(),
+			frustum_flags_scratch: Vec::new(),
 			raw_scratch: Vec::new(),
 			draw_scratch: Vec::new(),
 			draw_sort_keys: Vec::new(),

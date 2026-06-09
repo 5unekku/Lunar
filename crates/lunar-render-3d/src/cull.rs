@@ -98,7 +98,7 @@ impl RenderEngine3d {
 				let frustum = *world.resource::<Frustum>();
 				let soa = world.resource::<CullSoa>();
 				for (i, &entity) in soa.entities.iter().enumerate() {
-					if frustum.intersects_aabb(soa.centers[i], soa.half_extents[i]) {
+					if frustum.intersects_aabb(soa.center(i), soa.half_extent(i)) {
 						self.frustum_visible.insert(entity);
 					}
 				}
@@ -113,10 +113,16 @@ impl RenderEngine3d {
 				{
 					let soa = world.resource::<CullSoa>();
 					for i in 0..entity_count {
-						let c = soa.centers[i];
-						let e = soa.half_extents[i];
-						self.cull_aabb_scratch
-							.extend_from_slice(&[c.x, c.y, c.z, 0.0, e.x, e.y, e.z, 0.0]);
+						self.cull_aabb_scratch.extend_from_slice(&[
+							soa.center_x[i],
+							soa.center_y[i],
+							soa.center_z[i],
+							0.0,
+							soa.half_x[i],
+							soa.half_y[i],
+							soa.half_z[i],
+							0.0,
+						]);
 					}
 				}
 				let mut frustum_data = [0f32; 32];
@@ -291,27 +297,68 @@ impl RenderEngine3d {
 				}
 			}
 		} else {
+			// mid/low tier CPU cull: SIMD frustum test (8 boxes/iter on AVX2) over the
+			// CullSoa axis slices, writing 1/0 into a reused scratch buffer — no per-frame
+			// allocation (the old rayon `.collect()` heap-allocated a Vec every frame).
 			let frustum = *world.resource::<Frustum>();
 			let soa = world.resource::<CullSoa>();
-			#[cfg(not(target_arch = "wasm32"))]
-			{
-				use rayon::prelude::*;
-				let n = soa.entities.len();
-				let visible: Vec<Entity> = (0..n)
-					.into_par_iter()
-					.filter_map(|i| {
-						if frustum.intersects_aabb(soa.centers[i], soa.half_extents[i]) {
-							Some(soa.entities[i])
-						} else {
-							None
-						}
-					})
-					.collect();
-				self.frustum_visible.extend(visible);
+			let n = soa.entities.len();
+			self.frustum_flags_scratch.clear();
+			self.frustum_flags_scratch.resize(n, 0);
+			if n > 0 {
+				let planes = &frustum.planes;
+				let flags = &mut self.frustum_flags_scratch;
+				#[cfg(not(target_arch = "wasm32"))]
+				{
+					use rayon::prelude::*;
+					// fan the 8-wide sweep across cores only once there's enough work to
+					// amortise the rayon hand-off; each chunk owns a disjoint flag slice.
+					const PARALLEL_CHUNK: usize = 4096;
+					if n >= PARALLEL_CHUNK * 2 {
+						flags
+							.par_chunks_mut(PARALLEL_CHUNK)
+							.enumerate()
+							.for_each(|(chunk_idx, flags_chunk)| {
+								let start = chunk_idx * PARALLEL_CHUNK;
+								let end = start + flags_chunk.len();
+								lunar_3d::cull_aabbs_soa(
+									planes,
+									&soa.center_x[start..end],
+									&soa.center_y[start..end],
+									&soa.center_z[start..end],
+									&soa.half_x[start..end],
+									&soa.half_y[start..end],
+									&soa.half_z[start..end],
+									flags_chunk,
+								);
+							});
+					} else {
+						lunar_3d::cull_aabbs_soa(
+							planes,
+							&soa.center_x,
+							&soa.center_y,
+							&soa.center_z,
+							&soa.half_x,
+							&soa.half_y,
+							&soa.half_z,
+							flags,
+						);
+					}
+				}
+				#[cfg(target_arch = "wasm32")]
+				lunar_3d::cull_aabbs_soa(
+					planes,
+					&soa.center_x,
+					&soa.center_y,
+					&soa.center_z,
+					&soa.half_x,
+					&soa.half_y,
+					&soa.half_z,
+					flags,
+				);
 			}
-			#[cfg(target_arch = "wasm32")]
 			for (i, &entity) in soa.entities.iter().enumerate() {
-				if frustum.intersects_aabb(soa.centers[i], soa.half_extents[i]) {
+				if self.frustum_flags_scratch[i] != 0 {
 					self.frustum_visible.insert(entity);
 				}
 			}

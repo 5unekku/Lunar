@@ -1661,6 +1661,9 @@ pub struct RenderEngine3d {
 
 	// per-frame scratch — cleared at frame start, never reallocated in steady state
 	frustum_visible: HashSet<Entity>,
+	// per-box CPU frustum-cull result (1 visible, 0 culled), parallel to CullSoa.
+	// reused every frame so the SIMD mid/low-tier cull never allocates in the hot path.
+	frustum_flags_scratch: Vec<u8>,
 	// (entity, mesh_id, mat_id, model, lm_id, dir_lm_id); u32::MAX = none
 	raw_scratch: Vec<(Entity, u32, u32, Mat4, u32, u32)>,
 	// impostor billboard draw list — entities replaced by impostors this frame.
