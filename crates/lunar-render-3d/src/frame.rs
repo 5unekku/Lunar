@@ -829,45 +829,97 @@ impl RenderEngine3d {
 		let probe_grid = world.get_resource::<lunar_3d::AmbientProbeGrid>();
 		let irradiance_sh = world.get_resource::<lunar_3d::IrradianceSH>();
 
-		for i in 0..self.draw_scratch.len() {
-			let (_, _, _, color, metallic, roughness, model, _, mat_flags, lm_id, dir_lm_id) =
-				self.draw_scratch[i];
-			Self::pack_mesh_uniforms(&mut self.uniform_staging, ENTITY_SLOT_START + i, model);
-			// write per-entity SH: probe grid takes priority, then global IrradianceSH, else zeros
-			let world_pos = Vec3::new(model.w_axis.x, model.w_axis.y, model.w_axis.z);
-			let sh_coeffs: Option<[[f32; 3]; 9]> = probe_grid
-				.map(|g| g.sample(world_pos))
-				.or_else(|| irradiance_sh.map(|s| s.coefficients));
-			if let Some(coeffs) = sh_coeffs {
-				Self::pack_sh_uniforms(&mut self.uniform_staging, ENTITY_SLOT_START + i, &coeffs);
-			}
-			let has_lightmap: u32 = if lm_id != u32::MAX { 1 } else { 0 };
-			// bit 1 = has directional lightmap; only set when not in GPU indirect path (dir not atlased)
-			let dir_flag: u32 = if dir_lm_id != u32::MAX && !self.has_indirect {
-				2
-			} else {
-				0
-			};
-			let combined_flags = mat_flags | dir_flag;
-			let (lm_uv_offset, lm_uv_scale) = if lm_id != u32::MAX {
-				match self.atlas_lm_uvs.get(&lm_id) {
-					Some(&uvs) => ([uvs[0], uvs[1]], [uvs[2], uvs[3]]),
-					None => ([0.0f32, 0.0], [1.0f32, 1.0]),
+		// pack per-entity mesh + SH + material uniforms. every entity owns a disjoint slot
+		// in both staging buffers, and the per-entity work is non-trivial (a 3×3
+		// inverse-transpose for the normal matrix, plus an SH probe sample), so the loop fans
+		// out across cores for entity-heavy scenes. serial and parallel paths call the same
+		// per-slot packer over the same disjoint chunks, so the staging output is identical.
+		let entity_count = self.draw_scratch.len();
+		if entity_count > 0 {
+			let stride = UNIFORM_STRIDE as usize;
+			let mat_size = MATERIAL_UNIFORMS_SIZE as usize;
+			let base = ENTITY_SLOT_START;
+			// bind the distinct fields to locals so the closure borrows them disjointly:
+			// read-only scene data plus two mutable, non-overlapping staging slices.
+			let has_indirect = self.has_indirect;
+			let atlas_lm_uvs = &self.atlas_lm_uvs;
+			let draw_scratch = &self.draw_scratch;
+			let uniform_region =
+				&mut self.uniform_staging[base * stride..(base + entity_count) * stride];
+			let material_region =
+				&mut self.material_staging[base * mat_size..(base + entity_count) * mat_size];
+
+			let pack_slot = |i: usize, uniform_slot: &mut [u8], material_slot: &mut [u8]| {
+				let (_, _, _, color, metallic, roughness, model, _, mat_flags, lm_id, dir_lm_id) =
+					draw_scratch[i];
+				Self::pack_mesh_uniforms_at(uniform_slot, model);
+				// per-entity SH: probe grid takes priority, then global IrradianceSH, else leave prior
+				let world_pos = Vec3::new(model.w_axis.x, model.w_axis.y, model.w_axis.z);
+				let sh_coeffs: Option<[[f32; 3]; 9]> = probe_grid
+					.map(|g| g.sample(world_pos))
+					.or_else(|| irradiance_sh.map(|s| s.coefficients));
+				if let Some(coeffs) = sh_coeffs {
+					Self::pack_sh_uniforms_at(uniform_slot, &coeffs);
 				}
-			} else {
-				([0.0f32, 0.0], [1.0f32, 1.0])
+				let has_lightmap: u32 = if lm_id != u32::MAX { 1 } else { 0 };
+				// bit 1 = has directional lightmap; only set when not in GPU indirect path (dir not atlased)
+				let dir_flag: u32 = if dir_lm_id != u32::MAX && !has_indirect {
+					2
+				} else {
+					0
+				};
+				let combined_flags = mat_flags | dir_flag;
+				let (lm_uv_offset, lm_uv_scale) = if lm_id != u32::MAX {
+					match atlas_lm_uvs.get(&lm_id) {
+						Some(&uvs) => ([uvs[0], uvs[1]], [uvs[2], uvs[3]]),
+						None => ([0.0f32, 0.0], [1.0f32, 1.0]),
+					}
+				} else {
+					([0.0f32, 0.0], [1.0f32, 1.0])
+				};
+				Self::pack_material_uniforms_at(
+					material_slot,
+					color,
+					metallic,
+					roughness,
+					combined_flags,
+					has_lightmap,
+					lm_uv_offset,
+					lm_uv_scale,
+				);
 			};
-			Self::pack_material_uniforms(
-				&mut self.material_staging,
-				ENTITY_SLOT_START + i,
-				color,
-				metallic,
-				roughness,
-				combined_flags,
-				has_lightmap,
-				lm_uv_offset,
-				lm_uv_scale,
-			);
+
+			// fan out only past a threshold so tiny scenes skip the rayon hand-off.
+			#[cfg(not(target_arch = "wasm32"))]
+			{
+				const PARALLEL_PACK_THRESHOLD: usize = 256;
+				if entity_count >= PARALLEL_PACK_THRESHOLD {
+					use rayon::prelude::*;
+					uniform_region
+						.par_chunks_mut(stride)
+						.zip(material_region.par_chunks_mut(mat_size))
+						.enumerate()
+						.for_each(|(i, (uniform_slot, material_slot))| {
+							pack_slot(i, uniform_slot, material_slot);
+						});
+				} else {
+					uniform_region
+						.chunks_mut(stride)
+						.zip(material_region.chunks_mut(mat_size))
+						.enumerate()
+						.for_each(|(i, (uniform_slot, material_slot))| {
+							pack_slot(i, uniform_slot, material_slot);
+						});
+				}
+			}
+			#[cfg(target_arch = "wasm32")]
+			uniform_region
+				.chunks_mut(stride)
+				.zip(material_region.chunks_mut(mat_size))
+				.enumerate()
+				.for_each(|(i, (uniform_slot, material_slot))| {
+					pack_slot(i, uniform_slot, material_slot);
+				});
 		}
 
 		// ── pack lights buffer ────────────────────────────────────────────

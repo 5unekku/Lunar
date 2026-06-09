@@ -430,9 +430,15 @@ impl RenderEngine3d {
 	}
 	pub(crate) fn pack_mesh_uniforms(staging: &mut [u8], slot: usize, model: Mat4) {
 		let offset = slot * UNIFORM_STRIDE as usize;
+		Self::pack_mesh_uniforms_at(&mut staging[offset..offset + 112], model);
+	}
+	/// write the 112-byte mesh block (model matrix + normal matrix) at the start of
+	/// `slot_buf`. the slot-relative form lets the per-entity packing loop run over
+	/// disjoint `par_chunks_mut` slices without each task needing the whole buffer.
+	pub(crate) fn pack_mesh_uniforms_at(slot_buf: &mut [u8], model: Mat4) {
 		// model matrix (64 bytes)
 		let model_cols = model.to_cols_array();
-		staging[offset..offset + 64].copy_from_slice(bytemuck::cast_slice(&model_cols));
+		slot_buf[0..64].copy_from_slice(bytemuck::cast_slice(&model_cols));
 		// normal matrix = transpose(inverse(mat3(model))), packed as 3×vec4 (48 bytes)
 		let normal_mat = Mat3::from_mat4(model).inverse().transpose();
 		let cols = normal_mat.to_cols_array();
@@ -440,12 +446,12 @@ impl RenderEngine3d {
 			cols[0], cols[1], cols[2], 0.0, cols[3], cols[4], cols[5], 0.0, cols[6], cols[7],
 			cols[8], 0.0,
 		];
-		staging[offset + 64..offset + 112].copy_from_slice(bytemuck::cast_slice(&normal_packed));
+		slot_buf[64..112].copy_from_slice(bytemuck::cast_slice(&normal_packed));
 	}
-	/// write 9 L2 SH coefficients to the per-entity staging slot starting at offset 112.
-	/// `coeffs[i] = [R, G, B]`, flag=1.0 marks per-entity probe data present.
-	pub(crate) fn pack_sh_uniforms(staging: &mut [u8], slot: usize, coeffs: &[[f32; 3]; 9]) {
-		let offset = slot * UNIFORM_STRIDE as usize + 112;
+	/// write 9 L2 SH coefficients (the 144-byte block at offset 112 within `slot_buf`,
+	/// a full slot stride). `coeffs[i] = [R, G, B]`; flag=1.0 in `[0].w` marks per-entity
+	/// probe data present.
+	pub(crate) fn pack_sh_uniforms_at(slot_buf: &mut [u8], coeffs: &[[f32; 3]; 9]) {
 		let mut data = [0f32; 36];
 		for (i, c) in coeffs.iter().enumerate() {
 			data[i * 4] = c[0];
@@ -453,7 +459,7 @@ impl RenderEngine3d {
 			data[i * 4 + 2] = c[2];
 			data[i * 4 + 3] = if i == 0 { 1.0 } else { 0.0 }; // flag only in [0].w
 		}
-		staging[offset..offset + 144].copy_from_slice(bytemuck::cast_slice(&data));
+		slot_buf[112..256].copy_from_slice(bytemuck::cast_slice(&data));
 	}
 	#[allow(clippy::too_many_arguments)]
 	pub(crate) fn pack_material_uniforms(
@@ -468,6 +474,30 @@ impl RenderEngine3d {
 		lm_uv_scale: [f32; 2],
 	) {
 		let offset = slot * MATERIAL_UNIFORMS_SIZE as usize;
+		Self::pack_material_uniforms_at(
+			&mut staging[offset..offset + MATERIAL_UNIFORMS_SIZE as usize],
+			color,
+			metallic,
+			roughness,
+			flags,
+			has_lightmap,
+			lm_uv_offset,
+			lm_uv_scale,
+		);
+	}
+	/// write the 48-byte material block at the start of `slot_buf` (slot-relative form
+	/// for the parallel per-entity packing loop).
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn pack_material_uniforms_at(
+		slot_buf: &mut [u8],
+		color: Color,
+		metallic: f32,
+		roughness: f32,
+		flags: u32,
+		has_lightmap: u32,
+		lm_uv_offset: [f32; 2],
+		lm_uv_scale: [f32; 2],
+	) {
 		// base_color(16) + metallic(4) + roughness(4) + flags(4) + has_lightmap(4) = 32 bytes
 		let data: [f32; 7] = [
 			color.r,
@@ -478,12 +508,105 @@ impl RenderEngine3d {
 			roughness,
 			f32::from_bits(flags),
 		];
-		staging[offset..offset + 28].copy_from_slice(bytemuck::cast_slice(&data));
-		staging[offset + 28..offset + 32].copy_from_slice(&has_lightmap.to_le_bytes());
+		slot_buf[0..28].copy_from_slice(bytemuck::cast_slice(&data));
+		slot_buf[28..32].copy_from_slice(&has_lightmap.to_le_bytes());
 		// lm_uv_offset(8) + lm_uv_scale(8) = 16 bytes at offset 32
-		staging[offset + 32..offset + 40].copy_from_slice(bytemuck::cast_slice(&lm_uv_offset));
-		staging[offset + 40..offset + 48].copy_from_slice(bytemuck::cast_slice(&lm_uv_scale));
+		slot_buf[32..40].copy_from_slice(bytemuck::cast_slice(&lm_uv_offset));
+		slot_buf[40..48].copy_from_slice(bytemuck::cast_slice(&lm_uv_scale));
 	}
 
 	// ── public surface management ──────────────────────────────────────────
+}
+
+#[cfg(test)]
+mod packing_tests {
+	use super::*;
+	use lunar_math::{Mat4, Quat, Vec3};
+	use rayon::prelude::*;
+
+	/// deterministic per-entity model with rotation + non-uniform scale, so the
+	/// normal matrix (inverse-transpose) and every packed byte are non-trivial.
+	fn model_for(i: usize) -> Mat4 {
+		let f = i as f32;
+		Mat4::from_scale_rotation_translation(
+			Vec3::new(1.0 + (f * 0.1) % 3.0, 0.5 + (f * 0.2) % 2.0, 1.0 + (f * 0.05) % 1.5),
+			Quat::from_rotation_y(f * 0.137) * Quat::from_rotation_x(f * 0.071),
+			Vec3::new(f, -f * 0.5, f * 2.0),
+		)
+	}
+
+	/// the parallel per-entity packing (`par_chunks_mut` + the `*_at` writers) must produce
+	/// byte-identical staging to the serial slot-based packing the GPU previously consumed.
+	#[test]
+	fn parallel_packing_matches_serial() {
+		let n = 1000usize;
+		let base = ENTITY_SLOT_START;
+		let stride = UNIFORM_STRIDE as usize;
+		let mat_size = MATERIAL_UNIFORMS_SIZE as usize;
+		let total_slots = base + n;
+
+		let models: Vec<Mat4> = (0..n).map(model_for).collect();
+		let sh: Vec<[[f32; 3]; 9]> = (0..n)
+			.map(|i| core::array::from_fn(|k| [i as f32 + k as f32, k as f32, (i % 7) as f32]))
+			.collect();
+		// alternate "has SH" so the None branch (which leaves prior bytes) is exercised the same.
+		let has_sh: Vec<bool> = (0..n).map(|i| i % 3 != 0).collect();
+		let colors: Vec<Color> = (0..n)
+			.map(|i| Color::rgba((i % 5) as f32 / 5.0, 0.3, 0.7, 1.0))
+			.collect();
+
+		// 0xAB sentinel so the "untouched on None-SH" tail bytes are well-defined and compared.
+		let mut serial_u = vec![0xABu8; total_slots * stride];
+		let mut serial_m = vec![0u8; total_slots * mat_size];
+		let mut parallel_u = serial_u.clone();
+		let mut parallel_m = serial_m.clone();
+
+		// serial reference: the original slot-based packing.
+		for i in 0..n {
+			let slot = base + i;
+			RenderEngine3d::pack_mesh_uniforms(&mut serial_u, slot, models[i]);
+			if has_sh[i] {
+				RenderEngine3d::pack_sh_uniforms_at(
+					&mut serial_u[slot * stride..slot * stride + stride],
+					&sh[i],
+				);
+			}
+			RenderEngine3d::pack_material_uniforms(
+				&mut serial_m,
+				slot,
+				colors[i],
+				0.2,
+				0.6,
+				(i % 4) as u32,
+				(i % 2) as u32,
+				[0.1, 0.2],
+				[0.9, 0.8],
+			);
+		}
+
+		// parallel path: chunked `*_at` writers over disjoint slot slices.
+		parallel_u[base * stride..(base + n) * stride]
+			.par_chunks_mut(stride)
+			.zip(parallel_m[base * mat_size..(base + n) * mat_size].par_chunks_mut(mat_size))
+			.enumerate()
+			.for_each(|(i, (uniform_slot, material_slot))| {
+				RenderEngine3d::pack_mesh_uniforms_at(uniform_slot, models[i]);
+				if has_sh[i] {
+					RenderEngine3d::pack_sh_uniforms_at(uniform_slot, &sh[i]);
+				}
+				RenderEngine3d::pack_material_uniforms_at(
+					material_slot,
+					colors[i],
+					0.2,
+					0.6,
+					(i % 4) as u32,
+					(i % 2) as u32,
+					[0.1, 0.2],
+					[0.9, 0.8],
+				);
+			});
+
+		assert_eq!(serial_u, parallel_u, "uniform staging diverged between serial and parallel");
+		assert_eq!(serial_m, parallel_m, "material staging diverged between serial and parallel");
+	}
 }
