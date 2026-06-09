@@ -1,0 +1,44 @@
+Lunar Engine
+Copyright (c) 2024-2026 5unekku and contributors
+
+This software is licensed under the Mozilla Public License 2.0 (MPL-2.0).
+A copy of the license is available in the LICENSE-MPL file in this repository.
+
+-------------------------------------------------------------------------------
+Additional Permission — Compiled Applications (MPL-2.0 Section 7)
+-------------------------------------------------------------------------------
+
+As an additional permission under MPL-2.0 Section 7, you may distribute a
+Compiled Work that incorporates this software (for example, a game or
+application built using Lunar as a dependency) without being required to
+provide recipients with the ability to relink or replace the covered source
+files, provided that:
+
+  1. The Compiled Work is an end-user application (such as a game) and not a
+     redistribution or repackaging of the engine itself.
+
+  2. The Compiled Work's documentation, credits, or about screen includes a
+     notice substantially similar to the following:
+
+       "Built with Lunar Engine (https://gitlab.com/5unekku/Lunar),
+        licensed under the Mozilla Public License 2.0."
+
+  3. A copy of this NOTICE file and the LICENSE-MPL file is included with the
+     Compiled Work or made available at a URL disclosed to recipients.
+
+This permission does not extend to modified versions of Lunar distributed as
+an engine, library, or toolkit. Such distributions remain fully subject to the
+MPL-2.0, including the obligation to make modified source files available.
+
+-------------------------------------------------------------------------------
+Third-Party Notices
+-------------------------------------------------------------------------------
+
+This software depends on third-party libraries. Their licenses are reproduced
+in full in the LICENSE-MIT file included in this repository, or available from
+the sources listed below.
+
+  bevy_ecs     — MIT OR Apache-2.0   https://github.com/bevyengine/bevy
+  wgpu         — MIT OR Apache-2.0   https://github.com/gfx-rs/wgpu
+  glam         — MIT OR Apache-2.0   https://github.com/bitshifter/glam-rs
+  SDL3         — zlib                https://github.com/libsdl-org/SDL
