@@ -29,3 +29,6 @@ test-results/
 
 # texture macro compile cache
 **/.lunar/
+
+# persisted wgpu pipeline cache (regenerated per-adapter at runtime)
+.pipeline_cache_*.bin
