@@ -66,6 +66,17 @@ pub struct Sky {
 	pub sun_half_size: f32,
 	/// whether to draw the sun disc.
 	pub show_sun: bool,
+	/// optional cylindrical panorama texture painted over sky pixels after the
+	/// main passes (classic doom/quake skies). colors pass through untouched.
+	pub panorama: Option<lunar_assets::Handle<lunar_assets::Texture>>,
+	/// horizontal texture repeats per full 360° turn (doom: 4 for a 256-wide sky)
+	pub panorama_repeats: f32,
+	/// vertical squash: v advance per unit tan(pitch). matches a software
+	/// renderer's screen-linear sky when set to texel_span / (texture_height ·
+	/// tan(half vertical fov))
+	pub panorama_tan_scale: f32,
+	/// v at the horizon (doom: skytexturemid 100 of 128 → 0.78125)
+	pub panorama_v_offset: f32,
 }
 
 impl Default for Sky {
@@ -75,6 +86,10 @@ impl Default for Sky {
 			sun_color: Color::rgb(1.0, 0.98, 0.85),
 			sun_half_size: 40.0,
 			show_sun: true,
+			panorama: None,
+			panorama_repeats: 1.0,
+			panorama_tan_scale: 1.0,
+			panorama_v_offset: 0.5,
 		}
 	}
 }

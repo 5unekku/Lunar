@@ -166,6 +166,104 @@ impl RenderEngine3d {
 			pass.draw(0..3, 0..1);
 		}
 
+		// ── panorama sky pass — cylindrical texture over sky pixels ──────
+		if let Some(sky) = world.get_resource::<Sky>().copied()
+			&& let Some(handle) = sky.panorama
+		{
+			// upload + cache the panorama texture (non-srgb: gamma-space pipeline)
+			let texture_id = handle.id();
+			let cache_valid = self
+				.panorama_sky_cache
+				.as_ref()
+				.map(|(id, _, _)| *id == texture_id)
+				.unwrap_or(false);
+			if !cache_valid {
+				let asset_server = world.resource::<lunar_assets::AssetServer>();
+				if let Some(tex) = asset_server.get_texture_by_id(texture_id) {
+					let gpu_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+						label: Some("[panorama sky] tex"),
+						size: wgpu::Extent3d {
+							width: tex.width,
+							height: tex.height,
+							depth_or_array_layers: 1,
+						},
+						mip_level_count: 1,
+						sample_count: 1,
+						dimension: wgpu::TextureDimension::D2,
+						format: wgpu::TextureFormat::Rgba8Unorm,
+						usage: wgpu::TextureUsages::TEXTURE_BINDING
+							| wgpu::TextureUsages::COPY_DST,
+						view_formats: &[],
+					});
+					self.queue.write_texture(
+						gpu_tex.as_image_copy(),
+						&tex.pixels,
+						wgpu::TexelCopyBufferLayout {
+							offset: 0,
+							bytes_per_row: Some(tex.width * 4),
+							rows_per_image: Some(tex.height),
+						},
+						wgpu::Extent3d {
+							width: tex.width,
+							height: tex.height,
+							depth_or_array_layers: 1,
+						},
+					);
+					let view = gpu_tex.create_view(&Default::default());
+					let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+						label: Some("[panorama sky] bg1"),
+						layout: &self.panorama_bgl1,
+						entries: &[
+							wgpu::BindGroupEntry {
+								binding: 0,
+								resource: self.panorama_params_buf.as_entire_binding(),
+							},
+							wgpu::BindGroupEntry {
+								binding: 1,
+								resource: wgpu::BindingResource::TextureView(&view),
+							},
+							wgpu::BindGroupEntry {
+								binding: 2,
+								resource: wgpu::BindingResource::Sampler(&self.panorama_sampler),
+							},
+						],
+					});
+					self.panorama_sky_cache = Some((texture_id, gpu_tex, bg));
+				}
+			}
+			if let Some((_, _, bg)) = &self.panorama_sky_cache {
+				let params: [f32; 4] = [
+					sky.panorama_repeats,
+					sky.panorama_tan_scale,
+					sky.panorama_v_offset,
+					0.0,
+				];
+				self.queue
+					.write_buffer(&self.panorama_params_buf, 0, bytemuck::cast_slice(&params));
+
+				let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+					label: Some("[panorama sky] pass"),
+					color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+						view: &self.hdr_view,
+						resolve_target: None,
+						ops: wgpu::Operations {
+							load: wgpu::LoadOp::Load,
+							store: wgpu::StoreOp::Store,
+						},
+						depth_slice: None,
+					})],
+					depth_stencil_attachment: None,
+					timestamp_writes: None,
+					occlusion_query_set: None,
+					multiview_mask: None,
+				});
+				pass.set_pipeline(&self.panorama_pipeline);
+				pass.set_bind_group(0, &self.atmos_bg0, &[]);
+				pass.set_bind_group(1, bg, &[]);
+				pass.draw(0..3, 0..1);
+			}
+		}
+
 		// ── SSR pass (mid+ tier) ─────────────────────────────────────────
 		if dev_ssr {
 			let width = self.render_w as f32;
@@ -785,8 +883,15 @@ impl RenderEngine3d {
 			..
 		} = fc;
 		// ── GTAO passes (mid/high tier, ssao enabled) ────────────────────
-		// taa also needs non-msaa depth for reprojection; share this prepass when either is active
-		if (self.ssao_enabled && dev_ssao) || dev_staa {
+		// taa also needs non-msaa depth for reprojection, and the atmos /
+		// panorama sky passes read it to find sky pixels; shared by all three
+		let sky_needs_depth = world.get_resource::<AtmosphericScattering>().is_some()
+			|| world
+				.get_resource::<Sky>()
+				.map(|sky| sky.panorama.is_some())
+				.unwrap_or(false);
+		let gtao_active = (self.ssao_enabled && dev_ssao) || dev_staa;
+		if gtao_active || sky_needs_depth {
 			// non-MSAA depth prepass so GTAO/TAA can sample depth without MSAA complication
 			{
 				let mut zpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -847,8 +952,49 @@ impl RenderEngine3d {
 						i += 1;
 					}
 				}
+				// surface shader meshes belong in this depth copy too — without
+				// them their pixels read as sky (same rule as the main prepass);
+				// masked meshes use the alpha-tested variant
+				let is_masked = |packed: &[SurfaceStagePacked; 4]| {
+					packed.iter().any(|s| s.enabled != 0 && s.alpha_test != 0)
+				};
+				for &(mesh_id, slot, _, ref packed) in &self.surface_scratch {
+					if is_masked(packed) {
+						continue;
+					}
+					if let Some(gpu) = self.mesh_gpu.get(&mesh_id) {
+						zpass.set_vertex_buffer(0, gpu.pos_buf.slice(..));
+						zpass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+						zpass.draw_indexed(0..gpu.index_count, 0, slot as u32..slot as u32 + 1);
+					}
+				}
+				let draw_base_slot = ENTITY_SLOT_START + self.draw_scratch.len();
+				let mut masked_pipeline_bound = false;
+				for &(mesh_id, slot, tex_ids, ref packed) in &self.surface_scratch {
+					if !is_masked(packed) {
+						continue;
+					}
+					let Some(bg) = self.surface_bg_cache.get(&tex_ids) else {
+						continue;
+					};
+					let Some(gpu) = self.mesh_gpu.get(&mesh_id) else {
+						continue;
+					};
+					if !masked_pipeline_bound {
+						zpass.set_pipeline(&self.surface_masked_zprepass_nonmsaa_pipeline);
+						zpass.set_bind_group(0, &self.globals_bg, &[]);
+						zpass.set_bind_group(1, &self.entity_bg, &[]);
+						masked_pipeline_bound = true;
+					}
+					let surf_offset = ((slot - draw_base_slot) as u64 * UNIFORM_STRIDE) as u32;
+					zpass.set_bind_group(2, bg, &[surf_offset]);
+					zpass.set_vertex_buffer(0, gpu.vbuf.slice(..));
+					zpass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+					zpass.draw_indexed(0..gpu.index_count, 0, slot as u32..slot as u32 + 1);
+				}
 			}
 
+			if gtao_active {
 			// upload GTAO params
 			let (ao_w, ao_h) = (
 				(self.surface_config.width / 2).max(1),
@@ -942,6 +1088,7 @@ impl RenderEngine3d {
 				ao_w,
 				ao_h,
 			);
+			}
 		}
 
 		// ── planar reflection pass ────────────────────────────────────────

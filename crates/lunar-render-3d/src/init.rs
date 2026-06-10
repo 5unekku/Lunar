@@ -2295,6 +2295,86 @@ impl RenderEngine3d {
 		});
 		// atmos_bg0 needs gtao_depth_tex (created in GTAO section); assigned after that section.
 
+		// ── panorama sky — cylindrical texture over sky pixels ────────────
+		let panorama_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("[panorama sky] params buffer"),
+			size: 16,
+			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+			mapped_at_creation: false,
+		});
+		let panorama_bgl1 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("[panorama sky] bgl1"),
+			entries: &[
+				wgpu::BindGroupLayoutEntry {
+					binding: 0,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Buffer {
+						ty: wgpu::BufferBindingType::Uniform,
+						has_dynamic_offset: false,
+						min_binding_size: wgpu::BufferSize::new(16),
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 1,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+						view_dimension: wgpu::TextureViewDimension::D2,
+						multisampled: false,
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 2,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+					count: None,
+				},
+			],
+		});
+		let panorama_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+			label: Some("[panorama sky] sampler"),
+			mag_filter: wgpu::FilterMode::Linear,
+			min_filter: wgpu::FilterMode::Linear,
+			address_mode_u: wgpu::AddressMode::Repeat,
+			address_mode_v: wgpu::AddressMode::ClampToEdge,
+			..Default::default()
+		});
+		let panorama_shader = make_shader!(device, shader_passthrough, "[panorama sky] shader", PANORAMA_SKY_SHADER_SRC, "panorama_sky.spv");
+		let panorama_pipeline_layout =
+			device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+				label: Some("[panorama sky] pipeline layout"),
+				bind_group_layouts: &[Some(&atmos_bgl0), Some(&panorama_bgl1)],
+				immediate_size: 0,
+			});
+		let panorama_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+			label: Some("[panorama sky] pipeline"),
+			layout: Some(&panorama_pipeline_layout),
+			vertex: wgpu::VertexState {
+				module: &panorama_shader,
+				entry_point: Some("vs_main"),
+				buffers: &[],
+				compilation_options: wgpu::PipelineCompilationOptions::default(),
+			},
+			fragment: Some(wgpu::FragmentState {
+				module: &panorama_shader,
+				entry_point: Some("fs_main"),
+				targets: &[Some(wgpu::ColorTargetState {
+					format: hdr_format,
+					// alpha blend: only sky pixels get alpha 1 from the shader
+					blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+					write_mask: wgpu::ColorWrites::ALL,
+				})],
+				compilation_options: wgpu::PipelineCompilationOptions::default(),
+			}),
+			primitive: wgpu::PrimitiveState::default(),
+			depth_stencil: None,
+			multisample: wgpu::MultisampleState::default(),
+			cache: pipeline_cache_ref,
+			multiview_mask: None,
+		});
+
 		// ── water rendering — Gerstner waves + refraction ─────────────────
 
 		let water_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -2750,6 +2830,41 @@ impl RenderEngine3d {
 					bias: wgpu::DepthBiasState::default(),
 				}),
 				multisample: wgpu::MultisampleState::default(), // always sample_count=1
+				cache: pipeline_cache_ref,
+				multiview_mask: None,
+			});
+
+		// non-MSAA variant of the masked surface prepass (gtao/sky depth copy)
+		let surface_masked_zprepass_nonmsaa_pipeline =
+			device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+				label: Some("[surface prepass] masked (non-MSAA) pipeline"),
+				layout: Some(&surface_pipeline_layout),
+				vertex: wgpu::VertexState {
+					module: &surface_prepass_module,
+					entry_point: Some("vs_surface_prepass"),
+					buffers: vertex_buffers,
+					compilation_options: wgpu::PipelineCompilationOptions::default(),
+				},
+				fragment: Some(wgpu::FragmentState {
+					module: &surface_prepass_module,
+					entry_point: Some("fs_surface_prepass"),
+					targets: &[],
+					compilation_options: wgpu::PipelineCompilationOptions::default(),
+				}),
+				primitive: wgpu::PrimitiveState {
+					topology: wgpu::PrimitiveTopology::TriangleList,
+					front_face: wgpu::FrontFace::Ccw,
+					cull_mode: Some(wgpu::Face::Back),
+					..Default::default()
+				},
+				depth_stencil: Some(wgpu::DepthStencilState {
+					format: wgpu::TextureFormat::Depth32Float,
+					depth_write_enabled: Some(true),
+					depth_compare: Some(wgpu::CompareFunction::LessEqual),
+					stencil: wgpu::StencilState::default(),
+					bias: wgpu::DepthBiasState::default(),
+				}),
+				multisample: wgpu::MultisampleState::default(),
 				cache: pipeline_cache_ref,
 				multiview_mask: None,
 			});
@@ -3400,6 +3515,7 @@ impl RenderEngine3d {
 			gtao_blur_h_pipeline,
 			gtao_blur_v_pipeline,
 			zprepass_nonmsaa_pipeline,
+			surface_masked_zprepass_nonmsaa_pipeline,
 			transparent_pipeline,
 			transparent_scratch: Vec::new(),
 			transparent_last_depths: Vec::new(),
@@ -3466,6 +3582,11 @@ impl RenderEngine3d {
 			atmos_bg1,
 			atmos_params_buf,
 			atmos_pipeline,
+			panorama_bgl1,
+			panorama_sampler,
+			panorama_params_buf,
+			panorama_pipeline,
+			panorama_sky_cache: None,
 			water_params_buf,
 			water_bgl0,
 			water_bgl1,

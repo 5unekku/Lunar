@@ -77,6 +77,7 @@ const CLUSTER_SHADER_SRC: &str = include_str!("cluster.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const SURFACE_SHADER_SRC: &str = include_str!("surface.wgsl");
 const SURFACE_PREPASS_SHADER_SRC: &str = include_str!("surface_prepass.wgsl");
+const PANORAMA_SKY_SHADER_SRC: &str = include_str!("panorama_sky.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const BLOOM_SHADER_SRC: &str = include_str!("bloom.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
@@ -1420,6 +1421,8 @@ pub struct RenderEngine3d {
 	surface_pipeline: wgpu::RenderPipeline,
 	/// depth-only alpha-tested prepass for masked surface meshes
 	surface_masked_zprepass_pipeline: wgpu::RenderPipeline,
+	/// non-MSAA variant for the gtao/sky depth copy
+	surface_masked_zprepass_nonmsaa_pipeline: wgpu::RenderPipeline,
 	surface_fallback_tex: wgpu::Texture,
 	surface_fallback_view: wgpu::TextureView,
 	surface_sampler: wgpu::Sampler,
@@ -1551,6 +1554,14 @@ pub struct RenderEngine3d {
 	atmos_bg1: wgpu::BindGroup,
 	atmos_params_buf: wgpu::Buffer,
 	atmos_pipeline: wgpu::RenderPipeline,
+
+	// panorama sky — cylindrical texture painted over sky pixels (Sky::panorama)
+	panorama_bgl1: wgpu::BindGroupLayout,
+	panorama_sampler: wgpu::Sampler,
+	panorama_params_buf: wgpu::Buffer,
+	panorama_pipeline: wgpu::RenderPipeline,
+	/// uploaded panorama texture keyed by asset id; rebuilt when the handle changes
+	panorama_sky_cache: Option<(u32, wgpu::Texture, wgpu::BindGroup)>,
 
 	// volumetric fog — quarter-res ray-marched sun scattering (mid+ tier)
 	fog_enabled: bool,
