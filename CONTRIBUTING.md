@@ -47,7 +47,7 @@ violations have known downstream costs:
 4. no shader compilation mid-frame (compile in queue/prepare stage)
 5. every `wgpu::Buffer` and `wgpu::Texture` must have a non-empty label
 6. all GPU-bound structs: `#[repr(C)]` + `bytemuck::Pod + Zeroable`, no `Vec3` (use `Vec4` or `[f32; 4]` — std140 expands Vec3 silently)
-7. all matrices: column-major, reverse-z convention (near=1, far=0)
+7. all matrices: column-major, standard-z convention (near=0, far=1, Less/LessEqual compares, sky at depth 1) — reverse-z is a possible future precision upgrade but it must flip every depth compare, clear, and shader test in one sweep
 8. `wgpu::Limits::default()` is the floor — never rely on elevated limits without a feature gate
 
 ## render principles

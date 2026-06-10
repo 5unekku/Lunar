@@ -11,7 +11,9 @@ keywords.workspace = true
 
 [dependencies]
 rustc-hash = { workspace = true }
-wgpu = { workspace = true, features = ["vulkan", "metal", "gles", "wgsl"] }
+# wgsl is target-independent; gpu backends are enabled per-platform below so no
+# target drags in another platform's bindings (mirrors crates/lunar/Cargo.toml)
+wgpu = { workspace = true, features = ["wgsl"] }
 raw-window-handle = "0.6"
 lunar-math = { path = "../lunar-math", version = "1.0.0" }
 lunar-core = { path = "../lunar-core", version = "1.0.0" }
@@ -26,9 +28,16 @@ guillotiere = "0.6"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 sdl3 = { workspace = true }
 pollster = "0.4"
+wgpu = { workspace = true, features = ["vulkan", "gles"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { workspace = true, features = ["dx12"] }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+wgpu = { workspace = true, features = ["metal"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wgpu = { workspace = true, features = ["vulkan", "metal", "gles", "wgsl", "web"] }
+wgpu = { workspace = true, features = ["webgpu", "web"] }
 wasm-bindgen-futures = "0.4"
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElement", "OffscreenCanvas"] }

@@ -132,8 +132,7 @@ fn bench_navmesh_12_queries(c: &mut Criterion) {
 fn bench_rerecast_bake(c: &mut Criterion) {
     use glam::{UVec3, Vec3A};
     use rerecast::{
-        Aabb3d, AreaType, BuildContoursFlags, ConfigBuilder, DetailNavmesh, HeightfieldBuilder,
-        TriMesh,
+        AreaType, BuildContoursFlags, ConfigBuilder, DetailNavmesh, HeightfieldBuilder, TriMesh,
     };
 
     let mut trimesh = TriMesh { vertices: Vec::new(), indices: Vec::new(), area_types: Vec::new() };
