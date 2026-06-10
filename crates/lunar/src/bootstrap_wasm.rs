@@ -55,6 +55,10 @@ pub async fn bootstrap_wasm<Plugin: lunar_core::GamePlugin + Default + 'static>(
 	initial_settings.target_aspect = config.target_aspect;
 	initial_settings.allow_resize = config.allow_resize;
 	app.insert_resource(initial_settings);
+	// pump_frame reads the tick rate from this resource, so set_tick_rate works on wasm too
+	app.insert_resource(lunar_core::TickRateConfig {
+		rate: config.tick_rate,
+	});
 	// wasm has no display mode API — use the curated standard list
 	app.insert_resource(AvailableResolutions(STANDARD_RESOLUTIONS.to_vec()));
 	app.add_plugin(RenderPlugin);
@@ -62,15 +66,25 @@ pub async fn bootstrap_wasm<Plugin: lunar_core::GamePlugin + Default + 'static>(
 	app.add_plugin(AssetPlugin);
 	app.add_plugin(Plugin::default());
 
-	// app.tick() handles startup on first call, so the RAF closure is uniform
+	// pump_frame handles startup on first call, so the RAF closure is uniform.
+	// RAF fires at display refresh rate, so real elapsed time must be measured —
+	// a fixed per-callback delta would scale game speed with the monitor (2× at 120hz).
 	let app = Rc::new(RefCell::new(app));
 	let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
 	let g = f.clone();
 
+	let performance = web_sys::window()
+		.and_then(|w| w.performance())
+		.expect("browser exposes window.performance");
+	let mut last_ms = performance.now();
+
 	*g.borrow_mut() = Some(Closure::new({
 		let app = app.clone();
 		move || {
-			app.borrow_mut().tick(config.tick_rate.delta_seconds());
+			let now_ms = performance.now();
+			let real_delta = ((now_ms - last_ms) / 1000.0) as f32;
+			last_ms = now_ms;
+			app.borrow_mut().pump_frame(real_delta);
 			web_sys::window()
 				.unwrap()
 				.request_animation_frame(f.borrow().as_ref().unwrap().as_ref().unchecked_ref())

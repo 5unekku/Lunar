@@ -179,6 +179,8 @@ pub struct App {
 	built_plugins: Vec<String>,
 	/// whether startup systems have been run
 	startup_run: bool,
+	/// fixed-timestep accumulator for [`App::pump_frame`] (external pacing loops)
+	pump_accumulator: f32,
 }
 
 impl App {
@@ -195,6 +197,7 @@ impl App {
 			pending_plugins: Vec::new(),
 			built_plugins: Vec::new(),
 			startup_run: false,
+			pump_accumulator: 0.0,
 		}
 	}
 
@@ -402,6 +405,58 @@ impl App {
 			game_loop.apply_frame_cap();
 			process_events(self.engine.world_mut());
 		}
+	}
+
+	/// drive one render frame from an external pacing source (requestAnimationFrame
+	/// on wasm, or any host loop that reports real elapsed time).
+	///
+	/// runs the same fixed-timestep accumulator as [`App::run`]: 0-5 logic ticks at
+	/// the [`TickRateConfig`] interval (Hz60 when the resource is absent), then
+	/// exactly one render. unlike [`App::tick`], game speed stays correct whatever
+	/// the host frame rate — a 120hz display gets interpolated frames, not 2× speed.
+	///
+	/// `real_delta_seconds` is wall-clock time since the previous call, clamped to
+	/// 0.25s so a suspended tab resumes smoothly instead of bursting ticks.
+	pub fn pump_frame(&mut self, real_delta_seconds: f32) {
+		if !self.pending_plugins.is_empty() {
+			self.build_plugins();
+		}
+		if !self.startup_run {
+			self.engine.run_startup();
+			self.startup_run = true;
+		}
+
+		let tick_rate = self
+			.engine
+			.world()
+			.get_resource::<TickRateConfig>()
+			.map_or(TickRate::Hz60, |config| config.rate);
+		let fixed_delta = tick_rate.delta_seconds();
+
+		let real_delta = real_delta_seconds.clamp(0.0, 0.25);
+		self.pump_accumulator += real_delta;
+		let mut ticks = 0u32;
+		while self.pump_accumulator >= fixed_delta && ticks < 5 {
+			self.pump_accumulator -= fixed_delta;
+			ticks += 1;
+		}
+		// time beyond the 5-tick cap is dropped, matching GameLoop's spiral guard
+		if self.pump_accumulator >= fixed_delta {
+			self.pump_accumulator %= fixed_delta;
+		}
+		let alpha = (self.pump_accumulator / fixed_delta).clamp(0.0, 1.0);
+
+		if let Some(mut time) = self.engine.world_mut().get_resource_mut::<Time>() {
+			time.set_real_delta(real_delta);
+			time.set_interp_alpha(alpha);
+		}
+		for _ in 0..ticks {
+			if let Some(mut time) = self.engine.world_mut().get_resource_mut::<Time>() {
+				time.advance(fixed_delta);
+			}
+			self.engine.run_logic_tick();
+		}
+		self.engine.run_render_and_post();
 	}
 
 	/// run a single frame tick (for external loops like requestAnimationFrame).

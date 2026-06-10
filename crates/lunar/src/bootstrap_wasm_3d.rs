@@ -67,6 +67,10 @@ pub async fn bootstrap_wasm_3d<Plugin: lunar_core::GamePlugin + Default + 'stati
 	// wasm has no display mode API — use the curated standard list
 	app.insert_resource(AvailableResolutions(STANDARD_RESOLUTIONS.to_vec()));
 	app.insert_resource(engine);
+	// pump_frame reads the tick rate from this resource, so set_tick_rate works on wasm too
+	app.insert_resource(lunar_core::TickRateConfig {
+		rate: config.tick_rate,
+	});
 
 	app.add_plugin(Plugin3d);
 	app.add_plugin(RenderPlugin3d);
@@ -77,6 +81,13 @@ pub async fn bootstrap_wasm_3d<Plugin: lunar_core::GamePlugin + Default + 'stati
 	let app = Rc::new(RefCell::new(app));
 	let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
 	let g = f.clone();
+
+	// RAF fires at display refresh rate, so real elapsed time must be measured —
+	// a fixed per-callback delta would scale game speed with the monitor (2× at 120hz).
+	let performance = web_sys::window()
+		.and_then(|w| w.performance())
+		.expect("browser exposes window.performance");
+	let mut last_ms = performance.now();
 
 	*g.borrow_mut() = Some(Closure::new({
 		let app = app.clone();
@@ -104,7 +115,10 @@ pub async fn bootstrap_wasm_3d<Plugin: lunar_core::GamePlugin + Default + 'stati
 				canvas_h = new_h;
 			}
 
-			app.borrow_mut().tick(config.tick_rate.delta_seconds());
+			let now_ms = performance.now();
+			let real_delta = ((now_ms - last_ms) / 1000.0) as f32;
+			last_ms = now_ms;
+			app.borrow_mut().pump_frame(real_delta);
 			web_sys::window()
 				.unwrap()
 				.request_animation_frame(f.borrow().as_ref().unwrap().as_ref().unchecked_ref())
