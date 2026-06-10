@@ -1146,7 +1146,7 @@ impl RenderEngine3d {
 		let surface_fallback_view = surface_fallback_tex.create_view(&Default::default());
 		let surface_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("[surface] stage params"),
-			size: 64 * UNIFORM_STRIDE, // up to 64 surface entities per frame
+			size: 512 * UNIFORM_STRIDE,
 			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 			mapped_at_creation: false,
 		});

@@ -19,6 +19,8 @@ audio = ["dep:lunar-audio"]
 # convenience for examples / docs / "kitchen sink" builds.
 full = ["2d", "3d", "audio"]
 
+debug = ["bevy_ecs/debug"]
+
 [dependencies]
 bevy_ecs = { workspace = true }
 lunar-macros = { path = "../lunar-macros", version = "1.0.0" }

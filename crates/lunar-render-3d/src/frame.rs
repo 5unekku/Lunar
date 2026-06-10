@@ -358,6 +358,17 @@ impl RenderEngine3d {
 		}
 
 		// ── surface shader gather ─────────────────────────────────────────
+		// pack_mesh_uniforms writes into uniform_staging during this loop, before
+		// the post-gather grow check. pre-size the cpu staging vecs so the writes
+		// don't panic; the post-gather check still handles the gpu buffer side.
+		{
+			let worst_case = ENTITY_SLOT_START + self.draw_scratch.len() + 512;
+			let min_bytes = worst_case.next_power_of_two().max(INITIAL_ENTITY_CAPACITY);
+			let min_uniform = min_bytes * UNIFORM_STRIDE as usize;
+			if self.uniform_staging.len() < min_uniform {
+				self.uniform_staging.resize(min_uniform, 0);
+			}
+		}
 		self.surface_scratch.clear();
 		{
 			let elapsed = world.resource::<lunar_core::Time>().elapsed_seconds();
