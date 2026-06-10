@@ -162,7 +162,7 @@ impl RenderEngine3d {
 						qn(v.tangent[2]),
 						qn(v.tangent[3]),
 					],
-					uv: [qu(v.uv.x), qu(v.uv.y)],
+					uv: [v.uv.x, v.uv.y],
 					uv_lightmap: [qu(v.uv_lightmap.x), qu(v.uv_lightmap.y)],
 					color: v.color,
 				})
@@ -181,7 +181,7 @@ impl RenderEngine3d {
 					qn(v.tangent[2]),
 					qn(v.tangent[3]),
 				],
-				uv: [qu(v.uv.x), qu(v.uv.y)],
+				uv: [v.uv.x, v.uv.y],
 				uv_lightmap: [qu(v.uv_lightmap.x), qu(v.uv_lightmap.y)],
 				color: v.color,
 			})

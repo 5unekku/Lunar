@@ -373,7 +373,6 @@ impl RenderEngine3d {
 		{
 			let elapsed = world.resource::<lunar_core::Time>().elapsed_seconds();
 			let mut sq = world.query::<(
-				Entity,
 				&Mesh3d,
 				&SurfaceShader,
 				&WorldTransform3d,
@@ -381,9 +380,12 @@ impl RenderEngine3d {
 			)>();
 			let surface_slot_base = ENTITY_SLOT_START + self.draw_scratch.len();
 			let mut surface_idx = 0usize;
-			for (entity, mesh, surf, wt, vis) in sq.iter(world) {
-				if !vis.0 || surface_idx >= 512 {
+			for (mesh, surf, wt, vis) in sq.iter(world) {
+				if surface_idx >= 512 {
 					break;
+				}
+				if !vis.0 {
+					continue;
 				}
 				let slot = surface_slot_base + surface_idx;
 				// evaluate UV transforms
@@ -438,7 +440,7 @@ impl RenderEngine3d {
 				}
 				// upload transform to entity instances buffer
 				Self::pack_mesh_uniforms(&mut self.uniform_staging, slot, wt.to_matrix());
-				self.surface_scratch.push((entity, slot, tex_ids, packed));
+				self.surface_scratch.push((mesh.0.id(), slot, tex_ids, packed));
 				surface_idx += 1;
 			}
 		}
@@ -1181,7 +1183,8 @@ impl RenderEngine3d {
 				// upload stage params for this entity
 				let slot_offset = (slot - (ENTITY_SLOT_START + self.draw_scratch.len()))
 					* UNIFORM_STRIDE as usize;
-				if slot_offset + 128 <= 64 * UNIFORM_STRIDE as usize {
+				// surface_params_buf holds 512 slots — must match the gather cap above
+				if slot_offset + 128 <= 512 * UNIFORM_STRIDE as usize {
 					let mut stage_data = [0u8; 128];
 					for (i, &stage) in packed_stages.iter().enumerate() {
 						let off = i * 32;

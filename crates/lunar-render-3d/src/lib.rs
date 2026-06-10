@@ -174,8 +174,11 @@ mod resources;
 const SKY_RADIUS: f32 = 900.0;
 const SUN_Y: f32 = 895.0;
 
-// quantized gpu vertex: 32 bytes (vs cpu Vertex3d 60 bytes).
-// normals/tangents snorm8×4, uvs unorm16×2, position stays f32.
+// quantized gpu vertex: 36 bytes (vs cpu Vertex3d 60 bytes).
+// normals/tangents snorm8×4, position stays f32.
+// primary uv stays f32 too — tiled geometry (e.g. classic level formats) uses
+// coordinates far outside [0,1], which unorm quantization would clamp.
+// lightmap uv is always atlas-normalized [0,1] so unorm16 is safe there.
 // the upload path converts Vertex3d → GpuVertex3d at upload time.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -183,7 +186,7 @@ struct GpuVertex3d {
 	position: [f32; 3],    // 12 bytes
 	normal: [i8; 4],       // 4 bytes — snorm8×4, w=0
 	tangent: [i8; 4],      // 4 bytes — snorm8×4, w=handedness (±127)
-	uv: [u16; 2],          // 4 bytes — unorm16×2
+	uv: [f32; 2],          // 8 bytes — float32×2 (unbounded for tiling)
 	uv_lightmap: [u16; 2], // 4 bytes — unorm16×2
 	color: [u8; 4],        // 4 bytes
 }
@@ -1391,16 +1394,11 @@ pub struct RenderEngine3d {
 	surface_fallback_tex: wgpu::Texture,
 	surface_fallback_view: wgpu::TextureView,
 	surface_sampler: wgpu::Sampler,
-	surface_params_buf: wgpu::Buffer, // UNIFORM_STRIDE per entity, up to 64 surface entities
+	surface_params_buf: wgpu::Buffer, // UNIFORM_STRIDE per entity, up to 512 surface entities
 	surface_tex_cache: HashMap<u32, (wgpu::Texture, wgpu::TextureView)>,
 	surface_bg_cache: HashMap<[u32; 4], wgpu::BindGroup>,
-	// (entity, instance_slot, [tex_id; 4], packed stages × 4)
-	surface_scratch: Vec<(
-		bevy_ecs::entity::Entity,
-		usize,
-		[u32; 4],
-		[SurfaceStagePacked; 4],
-	)>,
+	// (mesh_id, instance_slot, [tex_id; 4], packed stages × 4)
+	surface_scratch: Vec<(u32, usize, [u32; 4], [SurfaceStagePacked; 4])>,
 
 	mesh_gpu: HashMap<u32, GpuMesh>,
 	dome_mesh: GpuMesh,

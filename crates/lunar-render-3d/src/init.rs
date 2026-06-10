@@ -749,18 +749,18 @@ impl RenderEngine3d {
 					shader_location: 2,
 				},
 				wgpu::VertexAttribute {
-					format: wgpu::VertexFormat::Unorm16x2,
+					format: wgpu::VertexFormat::Float32x2,
 					offset: 20,
 					shader_location: 3,
 				},
 				wgpu::VertexAttribute {
 					format: wgpu::VertexFormat::Unorm16x2,
-					offset: 24,
+					offset: 28,
 					shader_location: 4,
 				},
 				wgpu::VertexAttribute {
 					format: wgpu::VertexFormat::Unorm8x4,
-					offset: 28,
+					offset: 32,
 					shader_location: 5,
 				},
 			],
@@ -2598,7 +2598,7 @@ impl RenderEngine3d {
 						0 => Float32x3, // position
 						1 => Snorm8x4,  // normal (ignored by terrain shader)
 						2 => Snorm8x4,  // tangent (ignored)
-						3 => Unorm16x2, // uv (ignored)
+						3 => Float32x2, // uv (ignored)
 						4 => Unorm16x2, // uv_lightmap (ignored)
 						5 => Unorm8x4,  // color (ignored)
 					],

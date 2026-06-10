@@ -584,18 +584,18 @@ impl RenderEngine3d {
 				shader_location: 2,
 			},
 			wgpu::VertexAttribute {
-				format: wgpu::VertexFormat::Unorm16x2,
+				format: wgpu::VertexFormat::Float32x2,
 				offset: 20,
 				shader_location: 3,
 			},
 			wgpu::VertexAttribute {
 				format: wgpu::VertexFormat::Unorm16x2,
-				offset: 24,
+				offset: 28,
 				shader_location: 4,
 			},
 			wgpu::VertexAttribute {
 				format: wgpu::VertexFormat::Unorm8x4,
-				offset: 28,
+				offset: 32,
 				shader_location: 5,
 			},
 		];

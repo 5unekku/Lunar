@@ -234,11 +234,10 @@ impl RenderEngine3d {
 							b: sky_color.b as f64,
 							a: 1.0,
 						}),
-						store: if self.msaa_color_view.is_some() {
-							wgpu::StoreOp::Discard // MSAA tile memory, not needed after resolve
-						} else {
-							wgpu::StoreOp::Store
-						},
+						// later scene passes (surface, terrain, water, particles)
+						// load this attachment — discarding would leave them with
+						// undefined contents per the WebGPU spec
+						store: wgpu::StoreOp::Store,
 					},
 					depth_slice: None,
 				})],
@@ -251,7 +250,9 @@ impl RenderEngine3d {
 						} else {
 							wgpu::LoadOp::Clear(1.0)
 						},
-						store: wgpu::StoreOp::Discard,
+						// scene passes after this one depth-test against these
+						// contents — must persist
+						store: wgpu::StoreOp::Store,
 					}),
 					stencil_ops: None,
 				}),
@@ -465,15 +466,11 @@ impl RenderEngine3d {
 			surf_pass.set_bind_group(0, &self.globals_bg, &[]);
 			surf_pass.set_bind_group(1, &self.entity_bg, &[]);
 			let draw_base_slot = ENTITY_SLOT_START + self.draw_scratch.len();
-			for &(entity, slot, tex_ids, _) in &self.surface_scratch {
+			for &(mesh_id, slot, tex_ids, _) in &self.surface_scratch {
 				let Some(bg) = self.surface_bg_cache.get(&tex_ids) else {
 					continue;
 				};
 				let surf_offset = ((slot - draw_base_slot) as u64 * UNIFORM_STRIDE) as u32;
-				let Some(mesh_comp) = world.get::<Mesh3d>(entity) else {
-					continue;
-				};
-				let mesh_id = mesh_comp.0.id();
 				let Some(gpu) = self.mesh_gpu.get(&mesh_id) else {
 					continue;
 				};
@@ -481,6 +478,7 @@ impl RenderEngine3d {
 				surf_pass.set_vertex_buffer(0, gpu.vbuf.slice(..));
 				surf_pass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
 				surf_pass.draw_indexed(0..gpu.index_count, 0, slot as u32..slot as u32 + 1);
+				draw_calls += 1;
 			}
 		}
 
@@ -1534,6 +1532,7 @@ impl RenderEngine3d {
 				let mat_bg = &self.material_bg;
 				let depth_vw = &self.depth_view;
 				let draw_ref = &self.draw_scratch;
+				let surf_ref = &self.surface_scratch;
 				let shadow_ref = &self.shadow_list_scratch;
 				tasks
 					.par_iter()
@@ -1552,6 +1551,7 @@ impl RenderEngine3d {
 						let s_mat_bg = mat_bg;
 						let s_depth = depth_vw;
 						let s_draw = draw_ref;
+						let s_surf = surf_ref;
 						let label = if task == usize::MAX {
 							"[z-prepass]".to_string()
 						} else {
@@ -1619,6 +1619,20 @@ impl RenderEngine3d {
 									group_start = i;
 								}
 								i += 1;
+							}
+							// surface shader meshes write prepass depth too — the
+							// atmos sky pass and GTAO read this buffer, so missing
+							// them classifies their pixels as sky
+							for &(mesh_id, slot, _, _) in s_surf {
+								if let Some(gpu) = s_mesh_gpu.get(&mesh_id) {
+									zpass.set_vertex_buffer(0, gpu.pos_buf.slice(..));
+									zpass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+									zpass.draw_indexed(
+										0..gpu.index_count,
+										0,
+										slot as u32..slot as u32 + 1,
+									);
+								}
 							}
 						} else {
 							let cascade = task;
@@ -1795,6 +1809,18 @@ impl RenderEngine3d {
 							group_start = i;
 						}
 						i += 1;
+					}
+					// surface shader meshes write prepass depth too (see native path)
+					for &(mesh_id, slot, _, _) in &self.surface_scratch {
+						if let Some(gpu) = self.mesh_gpu.get(&mesh_id) {
+							zpass.set_vertex_buffer(0, gpu.pos_buf.slice(..));
+							zpass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+							zpass.draw_indexed(
+								0..gpu.index_count,
+								0,
+								slot as u32..slot as u32 + 1,
+							);
+						}
 					}
 				}
 			}
