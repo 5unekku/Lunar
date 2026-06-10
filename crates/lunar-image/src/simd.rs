@@ -258,14 +258,13 @@ mod srgb_tests {
 	/// the baked table must match the srgb transfer function exactly.
 	#[test]
 	fn baked_lut_matches_formula() {
-		for i in 0..256 {
+		for (i, &baked) in SRGB_TO_LINEAR_LUT.iter().enumerate() {
 			let s = i as f32 / 255.0;
 			let expected = if s <= 0.04045 {
 				s / 12.92
 			} else {
 				((s + 0.055) / 1.055).powf(2.4)
 			};
-			let baked = SRGB_TO_LINEAR_LUT[i];
 			assert!(
 				(baked - expected).abs() <= f32::EPSILON,
 				"lut[{i}] = {baked}, formula = {expected}"
