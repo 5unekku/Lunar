@@ -1,0 +1,3 @@
+[submodule "examples/lunar-doom"]
+	path = examples/lunar-doom
+	url = git@gitlab.com:5unekku/Lunar-DOOM.git

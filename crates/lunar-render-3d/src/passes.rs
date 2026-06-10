@@ -148,6 +148,7 @@ impl RenderEngine3d {
 						multiview: None,
 					},
 				);
+				benc.set_pipeline(&self.opaque_pipeline);
 				benc.set_bind_group(0, &self.globals_bg, &[]);
 				benc.set_bind_group(1, &self.material_bg, &[]);
 				benc.set_bind_group(2, &self.entity_bg, &[]);
@@ -301,9 +302,14 @@ impl RenderEngine3d {
 				pass.execute_bundles(std::iter::once(bundle));
 			}
 
-			// opaque PBR pass — entity_bg set once; instance_index selects transform + material.
+			// opaque PBR pass — execute_bundles resets all pass state per spec, so rebind everything
 			pass.set_pipeline(&self.opaque_pipeline);
+			pass.set_bind_group(0, &self.globals_bg, &[]);
+			pass.set_bind_group(1, &self.material_bg, &[]);
 			pass.set_bind_group(2, &self.entity_bg, &[]);
+			pass.set_bind_group(3, &self.lights_bg, &[]);
+			pass.set_bind_group(4, &self.lightmap_fallback_bg, &[]);
+			pass.set_bind_group(5, &self.cluster_bg_render, &[]);
 			if self.gpu_indirect_active() {
 				// phase 4: GPU cull wrote draw commands to indirect_buf.
 				// bind atlas once (all lightmaps packed into it), bind mega-VBO/IBO, one call.
