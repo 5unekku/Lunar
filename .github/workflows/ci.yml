@@ -36,7 +36,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
       - run: apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev clang
-      - run: cargo build --target wasm32-unknown-unknown --package lunar-lib
+      # lunar-game covers the full facade plus both bins (lunar is wasm-gated, lunar-web is the wasm entry)
+      - run: cargo build --target wasm32-unknown-unknown --package lunar-game
 
   smoke:
     runs-on: ubuntu-latest

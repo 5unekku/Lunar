@@ -8,6 +8,7 @@
 use lunar::prelude::*;
 
 #[derive(Default)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 struct EmptyPlugin;
 
 impl GamePlugin for EmptyPlugin {
@@ -17,5 +18,7 @@ impl GamePlugin for EmptyPlugin {
 }
 
 fn main() {
+	// wasm uses the lunar-web bin; gating here keeps `-p lunar-game` wasm builds green
+	#[cfg(not(target_arch = "wasm32"))]
 	lunar::bootstrap::<EmptyPlugin>(Default::default());
 }
