@@ -25,7 +25,9 @@
 struct TaaParams {
     prev_vp:     mat4x4<f32>,   // previous-frame view-projection (jittered, matches history)
     inv_vp:      mat4x4<f32>,   // inverse of current jittered view-projection
-    jitter:      vec2<f32>,     // current frame jitter in uv space (zero while moving)
+    // current frame jitter in y-down uv space (always active while staa runs).
+    // subtracting it from a sampled uv recovers the un-jittered position.
+    jitter:      vec2<f32>,
     rcp_frame:   vec2<f32>,     // (1/display_w, 1/display_h)
     // blend_alpha: base temporal blend weight within the masked region (default 0.1)
     blend_alpha: f32,
@@ -120,12 +122,15 @@ fn fxaa_resolve(uv: vec2<f32>, rc: vec2<f32>,
     let rcp_min = 1.0 / (min(abs(dir.x), abs(dir.y)) + reduce);
     dir = clamp(dir * rcp_min, vec2<f32>(-FXAA_SPAN_MAX), vec2<f32>(FXAA_SPAN_MAX)) * rc;
 
+    // explicit-lod samples: this runs inside a per-pixel branch, where implicit
+    // derivatives are undefined per the WGSL spec (works on most drivers, but
+    // textureSampleLevel is the portable form; these textures have one mip anyway).
     let rgb_a = 0.5 * (
-        textureSample(current_tex, linear_smp, uv + dir * (1.0 / 3.0 - 0.5)).rgb +
-        textureSample(current_tex, linear_smp, uv + dir * (2.0 / 3.0 - 0.5)).rgb);
+        textureSampleLevel(current_tex, linear_smp, uv + dir * (1.0 / 3.0 - 0.5), 0.0).rgb +
+        textureSampleLevel(current_tex, linear_smp, uv + dir * (2.0 / 3.0 - 0.5), 0.0).rgb);
     let rgb_b = rgb_a * 0.5 + 0.25 * (
-        textureSample(current_tex, linear_smp, uv + dir * -0.5).rgb +
-        textureSample(current_tex, linear_smp, uv + dir *  0.5).rgb);
+        textureSampleLevel(current_tex, linear_smp, uv + dir * -0.5, 0.0).rgb +
+        textureSampleLevel(current_tex, linear_smp, uv + dir *  0.5, 0.0).rgb);
 
     // if the wider blend overshoots the local luma range it has bled across the
     // edge — fall back to the narrower (lower-blur) blend.
@@ -248,11 +253,12 @@ fn fs_main(in: VertOut) -> FragOut {
         spatial = fxaa_resolve(uv, rc, luma_nw, luma_ne, luma_sw, luma_se, luma_min, luma_max);
     }
 
-    // spatial vs temporal balance on edges:
-    //   - camera dead-still + jitter active → temporal accumulates true ssaa, so back
+    // spatial vs temporal balance on edges, driven by measured velocity (jitter is
+    // always active while staa runs; it cancels out of speed_px above):
+    //   - camera dead-still → temporal accumulation of the jitter is true ssaa, so back
     //     spatial off (it would only add blur over an already-resolved edge).
-    //   - any motion → jitter is disabled upstream and history reprojects, so spatial
-    //     carries the edge AA while temporal just stabilizes it.
+    //   - motion ≥ ~2px/frame → history reprojection carries no sub-pixel detail, so
+    //     spatial carries the edge AA while temporal just stabilizes it.
     let jitter_active = dot(params.jitter, params.jitter) > 1e-12;
     let ssaa_factor   = select(0.0, saturate(1.0 - speed_px * 0.5), jitter_active);
     // fully hand edges to temporal ssaa when dead-still (no residual fxaa blur);

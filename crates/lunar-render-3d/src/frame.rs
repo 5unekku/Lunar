@@ -106,7 +106,7 @@ impl RenderEngine3d {
 				.unwrap_or(false)
 			&& self.staa_enabled; // staa_enabled = false on LowGles (no compute), true otherwise
 
-		let (view_proj, staa_jitter_ndc) = if staa_on {
+		let (view_proj, staa_jitter_uv) = if staa_on {
 			// Halton low-discrepancy sequence: base 2 for x, base 3 for y, evaluated
 			// at compile time. index k holds halton(k+1) so entry 0 is a non-zero
 			// offset (avoids identity jitter).
@@ -140,13 +140,17 @@ impl RenderEngine3d {
 			let jy = (hy - 0.5) * 2.0 / dh;
 
 			// modify the projection column 2 (z-axis.xy) to add a constant NDC offset.
-			// P[2][0] += Δx shifts NDC.x by -Δx for all depths (clip.w cancels out).
+			// P[2][0] -= Δx shifts NDC.x by +Δx for all depths (clip.w cancels out).
 			let view_mat = Camera3d::view_matrix(cam_wt);
 			let mut jittered_proj = camera.projection.matrix(aspect);
 			jittered_proj.z_axis.x -= jx;
 			jittered_proj.z_axis.y -= jy;
-			// jitter in UV space = NDC jitter / 2 (NDC spans [-1,1], UV spans [0,1])
-			(jittered_proj * view_mat, Vec2::new(jx * 0.5, jy * 0.5))
+			// jitter in UV space: NDC/2, with y NEGATED — ndc is y-up but uv is y-down,
+			// so +jy in ndc moves the image by -jy/2 in uv. the shader subtracts this
+			// value from uv to un-jitter; a positive y here would double the y jitter
+			// in the velocity estimate instead of cancelling it (≈2px phantom motion on
+			// a static camera, which kept spatial AA flickering on and off per frame).
+			(jittered_proj * view_mat, Vec2::new(jx * 0.5, -jy * 0.5))
 		} else {
 			(view_proj_unjittered, Vec2::ZERO)
 		};
@@ -1770,7 +1774,7 @@ impl RenderEngine3d {
 		// bundle read-only per-frame state once; shared by the pre-color and post passes
 		let fc = FrameContext {
 			view_proj,
-			staa_jitter_ndc,
+			staa_jitter_uv,
 			cam_pos,
 			cam_wt,
 			aspect,

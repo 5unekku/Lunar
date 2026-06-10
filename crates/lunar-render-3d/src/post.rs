@@ -18,7 +18,7 @@ impl RenderEngine3d {
 	) {
 		let &FrameContext {
 			view_proj,
-			staa_jitter_ndc,
+			staa_jitter_uv,
 			cam_pos,
 			cam_wt,
 			dev_bloom,
@@ -653,8 +653,8 @@ impl RenderEngine3d {
 				&self.staa_prev_vp_jittered.to_cols_array(),
 			));
 			taa_data[64..128].copy_from_slice(bytemuck::cast_slice(&inv_vp.to_cols_array()));
-			taa_data[128..132].copy_from_slice(bytemuck::cast_slice(&[staa_jitter_ndc.x]));
-			taa_data[132..136].copy_from_slice(bytemuck::cast_slice(&[staa_jitter_ndc.y]));
+			taa_data[128..132].copy_from_slice(bytemuck::cast_slice(&[staa_jitter_uv.x]));
+			taa_data[132..136].copy_from_slice(bytemuck::cast_slice(&[staa_jitter_uv.y]));
 			taa_data[136..140].copy_from_slice(bytemuck::cast_slice(&[1.0_f32 / w as f32]));
 			taa_data[140..144].copy_from_slice(bytemuck::cast_slice(&[1.0_f32 / h as f32]));
 			taa_data[144..148].copy_from_slice(bytemuck::cast_slice(&[0.1_f32])); // blend_alpha
@@ -702,7 +702,9 @@ impl RenderEngine3d {
 						view: history_write_view,
 						resolve_target: None,
 						ops: wgpu::Operations {
-							load: wgpu::LoadOp::Load,
+							// fullscreen triangle overwrites every pixel — Clear skips
+							// the tile load a Load would force on mobile GPUs
+							load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
 							store: wgpu::StoreOp::Store,
 						},
 						depth_slice: None,
@@ -727,7 +729,7 @@ impl RenderEngine3d {
 		// always track the jittered vp regardless of staa state, so the first active
 		// frame has a correct value for history reprojection.
 		self.staa_prev_vp_jittered = view_proj; // jittered vp, matches history
-		self.staa_prev_jitter = staa_jitter_ndc; // this frame's jitter → "prev" next frame
+		self.staa_prev_jitter = staa_jitter_uv; // this frame's jitter → "prev" next frame
 
 		// ── FXAA pass → swapchain ─────────────────────────────────────────
 		if dev_fxaa && !dev_staa {

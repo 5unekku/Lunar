@@ -1247,7 +1247,7 @@ impl Default for RenderInfo3d {
 /// end of render_frame and passed to extracted `record_*` pass methods. all Copy.
 struct FrameContext {
 	view_proj: Mat4,
-	staa_jitter_ndc: Vec2,
+	staa_jitter_uv: Vec2,
 	cam_pos: Vec3,
 	cam_wt: WorldTransform3d,
 	dev_bloom: bool,
