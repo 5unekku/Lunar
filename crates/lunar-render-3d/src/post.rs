@@ -445,6 +445,9 @@ impl RenderEngine3d {
 					if dev_contact_shadows && self.contact_shadow_tex.is_some() {
 						f |= 128;
 					}
+					if style.tonemap == crate::TonemapMode::Clamp {
+						f |= 256;
+					}
 					bloom_s = 0.04_f32;
 					vig_s = if dev_vignette && q.vignette { 0.3 } else { 0.0 };
 					vig_r = 0.3_f32;
@@ -469,6 +472,9 @@ impl RenderEngine3d {
 					}
 					if dev_contact_shadows && self.contact_shadow_tex.is_some() {
 						f |= 128;
+					}
+					if style.tonemap == crate::TonemapMode::Clamp {
+						f |= 256;
 					}
 				}
 				(bloom_s, vig_s, vig_r, ca_s, grain_s, f)

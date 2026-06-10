@@ -19,6 +19,7 @@ struct CompositeParams {
     //   bit 5 = SSR
     //   bit 6 = volumetric fog
     //   bit 7 = contact shadows
+    //   bit 8 = tonemap off (clamp instead of ACES — classic raw-color look)
     flags: u32,
     _pad: f32,
     // colour quantization (all neutral when color_bits == 0):
@@ -145,14 +146,27 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
         hdr_color += textureSample(bloom_tex, smp, uv).rgb * params.bloom_strength;
     }
 
-    // ACES filmic tonemap (HDR → LDR)
-    var ldr = aces_tonemap(hdr_color);
+    // HDR → LDR: ACES filmic by default; flag bit 8 swaps to a plain clamp so
+    // unlit/classic content keeps its authored colors (ACES crushes darks)
+    let tonemap_off = (params.flags & 256u) != 0u;
+    var ldr: vec3<f32>;
+    if tonemap_off {
+        ldr = saturate(hdr_color);
+    } else {
+        ldr = aces_tonemap(hdr_color);
+    }
 
     // volumetric fog: blend over LDR (after tonemap so fog isn't HDR-clamped)
     if (params.flags & 64u) != 0u {
         let fog = textureSample(fog_tex, smp, uv);
         // fog.rgb = in-scatter (linear), fog.a = 1 - transmittance
-        ldr = ldr * (1.0 - fog.a) + aces_tonemap(fog.rgb);
+        var fog_ldr: vec3<f32>;
+        if tonemap_off {
+            fog_ldr = saturate(fog.rgb);
+        } else {
+            fog_ldr = aces_tonemap(fog.rgb);
+        }
+        ldr = ldr * (1.0 - fog.a) + fog_ldr;
     }
 
     // vignette

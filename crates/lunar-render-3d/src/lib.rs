@@ -202,7 +202,7 @@ const SHADOW_MAP_SIZE: u32 = 1024;
 const NUM_CASCADES: u32 = 3;
 
 /// group 0: view_proj (64) + cam_pos (12) + elapsed (4) + delta (4) + pad (12) = 96 bytes.
-const GLOBALS_SIZE: u64 = 96;
+const GLOBALS_SIZE: u64 = 112;
 
 /// group 1: base_color (16) + metallic (4) + roughness (4) + flags (4) + has_lightmap (4)
 ///          + lm_uv_offset (8) + lm_uv_scale (8) = 48 bytes.
@@ -788,6 +788,18 @@ pub enum DitherMode {
 	Bayer8,
 }
 
+/// HDR → LDR transfer applied in the composite pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TonemapMode {
+	/// ACES filmic curve — the cinematic default for lit/PBR content.
+	#[default]
+	Aces,
+	/// plain clamp to [0, 1] — preserves authored colors exactly. ACES crushes
+	/// dark values, so unlit retro content (palette-based games, vertex-lit
+	/// surfaces) should use this.
+	Clamp,
+}
+
 impl DitherMode {
 	/// matrix edge length passed to the composite shader (`0` = off).
 	#[must_use]
@@ -831,6 +843,16 @@ pub struct VisualStyle {
 	/// disable perspective-correct texture interpolation on the textured/unlit surface
 	/// path, producing affine UV distortion. default `false`.
 	pub affine_textures: bool,
+	/// HDR → LDR transfer in the composite pass. `Aces` (default) for lit
+	/// content; `Clamp` for classic raw-color looks where ACES would crush darks.
+	pub tonemap: TonemapMode,
+	/// doom-style depth-cued lighting on the surface shader path. `0.0` = off.
+	/// when set, the surface shader reinterprets vertex color as a light level
+	/// and applies the classic software-renderer falloff: surfaces brighten as
+	/// the camera approaches, fading toward the sector's base level with
+	/// distance. the value is the boost distance constant in world units
+	/// (doom used 1280 map units).
+	pub classic_light_dist: f32,
 }
 
 impl Default for VisualStyle {
@@ -851,6 +873,8 @@ impl VisualStyle {
 			lighting: LightingModel::Pbr,
 			vertex_snap: 0.0,
 			affine_textures: false,
+			tonemap: TonemapMode::Aces,
+			classic_light_dist: 0.0,
 		}
 	}
 
@@ -862,6 +886,8 @@ impl VisualStyle {
 			&& self.lighting == LightingModel::Pbr
 			&& self.vertex_snap == 0.0
 			&& !self.affine_textures
+			&& self.tonemap == TonemapMode::Aces
+			&& self.classic_light_dist == 0.0
 	}
 }
 
@@ -1976,6 +2002,8 @@ mod visual_style_tests {
 		assert!(!VisualStyle { lighting: LightingModel::Lambert, ..VisualStyle::neutral() }.is_neutral());
 		assert!(!VisualStyle { vertex_snap: 240.0, ..VisualStyle::neutral() }.is_neutral());
 		assert!(!VisualStyle { affine_textures: true, ..VisualStyle::neutral() }.is_neutral());
+		assert!(!VisualStyle { tonemap: TonemapMode::Clamp, ..VisualStyle::neutral() }.is_neutral());
+		assert!(!VisualStyle { classic_light_dist: 40.0, ..VisualStyle::neutral() }.is_neutral());
 	}
 
 	#[test]

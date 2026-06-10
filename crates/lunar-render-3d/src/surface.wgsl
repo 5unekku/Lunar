@@ -11,6 +11,11 @@ struct Globals {
     lighting_model: u32,
     render_flags:   u32,  // bit 2 = affine_textures (disable perspective-correct UV)
     vertex_snap:    f32,  // snap grid resolution (0 = off)
+    // doom-style depth-cued lighting (0 = off). when set, vertex color is a
+    // light level and surfaces brighten as the camera approaches; the value
+    // is the boost distance constant in world units.
+    classic_light:  f32,
+    _pad0: f32, _pad1: f32, _pad2: f32,
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 
@@ -65,6 +70,8 @@ struct VertOut {
     // same base uv but interpolated screen-linearly (no perspective correction).
     // selected in the fragment shader when affine_textures is on → the classic UV "swim".
     @location(4) @interpolate(linear) uv_affine: vec2<f32>,
+    // world-space position, used by the classic depth-cued light path
+    @location(5) world_pos: vec3<f32>,
 }
 
 // vertex snapping (matches shader.wgsl); returns input unchanged when off.
@@ -88,6 +95,7 @@ fn vs_surface(in: VertIn, @builtin(instance_index) instance_id: u32) -> VertOut 
     out.color       = in.color;
     out.instance_id = instance_id;
     out.uv_affine   = in.uv;
+    out.world_pos   = world_pos4.xyz;
     return out;
 }
 
@@ -124,13 +132,29 @@ fn fs_surface(in: VertOut) -> @location(0) vec4<f32> {
     // affine_textures (render_flags bit 2): swap perspective-correct uv for the
     // screen-linear interpolant to recreate early-3D texture warping.
     let base_uv = select(in.uv, in.uv_affine, (globals.render_flags & 4u) != 0u);
+
+    // classic depth-cued lighting: vertex color holds the sector light level.
+    // vanilla software equation: colormap index = 4·(15 − light/16) − boost,
+    // where boost = K/distance capped at 23.5 steps (the j ≤ 47 scalelight
+    // clamp), index clamped to [0, 31]; 0 is full bright, 31 near black.
+    // the colormap scales palette bytes directly and this whole pipeline is
+    // gamma space (non-srgb textures + swapchain), so multiply as-is.
+    var vert_color = in.color;
+    if globals.classic_light > 0.0 {
+        let dist = max(distance(in.world_pos, globals.cam_pos), 0.001);
+        let boost = min(globals.classic_light / dist, 23.5);
+        let index = clamp(60.0 - 63.75 * in.color.r - boost, 0.0, 31.0);
+        let bright = (32.0 - index) / 32.0;
+        vert_color = vec4<f32>(bright, bright, bright, in.color.a);
+    }
+
     var acc = vec4<f32>(0.0, 0.0, 0.0, 1.0);
     for (var s = 0u; s < 4u; s++) {
         let stage = surface_params.stages[s];
         if stage.enabled == 0u { continue; }
         let uv = apply_uv(base_uv, in.uv_lightmap, stage);
         let sampled = sample_stage(s, uv);
-        acc = blend_stage(acc, sampled * in.color, stage);
+        acc = blend_stage(acc, sampled * vert_color, stage);
     }
     return acc;
 }

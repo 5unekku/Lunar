@@ -11,7 +11,9 @@ struct Globals {
     delta_secs:     f32,          //  4 bytes (offset 80)
     lighting_model: u32,          //  4 bytes (offset 84)
     render_flags:   u32,          //  4 bytes (offset 88) — bit 0: soft_shadows, bit 1: contact_shadows, bit 2: affine_textures
-    vertex_snap:    f32,          //  4 bytes (offset 92) — snap grid (0 = off). total: 96 bytes
+    vertex_snap:    f32,          //  4 bytes (offset 92) — snap grid (0 = off)
+    classic_light:  f32,          //  4 bytes (offset 96) — surface-path depth-cued light constant (0 = off)
+    _pad0: f32, _pad1: f32, _pad2: f32, // total: 112 bytes
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 

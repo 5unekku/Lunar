@@ -1118,12 +1118,15 @@ impl RenderEngine3d {
 						&& !self.surface_tex_cache.contains_key(&tid)
 						&& let Some(tex) = asset_server.get_texture_by_id(tid)
 					{
+						// non-srgb on purpose: the surface path is unlit and the
+						// swapchain is non-srgb with no gamma encode in composite,
+						// so srgb sampling would darken authored colors by ^2.2
 						let (gpu_fmt, bpr) = match tex.compression {
 							lunar_assets::TextureCompression::None => {
-								(wgpu::TextureFormat::Rgba8UnormSrgb, tex.width * 4)
+								(wgpu::TextureFormat::Rgba8Unorm, tex.width * 4)
 							}
 							lunar_assets::TextureCompression::Bc1 => (
-								wgpu::TextureFormat::Bc1RgbaUnormSrgb,
+								wgpu::TextureFormat::Bc1RgbaUnorm,
 								tex.width.div_ceil(4) * 8,
 							),
 							lunar_assets::TextureCompression::Bc3 => (
@@ -1280,9 +1283,9 @@ impl RenderEngine3d {
 		// ── upload globals + small uniforms via queue.write_buffer ───────
 		let upload_size = (needed * UNIFORM_STRIDE as usize) as u64;
 		let time = world.resource::<lunar_core::Time>();
-		let globals_data: [f32; 24] = {
+		let globals_data: [f32; 28] = {
 			let vp = view_proj.to_cols_array();
-			let mut d = [0f32; 24];
+			let mut d = [0f32; 28];
 			d[..16].copy_from_slice(&vp);
 			d[16] = cam_pos.x;
 			d[17] = cam_pos.y;
@@ -1308,6 +1311,9 @@ impl RenderEngine3d {
 			d[22] = f32::from_bits(render_flags);
 			// d[23] = vertex snap grid resolution (plain f32; 0.0 = off)
 			d[23] = dev_style.vertex_snap;
+			// d[24] = classic light boost distance constant (0.0 = off);
+			// d[25..28] = padding to the 112-byte Globals layout
+			d[24] = dev_style.classic_light_dist;
 			d
 		};
 		self.queue
