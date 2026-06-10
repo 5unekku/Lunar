@@ -10,10 +10,17 @@ use super::AudioBackend;
 use crossbeam_channel::{Sender, unbounded};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
+// cpal's webaudio Stream holds JS objects (AudioContext, callbacks) and is !Send.
+// SAFETY: wasm32-unknown-unknown without the `atomics` target feature is
+// single-threaded — no second thread can exist to observe the stream, so Send is
+// vacuously satisfied. revisit if wasm threads are ever enabled for this target.
+struct StreamHandle(#[allow(dead_code)] cpal::Stream);
+unsafe impl Send for StreamHandle {}
+
 pub struct CpalBackend {
     sender: Sender<Box<dyn AudioSource>>,
     /// stream must stay alive to keep audio running.
-    _stream: cpal::Stream,
+    _stream: StreamHandle,
 }
 
 impl CpalBackend {
@@ -45,7 +52,7 @@ impl CpalBackend {
 
         stream.play().map_err(|e| format!("stream play failed: {e}"))?;
 
-        Ok(Self { sender, _stream: stream })
+        Ok(Self { sender, _stream: StreamHandle(stream) })
     }
 }
 

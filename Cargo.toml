@@ -103,3 +103,10 @@ strip         = "symbols"  # strip debug symbols, keep minimal export table
 # a gpu-heavy engine, with no cost to debugging lunar's own code.
 [profile.dev.package."*"]
 opt-level = 3
+
+# cubeb-sys must stay at the profile default: at opt-level 3 the cmake crate flips
+# libcubeb to RelWithDebInfo, whose nested `cargo build --release` drops
+# libcubeb_pulse.a in release/ while cubeb-sys's build.rs (PROFILE=debug) searches
+# debug/ — dev builds then fail to link on any machine with libpulse installed.
+[profile.dev.package.cubeb-sys]
+opt-level = 0
