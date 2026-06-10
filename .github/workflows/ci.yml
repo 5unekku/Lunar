@@ -52,14 +52,28 @@ jobs:
   build-cross:
     runs-on: ubuntu-latest
     container: rust:slim-trixie
+    env:
+      # every crate except the sdl3 windowing layer (lunar, lunar-render, lunar-input)
+      # and lunar-audio (cubeb's nested cmake build does not cross-compile cleanly).
+      # the sdl3 layer is target-independent rust verified by the x86_64/aarch64 full builds.
+      ENGINE_CRATES: >-
+        -p lunar-math -p lunar-core -p lunar-2d -p lunar-3d -p lunar-bsp
+        -p lunar-gamedata -p lunar-atlas -p lunar-lightmap -p lunar-render-3d
+        -p lunar-image -p lunar-assets
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - aarch64-unknown-linux-gnu
-          # i686/armv7 excluded: sdl3 0.18.4 upstream type error (XlibWindowHandle u64 vs u32 on 32-bit)
-          # windows targets excluded: SDL3 cmake cross-build needs MinGW resource compiler (windres), not yet configured
+        include:
+          # full workspace where sdl3 cross-builds; engine set elsewhere:
+          # i686/armv7 hit the sdl3 0.18.4 XlibWindowHandle u64-vs-u32 bug on 32-bit,
+          # windows needs a MinGW windres for SDL3's resource script
+          - { target: x86_64-unknown-linux-gnu, full: true }
+          - { target: aarch64-unknown-linux-gnu, full: true }
+          - { target: armv7-unknown-linux-gnueabihf, full: false }
+          - { target: i686-unknown-linux-gnu, full: false }
+          - { target: x86_64-pc-windows-gnu, full: false }
+          - { target: i686-pc-windows-gnu, full: false }
+          - { target: aarch64-pc-windows-gnullvm, full: false }
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
@@ -68,4 +82,6 @@ jobs:
       - run: apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev python3-pip
       - run: rustup target add ${{ matrix.target }}
       - run: pip install cargo-zigbuild --break-system-packages
-      - run: cargo zigbuild --workspace --target ${{ matrix.target }}
+      - run: |
+          if [ "${{ matrix.full }}" = "true" ]; then scope="--workspace"; else scope="$ENGINE_CRATES"; fi
+          cargo zigbuild --target ${{ matrix.target }} $scope

@@ -2,7 +2,7 @@
 
 ## project rules
 
-- **audio is deferred** — all audio work belongs to the moonwalker project. no audio code in this workspace until moonwalker is ready for integration.
+- **audio is minimal** — `lunar-audio` (cubeb native, cpal on wasm) lives here behind the off-by-default `audio` feature. deeper audio work (tracker engines, DSP, mixing graphs) belongs to the moonwalker project.
 - **no async runtime** — async needs are covered by `pollster::block_on` (wgpu init), `std::thread` + crossbeam (asset IO), and `wasm_bindgen_futures::spawn_local` (wasm fetch). rayon only if profiling proves it necessary.
 - **prelude is the contract** — game code depends only on `lunar`. `bevy_ecs`, `wgpu`, `sdl3` never appear in a game's `Cargo.toml`. any leak is a bug.
 - **editor is downstream** — the editor lives in a separate repo that depends on `lunar`. no editor code in this workspace.
@@ -31,11 +31,11 @@
 
 ## hosting & publishing
 
-- **[GitLab](https://gitlab.com/5unekku/Lunar)** is the canonical home — CI/CD and PRs live here
+- **[GitLab](https://gitlab.com/5unekku/Lunar)** is the canonical home — development and contributions (MRs) live here
+- **[GitHub](https://github.com/5unekku/Lunar)** runs CI (Actions) and handles crates.io integration
 - **[Codeberg](https://codeberg.org/5unekku/Lunar)** is a mirror
-- **[GitHub](https://github.com/5unekku/Lunar)** is a mirror (visibility / crates.io integration)
 
-CI/CD runs on GitLab CI. this is a library, not a deployed service — the release job is `cargo publish` to crates.io. a lightweight pipeline that checks `cargo test`, `cargo clippy`, and `cargo build --target wasm32-unknown-unknown` on push is enough; a full matrix build is only needed before a crates.io publish.
+CI runs on GitHub Actions (`.github/workflows/ci.yml`): clippy, tests, a wasm build, an xvfb smoke run, and a zigbuild cross matrix over the supported linux/windows triples. this is a library, not a deployed service — the release job is `cargo publish` to crates.io.
 
 ## render rules
 

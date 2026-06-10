@@ -1,4 +1,6 @@
 [toolchain]
 channel = "nightly"
 targets = ["wasm32-unknown-unknown"]
-components = ["clippy", "rustfmt"]
+# cargo listed explicitly: tools that pin the toolchain (cargo-zigbuild) bypass
+# rustup's stable-cargo fallback and fail when the nightly lacks its own cargo
+components = ["cargo", "clippy", "rustfmt"]
