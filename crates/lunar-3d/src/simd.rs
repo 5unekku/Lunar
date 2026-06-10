@@ -2,15 +2,16 @@
 //!
 //! the renderer's mid/low tiers (no GPU compute cull) test every cullable AABB
 //! against the camera frustum on the CPU each frame. [`cull_aabbs_soa`] does that
-//! eight boxes at a time on x86_64 with AVX2+FMA, falling back to a scalar
-//! reference (identical arithmetic) on other targets or when AVX2 is absent at
-//! runtime. the box data comes from [`crate::visibility::CullSoa`], whose axes are
-//! already laid out as contiguous `f32` slices so each lane is a straight load.
+//! eight boxes at a time on x86_64 with AVX2+FMA, four at a time on aarch64 with
+//! NEON (baseline, no runtime detection), and falls back to a scalar reference
+//! elsewhere or when AVX2 is absent at runtime. the box data comes from
+//! [`crate::visibility::CullSoa`], whose axes are already laid out as contiguous
+//! `f32` slices so each lane is a straight load.
 //!
 //! the test is conservative and matches [`crate::visibility::Frustum::intersects_aabb`]:
 //! a box is "visible" unless it is fully outside one of the six planes. a false
 //! positive is harmless (a redundant draw); a false negative would drop geometry,
-//! so the scalar reference and the SIMD path use the same `>= 0` plane comparison.
+//! so the scalar reference and the SIMD paths use the same `>= 0` plane comparison.
 
 // the cull kernels take the six SoA axis slices as separate params by design — that's
 // the whole point of the layout — so the arg-count lint doesn't apply here.
@@ -91,6 +92,15 @@ pub fn cull_aabbs_soa(
 		}
 	}
 
+	#[cfg(target_arch = "aarch64")]
+	// SAFETY: NEON is part of the mandatory AArch64 baseline, so the kernel's
+	// target-feature precondition always holds (no runtime detection needed).
+	unsafe {
+		cull_neon(&pre, center_x, center_y, center_z, half_x, half_y, half_z, out);
+		return;
+	}
+
+	#[cfg_attr(target_arch = "aarch64", allow(unreachable_code))]
 	cull_scalar_into(&pre, center_x, center_y, center_z, half_x, half_y, half_z, out);
 }
 
@@ -113,8 +123,32 @@ fn cull_scalar_into(
 	}
 }
 
+/// fused multiply-add where the hardware has it, plain mul+add elsewhere.
+///
+/// on targets without native FMA (armv7 default float ABI, i686, pre-Haswell
+/// x86_64), `f32::mul_add` lowers to an `fmaf` libcall — an order of magnitude
+/// slower than the two-instruction form, and this runs 24 times per box. the
+/// cull's conservativeness does not depend on last-bit rounding, so the unfused
+/// form is safe; where FMA is native the fused form keeps the scalar reference
+/// bit-identical to the SIMD kernels.
+#[inline(always)]
+fn fused_mul_add(a: f32, b: f32, c: f32) -> f32 {
+	#[cfg(any(target_arch = "aarch64", target_feature = "fma", target_feature = "vfp4"))]
+	{
+		a.mul_add(b, c)
+	}
+	#[cfg(not(any(target_arch = "aarch64", target_feature = "fma", target_feature = "vfp4")))]
+	{
+		a * b + c
+	}
+}
+
 /// true when the box is inside-or-touching all six planes. evaluates every plane
-/// (no early-out) so the result matches the branchless SIMD accumulation bit-for-bit.
+/// (no early-out) so the result matches the branchless SIMD accumulation. on
+/// hardware-FMA targets the arithmetic is bit-identical to the SIMD kernels; on
+/// default x86_64 builds (no compile-time fma) the runtime-dispatched AVX2 kernel
+/// fuses while this doesn't — a last-ulp difference that can only matter for a box
+/// landing exactly on a plane, where either answer is acceptable (conservative test).
 #[inline]
 fn cull_one(
 	pre: &[PlanePrecomp; 6],
@@ -128,9 +162,9 @@ fn cull_one(
 	let mut inside = true;
 	for p in pre {
 		// dot(normal, center): innermost product plain, outer two fused — matches fmadd order.
-		let dot = p.nz.mul_add(cz, p.ny.mul_add(cy, p.nx * cx));
+		let dot = fused_mul_add(p.nz, cz, fused_mul_add(p.ny, cy, p.nx * cx));
 		// projected box radius along the plane normal.
-		let radius = p.anz.mul_add(hz, p.any.mul_add(hy, p.anx * hx));
+		let radius = fused_mul_add(p.anz, hz, fused_mul_add(p.any, hy, p.anx * hx));
 		let test = (dot + p.d) + radius;
 		inside &= test >= 0.0;
 	}
@@ -205,6 +239,90 @@ unsafe fn cull_avx2(
 		}
 
 		// scalar tail (n % 8 boxes).
+		while i < n {
+			*out.get_unchecked_mut(i) = cull_one(
+				pre,
+				*center_x.get_unchecked(i),
+				*center_y.get_unchecked(i),
+				*center_z.get_unchecked(i),
+				*half_x.get_unchecked(i),
+				*half_y.get_unchecked(i),
+				*half_z.get_unchecked(i),
+			) as u8;
+			i += 1;
+		}
+	}
+}
+
+/// NEON kernel: four boxes per iteration, scalar tail for the remainder.
+///
+/// same plane-accumulation structure as [`cull_avx2`]; `vfmaq_f32` keeps the
+/// arithmetic bit-identical to the aarch64 scalar reference (which fuses via
+/// [`fused_mul_add`]).
+///
+/// # Safety
+/// caller must ensure the target CPU supports NEON (always true: NEON is baseline
+/// on AArch64). all axis slices must be at least `out.len()` elements.
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn cull_neon(
+	pre: &[PlanePrecomp; 6],
+	center_x: &[f32],
+	center_y: &[f32],
+	center_z: &[f32],
+	half_x: &[f32],
+	half_y: &[f32],
+	half_z: &[f32],
+	out: &mut [u8],
+) {
+	use std::arch::aarch64::*;
+
+	// SAFETY: every intrinsic below is gated by the function's neon target feature;
+	// pointers are read 4 lanes at a time strictly within `lanes <= n`, and each
+	// `out` byte is written exactly once. the scalar tail covers n % 4.
+	unsafe {
+		let n = out.len();
+
+		// broadcast each plane's scalars to all 4 lanes once.
+		let nx: [float32x4_t; 6] = core::array::from_fn(|p| vdupq_n_f32(pre[p].nx));
+		let ny: [float32x4_t; 6] = core::array::from_fn(|p| vdupq_n_f32(pre[p].ny));
+		let nz: [float32x4_t; 6] = core::array::from_fn(|p| vdupq_n_f32(pre[p].nz));
+		let dd: [float32x4_t; 6] = core::array::from_fn(|p| vdupq_n_f32(pre[p].d));
+		let anx: [float32x4_t; 6] = core::array::from_fn(|p| vdupq_n_f32(pre[p].anx));
+		let any: [float32x4_t; 6] = core::array::from_fn(|p| vdupq_n_f32(pre[p].any));
+		let anz: [float32x4_t; 6] = core::array::from_fn(|p| vdupq_n_f32(pre[p].anz));
+
+		let lanes = n - (n % 4);
+		let mut i = 0;
+		while i < lanes {
+			let cxv = vld1q_f32(center_x.as_ptr().add(i));
+			let cyv = vld1q_f32(center_y.as_ptr().add(i));
+			let czv = vld1q_f32(center_z.as_ptr().add(i));
+			let hxv = vld1q_f32(half_x.as_ptr().add(i));
+			let hyv = vld1q_f32(half_y.as_ptr().add(i));
+			let hzv = vld1q_f32(half_z.as_ptr().add(i));
+
+			let mut inside = vdupq_n_u32(u32::MAX);
+			for p in 0..6 {
+				// vfmaq_f32(a, b, c) = a + b*c — same order as the scalar reference:
+				// nz*cz + (ny*cy + (nx*cx))
+				let dot = vfmaq_f32(vfmaq_f32(vmulq_f32(nx[p], cxv), ny[p], cyv), nz[p], czv);
+				let radius =
+					vfmaq_f32(vfmaq_f32(vmulq_f32(anx[p], hxv), any[p], hyv), anz[p], hzv);
+				let test = vaddq_f32(vaddq_f32(dot, dd[p]), radius);
+				// all-ones in lanes where test >= 0 (inside-or-touching this plane).
+				let ge = vcgezq_f32(test);
+				inside = vandq_u32(inside, ge);
+			}
+			let mut mask = [0u32; 4];
+			vst1q_u32(mask.as_mut_ptr(), inside);
+			for j in 0..4 {
+				*out.get_unchecked_mut(i + j) = (mask[j] & 1) as u8;
+			}
+			i += 4;
+		}
+
+		// scalar tail (n % 4 boxes).
 		while i < n {
 			*out.get_unchecked_mut(i) = cull_one(
 				pre,
