@@ -53,11 +53,14 @@ func main() {
 	release := false
 	only := ""
 	example := ""
+	noCPUBaseline := false
 
 	for i := 1; i < len(os.Args); i++ {
 		switch os.Args[i] {
 		case "--release":
 			release = true
+		case "--no-cpu-baseline":
+			noCPUBaseline = true
 		case "--target":
 			i++
 			if i < len(os.Args) {
@@ -143,17 +146,24 @@ func main() {
 			// merge stderr into stdout so everything appears in a redirected log
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stdout
+			cmd.Env = os.Environ()
+			if flags := cpuFlags(t.triple); flags != "" && !noCPUBaseline {
+				if existing := os.Getenv("RUSTFLAGS"); existing != "" {
+					flags = existing + " " + flags
+				}
+				cmd.Env = append(cmd.Env, "RUSTFLAGS="+flags)
+			}
 			if t.ext == ".exe" {
 				// cross-compiling for windows: tell the windres wrapper which COFF
 				// architecture to use — llvm-windres defaults to x64, so i686 and
 				// aarch64 objects get the wrong machine type without this
-				cmd.Env = append(os.Environ(), "WINDRES_TARGET="+windresTarget(t.triple))
+				cmd.Env = append(cmd.Env, "WINDRES_TARGET="+windresTarget(t.triple))
 			} else if t.sdk != "" {
 				// cross-compiling for macos: clear pkg-config host library dirs and
 				// disable SDL HIDAPI so cmake does not try to validate libusb as a
 				// .dylib (find_library still returns the linux .so despite root path
 				// restrictions when CMAKE_FIND_ROOT_PATH is empty)
-				cmd.Env = append(os.Environ(),
+				cmd.Env = append(cmd.Env,
 					"PKG_CONFIG_LIBDIR=",
 					"PKG_CONFIG_PATH=",
 					"CARGO_FEATURE_NO_SDL_HIDAPI=1",
@@ -201,6 +211,21 @@ func main() {
 	if failed > 0 {
 		os.Exit(1)
 	}
+}
+
+// cpuFlags returns extra codegen flags raising the CPU baseline for dist builds.
+// x86-64-v2 (SSE4.2/POPCNT, hardware from 2009+) is a safe floor that lets LLVM
+// vectorize far more aggressively than plain x86-64; armv7 boards that can run a
+// gpu game all have NEON+VFPv4 (Cortex-A7+, every Raspberry Pi 2 and later).
+// disable with --no-cpu-baseline for truly ancient hardware.
+func cpuFlags(triple string) string {
+	switch {
+	case strings.HasPrefix(triple, "x86_64-"):
+		return "-C target-cpu=x86-64-v2"
+	case strings.HasPrefix(triple, "armv7-"):
+		return "-C target-feature=+neon,+vfp4"
+	}
+	return ""
 }
 
 func buildArgs(t target, example string, release bool) []string {
@@ -391,6 +416,7 @@ options:
   --release            build in release mode (default: debug)
   --target <triple>    build only the specified target triple
   --example <name>     build only the specified example (default: all)
+  --no-cpu-baseline    drop the raised CPU floor (x86-64-v2 / armv7 neon+vfp4)
   --help               show this message
 
 targets:`)

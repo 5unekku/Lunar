@@ -10,8 +10,8 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"syscall"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -52,6 +52,20 @@ func main() {
 	bindgen.Stderr = os.Stderr
 	if err := bindgen.Run(); err != nil {
 		log.Fatalf("wasm-bindgen failed: %v", err)
+	}
+
+	// wasm-opt shrinks and speeds up the bindgen output; soft-skip when absent
+	if _, err := exec.LookPath("wasm-opt"); err == nil {
+		bound := filepath.Join(tmpDir, name+"_bg.wasm")
+		fmt.Println("running wasm-opt -O3...")
+		opt := exec.Command("wasm-opt", "-O3", "--enable-simd", "--enable-bulk-memory", "-o", bound, bound)
+		opt.Stdout = os.Stdout
+		opt.Stderr = os.Stderr
+		if err := opt.Run(); err != nil {
+			log.Fatalf("wasm-opt failed: %v", err)
+		}
+	} else {
+		fmt.Println("wasm-opt not found, skipping (install binaryen for smaller/faster wasm)")
 	}
 
 	// minimal index.html — canvas fits the viewport while preserving aspect ratio.
