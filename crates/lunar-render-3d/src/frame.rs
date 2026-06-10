@@ -371,7 +371,7 @@ impl RenderEngine3d {
 			let surface_slot_base = ENTITY_SLOT_START + self.draw_scratch.len();
 			let mut surface_idx = 0usize;
 			for (entity, mesh, surf, wt, vis) in sq.iter(world) {
-				if !vis.0 || surface_idx >= 64 {
+				if !vis.0 || surface_idx >= 512 {
 					break;
 				}
 				let slot = surface_slot_base + surface_idx;
