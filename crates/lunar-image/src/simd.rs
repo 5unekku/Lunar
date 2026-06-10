@@ -231,9 +231,12 @@ pub fn rgba_to_bgra(buf: &mut [u8]) {
 	}
 }
 
+// 256-entry srgb→linear table, baked by build.rs — no first-call init cost.
+include!(concat!(env!("OUT_DIR"), "/srgb_lut.rs"));
+
 /// convert sRGB byte values to linear f32. output must be the same length as input.
 ///
-/// uses a 256-entry precomputed LUT; first call initialises it, subsequent calls are free.
+/// uses a 256-entry table precomputed at build time.
 ///
 /// # Panics
 /// panics if output length does not equal input length.
@@ -243,23 +246,30 @@ pub fn srgb_to_linear(input: &[u8], output: &mut [f32]) {
 		output.len(),
 		"output must be same length as input"
 	);
-	let lut = srgb_lut();
 	for (out, &byte) in output.iter_mut().zip(input.iter()) {
-		*out = lut[byte as usize];
+		*out = SRGB_TO_LINEAR_LUT[byte as usize];
 	}
 }
 
-fn srgb_lut() -> &'static [f32; 256] {
-	use std::sync::OnceLock;
-	static LUT: OnceLock<[f32; 256]> = OnceLock::new();
-	LUT.get_or_init(|| {
-		std::array::from_fn(|i| {
+#[cfg(test)]
+mod srgb_tests {
+	use super::SRGB_TO_LINEAR_LUT;
+
+	/// the baked table must match the srgb transfer function exactly.
+	#[test]
+	fn baked_lut_matches_formula() {
+		for i in 0..256 {
 			let s = i as f32 / 255.0;
-			if s <= 0.04045 {
+			let expected = if s <= 0.04045 {
 				s / 12.92
 			} else {
 				((s + 0.055) / 1.055).powf(2.4)
-			}
-		})
-	})
+			};
+			let baked = SRGB_TO_LINEAR_LUT[i];
+			assert!(
+				(baked - expected).abs() <= f32::EPSILON,
+				"lut[{i}] = {baked}, formula = {expected}"
+			);
+		}
+	}
 }

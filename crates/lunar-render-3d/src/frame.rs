@@ -107,10 +107,10 @@ impl RenderEngine3d {
 			&& self.staa_enabled; // staa_enabled = false on LowGles (no compute), true otherwise
 
 		let (view_proj, staa_jitter_ndc) = if staa_on {
-			// Halton low-discrepancy sequence: base 2 for x, base 3 for y.
-			// use frame_index+1 so index 0 maps to a non-zero offset (avoids identity jitter).
-			let idx = (self.staa_frame_index % 8 + 1) as u64;
-			fn halton(mut i: u64, base: u64) -> f32 {
+			// Halton low-discrepancy sequence: base 2 for x, base 3 for y, evaluated
+			// at compile time. index k holds halton(k+1) so entry 0 is a non-zero
+			// offset (avoids identity jitter).
+			const fn halton(mut i: u64, base: u64) -> f32 {
 				let (mut f, mut r) = (1.0f64, 0.0f64);
 				while i > 0 {
 					f /= base as f64;
@@ -119,6 +119,15 @@ impl RenderEngine3d {
 				}
 				r as f32
 			}
+			const STAA_JITTER: [[f32; 2]; 8] = {
+				let mut table = [[0.0f32; 2]; 8];
+				let mut k = 0;
+				while k < 8 {
+					table[k] = [halton(k as u64 + 1, 2), halton(k as u64 + 1, 3)];
+					k += 1;
+				}
+				table
+			};
 			// NDC jitter: ≤0.5px in display-resolution screen space.
 			// using display (not render) dimensions means the oscillation stays
 			// sub-pixel at the output regardless of render scale. at render_scale < 1
@@ -126,8 +135,9 @@ impl RenderEngine3d {
 			// very low scales, which is correct: no sub-pixel info to accumulate there.
 			let dw = self.surface_config.width as f32;
 			let dh = self.surface_config.height as f32;
-			let jx = (halton(idx, 2) - 0.5) * 2.0 / dw;
-			let jy = (halton(idx, 3) - 0.5) * 2.0 / dh;
+			let [hx, hy] = STAA_JITTER[(self.staa_frame_index % 8) as usize];
+			let jx = (hx - 0.5) * 2.0 / dw;
+			let jy = (hy - 0.5) * 2.0 / dh;
 
 			// modify the projection column 2 (z-axis.xy) to add a constant NDC offset.
 			// P[2][0] += Δx shifts NDC.x by -Δx for all depths (clip.w cancels out).
