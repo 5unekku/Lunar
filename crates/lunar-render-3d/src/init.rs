@@ -1197,6 +1197,46 @@ impl RenderEngine3d {
 			multiview_mask: None,
 		});
 
+		// masked surface z-prepass: depth-only alpha-tested variant so sprite /
+		// grate cutouts don't stamp full-quad depth over the scene behind them
+		let surface_prepass_module = make_shader!(device, shader_passthrough, "[surface prepass] shader", SURFACE_PREPASS_SHADER_SRC, "surface_prepass.spv");
+		let surface_masked_zprepass_pipeline =
+			device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+				label: Some("[surface prepass] masked pipeline"),
+				layout: Some(&surface_pipeline_layout),
+				vertex: wgpu::VertexState {
+					module: &surface_prepass_module,
+					entry_point: Some("vs_surface_prepass"),
+					buffers: vertex_buffers,
+					compilation_options: wgpu::PipelineCompilationOptions::default(),
+				},
+				fragment: Some(wgpu::FragmentState {
+					module: &surface_prepass_module,
+					entry_point: Some("fs_surface_prepass"),
+					targets: &[],
+					compilation_options: wgpu::PipelineCompilationOptions::default(),
+				}),
+				primitive: wgpu::PrimitiveState {
+					topology: wgpu::PrimitiveTopology::TriangleList,
+					front_face: wgpu::FrontFace::Ccw,
+					cull_mode: Some(wgpu::Face::Back),
+					..Default::default()
+				},
+				depth_stencil: Some(wgpu::DepthStencilState {
+					format: wgpu::TextureFormat::Depth32Float,
+					depth_write_enabled: Some(true),
+					depth_compare: Some(wgpu::CompareFunction::LessEqual),
+					stencil: wgpu::StencilState::default(),
+					bias: wgpu::DepthBiasState::default(),
+				}),
+				multisample: wgpu::MultisampleState {
+					count: msaa_samples,
+					..Default::default()
+				},
+				cache: pipeline_cache_ref,
+				multiview_mask: None,
+			});
+
 		// point shadow pipeline: writes linear depth, uses point_shadow.wgsl
 		let point_shadow_shader = make_shader!(device, shader_passthrough, "[point shadow] shader", POINT_SHADOW_SHADER_SRC, "point_shadow.spv");
 		let point_shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -3317,6 +3357,7 @@ impl RenderEngine3d {
 			cluster_bg_render,
 			surface_bgl,
 			surface_pipeline,
+			surface_masked_zprepass_pipeline,
 			surface_fallback_tex,
 			surface_fallback_view,
 			surface_sampler,
@@ -3459,6 +3500,7 @@ impl RenderEngine3d {
 			terrain_gpu: HashMap::default(),
 			msaa_main_shader: shader,
 			msaa_surface_shader: surface_shader_module,
+			msaa_surface_prepass_shader: surface_prepass_module,
 			msaa_water_shader: water_shader,
 			msaa_terrain_shader: terrain_shader,
 			msaa_particle_render_shader: particle_render_shader,

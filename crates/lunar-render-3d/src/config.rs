@@ -872,6 +872,41 @@ impl RenderEngine3d {
 					multiview_mask: None,
 				});
 
+		self.surface_masked_zprepass_pipeline =
+			self.device
+				.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+					label: Some("[surface prepass] masked pipeline"),
+					layout: Some(&surface_layout),
+					vertex: wgpu::VertexState {
+						module: &self.msaa_surface_prepass_shader,
+						entry_point: Some("vs_surface_prepass"),
+						buffers: &vertex_buffers,
+						compilation_options: wgpu::PipelineCompilationOptions::default(),
+					},
+					fragment: Some(wgpu::FragmentState {
+						module: &self.msaa_surface_prepass_shader,
+						entry_point: Some("fs_surface_prepass"),
+						targets: &[],
+						compilation_options: wgpu::PipelineCompilationOptions::default(),
+					}),
+					primitive: wgpu::PrimitiveState {
+						topology: wgpu::PrimitiveTopology::TriangleList,
+						front_face: wgpu::FrontFace::Ccw,
+						cull_mode: Some(wgpu::Face::Back),
+						..Default::default()
+					},
+					depth_stencil: Some(wgpu::DepthStencilState {
+						format: wgpu::TextureFormat::Depth32Float,
+						depth_write_enabled: Some(true),
+						depth_compare: Some(wgpu::CompareFunction::LessEqual),
+						stencil: wgpu::StencilState::default(),
+						bias: wgpu::DepthBiasState::default(),
+					}),
+					multisample: msaa_state,
+					cache,
+					multiview_mask: None,
+				});
+
 		self.water_pipeline = self
 			.device
 			.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

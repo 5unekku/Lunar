@@ -37,7 +37,7 @@ struct StageData {
     alpha:      f32,         // constant alpha (AlphaGen::Const) or 1.0 for Identity
     use_lm_uv:  u32,         // 1 = sample using uv_lightmap channel
     enabled:    u32,         // 1 if this stage should be rendered
-    _pad:       u32,
+    alpha_test: u32,         // 1 = discard fragments with alpha < 0.5 (q3 alphaFunc GE128)
 }
 
 struct SurfaceParams {
@@ -154,6 +154,10 @@ fn fs_surface(in: VertOut) -> @location(0) vec4<f32> {
         if stage.enabled == 0u { continue; }
         let uv = apply_uv(base_uv, in.uv_lightmap, stage);
         let sampled = sample_stage(s, uv);
+        // masked surfaces (sprites, grates): binary cutout, keeps depth honest
+        if stage.alpha_test != 0u && sampled.a * stage.alpha < 0.5 {
+            discard;
+        }
         acc = blend_stage(acc, sampled * vert_color, stage);
     }
     return acc;

@@ -76,6 +76,7 @@ const POINT_SHADOW_SHADER_SRC: &str = include_str!("point_shadow.wgsl");
 const CLUSTER_SHADER_SRC: &str = include_str!("cluster.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const SURFACE_SHADER_SRC: &str = include_str!("surface.wgsl");
+const SURFACE_PREPASS_SHADER_SRC: &str = include_str!("surface_prepass.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const BLOOM_SHADER_SRC: &str = include_str!("bloom.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
@@ -323,7 +324,7 @@ struct SurfaceStagePacked {
 	alpha: f32,
 	use_lm_uv: u32,
 	enabled: u32,
-	_pad: u32,
+	alpha_test: u32,
 }
 
 // ── gpu types ──────────────────────────────────────────────────────────────
@@ -1417,6 +1418,8 @@ pub struct RenderEngine3d {
 	// q3-style multi-stage surface shader (Item C)
 	surface_bgl: wgpu::BindGroupLayout,
 	surface_pipeline: wgpu::RenderPipeline,
+	/// depth-only alpha-tested prepass for masked surface meshes
+	surface_masked_zprepass_pipeline: wgpu::RenderPipeline,
 	surface_fallback_tex: wgpu::Texture,
 	surface_fallback_view: wgpu::TextureView,
 	surface_sampler: wgpu::Sampler,
@@ -1617,6 +1620,7 @@ pub struct RenderEngine3d {
 	// stored shader modules for runtime MSAA rebuild
 	msaa_main_shader: wgpu::ShaderModule,
 	msaa_surface_shader: wgpu::ShaderModule,
+	msaa_surface_prepass_shader: wgpu::ShaderModule,
 	msaa_water_shader: wgpu::ShaderModule,
 	msaa_terrain_shader: wgpu::ShaderModule,
 	msaa_particle_render_shader: wgpu::ShaderModule,

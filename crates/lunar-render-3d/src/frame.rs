@@ -396,7 +396,7 @@ impl RenderEngine3d {
 					alpha: 1.0,
 					use_lm_uv: 0,
 					enabled: 0,
-					_pad: 0,
+					alpha_test: 0,
 				}; 4];
 				let mut tex_ids = [u32::MAX; 4];
 				for (si, stage) in surf.stages.iter().enumerate().take(4) {
@@ -421,7 +421,7 @@ impl RenderEngine3d {
 						alpha,
 						use_lm_uv,
 						enabled: 1,
-						_pad: 0,
+						alpha_test: stage.alpha_test as u32,
 					};
 					tex_ids[si] = stage.texture.id();
 					// ensure mesh is uploaded
@@ -1204,7 +1204,7 @@ impl RenderEngine3d {
 						stage_data[off + 24..off + 28]
 							.copy_from_slice(bytemuck::cast_slice(&[stage.enabled]));
 						stage_data[off + 28..off + 32]
-							.copy_from_slice(bytemuck::cast_slice(&[stage._pad]));
+							.copy_from_slice(bytemuck::cast_slice(&[stage.alpha_test]));
 					}
 					self.queue.write_buffer(
 						&self.surface_params_buf,

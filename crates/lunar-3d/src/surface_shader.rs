@@ -58,6 +58,10 @@ pub struct SurfaceStage {
 	pub tc_gen: TcGen,
 	/// how the alpha value is determined for this stage.
 	pub alpha_gen: AlphaGen,
+	/// binary cutout (q3 alphaFunc GE128): fragments with sampled alpha below
+	/// 0.5 are discarded in both the z-prepass and the surface pass, keeping
+	/// depth honest for sprites, grates and fences.
+	pub alpha_test: bool,
 }
 
 impl Default for SurfaceStage {
@@ -68,6 +72,7 @@ impl Default for SurfaceStage {
 			uv_transform: UvTransform::default(),
 			tc_gen: TcGen::Base,
 			alpha_gen: AlphaGen::Identity,
+			alpha_test: false,
 		}
 	}
 }

@@ -1527,6 +1527,8 @@ impl RenderEngine3d {
 				let casc_views = &self.shadow_cascade_views;
 				let mesh_gpu = &self.mesh_gpu;
 				let zpr_pl = &self.zprepass_pipeline;
+				let masked_zpr_pl = &self.surface_masked_zprepass_pipeline;
+				let surf_bg_cache = &self.surface_bg_cache;
 				let glob_bg = &self.globals_bg;
 				let lights_bg_ref = &self.lights_bg;
 				let mat_bg = &self.material_bg;
@@ -1546,6 +1548,8 @@ impl RenderEngine3d {
 						let s_casc = casc_views;
 						let s_mesh_gpu = mesh_gpu;
 						let s_zpr_pl = zpr_pl;
+						let s_masked_zpr_pl = masked_zpr_pl;
+						let s_surf_bg_cache = surf_bg_cache;
 						let s_glob_bg = glob_bg;
 						let s_lights = lights_bg_ref;
 						let s_mat_bg = mat_bg;
@@ -1622,8 +1626,16 @@ impl RenderEngine3d {
 							}
 							// surface shader meshes write prepass depth too — the
 							// atmos sky pass and GTAO read this buffer, so missing
-							// them classifies their pixels as sky
-							for &(mesh_id, slot, _, _) in s_surf {
+							// them classifies their pixels as sky. masked (alpha
+							// tested) meshes are deferred to the textured variant
+							// below so their cutouts don't stamp full-quad depth
+							let is_masked = |packed: &[SurfaceStagePacked; 4]| {
+								packed.iter().any(|s| s.enabled != 0 && s.alpha_test != 0)
+							};
+							for &(mesh_id, slot, _, ref packed) in s_surf {
+								if is_masked(packed) {
+									continue;
+								}
 								if let Some(gpu) = s_mesh_gpu.get(&mesh_id) {
 									zpass.set_vertex_buffer(0, gpu.pos_buf.slice(..));
 									zpass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
@@ -1633,6 +1645,37 @@ impl RenderEngine3d {
 										slot as u32..slot as u32 + 1,
 									);
 								}
+							}
+							// masked surface meshes: alpha-tested depth so only
+							// solid texels occlude
+							let draw_base_slot = ENTITY_SLOT_START + s_draw.len();
+							let mut masked_pipeline_bound = false;
+							for &(mesh_id, slot, tex_ids, ref packed) in s_surf {
+								if !is_masked(packed) {
+									continue;
+								}
+								let Some(bg) = s_surf_bg_cache.get(&tex_ids) else {
+									continue;
+								};
+								let Some(gpu) = s_mesh_gpu.get(&mesh_id) else {
+									continue;
+								};
+								if !masked_pipeline_bound {
+									zpass.set_pipeline(s_masked_zpr_pl);
+									zpass.set_bind_group(0, s_glob_bg, &[]);
+									zpass.set_bind_group(1, s_ent_bg, &[]);
+									masked_pipeline_bound = true;
+								}
+								let surf_offset =
+									((slot - draw_base_slot) as u64 * UNIFORM_STRIDE) as u32;
+								zpass.set_bind_group(2, bg, &[surf_offset]);
+								zpass.set_vertex_buffer(0, gpu.vbuf.slice(..));
+								zpass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+								zpass.draw_indexed(
+									0..gpu.index_count,
+									0,
+									slot as u32..slot as u32 + 1,
+								);
 							}
 						} else {
 							let cascade = task;
@@ -1811,7 +1854,13 @@ impl RenderEngine3d {
 						i += 1;
 					}
 					// surface shader meshes write prepass depth too (see native path)
-					for &(mesh_id, slot, _, _) in &self.surface_scratch {
+					let is_masked = |packed: &[SurfaceStagePacked; 4]| {
+						packed.iter().any(|s| s.enabled != 0 && s.alpha_test != 0)
+					};
+					for &(mesh_id, slot, _, ref packed) in &self.surface_scratch {
+						if is_masked(packed) {
+							continue;
+						}
 						if let Some(gpu) = self.mesh_gpu.get(&mesh_id) {
 							zpass.set_vertex_buffer(0, gpu.pos_buf.slice(..));
 							zpass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
@@ -1821,6 +1870,31 @@ impl RenderEngine3d {
 								slot as u32..slot as u32 + 1,
 							);
 						}
+					}
+					// masked surface meshes: alpha-tested depth (see native path)
+					let draw_base_slot = ENTITY_SLOT_START + self.draw_scratch.len();
+					let mut masked_pipeline_bound = false;
+					for &(mesh_id, slot, tex_ids, ref packed) in &self.surface_scratch {
+						if !is_masked(packed) {
+							continue;
+						}
+						let Some(bg) = self.surface_bg_cache.get(&tex_ids) else {
+							continue;
+						};
+						let Some(gpu) = self.mesh_gpu.get(&mesh_id) else {
+							continue;
+						};
+						if !masked_pipeline_bound {
+							zpass.set_pipeline(&self.surface_masked_zprepass_pipeline);
+							zpass.set_bind_group(0, &self.globals_bg, &[]);
+							zpass.set_bind_group(1, &self.entity_bg, &[]);
+							masked_pipeline_bound = true;
+						}
+						let surf_offset = ((slot - draw_base_slot) as u64 * UNIFORM_STRIDE) as u32;
+						zpass.set_bind_group(2, bg, &[surf_offset]);
+						zpass.set_vertex_buffer(0, gpu.vbuf.slice(..));
+						zpass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+						zpass.draw_indexed(0..gpu.index_count, 0, slot as u32..slot as u32 + 1);
 					}
 				}
 			}
