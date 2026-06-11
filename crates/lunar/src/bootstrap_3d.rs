@@ -104,7 +104,7 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
 		b.build().expect("failed to create window")
 	};
 
-	let instance = wgpu::Instance::default();
+	let instance = crate::bootstrap_impl::engine_wgpu_instance();
 	let surface = unsafe {
 		let display_handle = window.display_handle().unwrap();
 		let window_handle = window.window_handle().unwrap();
