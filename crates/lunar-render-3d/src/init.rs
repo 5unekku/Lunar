@@ -3687,6 +3687,7 @@ impl RenderEngine3d {
 			lm_needed_scratch: Vec::new(),
 			lm_evict_scratch: Vec::new(),
 			surface_evict_scratch: Vec::new(),
+			surface_params_staging: Vec::new(),
 
 			render_graph: Self::build_render_graph(
 				render_tier,

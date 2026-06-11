@@ -317,7 +317,7 @@ const ENTITY_SLOT_START: usize = 2;
 
 /// surface stage data packed for the GPU (matches StageData in surface.wgsl, 32 bytes).
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SurfaceStagePacked {
 	uv_offset: [f32; 2],
 	uv_scale: f32,
@@ -1754,6 +1754,7 @@ pub struct RenderEngine3d {
 	lm_needed_scratch: Vec<(u32, u32)>, // distinct (lm_id, dir_lm_id) pairs this frame
 	lm_evict_scratch: Vec<u32>,   // lightmap texture ids to evict cpu data for
 	surface_evict_scratch: Vec<u32>, // surface texture ids to evict cpu data for
+	surface_params_staging: Vec<u8>, // strided stage params, uploaded in one write_buffer
 
 	// render graph DAG — built once at init, drives pass execution order in render_frame.
 	// models pass dependencies via declared texture reads/writes and topological sort.

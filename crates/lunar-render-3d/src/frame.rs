@@ -424,17 +424,16 @@ impl RenderEngine3d {
 						flags: stage.alpha_test as u32 | (stage.nearest as u32) << 1,
 					};
 					tex_ids[si] = stage.texture.id();
-					// ensure mesh is uploaded
-					let mesh_id = mesh.0.id();
-					if !self.mesh_gpu.contains_key(&mesh_id) {
-						let registry = world.resource::<MeshRegistry>();
-						if let Some(data) = registry.get_mesh(lunar_assets::Handle::new(mesh_id, 0))
-						{
-							let gpu = Self::upload_mesh_data(&self.device, &self.queue, data);
-							self.mesh_gpu.insert(mesh_id, gpu);
-							if data.gpu_only {
-								self.mesh_evict_scratch.push(mesh_id);
-							}
+				}
+				// ensure mesh is uploaded (once per entity, not per stage)
+				let mesh_id = mesh.0.id();
+				if !self.mesh_gpu.contains_key(&mesh_id) {
+					let registry = world.resource::<MeshRegistry>();
+					if let Some(data) = registry.get_mesh(lunar_assets::Handle::new(mesh_id, 0)) {
+						let gpu = Self::upload_mesh_data(&self.device, &self.queue, data);
+						self.mesh_gpu.insert(mesh_id, gpu);
+						if data.gpu_only {
+							self.mesh_evict_scratch.push(mesh_id);
 						}
 					}
 				}
@@ -1110,8 +1109,17 @@ impl RenderEngine3d {
 		// ── upload surface shader textures + stage params ─────────────────
 		self.surface_evict_scratch.clear();
 		{
+			let stride = UNIFORM_STRIDE as usize;
+			// stage params for all surface entities, packed at their slot strides
+			// and uploaded in one write_buffer after the loop (entities get
+			// contiguous local slots 0.., capped at the buffer's 512 by the gather)
+			self.surface_params_staging.clear();
+			self.surface_params_staging
+				.resize(self.surface_scratch.len() * stride, 0);
 			let asset_server = world.resource::<lunar_assets::AssetServer>();
-			for &(_, slot, tex_ids, packed_stages) in &self.surface_scratch {
+			for (local_slot, &(_, _, tex_ids, packed_stages)) in
+				self.surface_scratch.iter().enumerate()
+			{
 				// upload any new textures
 				for &tid in &tex_ids {
 					if tid != u32::MAX
@@ -1121,34 +1129,31 @@ impl RenderEngine3d {
 						// non-srgb on purpose: the surface path is unlit and the
 						// swapchain is non-srgb with no gamma encode in composite,
 						// so srgb sampling would darken authored colors by ^2.2
-						let (gpu_fmt, bpr) = match tex.compression {
-							lunar_assets::TextureCompression::None => {
-								(wgpu::TextureFormat::Rgba8Unorm, tex.width * 4)
-							}
-							lunar_assets::TextureCompression::Bc1 => (
-								wgpu::TextureFormat::Bc1RgbaUnorm,
-								tex.width.div_ceil(4) * 8,
-							),
-							lunar_assets::TextureCompression::Bc3 => (
-								wgpu::TextureFormat::Bc3RgbaUnorm,
-								tex.width.div_ceil(4) * 16,
-							),
-							lunar_assets::TextureCompression::Bc5 => {
-								(wgpu::TextureFormat::Bc5RgUnorm, tex.width.div_ceil(4) * 16)
-							}
-							lunar_assets::TextureCompression::Bc6h => (
-								wgpu::TextureFormat::Bc6hRgbFloat,
-								tex.width.div_ceil(4) * 16,
-							),
-							lunar_assets::TextureCompression::Bc7 => (
-								wgpu::TextureFormat::Bc7RgbaUnorm,
-								tex.width.div_ceil(4) * 16,
-							),
-						};
-						let rows_per_image = match tex.compression {
-							lunar_assets::TextureCompression::None => tex.height,
-							_ => tex.height.div_ceil(4),
-						};
+						let (gpu_fmt, bytes_per_row): (wgpu::TextureFormat, fn(u32) -> u32) =
+							match tex.compression {
+								lunar_assets::TextureCompression::None => {
+									(wgpu::TextureFormat::Rgba8Unorm, |w| w * 4)
+								}
+								lunar_assets::TextureCompression::Bc1 => {
+									(wgpu::TextureFormat::Bc1RgbaUnorm, |w| w.div_ceil(4) * 8)
+								}
+								lunar_assets::TextureCompression::Bc3 => {
+									(wgpu::TextureFormat::Bc3RgbaUnorm, |w| w.div_ceil(4) * 16)
+								}
+								lunar_assets::TextureCompression::Bc5 => {
+									(wgpu::TextureFormat::Bc5RgUnorm, |w| w.div_ceil(4) * 16)
+								}
+								lunar_assets::TextureCompression::Bc6h => {
+									(wgpu::TextureFormat::Bc6hRgbFloat, |w| w.div_ceil(4) * 16)
+								}
+								lunar_assets::TextureCompression::Bc7 => {
+									(wgpu::TextureFormat::Bc7RgbaUnorm, |w| w.div_ceil(4) * 16)
+								}
+							};
+						let block_compressed =
+							tex.compression != lunar_assets::TextureCompression::None;
+						let rows_per_image =
+							|h: u32| if block_compressed { h.div_ceil(4) } else { h };
 						let gpu_tex = self.device.create_texture(&wgpu::TextureDescriptor {
 							label: Some("[surface] tex"),
 							size: wgpu::Extent3d {
@@ -1169,8 +1174,8 @@ impl RenderEngine3d {
 							&tex.pixels,
 							wgpu::TexelCopyBufferLayout {
 								offset: 0,
-								bytes_per_row: Some(bpr),
-								rows_per_image: Some(rows_per_image),
+								bytes_per_row: Some(bytes_per_row(tex.width)),
+								rows_per_image: Some(rows_per_image(tex.height)),
 							},
 							wgpu::Extent3d {
 								width: tex.width,
@@ -1178,40 +1183,40 @@ impl RenderEngine3d {
 								depth_or_array_layers: 1,
 							},
 						);
+						// the texture is allocated with its full mip chain — upload
+						// every level, or minified sampling reads unwritten memory
+						for (mip_idx, mip_data) in tex.mips.iter().enumerate() {
+							let mip_w = (tex.width >> (mip_idx + 1)).max(1);
+							let mip_h = (tex.height >> (mip_idx + 1)).max(1);
+							self.queue.write_texture(
+								wgpu::TexelCopyTextureInfo {
+									texture: &gpu_tex,
+									mip_level: (mip_idx + 1) as u32,
+									origin: wgpu::Origin3d::ZERO,
+									aspect: wgpu::TextureAspect::All,
+								},
+								mip_data,
+								wgpu::TexelCopyBufferLayout {
+									offset: 0,
+									bytes_per_row: Some(bytes_per_row(mip_w)),
+									rows_per_image: Some(rows_per_image(mip_h)),
+								},
+								wgpu::Extent3d {
+									width: mip_w,
+									height: mip_h,
+									depth_or_array_layers: 1,
+								},
+							);
+						}
 						let view = gpu_tex.create_view(&Default::default());
 						self.surface_tex_cache.insert(tid, (gpu_tex, view));
 						self.surface_evict_scratch.push(tid);
 					}
 				}
-				// upload stage params for this entity
-				let slot_offset = (slot - (ENTITY_SLOT_START + self.draw_scratch.len()))
-					* UNIFORM_STRIDE as usize;
-				// surface_params_buf holds 512 slots — must match the gather cap above
-				if slot_offset + 128 <= 512 * UNIFORM_STRIDE as usize {
-					let mut stage_data = [0u8; 128];
-					for (i, &stage) in packed_stages.iter().enumerate() {
-						let off = i * 32;
-						stage_data[off..off + 8]
-							.copy_from_slice(bytemuck::cast_slice(&stage.uv_offset));
-						stage_data[off + 8..off + 12]
-							.copy_from_slice(bytemuck::cast_slice(&[stage.uv_scale]));
-						stage_data[off + 12..off + 16]
-							.copy_from_slice(bytemuck::cast_slice(&[stage.blend]));
-						stage_data[off + 16..off + 20]
-							.copy_from_slice(bytemuck::cast_slice(&[stage.alpha]));
-						stage_data[off + 20..off + 24]
-							.copy_from_slice(bytemuck::cast_slice(&[stage.use_lm_uv]));
-						stage_data[off + 24..off + 28]
-							.copy_from_slice(bytemuck::cast_slice(&[stage.enabled]));
-						stage_data[off + 28..off + 32]
-							.copy_from_slice(bytemuck::cast_slice(&[stage.flags]));
-					}
-					self.queue.write_buffer(
-						&self.surface_params_buf,
-						slot_offset as u64,
-						&stage_data,
-					);
-				}
+				// pack stage params into this entity's staging slot
+				let slot_offset = local_slot * stride;
+				self.surface_params_staging[slot_offset..slot_offset + 128]
+					.copy_from_slice(bytemuck::cast_slice(&packed_stages));
 				// create/update BG if texture combination changed
 				if !self.surface_bg_cache.contains_key(&tex_ids) {
 					let get_view = |tid: u32| -> &wgpu::TextureView {
@@ -1262,6 +1267,15 @@ impl RenderEngine3d {
 					});
 					self.surface_bg_cache.insert(tex_ids, bg);
 				}
+			}
+			// one upload covering every surface entity instead of a write_buffer
+			// per entity (up to 512 × 128-byte writes before)
+			if !self.surface_params_staging.is_empty() {
+				self.queue.write_buffer(
+					&self.surface_params_buf,
+					0,
+					&self.surface_params_staging,
+				);
 			}
 		}
 		// evict cpu-side data for newly uploaded surface textures
