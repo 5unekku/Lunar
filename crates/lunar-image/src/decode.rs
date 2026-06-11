@@ -135,18 +135,26 @@ pub fn decode(data: &[u8]) -> Result<Image, DecodeError> {
 				if pixels.is_some() {
 					return Err(DecodeError::MultiplePixelData);
 				}
-				let decompressed = zstd::decode_all(std::io::Cursor::new(compressed))
+				// the exact decompressed size is known from the header, so
+				// single-pass bulk decompression into a pre-sized buffer beats
+				// decode_all's incremental Vec growth on multi-MB textures
+				let filtered = header.flags & format::FLAG_FILTERED != 0;
+				let expected_decompressed = if filtered {
+					expected_bytes + filter::overhead_bytes(header.height as usize, 4)
+				} else {
+					expected_bytes
+				};
+				let decompressed = zstd::bulk::decompress(compressed, expected_decompressed)
 					.map_err(DecodeError::ZstdError)?;
 
 				// undo the per-row delta filter first, if present, recovering the raw
 				// planar buffer. filtered data carries one extra byte per plane row.
-				let planar = if header.flags & format::FLAG_FILTERED != 0 {
+				let planar = if filtered {
 					let width = header.width as usize;
 					let height = header.height as usize;
-					let expected_filtered = expected_bytes + filter::overhead_bytes(height, 4);
-					if decompressed.len() != expected_filtered {
+					if decompressed.len() != expected_decompressed {
 						return Err(DecodeError::SizeMismatch {
-							expected: expected_filtered,
+							expected: expected_decompressed,
 							actual: decompressed.len(),
 						});
 					}
