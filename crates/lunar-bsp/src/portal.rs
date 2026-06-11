@@ -145,37 +145,44 @@ pub fn cull_portals(
 	visible.active = true;
 	visible.area_ids.insert(cam_area);
 
-	// BFS through portals
+	// gather open portals once — the BFS below scans this flat list per area
+	// instead of re-walking the ECS query, and the SIMD conversion happens once
+	// per portal instead of once per (area, portal) pair
+	use lunar_math::Vec3A;
+	let open_portals: Vec<(u32, u32, Vec3A, Vec3A)> = portals
+		.iter()
+		.filter(|(_, open)| open.is_some())
+		.map(|(p, _)| {
+			(
+				p.area_a,
+				p.area_b,
+				Vec3A::from(p.center),
+				Vec3A::from(p.half_extents),
+			)
+		})
+		.collect();
+
+	// BFS through portals; visible.area_ids doubles as the visited set
 	let mut queue: VecDeque<(u32, u32)> = VecDeque::new(); // (area_id, depth)
-	let mut visited: HashSet<u32> = HashSet::default();
 	queue.push_back((cam_area, 0));
-	visited.insert(cam_area);
 
 	while let Some((area, depth)) = queue.pop_front() {
 		if depth >= config.max_depth {
 			continue;
 		}
-		for (portal, open) in portals.iter() {
-			if open.is_none() {
-				continue;
-			} // closed portal
-			let (this_area, other_area) = if portal.area_a == area {
-				(portal.area_a, portal.area_b)
-			} else if portal.area_b == area {
-				(portal.area_b, portal.area_a)
+		for &(area_a, area_b, center, half) in &open_portals {
+			let other_area = if area_a == area {
+				area_b
+			} else if area_b == area {
+				area_a
 			} else {
 				continue;
 			};
-			let _ = this_area;
-			if visited.contains(&other_area) {
+			if visible.area_ids.contains(&other_area) {
 				continue;
 			}
 			// check: portal AABB intersects frustum
-			use lunar_math::Vec3A;
-			let center = Vec3A::from(portal.center);
-			let half = Vec3A::from(portal.half_extents);
 			if frustum.intersects_aabb(center, half) {
-				visited.insert(other_area);
 				visible.area_ids.insert(other_area);
 				queue.push_back((other_area, depth + 1));
 			}

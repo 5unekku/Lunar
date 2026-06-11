@@ -136,30 +136,46 @@ impl BspLevel {
 		}
 	}
 
-	/// return all leaf indices visible from `camera_leaf` according to the PVS.
+	/// call `callback` with each leaf index visible from `camera_leaf` per the PVS.
 	///
-	/// returns all leaves (0..leaf_count) if no blob is loaded or pvs_stride is 0,
-	/// so downstream code always gets a valid visible set.
-	pub fn visible_leaves(&self, camera_leaf: usize) -> Vec<usize> {
-		let blob = match &self.blob {
-			Some(b) => b,
-			None => return vec![],
-		};
+	/// calls back with every leaf (0..leaf_count) if pvs_stride is 0 or the leaf
+	/// is out of range, so downstream code always gets a valid visible set. the
+	/// renderer uses this each frame — no allocation, and the bitset scan skips
+	/// empty words via trailing_zeros instead of probing every bit.
+	pub fn for_each_visible_leaf(&self, camera_leaf: usize, mut callback: impl FnMut(usize)) {
+		let Some(blob) = &self.blob else { return };
 		let leaf_count = blob.leaf_count as usize;
 		if blob.pvs_stride == 0 || camera_leaf >= leaf_count {
-			return (0..leaf_count).collect();
+			for leaf in 0..leaf_count {
+				callback(leaf);
+			}
+			return;
 		}
 		let stride = blob.pvs_stride as usize;
 		let base = camera_leaf * stride;
-		let mut out = Vec::with_capacity(leaf_count / 4);
-		for leaf in 0..leaf_count {
-			let word = leaf / 64;
-			let bit = leaf % 64;
-			let word_idx = base + word;
-			if word_idx < blob.pvs.len() && blob.pvs[word_idx] & (1u64 << bit) != 0 {
-				out.push(leaf);
+		for word_idx in 0..stride {
+			let Some(&word) = blob.pvs.get(base + word_idx) else {
+				break;
+			};
+			let mut bits = word;
+			while bits != 0 {
+				let leaf = word_idx * 64 + bits.trailing_zeros() as usize;
+				if leaf < leaf_count {
+					callback(leaf);
+				}
+				bits &= bits - 1;
 			}
 		}
+	}
+
+	/// return all leaf indices visible from `camera_leaf` according to the PVS.
+	///
+	/// returns all leaves (0..leaf_count) if no blob is loaded or pvs_stride is 0,
+	/// so downstream code always gets a valid visible set. allocates — prefer
+	/// [`BspLevel::for_each_visible_leaf`] in per-frame code.
+	pub fn visible_leaves(&self, camera_leaf: usize) -> Vec<usize> {
+		let mut out = Vec::new();
+		self.for_each_visible_leaf(camera_leaf, |leaf| out.push(leaf));
 		out
 	}
 

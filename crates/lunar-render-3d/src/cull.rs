@@ -530,13 +530,13 @@ impl RenderEngine3d {
 			.filter(|level| level.is_loaded())
 		{
 			let leaf = level.camera_leaf(cam_pos);
-			let visible_leaves = level.visible_leaves(leaf);
 			let area_map = level.area_map();
-			for leaf_idx in &visible_leaves {
-				if let Ok(pos) = area_map.binary_search_by_key(&(*leaf_idx as u32), |&(li, _)| li) {
-					self.bsp_visible_scratch.insert(area_map[pos].1);
+			let bsp_visible = &mut self.bsp_visible_scratch;
+			level.for_each_visible_leaf(leaf, |leaf_idx| {
+				if let Ok(pos) = area_map.binary_search_by_key(&(leaf_idx as u32), |&(li, _)| li) {
+					bsp_visible.insert(area_map[pos].1);
 				}
-			}
+			});
 			self.bsp_visible_active = true;
 		}
 
