@@ -44,12 +44,16 @@ pub struct BvhNode {
 pub struct Bvh {
 	pub nodes: Vec<BvhNode>,
 	pub entities: Vec<(Entity, Vec3, Vec3)>, // entity + world min/max
+	/// permutation of entity indices, partitioned during the build so every
+	/// leaf owns a contiguous range of it
+	order: Vec<u32>,
 }
 
 impl Bvh {
 	pub fn clear(&mut self) {
 		self.nodes.clear();
 		self.entities.clear();
+		self.order.clear();
 	}
 
 	/// build the BVH from entity AABBs. returns the root node index (always 0 after build).
@@ -71,39 +75,47 @@ impl Bvh {
 		}
 		let n = self.entities.len();
 		self.nodes.reserve(n * 2);
-		let indices: Vec<usize> = (0..n).collect();
-		self.build_node(&indices);
+		self.order.extend(0..n as u32);
+		// take the order array out so build_node can partition its sub-slices
+		// while nodes is borrowed mutably
+		let mut order = std::mem::take(&mut self.order);
+		Self::build_node(&mut self.nodes, &self.entities, &mut order, 0);
+		self.order = order;
 	}
 
-	fn build_node(&mut self, indices: &[usize]) -> i32 {
+	/// build the node covering `order` (a sub-slice starting at `base` within
+	/// the full order array), partitioning it in place
+	fn build_node(
+		nodes: &mut Vec<BvhNode>,
+		entities: &[(Entity, Vec3, Vec3)],
+		order: &mut [u32],
+		base: usize,
+	) -> i32 {
 		// compute AABB covering all entities in this node
 		let mut min = Vec3::splat(f32::INFINITY);
 		let mut max = Vec3::splat(f32::NEG_INFINITY);
-		for &i in indices {
-			min = min.min(self.entities[i].1);
-			max = max.max(self.entities[i].2);
+		for &i in order.iter() {
+			min = min.min(entities[i as usize].1);
+			max = max.max(entities[i as usize].2);
 		}
 
-		let node_idx = self.nodes.len() as i32;
-		self.nodes.push(BvhNode {
+		let node_idx = nodes.len() as i32;
+		nodes.push(BvhNode {
 			min,
 			max,
 			left_or_start: 0,
 			right_or_end: 0,
 		});
 
-		if indices.len() <= 4 {
-			// leaf: store entity range as negative indices
-			let _start = self.entities.len() as i32; // would need separate list
-			// simplification: store as leaf with entity indices encoded
-			let start_enc = -(indices[0] as i32 + 1);
-			let end_enc = -((*indices.last().unwrap()) as i32 + 1);
-			self.nodes[node_idx as usize].left_or_start = start_enc;
-			self.nodes[node_idx as usize].right_or_end = end_enc;
+		if order.len() <= 4 {
+			// leaf: contiguous range in the order array, negative-encoded
+			nodes[node_idx as usize].left_or_start = -(base as i32 + 1);
+			nodes[node_idx as usize].right_or_end = -((base + order.len() - 1) as i32 + 1);
 			return node_idx;
 		}
 
-		// split along longest axis at median
+		// split along longest axis at the median; a full sort is unnecessary —
+		// partitioning around the median element is enough for a balanced tree
 		let extent = max - min;
 		let axis = if extent.x >= extent.y && extent.x >= extent.z {
 			0
@@ -112,22 +124,20 @@ impl Bvh {
 		} else {
 			2
 		};
-
-		let mut sorted = indices.to_vec();
-		sorted.sort_unstable_by(|&a, &b| {
-			let ca = (self.entities[a].1[axis] + self.entities[a].2[axis]) * 0.5;
-			let cb = (self.entities[b].1[axis] + self.entities[b].2[axis]) * 0.5;
-			ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
+		let centroid = |i: u32| (entities[i as usize].1[axis] + entities[i as usize].2[axis]) * 0.5;
+		let mid = order.len() / 2;
+		order.select_nth_unstable_by(mid, |&a, &b| {
+			centroid(a)
+				.partial_cmp(&centroid(b))
+				.unwrap_or(std::cmp::Ordering::Equal)
 		});
-		let mid = sorted.len() / 2;
-		let (left_idx, right_idx) = sorted.split_at(mid);
+		let (left, right) = order.split_at_mut(mid);
 
-		// reserve placeholder so indices don't shift
-		let left_node = self.build_node(left_idx);
-		let right_node = self.build_node(right_idx);
+		let left_node = Self::build_node(nodes, entities, left, base);
+		let right_node = Self::build_node(nodes, entities, right, base + mid);
 
-		self.nodes[node_idx as usize].left_or_start = left_node;
-		self.nodes[node_idx as usize].right_or_end = right_node;
+		nodes[node_idx as usize].left_or_start = left_node;
+		nodes[node_idx as usize].right_or_end = right_node;
 
 		node_idx
 	}
@@ -153,16 +163,95 @@ impl Bvh {
 		}
 
 		if node.left_or_start < 0 {
-			// leaf: emit entities in range
+			// leaf: test each entity so the result is exact, not just node-level
+			// conservative (leaves hold at most 4 entities)
 			let start_idx = (-(node.left_or_start + 1)) as usize;
 			let end_idx = (-(node.right_or_end + 1)) as usize;
-			for i in start_idx..=end_idx {
-				out.push(self.entities[i].0);
+			for &entity_idx in &self.order[start_idx..=end_idx] {
+				let (entity, entity_min, entity_max) = self.entities[entity_idx as usize];
+				let entity_center = Vec3A::from((entity_min + entity_max) * 0.5);
+				let entity_half = Vec3A::from((entity_max - entity_min) * 0.5);
+				if frustum.intersects_aabb(entity_center, entity_half) {
+					out.push(entity);
+				}
 			}
 		} else {
 			self.visit_node(node.left_or_start, frustum, out);
 			self.visit_node(node.right_or_end, frustum, out);
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use bevy_ecs::system::RunSystemOnce;
+	use lunar_math::{Mat4, Quat};
+
+	fn spawn_row(world: &mut World, count: usize) -> Vec<Entity> {
+		// unit boxes spaced 3 apart along x, with some y/z scatter
+		(0..count)
+			.map(|i| {
+				world
+					.spawn((
+						Aabb3d {
+							center: Vec3A::ZERO,
+							half_extents: Vec3A::splat(0.5),
+						},
+						WorldTransform3d {
+							translation: Vec3::new(i as f32 * 3.0, (i % 5) as f32, (i % 7) as f32),
+							rotation: Quat::IDENTITY,
+							scale: Vec3::ONE,
+						},
+						ComputedVisibility(true),
+					))
+					.id()
+			})
+			.collect()
+	}
+
+	fn build_and_query(world: &mut World, frustum: Frustum) -> Vec<Entity> {
+		world
+			.run_system_once(
+				move |query: Query<(Entity, &Aabb3d, &WorldTransform3d, &ComputedVisibility)>| {
+					let mut bvh = Bvh::default();
+					bvh.build(&query);
+					let mut out = Vec::new();
+					bvh.query_frustum(&frustum, &mut out);
+					out
+				},
+			)
+			.unwrap()
+	}
+
+	#[test]
+	fn query_returns_each_contained_entity_exactly_once() {
+		let mut world = World::new();
+		let mut spawned = spawn_row(&mut world, 37);
+		let all = Frustum::from_view_proj(Mat4::orthographic_rh(
+			-1000.0, 1000.0, -1000.0, 1000.0, -1000.0, 1000.0,
+		));
+		let mut visible = build_and_query(&mut world, all);
+		spawned.sort();
+		visible.sort();
+		// sorted equality also rejects duplicates and drops
+		assert_eq!(visible, spawned);
+	}
+
+	#[test]
+	fn query_culls_entities_outside_the_frustum() {
+		let mut world = World::new();
+		let spawned = spawn_row(&mut world, 37);
+		// boxes sit at x = 0, 3, 6, 9, 12, …; this frustum ends at x = 10, so
+		// exactly the first four (max x = 9.5) are inside
+		let narrow = Frustum::from_view_proj(Mat4::orthographic_rh(
+			-10.0, 10.0, -1000.0, 1000.0, -1000.0, 1000.0,
+		));
+		let mut visible = build_and_query(&mut world, narrow);
+		let mut expected = spawned[..4].to_vec();
+		visible.sort();
+		expected.sort();
+		assert_eq!(visible, expected);
 	}
 }
 
