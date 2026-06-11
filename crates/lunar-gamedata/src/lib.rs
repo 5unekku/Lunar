@@ -112,6 +112,10 @@ pub struct GameData {
 	pub strings: Vec<String>,
 	/// table name → compiled table (table names are stored as raw strings)
 	pub tables: HashMap<String, DataTable>,
+	/// string → id reverse index, rebuilt at load (not part of the blob) so
+	/// [`GameData::string_id`] is O(1) instead of scanning the table per lookup
+	#[serde(skip)]
+	pub string_index: HashMap<String, u32>,
 }
 
 impl GameData {
@@ -119,7 +123,23 @@ impl GameData {
 	/// # Errors
 	/// returns an error if the bytes are not a valid compiled game data blob.
 	pub fn from_binary(bytes: &[u8]) -> Result<Self, String> {
-		bincode::deserialize(bytes).map_err(|e| format!("invalid gamedata blob: {e}"))
+		let mut data: Self =
+			bincode::deserialize(bytes).map_err(|e| format!("invalid gamedata blob: {e}"))?;
+		data.rebuild_string_index();
+		Ok(data)
+	}
+
+	/// rebuild the string → id reverse index from `strings`.
+	///
+	/// called by [`GameData::from_binary`]; call manually only after mutating
+	/// `strings` directly.
+	pub fn rebuild_string_index(&mut self) {
+		self.string_index = self
+			.strings
+			.iter()
+			.enumerate()
+			.map(|(i, s)| (s.clone(), i as u32))
+			.collect();
 	}
 
 	/// resolve an interned string id to its string.
@@ -132,10 +152,7 @@ impl GameData {
 	/// returns None if the string is not present (was never compiled in).
 	#[must_use]
 	pub fn string_id(&self, value: &str) -> Option<u32> {
-		self.strings
-			.iter()
-			.position(|x| x == value)
-			.and_then(|i| u32::try_from(i).ok())
+		self.string_index.get(value).copied()
 	}
 
 	/// get a table by name.
@@ -222,7 +239,13 @@ mod tests {
 		};
 		let mut tables = HashMap::default();
 		tables.insert("enemies".to_string(), table);
-		GameData { strings, tables }
+		let mut data = GameData {
+			strings,
+			tables,
+			string_index: HashMap::default(),
+		};
+		data.rebuild_string_index();
+		data
 	}
 
 	#[test]

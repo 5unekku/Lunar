@@ -148,7 +148,12 @@ pub fn compile_toml(source: &str) -> Result<Vec<u8>, String> {
 		tables.insert(table_name.clone(), DataTable { records, index });
 	}
 
-	let game_data = GameData { strings, tables };
+	// string_index is #[serde(skip)] — the runtime rebuilds it on load
+	let game_data = GameData {
+		strings,
+		tables,
+		string_index: Default::default(),
+	};
 	bincode::serialize(&game_data).map_err(|e| format!("serialization error: {e}"))
 }
 
