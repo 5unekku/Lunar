@@ -20,7 +20,8 @@ impl Mixer {
     }
 
     /// drain any pending sources from the submission channel, then mix all active
-    /// sources into `output` (interleaved stereo f32, already zeroed by caller).
+    /// sources into `output` (interleaved stereo f32; zeroed here, callers don't
+    /// need to clear it).
     pub fn fill(&mut self, output: &mut [f32]) {
         while let Ok(source) = self.receiver.try_recv() {
             self.sources.push(source);
@@ -34,10 +35,12 @@ impl Mixer {
 
         let mut i = 0;
         while i < sources.len() {
-            scratch[..output.len()].fill(0.0);
-            sources[i].fill(&mut scratch[..output.len()]);
+            // sources fully write the prefix they report, so only that prefix is
+            // mixed and scratch never needs re-zeroing
+            let frames = sources[i].fill(&mut scratch[..output.len()]);
+            let written = (frames * 2).min(output.len());
 
-            for (out, sample) in output.iter_mut().zip(scratch.iter()) {
+            for (out, sample) in output[..written].iter_mut().zip(&scratch[..written]) {
                 *out += sample;
             }
 

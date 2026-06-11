@@ -838,6 +838,7 @@ impl SoundLoaderTrait for CompressedSoundLoader {
 		Ok(Sound {
 			data: bytes,
 			format: self.format,
+			decoded_pcm: std::sync::OnceLock::new(),
 		})
 	}
 }
@@ -1765,6 +1766,10 @@ pub struct Sound {
 	pub data: Vec<u8>,
 	/// format detected from file extension at load time.
 	pub format: AudioFormat,
+	/// interleaved stereo f32 PCM, filled by the audio plugin on first play and
+	/// shared by every subsequent play of this asset. lives as long as the asset;
+	/// unload the asset to reclaim the memory (large for long music tracks).
+	pub decoded_pcm: std::sync::OnceLock<Arc<[f32]>>,
 }
 
 impl Asset for Sound {}

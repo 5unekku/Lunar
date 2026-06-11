@@ -12,6 +12,9 @@
 pub trait AudioSource: Send + Sync + 'static {
     /// write interleaved stereo f32 samples into `output` and return the number
     /// of *frames* (sample pairs) written. returning 0 signals exhaustion.
+    ///
+    /// the first `frames * 2` samples of `output` must all be written; anything
+    /// past that is ignored by the mixer (no need to zero-pad the tail).
     fn fill(&mut self, output: &mut [f32]) -> usize;
 
     /// true once all samples have been emitted and the source should be dropped.

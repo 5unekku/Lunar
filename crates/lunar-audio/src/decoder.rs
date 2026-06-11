@@ -25,20 +25,30 @@ impl Default for PlaybackOptions {
     fn default() -> Self { Self { volume: 1.0, looping: false } }
 }
 
-/// pre-decoded stereo f32 PCM held in memory; emitted sample-by-sample.
+/// pre-decoded stereo f32 PCM emitted sample-by-sample; the buffer is shared
+/// with the [`Sound`] asset's cache, so concurrent plays add no memory.
 pub struct DecodedSource {
-    samples: Vec<f32>,
+    samples: std::sync::Arc<[f32]>,
     cursor: usize,
     volume: f32,
     looping: bool,
 }
 
 impl DecodedSource {
-    /// decode `sound` synchronously into interleaved stereo f32 PCM.
+    /// fetch (or decode and cache) `sound`'s PCM and wrap it for playback.
     ///
+    /// the first play of a sound decodes synchronously and stores the result in
+    /// [`Sound::decoded_pcm`]; later plays reuse it and only pay an Arc clone.
     /// returns an error string on format or decode failure.
     pub fn from_sound(sound: &Sound, options: PlaybackOptions) -> Result<Self, String> {
-        let samples = decode(sound)?;
+        let samples = match sound.decoded_pcm.get() {
+            Some(pcm) => pcm.clone(),
+            None => {
+                let pcm: std::sync::Arc<[f32]> = decode(sound)?.into();
+                // first writer wins if two plays race; both share one buffer
+                sound.decoded_pcm.get_or_init(|| pcm).clone()
+            }
+        };
         Ok(Self {
             samples,
             cursor: 0,
@@ -50,30 +60,36 @@ impl DecodedSource {
 
 impl AudioSource for DecodedSource {
     fn fill(&mut self, output: &mut [f32]) -> usize {
-        let remaining = self.samples.len() - self.cursor;
-        if remaining == 0 {
-            if self.looping {
+        if self.samples.is_empty() {
+            return 0;
+        }
+        let volume = self.volume;
+        let mut written = 0;
+        // loop so a looping source restarts mid-buffer instead of padding the
+        // tail with silence (which clicks at every loop seam)
+        while written < output.len() {
+            let remaining = self.samples.len() - self.cursor;
+            if remaining == 0 {
+                if !self.looping {
+                    break;
+                }
                 self.cursor = 0;
-            } else {
-                return 0;
+                continue;
             }
+            let n = (output.len() - written).min(remaining);
+            let source = &self.samples[self.cursor..self.cursor + n];
+            for (dst, sample) in output[written..written + n].iter_mut().zip(source) {
+                *dst = sample * volume;
+            }
+            written += n;
+            self.cursor += n;
         }
-
-        let n = output.len().min(self.samples.len() - self.cursor);
-        let v = self.volume;
-        for (dst, src) in output[..n].iter_mut().zip(&self.samples[self.cursor..]) {
-            *dst = src * v;
-        }
-        self.cursor += n;
-
-        if self.looping && self.cursor == self.samples.len() {
-            self.cursor = 0;
-        }
-
-        n / 2 // frames = samples / channels
+        written / 2 // frames = samples / channels
     }
 
-    fn is_done(&self) -> bool { !self.looping && self.cursor >= self.samples.len() }
+    fn is_done(&self) -> bool {
+        self.samples.is_empty() || (!self.looping && self.cursor >= self.samples.len())
+    }
 }
 
 /// decode `sound` bytes into interleaved stereo f32 at [`SAMPLE_RATE`] Hz.
@@ -113,6 +129,8 @@ fn decode(sound: &Sound) -> Result<Vec<f32>, String> {
         .map_err(|e| format!("codec init failed: {e}"))?;
 
     let mut raw: Vec<f32> = Vec::new();
+    // reused across packets; reallocated only if a packet needs more room
+    let mut sample_buf: Option<SampleBuffer<f32>> = None;
 
     loop {
         let packet = match reader.next_packet() {
@@ -134,7 +152,11 @@ fn decode(sound: &Sound) -> Result<Vec<f32>, String> {
         };
 
         let spec = *audio.spec();
-        let mut sbuf = SampleBuffer::<f32>::new(audio.capacity() as u64, spec);
+        let needed = audio.capacity() * spec.channels.count();
+        if sample_buf.as_ref().is_none_or(|b| b.capacity() < needed) {
+            sample_buf = Some(SampleBuffer::<f32>::new(audio.capacity() as u64, spec));
+        }
+        let sbuf = sample_buf.as_mut().unwrap();
         sbuf.copy_interleaved_ref(audio);
         raw.extend_from_slice(sbuf.samples());
     }

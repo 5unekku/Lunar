@@ -32,8 +32,10 @@ impl AudioPlayer {
 
     /// decode `sound` and submit it for playback with `options`.
     ///
-    /// decodes synchronously on the caller's thread — fine for short SFX.
-    /// for streaming music, decode off-thread and use [`play_source`] instead.
+    /// the first play of a sound decodes synchronously on the caller's thread
+    /// and caches the PCM on the asset; repeat plays are an Arc clone. fine for
+    /// short SFX — for streaming music, decode off-thread and use
+    /// [`play_source`] instead.
     pub fn play(&self, sound: &Sound, options: PlaybackOptions) {
         match DecodedSource::from_sound(sound, options) {
             Ok(source) => self.backend.0.submit(Box::new(source)),
