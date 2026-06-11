@@ -1345,6 +1345,8 @@ pub struct RenderEngine3d {
 	render_scale: f32,
 
 	msaa_samples: u32,
+	// texture handle kept for the depth→gtao-depth copy fast path (msaa off)
+	depth_texture: wgpu::Texture,
 	depth_view: wgpu::TextureView,
 	// some when msaa_samples > 1; render target for color pass, resolved to swapchain
 	msaa_color_view: Option<wgpu::TextureView>,
@@ -1463,7 +1465,10 @@ pub struct RenderEngine3d {
 
 	// GTAO: half-res ambient occlusion
 	ssao_enabled: bool,
-	// non-MSAA z-prepass depth used as GTAO input (can't sample MSAA depth)
+	// non-MSAA z-prepass depth used as GTAO input (can't sample MSAA depth).
+	// when msaa is off it's filled by copying depth_texture instead of
+	// re-rendering the scene; the texture handle enables that copy
+	gtao_depth_texture: wgpu::Texture,
 	gtao_depth_view: wgpu::TextureView,
 	gtao_ao_a: wgpu::Texture, // ping-pong target A (AO result)
 	gtao_ao_b: wgpu::Texture, // ping-pong target B (blur intermediate)

@@ -892,8 +892,24 @@ impl RenderEngine3d {
 		let sky_needs_depth = world.get_resource::<AtmosphericScattering>().is_some();
 		let gtao_active = (self.ssao_enabled && dev_ssao) || dev_staa;
 		if gtao_active || sky_needs_depth {
-			// non-MSAA depth prepass so GTAO/TAA can sample depth without MSAA complication
-			{
+			// native msaa-off prepass tiers: the z-prepass renders this exact
+			// depth (opaque + surface meshes, full extent, sample count 1) into
+			// depth_texture on a parallel encoder that submits before this one,
+			// so a flat copy replaces a full scene depth re-render. wasm records
+			// its z-prepass into THIS encoder after this point, so the copy
+			// would read stale depth there — keep the re-render on wasm.
+			let depth_copy_ok = cfg!(not(target_arch = "wasm32"))
+				&& self.msaa_samples == 1
+				&& self.render_tier != RenderTier::LowGles;
+			if depth_copy_ok {
+				encoder.copy_texture_to_texture(
+					self.depth_texture.as_image_copy(),
+					self.gtao_depth_texture.as_image_copy(),
+					self.depth_texture.size(),
+				);
+			} else {
+				// non-MSAA depth prepass so GTAO/TAA can sample depth without
+				// MSAA complication (multisampled depth can't be copied)
 				let mut zpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 					label: Some("[gtao] depth prepass"),
 					color_attachments: &[],

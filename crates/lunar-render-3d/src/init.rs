@@ -202,7 +202,8 @@ impl RenderEngine3d {
 		// derive quality settings early so msaa_samples and other tier-specific values come from one place
 		let quality_early = QualitySettings::from_tier(render_tier);
 		let msaa_samples = quality_early.msaa_samples;
-		let depth_view = Self::make_depth_view(&device, config.width, config.height, msaa_samples);
+		let (depth_texture, depth_view) =
+			Self::make_depth_view(&device, config.width, config.height, msaa_samples);
 		let msaa_color_view = Self::make_msaa_color_view(
 			&device,
 			config.width,
@@ -2757,7 +2758,8 @@ impl RenderEngine3d {
 		let ao_h = (config.height / 2).max(1);
 
 		// non-MSAA depth texture dedicated to GTAO input
-		let gtao_depth_tex = Self::make_depth_view(&device, config.width, config.height, 1);
+		let (gtao_depth_texture, gtao_depth_tex) =
+			Self::make_depth_view(&device, config.width, config.height, 1);
 
 		let gtao_ao_a = device.create_texture(&wgpu::TextureDescriptor {
 			label: Some("[gtao] ao ping"),
@@ -3414,6 +3416,7 @@ impl RenderEngine3d {
 			render_w: config.width,
 			render_h: config.height,
 			render_scale: 1.0,
+			depth_texture,
 			depth_view,
 			globals_buf,
 			globals_bg,
@@ -3495,6 +3498,7 @@ impl RenderEngine3d {
 			composite_pipeline,
 			post_sampler,
 			ssao_enabled,
+			gtao_depth_texture,
 			gtao_depth_view: gtao_depth_tex,
 			gtao_ao_a,
 			gtao_ao_b,

@@ -29,7 +29,7 @@ impl RenderEngine3d {
 		let render_h = ((height as f32 * self.render_scale).ceil() as u32).max(1);
 		self.render_w = render_w;
 		self.render_h = render_h;
-		self.depth_view =
+		(self.depth_texture, self.depth_view) =
 			Self::make_depth_view(&self.device, render_w, render_h, self.msaa_samples);
 		self.msaa_color_view = Self::make_msaa_color_view(
 			&self.device,
@@ -63,7 +63,8 @@ impl RenderEngine3d {
 		// rebuild GTAO depth and AO textures at the new render resolution
 		let ao_w = (render_w / 2).max(1);
 		let ao_h = (render_h / 2).max(1);
-		self.gtao_depth_view = Self::make_depth_view(&self.device, render_w, render_h, 1);
+		(self.gtao_depth_texture, self.gtao_depth_view) =
+			Self::make_depth_view(&self.device, render_w, render_h, 1);
 		// the contact-shadow pass bind group references gtao_depth_view — invalidate it
 		self.contact_shadow_bg = None;
 		let gtao_ao_a = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -548,7 +549,7 @@ impl RenderEngine3d {
 		self.msaa_samples = samples;
 		let w = self.render_w;
 		let h = self.render_h;
-		self.depth_view = Self::make_depth_view(&self.device, w, h, samples);
+		(self.depth_texture, self.depth_view) = Self::make_depth_view(&self.device, w, h, samples);
 		self.msaa_color_view =
 			Self::make_msaa_color_view(&self.device, w, h, self.hdr_format, samples);
 		self.rebuild_msaa_pipelines();

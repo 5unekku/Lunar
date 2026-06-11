@@ -1098,30 +1098,35 @@ impl RenderEngine3d {
 		width: u32,
 		height: u32,
 		sample_count: u32,
-	) -> wgpu::TextureView {
-		// non-MSAA depth also gets TEXTURE_BINDING so GTAO can sample it
+	) -> (wgpu::Texture, wgpu::TextureView) {
+		// non-MSAA depth also gets TEXTURE_BINDING so GTAO can sample it, plus
+		// COPY usage so the z-prepass result can be blitted into the gtao depth
+		// copy instead of re-rendering the scene (msaa off only — multisampled
+		// depth can't be copied)
 		let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
 			| if sample_count == 1 {
 				wgpu::TextureUsages::TEXTURE_BINDING
+					| wgpu::TextureUsages::COPY_SRC
+					| wgpu::TextureUsages::COPY_DST
 			} else {
 				wgpu::TextureUsages::empty()
 			};
-		device
-			.create_texture(&wgpu::TextureDescriptor {
-				label: Some("[depth] attachment"),
-				size: wgpu::Extent3d {
-					width,
-					height,
-					depth_or_array_layers: 1,
-				},
-				mip_level_count: 1,
-				sample_count,
-				dimension: wgpu::TextureDimension::D2,
-				format: wgpu::TextureFormat::Depth32Float,
-				usage,
-				view_formats: &[],
-			})
-			.create_view(&wgpu::TextureViewDescriptor::default())
+		let texture = device.create_texture(&wgpu::TextureDescriptor {
+			label: Some("[depth] attachment"),
+			size: wgpu::Extent3d {
+				width,
+				height,
+				depth_or_array_layers: 1,
+			},
+			mip_level_count: 1,
+			sample_count,
+			dimension: wgpu::TextureDimension::D2,
+			format: wgpu::TextureFormat::Depth32Float,
+			usage,
+			view_formats: &[],
+		});
+		let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+		(texture, view)
 	}
 	pub(crate) fn make_msaa_color_view(
 		device: &wgpu::Device,
