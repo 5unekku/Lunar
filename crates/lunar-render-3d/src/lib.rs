@@ -203,7 +203,8 @@ const SHADOW_MAP_SIZE: u32 = 1024;
 /// number of shadow cascades for the directional light.
 const NUM_CASCADES: u32 = 3;
 
-/// group 0: view_proj (64) + cam_pos (12) + elapsed (4) + delta (4) + pad (12) = 96 bytes.
+/// group 0: view_proj (64) + cam_pos (12) + elapsed (4) + delta (4) + lighting_model (4)
+///          + render_flags (4) + vertex_snap (4) + classic_light (4) + pad (12) = 112 bytes.
 const GLOBALS_SIZE: u64 = 112;
 
 /// group 1: base_color (16) + metallic (4) + roughness (4) + flags (4) + has_lightmap (4)
@@ -2007,7 +2008,7 @@ pub mod prelude {
 
 #[cfg(test)]
 mod visual_style_tests {
-	use super::{DevRenderProfile, DitherMode, LightingModel, VisualStyle};
+	use super::{DevRenderProfile, DitherMode, LightingModel, TonemapMode, VisualStyle};
 
 	#[test]
 	fn neutral_is_a_no_op() {

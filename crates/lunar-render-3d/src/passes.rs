@@ -276,18 +276,10 @@ impl RenderEngine3d {
 			// group 5: clustered lights (same for entire pass)
 			pass.set_bind_group(5, &self.cluster_bg_render, &[]);
 
-			// sky pass — a configured panorama texture replaces the dome+sun:
-			// drawing it here (depth Always, write off) lets geometry cover it,
-			// so msaa silhouettes resolve against real sky texels instead of a
-			// post-resolve paint-over that can't fix partially-covered pixels
-			if panorama_ready && let Some((_, _, panorama_bg)) = &self.panorama_sky_cache {
-				// group 1 is stomped with panorama data here; the opaque section
-				// below rebinds every group anyway
-				pass.set_pipeline(&self.panorama_scene_pipeline);
-				pass.set_bind_group(1, panorama_bg, &[]);
-				pass.draw(0..3, 0..1);
-				draw_calls += 1;
-			} else {
+			// sky pass — a configured panorama texture replaces the dome+sun and
+			// draws after the opaque section instead (depth-tested at far plane,
+			// so early-z skips every pixel geometry already covered)
+			if !panorama_ready {
 				// unlit dome; sun only when the sky resource asks for it.
 				// entity_bg is set once for the whole pass (covers all slots).
 				pass.set_pipeline(&self.sky_pipeline);
@@ -415,6 +407,19 @@ impl RenderEngine3d {
 					}
 					i += 1;
 				}
+			}
+
+			// panorama sky — fullscreen triangle at far depth (LessEqual, no
+			// write): after opaques so early-z rejects covered pixels, still in
+			// the main pass so msaa silhouettes resolve against real sky texels,
+			// and before transparents, which must blend over it
+			if panorama_ready && let Some((_, _, panorama_bg)) = &self.panorama_sky_cache {
+				pass.set_pipeline(&self.panorama_scene_pipeline);
+				pass.set_bind_group(1, panorama_bg, &[]);
+				pass.draw(0..3, 0..1);
+				// restore the material bind group the transparent pass relies on
+				pass.set_bind_group(1, &self.material_bg, &[]);
+				draw_calls += 1;
 			}
 
 			// transparent pass — back-to-front sorted, no depth write, alpha blend.

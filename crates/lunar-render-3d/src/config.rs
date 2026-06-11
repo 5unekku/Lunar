@@ -556,9 +556,10 @@ impl RenderEngine3d {
 		self.static_bundle = None;
 		log::info!("msaa changed to {samples}x");
 	}
-	/// panorama sky pipeline — fullscreen triangle drawn inside the main color
-	/// pass in place of the sky dome, so it must match the pass's msaa count
-	/// and depth attachment (test Always, no write)
+	/// panorama sky pipeline — fullscreen triangle at far depth drawn inside the
+	/// main color pass after the opaque section, so it must match the pass's
+	/// msaa count and depth attachment (test LessEqual, no write — early-z
+	/// rejects every pixel geometry already covered)
 	pub(crate) fn make_panorama_scene_pipeline(
 		device: &wgpu::Device,
 		layout: &wgpu::PipelineLayout,
@@ -590,7 +591,7 @@ impl RenderEngine3d {
 			depth_stencil: Some(wgpu::DepthStencilState {
 				format: wgpu::TextureFormat::Depth32Float,
 				depth_write_enabled: Some(false),
-				depth_compare: Some(wgpu::CompareFunction::Always),
+				depth_compare: Some(wgpu::CompareFunction::LessEqual),
 				stencil: wgpu::StencilState::default(),
 				bias: wgpu::DepthBiasState::default(),
 			}),

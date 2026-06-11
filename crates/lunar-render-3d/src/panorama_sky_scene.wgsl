@@ -1,10 +1,11 @@
 // cylindrical panorama sky, drawn inside the main color pass in place of the
-// sky dome (depth Always, write off): geometry then draws over it, so msaa
-// edges resolve against real sky texels instead of the clear color, and no
-// post-resolve depth classification is needed. the texture tiles horizontally
-// `repeats` times per full turn and maps linearly in tan(pitch) vertically,
-// matching a software renderer's screen-linear sky columns at any fov.
-// colors pass through untouched (the pipeline is gamma space).
+// sky dome. the triangle sits at far depth (LessEqual, write off) and draws
+// after the opaque section, so early-z skips every geometry-covered pixel and
+// only visible sky shades; being in the main pass still lets msaa edges
+// resolve against real sky texels instead of the clear color. the texture
+// tiles horizontally `repeats` times per full turn and maps linearly in
+// tan(pitch) vertically, matching a software renderer's screen-linear sky
+// columns at any fov. colors pass through untouched (gamma-space pipeline).
 
 struct Globals {
     view_proj:      mat4x4<f32>,
@@ -44,7 +45,8 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertOut {
         vec2<f32>(0.0, 2.0), vec2<f32>(0.0, 0.0), vec2<f32>(2.0, 0.0),
     );
     var out: VertOut;
-    out.clip_pos = vec4<f32>(pos[vi], 0.0, 1.0);
+    // z = w → far-plane depth 1.0: passes LessEqual only where no geometry wrote
+    out.clip_pos = vec4<f32>(pos[vi], 1.0, 1.0);
     out.uv = uvs[vi];
     return out;
 }
