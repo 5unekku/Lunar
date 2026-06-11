@@ -109,6 +109,8 @@ impl RenderEngine3d {
 			..
 		} = fc;
 		let mut draw_calls = 0u32;
+		// panorama sky replaces the dome inside the main pass when configured
+		let panorama_ready = self.prepare_panorama_sky(world);
 		// ── main color pass → HDR texture ───��─────────────────────────────
 		// MSAA resolves into the non-MSAA HDR texture; no MSAA renders direct to HDR.
 		// composite pass reads the HDR texture and writes to swapchain.
@@ -274,28 +276,41 @@ impl RenderEngine3d {
 			// group 5: clustered lights (same for entire pass)
 			pass.set_bind_group(5, &self.cluster_bg_render, &[]);
 
-			// sky pass — unlit, dome always drawn; sun only when sky resource present.
-			// entity_bg is set once for the whole pass (covers all slots in storage buffer).
-			pass.set_pipeline(&self.sky_pipeline);
-			pass.set_bind_group(2, &self.entity_bg, &[]);
-			pass.set_vertex_buffer(0, self.dome_mesh.vbuf.slice(..));
-			pass.set_index_buffer(self.dome_mesh.ibuf.slice(..), self.dome_mesh.index_fmt);
-			pass.draw_indexed(
-				0..self.dome_mesh.index_count,
-				0,
-				SLOT_DOME as u32..SLOT_DOME as u32 + 1,
-			);
-			draw_calls += 1;
-
-			if sky.is_some_and(|s| s.show_sun) {
-				pass.set_vertex_buffer(0, self.sun_mesh.vbuf.slice(..));
-				pass.set_index_buffer(self.sun_mesh.ibuf.slice(..), self.sun_mesh.index_fmt);
+			// sky pass — a configured panorama texture replaces the dome+sun:
+			// drawing it here (depth Always, write off) lets geometry cover it,
+			// so msaa silhouettes resolve against real sky texels instead of a
+			// post-resolve paint-over that can't fix partially-covered pixels
+			if panorama_ready && let Some((_, _, panorama_bg)) = &self.panorama_sky_cache {
+				// group 1 is stomped with panorama data here; the opaque section
+				// below rebinds every group anyway
+				pass.set_pipeline(&self.panorama_scene_pipeline);
+				pass.set_bind_group(1, panorama_bg, &[]);
+				pass.draw(0..3, 0..1);
+				draw_calls += 1;
+			} else {
+				// unlit dome; sun only when the sky resource asks for it.
+				// entity_bg is set once for the whole pass (covers all slots).
+				pass.set_pipeline(&self.sky_pipeline);
+				pass.set_bind_group(2, &self.entity_bg, &[]);
+				pass.set_vertex_buffer(0, self.dome_mesh.vbuf.slice(..));
+				pass.set_index_buffer(self.dome_mesh.ibuf.slice(..), self.dome_mesh.index_fmt);
 				pass.draw_indexed(
-					0..self.sun_mesh.index_count,
+					0..self.dome_mesh.index_count,
 					0,
-					SLOT_SUN as u32..SLOT_SUN as u32 + 1,
+					SLOT_DOME as u32..SLOT_DOME as u32 + 1,
 				);
 				draw_calls += 1;
+
+				if sky.is_some_and(|s| s.show_sun) {
+					pass.set_vertex_buffer(0, self.sun_mesh.vbuf.slice(..));
+					pass.set_index_buffer(self.sun_mesh.ibuf.slice(..), self.sun_mesh.index_fmt);
+					pass.draw_indexed(
+						0..self.sun_mesh.index_count,
+						0,
+						SLOT_SUN as u32..SLOT_SUN as u32 + 1,
+					);
+					draw_calls += 1;
+				}
 			}
 
 			// static geometry via RenderBundle — near-zero CPU cost per frame
@@ -1630,7 +1645,7 @@ impl RenderEngine3d {
 							// tested) meshes are deferred to the textured variant
 							// below so their cutouts don't stamp full-quad depth
 							let is_masked = |packed: &[SurfaceStagePacked; 4]| {
-								packed.iter().any(|s| s.enabled != 0 && s.alpha_test != 0)
+								packed.iter().any(|s| s.enabled != 0 && s.flags & 1 != 0)
 							};
 							for &(mesh_id, slot, _, ref packed) in s_surf {
 								if is_masked(packed) {
@@ -1855,7 +1870,7 @@ impl RenderEngine3d {
 					}
 					// surface shader meshes write prepass depth too (see native path)
 					let is_masked = |packed: &[SurfaceStagePacked; 4]| {
-						packed.iter().any(|s| s.enabled != 0 && s.alpha_test != 0)
+						packed.iter().any(|s| s.enabled != 0 && s.flags & 1 != 0)
 					};
 					for &(mesh_id, slot, _, ref packed) in &self.surface_scratch {
 						if is_masked(packed) {

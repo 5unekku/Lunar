@@ -396,7 +396,7 @@ impl RenderEngine3d {
 					alpha: 1.0,
 					use_lm_uv: 0,
 					enabled: 0,
-					alpha_test: 0,
+					flags: 0,
 				}; 4];
 				let mut tex_ids = [u32::MAX; 4];
 				for (si, stage) in surf.stages.iter().enumerate().take(4) {
@@ -421,7 +421,7 @@ impl RenderEngine3d {
 						alpha,
 						use_lm_uv,
 						enabled: 1,
-						alpha_test: stage.alpha_test as u32,
+						flags: stage.alpha_test as u32 | (stage.nearest as u32) << 1,
 					};
 					tex_ids[si] = stage.texture.id();
 					// ensure mesh is uploaded
@@ -1204,7 +1204,7 @@ impl RenderEngine3d {
 						stage_data[off + 24..off + 28]
 							.copy_from_slice(bytemuck::cast_slice(&[stage.enabled]));
 						stage_data[off + 28..off + 32]
-							.copy_from_slice(bytemuck::cast_slice(&[stage.alpha_test]));
+							.copy_from_slice(bytemuck::cast_slice(&[stage.flags]));
 					}
 					self.queue.write_buffer(
 						&self.surface_params_buf,
@@ -1253,6 +1253,10 @@ impl RenderEngine3d {
 							wgpu::BindGroupEntry {
 								binding: 5,
 								resource: wgpu::BindingResource::Sampler(&self.surface_sampler),
+							},
+							wgpu::BindGroupEntry {
+								binding: 6,
+								resource: wgpu::BindingResource::Sampler(&self.surface_nearest_sampler),
 							},
 						],
 					});

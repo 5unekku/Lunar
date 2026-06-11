@@ -77,7 +77,7 @@ const CLUSTER_SHADER_SRC: &str = include_str!("cluster.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const SURFACE_SHADER_SRC: &str = include_str!("surface.wgsl");
 const SURFACE_PREPASS_SHADER_SRC: &str = include_str!("surface_prepass.wgsl");
-const PANORAMA_SKY_SHADER_SRC: &str = include_str!("panorama_sky.wgsl");
+const PANORAMA_SKY_SCENE_SHADER_SRC: &str = include_str!("panorama_sky_scene.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const BLOOM_SHADER_SRC: &str = include_str!("bloom.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
@@ -325,7 +325,8 @@ struct SurfaceStagePacked {
 	alpha: f32,
 	use_lm_uv: u32,
 	enabled: u32,
-	alpha_test: u32,
+	/// bit 0 = alpha test (discard a < 0.5), bit 1 = nearest-neighbor sampling
+	flags: u32,
 }
 
 // ── gpu types ──────────────────────────────────────────────────────────────
@@ -1429,6 +1430,7 @@ pub struct RenderEngine3d {
 	surface_params_buf: wgpu::Buffer, // UNIFORM_STRIDE per entity, up to 512 surface entities
 	surface_tex_cache: HashMap<u32, (wgpu::Texture, wgpu::TextureView)>,
 	surface_bg_cache: HashMap<[u32; 4], wgpu::BindGroup>,
+	surface_nearest_sampler: wgpu::Sampler,
 	// (mesh_id, instance_slot, [tex_id; 4], packed stages × 4)
 	surface_scratch: Vec<(u32, usize, [u32; 4], [SurfaceStagePacked; 4])>,
 
@@ -1555,13 +1557,16 @@ pub struct RenderEngine3d {
 	atmos_params_buf: wgpu::Buffer,
 	atmos_pipeline: wgpu::RenderPipeline,
 
-	// panorama sky — cylindrical texture painted over sky pixels (Sky::panorama)
+	// panorama sky — cylindrical texture drawn in the main pass instead of the
+	// dome (Sky::panorama), so geometry covers it and msaa edges resolve right
 	panorama_bgl1: wgpu::BindGroupLayout,
 	panorama_sampler: wgpu::Sampler,
 	panorama_params_buf: wgpu::Buffer,
-	panorama_pipeline: wgpu::RenderPipeline,
-	/// uploaded panorama texture keyed by asset id; rebuilt when the handle changes
-	panorama_sky_cache: Option<(u32, wgpu::Texture, wgpu::BindGroup)>,
+	panorama_scene_shader: wgpu::ShaderModule,
+	panorama_scene_pipeline: wgpu::RenderPipeline,
+	/// panorama bind group keyed by asset id; the texture is owned here only
+	/// when the surface cache didn't already hold a gpu copy
+	panorama_sky_cache: Option<(u32, Option<wgpu::Texture>, wgpu::BindGroup)>,
 
 	// volumetric fog — quarter-res ray-marched sun scattering (mid+ tier)
 	fog_enabled: bool,

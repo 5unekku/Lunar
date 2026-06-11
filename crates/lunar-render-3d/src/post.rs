@@ -6,6 +6,107 @@
 use super::*;
 
 impl RenderEngine3d {
+	/// readies the panorama sky for the main color pass: caches the texture
+	/// bind group and uploads mapping params. returns true when the sky can be
+	/// drawn this frame. when the surface path already uploaded the asset (sky
+	/// doubling as a wall texture) its cpu pixels are evicted, so the gpu copy
+	/// is reused instead of re-uploading (non-srgb: gamma-space pipeline).
+	pub(crate) fn prepare_panorama_sky(&mut self, world: &World) -> bool {
+		let Some(sky) = world.get_resource::<Sky>().copied() else {
+			return false;
+		};
+		let Some(handle) = sky.panorama else {
+			return false;
+		};
+		let texture_id = handle.id();
+		let cache_valid = self
+			.panorama_sky_cache
+			.as_ref()
+			.map(|(id, _, _)| *id == texture_id)
+			.unwrap_or(false);
+		if !cache_valid {
+			let make_bind_group = |view: &wgpu::TextureView| {
+				self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+					label: Some("[panorama sky] bg1"),
+					layout: &self.panorama_bgl1,
+					entries: &[
+						wgpu::BindGroupEntry {
+							binding: 0,
+							resource: self.panorama_params_buf.as_entire_binding(),
+						},
+						wgpu::BindGroupEntry {
+							binding: 1,
+							resource: wgpu::BindingResource::TextureView(view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 2,
+							resource: wgpu::BindingResource::Sampler(&self.panorama_sampler),
+						},
+					],
+				})
+			};
+			let mut built: Option<(u32, Option<wgpu::Texture>, wgpu::BindGroup)> = None;
+			if let Some((_, view)) = self.surface_tex_cache.get(&texture_id) {
+				built = Some((texture_id, None, make_bind_group(view)));
+			} else {
+				let asset_server = world.resource::<lunar_assets::AssetServer>();
+				if let Some(tex) = asset_server.get_texture_by_id(texture_id) {
+					let expected = (tex.width * tex.height * 4) as usize;
+					if tex.pixels.len() >= expected {
+						let gpu_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+							label: Some("[panorama sky] tex"),
+							size: wgpu::Extent3d {
+								width: tex.width,
+								height: tex.height,
+								depth_or_array_layers: 1,
+							},
+							mip_level_count: 1,
+							sample_count: 1,
+							dimension: wgpu::TextureDimension::D2,
+							format: wgpu::TextureFormat::Rgba8Unorm,
+							usage: wgpu::TextureUsages::TEXTURE_BINDING
+								| wgpu::TextureUsages::COPY_DST,
+							view_formats: &[],
+						});
+						self.queue.write_texture(
+							gpu_tex.as_image_copy(),
+							&tex.pixels[..expected],
+							wgpu::TexelCopyBufferLayout {
+								offset: 0,
+								bytes_per_row: Some(tex.width * 4),
+								rows_per_image: Some(tex.height),
+							},
+							wgpu::Extent3d {
+								width: tex.width,
+								height: tex.height,
+								depth_or_array_layers: 1,
+							},
+						);
+						let view = gpu_tex.create_view(&Default::default());
+						let bind_group = make_bind_group(&view);
+						built = Some((texture_id, Some(gpu_tex), bind_group));
+					}
+				}
+			}
+			if let Some(entry) = built {
+				self.panorama_sky_cache = Some(entry);
+			}
+		}
+		if self.panorama_sky_cache.is_some() {
+			let params: [f32; 4] = [
+				sky.panorama_repeats,
+				sky.panorama_tan_scale,
+				sky.panorama_v_offset,
+				0.0,
+			];
+			self.queue
+				.write_buffer(&self.panorama_params_buf, 0, bytemuck::cast_slice(&params));
+			true
+		} else {
+			false
+		}
+	}
+
 	/// records the post-processing chain (bloom, atmospheric sky, ssr, fog, contact
 	/// shadow, motion vectors, composite, taa, fxaa) into the frame encoder, ending at
 	/// the swapchain. `view` is the surface view (moved in; not used after).
@@ -164,104 +265,6 @@ impl RenderEngine3d {
 			pass.set_bind_group(0, &self.atmos_bg0, &[]);
 			pass.set_bind_group(1, &self.atmos_bg1, &[]);
 			pass.draw(0..3, 0..1);
-		}
-
-		// ── panorama sky pass — cylindrical texture over sky pixels ──────
-		if let Some(sky) = world.get_resource::<Sky>().copied()
-			&& let Some(handle) = sky.panorama
-		{
-			// upload + cache the panorama texture (non-srgb: gamma-space pipeline)
-			let texture_id = handle.id();
-			let cache_valid = self
-				.panorama_sky_cache
-				.as_ref()
-				.map(|(id, _, _)| *id == texture_id)
-				.unwrap_or(false);
-			if !cache_valid {
-				let asset_server = world.resource::<lunar_assets::AssetServer>();
-				if let Some(tex) = asset_server.get_texture_by_id(texture_id) {
-					let gpu_tex = self.device.create_texture(&wgpu::TextureDescriptor {
-						label: Some("[panorama sky] tex"),
-						size: wgpu::Extent3d {
-							width: tex.width,
-							height: tex.height,
-							depth_or_array_layers: 1,
-						},
-						mip_level_count: 1,
-						sample_count: 1,
-						dimension: wgpu::TextureDimension::D2,
-						format: wgpu::TextureFormat::Rgba8Unorm,
-						usage: wgpu::TextureUsages::TEXTURE_BINDING
-							| wgpu::TextureUsages::COPY_DST,
-						view_formats: &[],
-					});
-					self.queue.write_texture(
-						gpu_tex.as_image_copy(),
-						&tex.pixels,
-						wgpu::TexelCopyBufferLayout {
-							offset: 0,
-							bytes_per_row: Some(tex.width * 4),
-							rows_per_image: Some(tex.height),
-						},
-						wgpu::Extent3d {
-							width: tex.width,
-							height: tex.height,
-							depth_or_array_layers: 1,
-						},
-					);
-					let view = gpu_tex.create_view(&Default::default());
-					let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-						label: Some("[panorama sky] bg1"),
-						layout: &self.panorama_bgl1,
-						entries: &[
-							wgpu::BindGroupEntry {
-								binding: 0,
-								resource: self.panorama_params_buf.as_entire_binding(),
-							},
-							wgpu::BindGroupEntry {
-								binding: 1,
-								resource: wgpu::BindingResource::TextureView(&view),
-							},
-							wgpu::BindGroupEntry {
-								binding: 2,
-								resource: wgpu::BindingResource::Sampler(&self.panorama_sampler),
-							},
-						],
-					});
-					self.panorama_sky_cache = Some((texture_id, gpu_tex, bg));
-				}
-			}
-			if let Some((_, _, bg)) = &self.panorama_sky_cache {
-				let params: [f32; 4] = [
-					sky.panorama_repeats,
-					sky.panorama_tan_scale,
-					sky.panorama_v_offset,
-					0.0,
-				];
-				self.queue
-					.write_buffer(&self.panorama_params_buf, 0, bytemuck::cast_slice(&params));
-
-				let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-					label: Some("[panorama sky] pass"),
-					color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-						view: &self.hdr_view,
-						resolve_target: None,
-						ops: wgpu::Operations {
-							load: wgpu::LoadOp::Load,
-							store: wgpu::StoreOp::Store,
-						},
-						depth_slice: None,
-					})],
-					depth_stencil_attachment: None,
-					timestamp_writes: None,
-					occlusion_query_set: None,
-					multiview_mask: None,
-				});
-				pass.set_pipeline(&self.panorama_pipeline);
-				pass.set_bind_group(0, &self.atmos_bg0, &[]);
-				pass.set_bind_group(1, bg, &[]);
-				pass.draw(0..3, 0..1);
-			}
 		}
 
 		// ── SSR pass (mid+ tier) ─────────────────────────────────────────
@@ -883,13 +886,10 @@ impl RenderEngine3d {
 			..
 		} = fc;
 		// ── GTAO passes (mid/high tier, ssao enabled) ────────────────────
-		// taa also needs non-msaa depth for reprojection, and the atmos /
-		// panorama sky passes read it to find sky pixels; shared by all three
-		let sky_needs_depth = world.get_resource::<AtmosphericScattering>().is_some()
-			|| world
-				.get_resource::<Sky>()
-				.map(|sky| sky.panorama.is_some())
-				.unwrap_or(false);
+		// taa also needs non-msaa depth for reprojection, and the atmos sky
+		// pass reads it to find sky pixels (the panorama sky draws inside the
+		// main pass and needs no depth classification)
+		let sky_needs_depth = world.get_resource::<AtmosphericScattering>().is_some();
 		let gtao_active = (self.ssao_enabled && dev_ssao) || dev_staa;
 		if gtao_active || sky_needs_depth {
 			// non-MSAA depth prepass so GTAO/TAA can sample depth without MSAA complication
@@ -956,7 +956,7 @@ impl RenderEngine3d {
 				// them their pixels read as sky (same rule as the main prepass);
 				// masked meshes use the alpha-tested variant
 				let is_masked = |packed: &[SurfaceStagePacked; 4]| {
-					packed.iter().any(|s| s.enabled != 0 && s.alpha_test != 0)
+					packed.iter().any(|s| s.enabled != 0 && s.flags & 1 != 0)
 				};
 				for &(mesh_id, slot, _, ref packed) in &self.surface_scratch {
 					if is_masked(packed) {

@@ -34,7 +34,7 @@ struct StageData {
     alpha:      f32,
     use_lm_uv:  u32,
     enabled:    u32,
-    alpha_test: u32,
+    flags:      u32,
 }
 struct SurfaceParams {
     stages: array<StageData, 4>,
@@ -42,6 +42,7 @@ struct SurfaceParams {
 @group(2) @binding(0) var<uniform> surface_params: SurfaceParams;
 @group(2) @binding(1) var          tex0:           texture_2d<f32>;
 @group(2) @binding(5) var          surf_sampler:   sampler;
+@group(2) @binding(6) var          surf_nearest:   sampler;
 
 struct VertIn {
     @location(0) position: vec3<f32>,
@@ -77,8 +78,13 @@ fn vs_surface_prepass(in: VertIn, @builtin(instance_index) instance_id: u32) -> 
 fn fs_surface_prepass(in: VertOut) {
     let stage = surface_params.stages[0];
     let uv = (in.uv + stage.uv_offset) * stage.uv_scale;
-    let sampled = textureSample(tex0, surf_sampler, uv);
-    if stage.alpha_test != 0u && sampled.a * stage.alpha < 0.5 {
+    var sampled: vec4<f32>;
+    if (stage.flags & 2u) != 0u {
+        sampled = textureSample(tex0, surf_nearest, uv);
+    } else {
+        sampled = textureSample(tex0, surf_sampler, uv);
+    }
+    if (stage.flags & 1u) != 0u && sampled.a * stage.alpha < 0.5 {
         discard;
     }
 }

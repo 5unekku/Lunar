@@ -1104,6 +1104,12 @@ impl RenderEngine3d {
 					ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
 					count: None,
 				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 6,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+					count: None,
+				},
 			],
 		});
 		let surface_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -1111,6 +1117,16 @@ impl RenderEngine3d {
 			mag_filter: wgpu::FilterMode::Linear,
 			min_filter: wgpu::FilterMode::Linear,
 			mipmap_filter: wgpu::MipmapFilterMode::Linear,
+			address_mode_u: wgpu::AddressMode::Repeat,
+			address_mode_v: wgpu::AddressMode::Repeat,
+			..Default::default()
+		});
+		// per-stage opt-in (SurfaceStage::nearest) — crisp texels for pixel art
+		let surface_nearest_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+			label: Some("[surface] nearest sampler"),
+			mag_filter: wgpu::FilterMode::Nearest,
+			min_filter: wgpu::FilterMode::Nearest,
+			mipmap_filter: wgpu::MipmapFilterMode::Nearest,
 			address_mode_u: wgpu::AddressMode::Repeat,
 			address_mode_v: wgpu::AddressMode::Repeat,
 			..Default::default()
@@ -2341,39 +2357,17 @@ impl RenderEngine3d {
 			address_mode_v: wgpu::AddressMode::ClampToEdge,
 			..Default::default()
 		});
-		let panorama_shader = make_shader!(device, shader_passthrough, "[panorama sky] shader", PANORAMA_SKY_SHADER_SRC, "panorama_sky.spv");
+		// drawn inside the main color pass in place of the sky dome, so it
+		// shares the pass's msaa target and depth attachment (test Always)
+		let panorama_scene_shader = make_shader!(device, shader_passthrough, "[panorama sky] shader", PANORAMA_SKY_SCENE_SHADER_SRC, "panorama_sky_scene.spv");
 		let panorama_pipeline_layout =
 			device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
 				label: Some("[panorama sky] pipeline layout"),
-				bind_group_layouts: &[Some(&atmos_bgl0), Some(&panorama_bgl1)],
+				bind_group_layouts: &[Some(&globals_bgl), Some(&panorama_bgl1)],
 				immediate_size: 0,
 			});
-		let panorama_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-			label: Some("[panorama sky] pipeline"),
-			layout: Some(&panorama_pipeline_layout),
-			vertex: wgpu::VertexState {
-				module: &panorama_shader,
-				entry_point: Some("vs_main"),
-				buffers: &[],
-				compilation_options: wgpu::PipelineCompilationOptions::default(),
-			},
-			fragment: Some(wgpu::FragmentState {
-				module: &panorama_shader,
-				entry_point: Some("fs_main"),
-				targets: &[Some(wgpu::ColorTargetState {
-					format: hdr_format,
-					// alpha blend: only sky pixels get alpha 1 from the shader
-					blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-					write_mask: wgpu::ColorWrites::ALL,
-				})],
-				compilation_options: wgpu::PipelineCompilationOptions::default(),
-			}),
-			primitive: wgpu::PrimitiveState::default(),
-			depth_stencil: None,
-			multisample: wgpu::MultisampleState::default(),
-			cache: pipeline_cache_ref,
-			multiview_mask: None,
-		});
+		let panorama_scene_pipeline =
+			Self::make_panorama_scene_pipeline(&device, &panorama_pipeline_layout, &panorama_scene_shader, hdr_format, msaa_samples, pipeline_cache_ref);
 
 		// ── water rendering — Gerstner waves + refraction ─────────────────
 
@@ -3471,6 +3465,7 @@ impl RenderEngine3d {
 			cluster_bg_compute,
 			cluster_bg_render,
 			surface_bgl,
+			surface_nearest_sampler,
 			surface_pipeline,
 			surface_masked_zprepass_pipeline,
 			surface_fallback_tex,
@@ -3585,7 +3580,8 @@ impl RenderEngine3d {
 			panorama_bgl1,
 			panorama_sampler,
 			panorama_params_buf,
-			panorama_pipeline,
+			panorama_scene_shader,
+			panorama_scene_pipeline,
 			panorama_sky_cache: None,
 			water_params_buf,
 			water_bgl0,

@@ -1,14 +1,20 @@
-// cylindrical panorama sky — paints a texture over sky pixels (prepass depth
-// == 1.0) after the main passes, doom-style: the texture tiles horizontally
+// cylindrical panorama sky, drawn inside the main color pass in place of the
+// sky dome (depth Always, write off): geometry then draws over it, so msaa
+// edges resolve against real sky texels instead of the clear color, and no
+// post-resolve depth classification is needed. the texture tiles horizontally
 // `repeats` times per full turn and maps linearly in tan(pitch) vertically,
-// which matches a software renderer's screen-linear sky columns at any fov.
+// matching a software renderer's screen-linear sky columns at any fov.
 // colors pass through untouched (the pipeline is gamma space).
 
 struct Globals {
-    view_proj:    mat4x4<f32>,
-    cam_pos:      vec3<f32>,
-    elapsed_secs: f32,
-    delta_secs:   f32,
+    view_proj:      mat4x4<f32>,
+    cam_pos:        vec3<f32>,
+    elapsed_secs:   f32,
+    delta_secs:     f32,
+    lighting_model: u32,
+    render_flags:   u32,
+    vertex_snap:    f32,
+    classic_light:  f32,
     _pad0: f32, _pad1: f32, _pad2: f32,
 }
 
@@ -19,8 +25,7 @@ struct PanoramaParams {
     _pad0:     f32,
 }
 
-@group(0) @binding(0) var<uniform> globals:   Globals;
-@group(0) @binding(1) var          depth_tex: texture_2d<f32>;
+@group(0) @binding(0) var<uniform> globals:     Globals;
 @group(1) @binding(0) var<uniform> params:      PanoramaParams;
 @group(1) @binding(1) var          sky_tex:     texture_2d<f32>;
 @group(1) @binding(2) var          sky_sampler: sampler;
@@ -48,13 +53,6 @@ const TAU: f32 = 6.28318530717958;
 
 @fragment
 fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
-    // only paint pixels no geometry covered
-    let px = vec2<i32>(i32(in.clip_pos.x), i32(in.clip_pos.y));
-    let depth = textureLoad(depth_tex, px, 0).r;
-    if depth < 1.0 {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
-
     // reconstruct the world-space view ray (same basis trick as atmos.wgsl)
     let ndc = in.uv * 2.0 - 1.0;
     let right = vec3<f32>(globals.view_proj[0][0], globals.view_proj[1][0], globals.view_proj[2][0]);

@@ -37,7 +37,7 @@ struct StageData {
     alpha:      f32,         // constant alpha (AlphaGen::Const) or 1.0 for Identity
     use_lm_uv:  u32,         // 1 = sample using uv_lightmap channel
     enabled:    u32,         // 1 if this stage should be rendered
-    alpha_test: u32,         // 1 = discard fragments with alpha < 0.5 (q3 alphaFunc GE128)
+    flags:      u32,         // bit 0 = alpha test (discard a < 0.5), bit 1 = nearest sampling
 }
 
 struct SurfaceParams {
@@ -49,6 +49,7 @@ struct SurfaceParams {
 @group(2) @binding(3) var           tex2:           texture_2d<f32>;
 @group(2) @binding(4) var           tex3:           texture_2d<f32>;
 @group(2) @binding(5) var           surf_sampler:   sampler;
+@group(2) @binding(6) var           surf_nearest:   sampler;
 
 // vertex I/O
 
@@ -105,8 +106,14 @@ fn apply_uv(base_uv: vec2<f32>, lm_uv: vec2<f32>, stage: StageData) -> vec2<f32>
     return (raw + stage.uv_offset) * stage.uv_scale;
 }
 
-// sample one texture by stage index
+// sample one texture by stage index, honoring the stage's nearest flag
 fn sample_stage(stage_idx: u32, uv: vec2<f32>) -> vec4<f32> {
+    if (surface_params.stages[stage_idx].flags & 2u) != 0u {
+        if stage_idx == 0u { return textureSample(tex0, surf_nearest, uv); }
+        if stage_idx == 1u { return textureSample(tex1, surf_nearest, uv); }
+        if stage_idx == 2u { return textureSample(tex2, surf_nearest, uv); }
+        return textureSample(tex3, surf_nearest, uv);
+    }
     if stage_idx == 0u { return textureSample(tex0, surf_sampler, uv); }
     if stage_idx == 1u { return textureSample(tex1, surf_sampler, uv); }
     if stage_idx == 2u { return textureSample(tex2, surf_sampler, uv); }
@@ -155,7 +162,7 @@ fn fs_surface(in: VertOut) -> @location(0) vec4<f32> {
         let uv = apply_uv(base_uv, in.uv_lightmap, stage);
         let sampled = sample_stage(s, uv);
         // masked surfaces (sprites, grates): binary cutout, keeps depth honest
-        if stage.alpha_test != 0u && sampled.a * stage.alpha < 0.5 {
+        if (stage.flags & 1u) != 0u && sampled.a * stage.alpha < 0.5 {
             discard;
         }
         acc = blend_stage(acc, sampled * vert_color, stage);

@@ -62,6 +62,9 @@ pub struct SurfaceStage {
 	/// 0.5 are discarded in both the z-prepass and the surface pass, keeping
 	/// depth honest for sprites, grates and fences.
 	pub alpha_test: bool,
+	/// sample this stage's texture with nearest-neighbor filtering instead of
+	/// bilinear. crisp texels for low-res pixel art (retro sprites, hud quads).
+	pub nearest: bool,
 }
 
 impl Default for SurfaceStage {
@@ -73,6 +76,7 @@ impl Default for SurfaceStage {
 			tc_gen: TcGen::Base,
 			alpha_gen: AlphaGen::Identity,
 			alpha_test: false,
+			nearest: false,
 		}
 	}
 }

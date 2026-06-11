@@ -556,6 +556,53 @@ impl RenderEngine3d {
 		self.static_bundle = None;
 		log::info!("msaa changed to {samples}x");
 	}
+	/// panorama sky pipeline — fullscreen triangle drawn inside the main color
+	/// pass in place of the sky dome, so it must match the pass's msaa count
+	/// and depth attachment (test Always, no write)
+	pub(crate) fn make_panorama_scene_pipeline(
+		device: &wgpu::Device,
+		layout: &wgpu::PipelineLayout,
+		shader: &wgpu::ShaderModule,
+		hdr_format: wgpu::TextureFormat,
+		msaa_samples: u32,
+		cache: Option<&wgpu::PipelineCache>,
+	) -> wgpu::RenderPipeline {
+		device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+			label: Some("[panorama sky] pipeline"),
+			layout: Some(layout),
+			vertex: wgpu::VertexState {
+				module: shader,
+				entry_point: Some("vs_main"),
+				buffers: &[],
+				compilation_options: wgpu::PipelineCompilationOptions::default(),
+			},
+			fragment: Some(wgpu::FragmentState {
+				module: shader,
+				entry_point: Some("fs_main"),
+				targets: &[Some(wgpu::ColorTargetState {
+					format: hdr_format,
+					blend: None,
+					write_mask: wgpu::ColorWrites::ALL,
+				})],
+				compilation_options: wgpu::PipelineCompilationOptions::default(),
+			}),
+			primitive: wgpu::PrimitiveState::default(),
+			depth_stencil: Some(wgpu::DepthStencilState {
+				format: wgpu::TextureFormat::Depth32Float,
+				depth_write_enabled: Some(false),
+				depth_compare: Some(wgpu::CompareFunction::Always),
+				stencil: wgpu::StencilState::default(),
+				bias: wgpu::DepthBiasState::default(),
+			}),
+			multisample: wgpu::MultisampleState {
+				count: msaa_samples,
+				..Default::default()
+			},
+			cache,
+			multiview_mask: None,
+		})
+	}
+
 	pub(crate) fn rebuild_msaa_pipelines(&mut self) {
 		let msaa = self.msaa_samples;
 		let hdr = self.hdr_format;
@@ -906,6 +953,24 @@ impl RenderEngine3d {
 					cache,
 					multiview_mask: None,
 				});
+
+		{
+			let panorama_layout =
+				self.device
+					.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+						label: Some("[panorama sky] pipeline layout"),
+						bind_group_layouts: &[Some(&self.globals_bgl), Some(&self.panorama_bgl1)],
+						immediate_size: 0,
+					});
+			self.panorama_scene_pipeline = Self::make_panorama_scene_pipeline(
+				&self.device,
+				&panorama_layout,
+				&self.panorama_scene_shader,
+				hdr,
+				msaa,
+				cache,
+			);
+		}
 
 		self.water_pipeline = self
 			.device
