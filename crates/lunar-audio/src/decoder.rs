@@ -56,6 +56,13 @@ impl DecodedSource {
             looping: options.looping,
         })
     }
+
+    /// build a source directly from interleaved stereo samples, bypassing the
+    /// decode path. test-only: lets fill()/is_done() run against known PCM.
+    #[cfg(test)]
+    fn from_samples(samples: Vec<f32>, volume: f32, looping: bool) -> Self {
+        Self { samples: samples.into(), cursor: 0, volume, looping }
+    }
 }
 
 impl AudioSource for DecodedSource {
@@ -238,5 +245,57 @@ mod tests {
     #[test]
     fn resample_handles_empty_input() {
         assert!(resample_stereo(&[], 44_100, 48_000).is_empty());
+    }
+
+    #[test]
+    fn fill_applies_volume_and_reports_frames() {
+        let mut source = DecodedSource::from_samples(vec![1.0, 1.0, 1.0, 1.0], 0.5, false);
+        let mut output = [0.0f32; 4];
+        let frames = source.fill(&mut output);
+        assert_eq!(frames, 2);
+        assert!(output.iter().all(|&sample| (sample - 0.5).abs() < 1e-6));
+    }
+
+    #[test]
+    fn fill_stops_at_end_when_not_looping() {
+        let mut source = DecodedSource::from_samples(vec![1.0, 2.0, 3.0, 4.0], 1.0, false);
+        let mut output = [9.0f32; 8];
+        let frames = source.fill(&mut output);
+        assert_eq!(frames, 2);
+        assert_eq!(&output[..4], &[1.0, 2.0, 3.0, 4.0]);
+        // only the reported prefix is written; the mixer ignores the tail
+        assert_eq!(&output[4..], &[9.0; 4]);
+        assert!(source.is_done());
+    }
+
+    #[test]
+    fn fill_looping_restarts_mid_buffer_without_a_gap() {
+        let mut source = DecodedSource::from_samples(vec![1.0, 2.0, 3.0, 4.0], 1.0, true);
+        let mut output = [0.0f32; 8];
+        let frames = source.fill(&mut output);
+        // the loop seam lands mid-buffer with no silent padding (silence clicks)
+        assert_eq!(frames, 4);
+        assert_eq!(output, [1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0]);
+        assert!(!source.is_done());
+    }
+
+    #[test]
+    fn fill_resumes_from_cursor_across_calls() {
+        let mut source = DecodedSource::from_samples(vec![1.0, 2.0, 3.0, 4.0], 1.0, false);
+        let mut output = [0.0f32; 2];
+        assert_eq!(source.fill(&mut output), 1);
+        assert_eq!(output, [1.0, 2.0]);
+        assert!(!source.is_done());
+        assert_eq!(source.fill(&mut output), 1);
+        assert_eq!(output, [3.0, 4.0]);
+        assert!(source.is_done());
+    }
+
+    #[test]
+    fn fill_empty_source_writes_nothing_and_is_done() {
+        let mut source = DecodedSource::from_samples(Vec::new(), 1.0, true);
+        let mut output = [0.0f32; 4];
+        assert_eq!(source.fill(&mut output), 0);
+        assert!(source.is_done());
     }
 }
