@@ -66,9 +66,12 @@ impl TextLayoutCache {
 		wrap_width: Option<f32>,
 	) -> Option<&Vec<TextGlyphQuad>> {
 		let key = cache_key(font_id, content, font_size, wrap_width);
-		let generation = self.lru_gen;
 		if let Some(entry) = self.map.get_mut(&key) {
-			entry.1 = generation;
+			// a read must make the entry strictly newer than every other entry,
+			// otherwise it ties with the latest insert and eviction picks
+			// arbitrarily between them
+			self.lru_gen += 1;
+			entry.1 = self.lru_gen;
 			Some(&entry.0)
 		} else {
 			None
@@ -374,7 +377,8 @@ pub fn layout_text_into(
 	}
 }
 
-/// measure the maximum line width of a string in game units.
+/// measure the maximum line width of a string in game units. used by tests
+/// and tooling; the hot path caches full layouts instead.
 #[allow(dead_code)]
 pub fn measure_text(atlas: &mut GlyphAtlas, font_id: u32, text: &str, font_size: f32) -> f32 {
 	let scale = atlas.scale;
@@ -469,5 +473,235 @@ pub fn layout_text_wrapped_into(
 				uv_max,
 			});
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	const FONT_BYTES: &[u8] =
+		include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/fonts/Inconsolata.ttf"));
+	const FONT_ID: u32 = 1;
+
+	fn atlas_with_font() -> GlyphAtlas {
+		let mut atlas = GlyphAtlas::new(512, 512);
+		atlas.register_font(FONT_ID, FONT_BYTES);
+		atlas
+	}
+
+	#[test]
+	fn has_font_is_false_until_registered() {
+		let mut atlas = GlyphAtlas::new(64, 64);
+		assert!(!atlas.has_font(FONT_ID));
+		atlas.register_font(FONT_ID, FONT_BYTES);
+		assert!(atlas.has_font(FONT_ID));
+		assert!(!atlas.has_font(FONT_ID + 1));
+	}
+
+	// regression guard for the async font-load race: shaping against the
+	// engine's deliberately empty font db panics inside cosmic-text, which is
+	// why render() must skip text commands until has_font() turns true. if
+	// this stops panicking after a cosmic-text upgrade, that guard can go.
+	#[test]
+	#[should_panic(expected = "no default font")]
+	fn layout_without_registered_font_panics_in_cosmic_text() {
+		let mut atlas = GlyphAtlas::new(64, 64);
+		let mut out = Vec::new();
+		layout_text_into(&mut atlas, FONT_ID, "hi", 16.0, Vec2::ZERO, &mut out);
+	}
+
+	#[test]
+	fn layout_produces_quads_and_rasterizes_pixels() {
+		let mut atlas = atlas_with_font();
+		let mut out = Vec::new();
+		layout_text_into(&mut atlas, FONT_ID, "Hello", 24.0, Vec2::new(10.0, 20.0), &mut out);
+		assert_eq!(out.len(), 5);
+		for quad in &out {
+			assert!(quad.size.x > 0.0 && quad.size.y > 0.0);
+			assert!(quad.uv_min.x < quad.uv_max.x && quad.uv_min.y < quad.uv_max.y);
+		}
+		// glyphs advance left to right
+		for pair in out.windows(2) {
+			assert!(pair[1].position.x > pair[0].position.x);
+		}
+		// rasterization actually wrote coverage into the atlas
+		assert!(atlas.dirty);
+		assert!(atlas.pixels().iter().any(|&byte| byte != 0));
+	}
+
+	// the layout cache stores origin-relative quads and adds the position on
+	// read, so layout itself must be a pure translation of the origin layout
+	#[test]
+	fn layout_translates_with_position() {
+		let mut atlas = atlas_with_font();
+		let mut at_origin = Vec::new();
+		let mut shifted = Vec::new();
+		layout_text_into(&mut atlas, FONT_ID, "Cache", 18.0, Vec2::ZERO, &mut at_origin);
+		layout_text_into(&mut atlas, FONT_ID, "Cache", 18.0, Vec2::new(100.0, 50.0), &mut shifted);
+		assert_eq!(at_origin.len(), shifted.len());
+		for (a, b) in at_origin.iter().zip(&shifted) {
+			assert!((b.position.x - a.position.x - 100.0).abs() < 1e-4);
+			assert!((b.position.y - a.position.y - 50.0).abs() < 1e-4);
+			assert_eq!(a.size, b.size);
+			assert_eq!(a.uv_min, b.uv_min);
+			assert_eq!(a.uv_max, b.uv_max);
+		}
+	}
+
+	#[test]
+	fn layout_clears_stale_quads_and_skips_invisible_text() {
+		let mut atlas = atlas_with_font();
+		let mut out = Vec::new();
+		layout_text_into(&mut atlas, FONT_ID, "stale", 16.0, Vec2::ZERO, &mut out);
+		assert!(!out.is_empty());
+		layout_text_into(&mut atlas, FONT_ID, "", 16.0, Vec2::ZERO, &mut out);
+		assert!(out.is_empty(), "empty string must clear previous quads");
+		layout_text_into(&mut atlas, FONT_ID, "   ", 16.0, Vec2::ZERO, &mut out);
+		assert!(out.is_empty(), "whitespace rasterizes no quads");
+	}
+
+	#[test]
+	fn measure_text_grows_with_content() {
+		let mut atlas = atlas_with_font();
+		let empty = measure_text(&mut atlas, FONT_ID, "", 16.0);
+		let short = measure_text(&mut atlas, FONT_ID, "a", 16.0);
+		let long = measure_text(&mut atlas, FONT_ID, "aaaa", 16.0);
+		assert_eq!(empty, 0.0);
+		assert!(short > 0.0);
+		assert!(long > short);
+	}
+
+	#[test]
+	fn distinct_glyphs_get_non_overlapping_atlas_rects() {
+		let mut atlas = atlas_with_font();
+		let mut out = Vec::new();
+		layout_text_into(&mut atlas, FONT_ID, "abcdefg", 32.0, Vec2::ZERO, &mut out);
+		assert_eq!(out.len(), 7);
+		for i in 0..out.len() {
+			for j in (i + 1)..out.len() {
+				let (a, b) = (&out[i], &out[j]);
+				let overlaps = a.uv_min.x < b.uv_max.x
+					&& b.uv_min.x < a.uv_max.x
+					&& a.uv_min.y < b.uv_max.y
+					&& b.uv_min.y < a.uv_max.y;
+				assert!(!overlaps, "glyphs {i} and {j} share atlas pixels");
+			}
+		}
+	}
+
+	#[test]
+	fn wrapped_layout_breaks_lines_within_max_width() {
+		let mut atlas = atlas_with_font();
+		let mut out = Vec::new();
+		let max_width = 80.0;
+		layout_text_wrapped_into(
+			&mut atlas,
+			FONT_ID,
+			"one two three four five six",
+			16.0,
+			Vec2::ZERO,
+			max_width,
+			0.0,
+			&mut out,
+		);
+		assert!(!out.is_empty());
+		// every quad stays inside the wrap width
+		for quad in &out {
+			assert!(quad.position.x + quad.size.x <= max_width + 1.0);
+		}
+		// text this long cannot fit one line, so quads span multiple baselines
+		let min_y = out.iter().map(|q| q.position.y).fold(f32::MAX, f32::min);
+		let max_y = out.iter().map(|q| q.position.y).fold(f32::MIN, f32::max);
+		assert!(max_y - min_y >= 10.0, "expected at least two lines");
+	}
+
+	#[test]
+	fn wrapped_layout_line_height_controls_spacing() {
+		let mut atlas = atlas_with_font();
+		let text = "word word word word word word";
+		let mut tight = Vec::new();
+		let mut loose = Vec::new();
+		layout_text_wrapped_into(&mut atlas, FONT_ID, text, 16.0, Vec2::ZERO, 60.0, 18.0, &mut tight);
+		layout_text_wrapped_into(&mut atlas, FONT_ID, text, 16.0, Vec2::ZERO, 60.0, 40.0, &mut loose);
+		let spread = |quads: &[TextGlyphQuad]| {
+			let min = quads.iter().map(|q| q.position.y).fold(f32::MAX, f32::min);
+			let max = quads.iter().map(|q| q.position.y).fold(f32::MIN, f32::max);
+			max - min
+		};
+		assert!(spread(&loose) > spread(&tight));
+	}
+
+	#[test]
+	fn set_scale_resets_atlas_and_preserves_game_unit_layout() {
+		let mut atlas = atlas_with_font();
+		let mut at_one = Vec::new();
+		layout_text_into(&mut atlas, FONT_ID, "Scale", 20.0, Vec2::ZERO, &mut at_one);
+
+		assert!(atlas.set_scale(2.0));
+		// reset wiped all rasterized coverage
+		assert!(atlas.pixels().iter().all(|&byte| byte == 0));
+		// re-applying the same scale (within rounding epsilon) is a no-op
+		assert!(!atlas.set_scale(2.001));
+
+		let mut at_two = Vec::new();
+		layout_text_into(&mut atlas, FONT_ID, "Scale", 20.0, Vec2::ZERO, &mut at_two);
+		assert_eq!(at_one.len(), at_two.len());
+		// glyphs rasterize at 2x but game-unit geometry stays put (within a pixel)
+		let width = |quads: &[TextGlyphQuad]| {
+			quads.last().map_or(0.0, |q| q.position.x + q.size.x) - quads[0].position.x
+		};
+		assert!((width(&at_one) - width(&at_two)).abs() < 2.0);
+	}
+
+	#[test]
+	fn full_atlas_drops_glyphs_without_panicking() {
+		let mut atlas = GlyphAtlas::new(8, 8);
+		atlas.register_font(FONT_ID, FONT_BYTES);
+		let mut out = Vec::new();
+		layout_text_into(&mut atlas, FONT_ID, "Too big to fit", 64.0, Vec2::ZERO, &mut out);
+		assert!(out.is_empty(), "oversized glyphs must be dropped, not packed");
+	}
+
+	#[test]
+	fn layout_cache_hits_after_insert_and_respects_keys() {
+		let mut cache = TextLayoutCache::new(8);
+		assert!(cache.get(FONT_ID, "hi", 16.0, None).is_none());
+		let quads = vec![TextGlyphQuad {
+			position: Vec2::ZERO,
+			size: Vec2::new(4.0, 8.0),
+			uv_min: Vec2::ZERO,
+			uv_max: Vec2::new(0.1, 0.1),
+		}];
+		cache.insert(FONT_ID, "hi", 16.0, None, quads);
+		assert!(cache.get(FONT_ID, "hi", 16.0, None).is_some());
+		// any key component change is a different entry
+		assert!(cache.get(FONT_ID, "hi", 17.0, None).is_none());
+		assert!(cache.get(FONT_ID, "hi", 16.0, Some(80.0)).is_none());
+		assert!(cache.get(FONT_ID + 1, "hi", 16.0, None).is_none());
+		assert!(cache.get(FONT_ID, "ho", 16.0, None).is_none());
+		cache.clear();
+		assert!(cache.get(FONT_ID, "hi", 16.0, None).is_none());
+	}
+
+	#[test]
+	fn layout_cache_evicts_least_recently_used_at_capacity() {
+		let mut cache = TextLayoutCache::new(2);
+		cache.insert(FONT_ID, "a", 16.0, None, Vec::new());
+		cache.insert(FONT_ID, "b", 16.0, None, Vec::new());
+		// touch "a" so "b" becomes the least recently used entry
+		assert!(cache.get(FONT_ID, "a", 16.0, None).is_some());
+		cache.insert(FONT_ID, "c", 16.0, None, Vec::new());
+		assert!(cache.get(FONT_ID, "a", 16.0, None).is_some());
+		assert!(cache.get(FONT_ID, "b", 16.0, None).is_none(), "lru entry must be evicted");
+		assert!(cache.get(FONT_ID, "c", 16.0, None).is_some());
+	}
+
+	#[test]
+	fn layout_cache_reinserting_existing_key_does_not_evict() {
+		let mut cache = TextLayoutCache::new(1);
+		cache.insert(FONT_ID, "a", 16.0, None, Vec::new());
+		cache.insert(FONT_ID, "a", 16.0, None, Vec::new());
+		assert!(cache.get(FONT_ID, "a", 16.0, None).is_some());
 	}
 }
