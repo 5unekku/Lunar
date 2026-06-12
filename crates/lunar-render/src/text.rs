@@ -172,6 +172,12 @@ impl GlyphAtlas {
 		}
 	}
 
+	/// true once `font_id` has been registered and its family name is known.
+	#[must_use]
+	pub fn has_font(&self, font_id: u32) -> bool {
+		self.font_families.contains_key(&font_id)
+	}
+
 	/// register a font from raw bytes. no-op if already registered.
 	pub fn register_font(&mut self, font_id: u32, data: &[u8]) {
 		if self.font_families.contains_key(&font_id) {

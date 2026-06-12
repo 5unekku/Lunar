@@ -1888,6 +1888,8 @@ pub struct RenderEngine3d {
 	lod_select_pipeline: Option<wgpu::ComputePipeline>,
 	// cached LOD-select bind group; rebuilt when cull aabb buf or lod buffers regrow
 	lod_select_bg: Option<wgpu::BindGroup>,
+	// cached late-cull bind group; rebuilt when any backing cull/indirect buffer regrows
+	late_cull_bg: Option<wgpu::BindGroup>,
 	lod_params_buf: Option<wgpu::Buffer>,
 	lod_indices_buf: Option<wgpu::Buffer>,
 	lod_indices_staging: Option<wgpu::Buffer>,

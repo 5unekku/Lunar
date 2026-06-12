@@ -1394,6 +1394,15 @@ impl RenderEngine {
 			let font_id = u32::try_from(font.unwrap_or(0)).unwrap_or(u32::MAX);
 			let slot = self.text_quads.entry(i).or_default();
 
+			// async font load race: a draw command can arrive before the font's
+			// bytes finish loading and register. shaping an unknown family against
+			// the engine's deliberately empty font db panics inside cosmic-text,
+			// so clear this command's quads and skip until the font registers
+			if !self.glyph_atlas.has_font(font_id) {
+				slot.clear();
+				continue;
+			}
+
 			if let Some(cached) =
 				self.text_layout_cache
 					.get(font_id, content, *font_size, *wrap_width)

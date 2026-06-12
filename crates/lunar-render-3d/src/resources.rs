@@ -229,6 +229,7 @@ impl RenderEngine3d {
 			// these buffers back the cull + LOD bind groups — force a rebuild of both
 			self.cull_bg = None;
 			self.lod_select_bg = None;
+			self.late_cull_bg = None;
 
 			// aabb input buffer: 32 bytes per entry (center vec3+pad + half_extent vec3+pad)
 			self.cull_aabb_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {

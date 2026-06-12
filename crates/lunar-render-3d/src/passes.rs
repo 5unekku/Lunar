@@ -1678,16 +1678,21 @@ impl RenderEngine3d {
 							// solid texels occlude
 							let draw_base_slot = ENTITY_SLOT_START + s_draw.len();
 							let mut masked_pipeline_bound = false;
+							let mut masked_drawn = 0usize;
+							let mut masked_skipped = 0usize;
 							for &(mesh_id, slot, tex_ids, ref packed) in s_surf {
 								if !is_masked(packed) {
 									continue;
 								}
 								let Some(bg) = s_surf_bg_cache.get(&tex_ids) else {
+									masked_skipped += 1;
 									continue;
 								};
 								let Some(gpu) = s_mesh_gpu.get(&mesh_id) else {
+									masked_skipped += 1;
 									continue;
 								};
+								masked_drawn += 1;
 								if !masked_pipeline_bound {
 									zpass.set_pipeline(s_masked_zpr_pl);
 									zpass.set_bind_group(0, s_glob_bg, &[]);
@@ -1705,6 +1710,9 @@ impl RenderEngine3d {
 									slot as u32..slot as u32 + 1,
 								);
 							}
+							log::debug!(
+								"[z-prepass] masked surface: {masked_drawn} drawn, {masked_skipped} skipped"
+							);
 						} else {
 							let cascade = task;
 							let mut spass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {

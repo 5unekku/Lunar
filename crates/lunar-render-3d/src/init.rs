@@ -3785,6 +3785,7 @@ impl RenderEngine3d {
 			lod_select_bgl: None,
 			lod_select_pipeline: None,
 			lod_select_bg: None,
+			late_cull_bg: None,
 			lod_params_buf: None,
 			lod_indices_buf: None,
 			lod_indices_staging: None,

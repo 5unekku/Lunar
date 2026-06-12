@@ -1555,6 +1555,8 @@ impl RenderEngine3d {
 						usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
 						mapped_at_creation: false,
 					}));
+					// the late-cull bind group binds indirect_buf — rebuild it
+					self.late_cull_bg = None;
 				}
 				self.queue.write_buffer(
 					self.indirect_buf.as_ref().unwrap(),
@@ -1632,36 +1634,41 @@ impl RenderEngine3d {
 				self.queue
 					.write_buffer(cnt_buf, 0, bytemuck::bytes_of(&0u32));
 
-				let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-					label: Some("[late cull] bg"),
-					layout: self.cull_indirect_bgl.as_ref().unwrap(),
-					entries: &[
-						wgpu::BindGroupEntry {
-							binding: 0,
-							resource: aabb_buf.as_entire_binding(),
-						},
-						wgpu::BindGroupEntry {
-							binding: 1,
-							resource: late_fp_buf.as_entire_binding(),
-						},
-						wgpu::BindGroupEntry {
-							binding: 2,
-							resource: flags_buf.as_entire_binding(),
-						},
-						wgpu::BindGroupEntry {
-							binding: 3,
-							resource: dp_buf.as_entire_binding(),
-						},
-						wgpu::BindGroupEntry {
-							binding: 4,
-							resource: ind_buf.as_entire_binding(),
-						},
-						wgpu::BindGroupEntry {
-							binding: 5,
-							resource: cnt_buf.as_entire_binding(),
-						},
-					],
-				});
+				// cached across frames; reset to None whenever any backing buffer regrows
+				if self.late_cull_bg.is_none() {
+					self.late_cull_bg =
+						Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+							label: Some("[late cull] bg"),
+							layout: self.cull_indirect_bgl.as_ref().unwrap(),
+							entries: &[
+								wgpu::BindGroupEntry {
+									binding: 0,
+									resource: aabb_buf.as_entire_binding(),
+								},
+								wgpu::BindGroupEntry {
+									binding: 1,
+									resource: late_fp_buf.as_entire_binding(),
+								},
+								wgpu::BindGroupEntry {
+									binding: 2,
+									resource: flags_buf.as_entire_binding(),
+								},
+								wgpu::BindGroupEntry {
+									binding: 3,
+									resource: dp_buf.as_entire_binding(),
+								},
+								wgpu::BindGroupEntry {
+									binding: 4,
+									resource: ind_buf.as_entire_binding(),
+								},
+								wgpu::BindGroupEntry {
+									binding: 5,
+									resource: cnt_buf.as_entire_binding(),
+								},
+							],
+						}));
+				}
+				let bg = self.late_cull_bg.as_ref().unwrap();
 				let mut late_enc =
 					self.device
 						.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1673,7 +1680,7 @@ impl RenderEngine3d {
 						timestamp_writes: None,
 					});
 					cpass.set_pipeline(self.cull_indirect_pipeline.as_ref().unwrap());
-					cpass.set_bind_group(0, &bg, &[]);
+					cpass.set_bind_group(0, bg, &[]);
 					cpass.dispatch_workgroups((entity_count as u32).div_ceil(64), 1, 1);
 				}
 				self.queue.submit([late_enc.finish()]);
