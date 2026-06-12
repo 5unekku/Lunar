@@ -194,3 +194,123 @@ impl Default for RenderGraph {
 		Self::new()
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	/// position of `id` in the sorted order; panics if missing.
+	fn position(order: &[PassId], id: PassId) -> usize {
+		order.iter().position(|&p| p == id).expect("pass missing from sorted order")
+	}
+
+	#[test]
+	fn writer_sorts_before_reader_regardless_of_registration_order() {
+		let mut graph = RenderGraph::new();
+		let depth = graph.texture("depth");
+		let hdr = graph.texture("hdr");
+		// register in reverse dependency order on purpose
+		let post = graph.add_pass("post", vec![hdr], vec![]);
+		let opaque = graph.add_pass("opaque", vec![depth], vec![hdr]);
+		let zprepass = graph.add_pass("zprepass", vec![], vec![depth]);
+		let order = graph.sorted_pass_ids().to_vec();
+		assert!(position(&order, zprepass) < position(&order, opaque));
+		assert!(position(&order, opaque) < position(&order, post));
+	}
+
+	#[test]
+	fn diamond_dependency_resolves() {
+		let mut graph = RenderGraph::new();
+		let t1 = graph.texture("t1");
+		let t2 = graph.texture("t2");
+		let t3 = graph.texture("t3");
+		let top = graph.add_pass("top", vec![], vec![t1]);
+		let left = graph.add_pass("left", vec![t1], vec![t2]);
+		let right = graph.add_pass("right", vec![t1], vec![t3]);
+		let bottom = graph.add_pass("bottom", vec![t2, t3], vec![]);
+		let order = graph.sorted_pass_ids().to_vec();
+		assert_eq!(order.len(), 4);
+		assert!(position(&order, top) < position(&order, left));
+		assert!(position(&order, top) < position(&order, right));
+		assert!(position(&order, left) < position(&order, bottom));
+		assert!(position(&order, right) < position(&order, bottom));
+	}
+
+	#[test]
+	fn independent_passes_keep_registration_order() {
+		let mut graph = RenderGraph::new();
+		let a = graph.add_pass("a", vec![], vec![]);
+		let b = graph.add_pass("b", vec![], vec![]);
+		let c = graph.add_pass("c", vec![], vec![]);
+		assert_eq!(graph.sorted_pass_ids(), &[a, b, c]);
+	}
+
+	#[test]
+	fn multiple_writers_all_sort_before_reader() {
+		let mut graph = RenderGraph::new();
+		// depth is written by both shadow and zprepass (clear + draw), read by gtao
+		let depth = graph.texture("depth");
+		let gtao = graph.add_pass("gtao", vec![depth], vec![]);
+		let shadow = graph.add_pass("shadow", vec![], vec![depth]);
+		let zprepass = graph.add_pass("zprepass", vec![], vec![depth]);
+		let order = graph.sorted_pass_ids().to_vec();
+		assert!(position(&order, shadow) < position(&order, gtao));
+		assert!(position(&order, zprepass) < position(&order, gtao));
+	}
+
+	#[test]
+	fn cycle_falls_back_to_registration_order() {
+		let mut graph = RenderGraph::new();
+		let t1 = graph.texture("t1");
+		let t2 = graph.texture("t2");
+		// a and b form a 2-cycle; the guard must emit every pass exactly once
+		let a = graph.add_pass("a", vec![t2], vec![t1]);
+		let b = graph.add_pass("b", vec![t1], vec![t2]);
+		assert_eq!(graph.sorted_pass_ids(), &[a, b]);
+	}
+
+	#[test]
+	fn pass_reading_its_own_write_gets_no_self_edge() {
+		let mut graph = RenderGraph::new();
+		let hdr = graph.texture("hdr");
+		// e.g. an in-place post effect; the src != i guard must skip the self edge
+		let inplace = graph.add_pass("inplace", vec![hdr], vec![hdr]);
+		let reader = graph.add_pass("reader", vec![hdr], vec![]);
+		let order = graph.sorted_pass_ids().to_vec();
+		assert_eq!(order.len(), 2);
+		assert!(position(&order, inplace) < position(&order, reader));
+	}
+
+	#[test]
+	fn texture_handles_are_idempotent_by_name() {
+		let mut graph = RenderGraph::new();
+		let first = graph.texture("depth");
+		let again = graph.texture("depth");
+		let other = graph.texture("hdr");
+		assert_eq!(first, again);
+		assert_ne!(first, other);
+	}
+
+	#[test]
+	fn sorted_order_refreshes_after_adding_a_pass() {
+		let mut graph = RenderGraph::new();
+		let depth = graph.texture("depth");
+		let reader = graph.add_pass("reader", vec![depth], vec![]);
+		assert_eq!(graph.sorted_pass_ids().len(), 1);
+		// adding a writer afterwards must invalidate the cached order
+		let writer = graph.add_pass("writer", vec![], vec![depth]);
+		let order = graph.sorted_pass_ids().to_vec();
+		assert_eq!(order.len(), 2);
+		assert!(position(&order, writer) < position(&order, reader));
+	}
+
+	#[test]
+	fn pass_names_and_count_round_trip() {
+		let mut graph = RenderGraph::new();
+		let a = graph.add_pass("alpha", vec![], vec![]);
+		let b = graph.add_pass("beta", vec![], vec![]);
+		assert_eq!(graph.pass_count(), 2);
+		assert_eq!(graph.pass_name(a), "alpha");
+		assert_eq!(graph.pass_name(b), "beta");
+	}
+}
