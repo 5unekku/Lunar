@@ -1484,26 +1484,8 @@ impl RenderEngine {
 		// reuse the persistent Vec — clear() retains capacity from previous frames.
 		self.sorted_indices.clear();
 		self.sorted_indices.extend(0..commands.len());
-		self.sorted_indices.sort_unstable_by_key(|&i| {
-			let cmd = &commands[i];
-			let layer = match &cmd.kind {
-				DrawKind::Sprite { layer, .. }
-				| DrawKind::Rect { layer, .. }
-				| DrawKind::Line { layer, .. }
-				| DrawKind::Text { layer, .. } => *layer,
-			};
-			let secondary: i64 = match &cmd.kind {
-				DrawKind::Sprite {
-					sort_key: Some(k), ..
-				} => i64::from(*k),
-				DrawKind::Sprite {
-					texture: Some(id), ..
-				} => i64::try_from(*id).unwrap_or(i64::MAX),
-				DrawKind::Text { .. } => i64::from(GLYPH_ATLAS_BIND_ID),
-				_ => i64::MAX,
-			};
-			(layer, secondary)
-		});
+		self.sorted_indices
+			.sort_unstable_by_key(|&i| draw_sort_key(&commands[i]));
 
 		let mut encoder = self
 			.device
@@ -2014,6 +1996,32 @@ pub enum DrawKind {
 		/// line spacing when wrap_width is set; 0.0 = font_size * 1.25
 		line_height: f32,
 	},
+}
+
+/// batching sort key for a draw command.
+///
+/// primary is the layer; secondary keeps same-texture sprites contiguous so
+/// they collapse into one instanced draw. a y-sorted sprite uses its encoded
+/// world-y key instead of the texture id, text groups under the glyph atlas
+/// bind id, and untextured primitives sort last within their layer.
+fn draw_sort_key(command: &DrawCommand) -> (i32, i64) {
+	let layer = match &command.kind {
+		DrawKind::Sprite { layer, .. }
+		| DrawKind::Rect { layer, .. }
+		| DrawKind::Line { layer, .. }
+		| DrawKind::Text { layer, .. } => *layer,
+	};
+	let secondary: i64 = match &command.kind {
+		DrawKind::Sprite {
+			sort_key: Some(key), ..
+		} => i64::from(*key),
+		DrawKind::Sprite {
+			texture: Some(id), ..
+		} => i64::try_from(*id).unwrap_or(i64::MAX),
+		DrawKind::Text { .. } => i64::from(GLYPH_ATLAS_BIND_ID),
+		_ => i64::MAX,
+	};
+	(layer, secondary)
 }
 
 /// built-in layer constants for common rendering needs.
@@ -3268,4 +3276,232 @@ fn debug_overlay_system(
 		info.sprite_count,
 		entity_count,
 	);
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use bevy_ecs::system::RunSystemOnce;
+
+	fn sprite_command(texture: Option<u64>, layer: i32, sort_key: Option<i32>) -> DrawCommand {
+		DrawCommand {
+			kind: DrawKind::Sprite {
+				texture,
+				position: Vec2::ZERO,
+				rotation: 0.0,
+				scale: Vec2::ONE,
+				tint: Color::WHITE,
+				layer,
+				uv_rect: None,
+				origin: Vec2::ZERO,
+				sort_key,
+			},
+		}
+	}
+
+	fn rect_command(layer: i32) -> DrawCommand {
+		DrawCommand {
+			kind: DrawKind::Rect {
+				position: Vec2::ZERO,
+				size: Vec2::ONE,
+				color: Color::WHITE,
+				layer,
+			},
+		}
+	}
+
+	fn text_command(layer: i32) -> DrawCommand {
+		DrawCommand {
+			kind: DrawKind::Text {
+				font: Some(1),
+				content: Arc::from("hi"),
+				position: Vec2::ZERO,
+				font_size: 16.0,
+				color: Color::WHITE,
+				layer,
+				wrap_width: None,
+				line_height: 0.0,
+			},
+		}
+	}
+
+	#[test]
+	fn sort_key_orders_by_layer_before_anything_else() {
+		// a textured sprite on a low layer must sort before an untextured
+		// rect on a high layer, and before text on a higher one
+		let low = draw_sort_key(&sprite_command(Some(5), 0, None));
+		let mid = draw_sort_key(&rect_command(100));
+		let high = draw_sort_key(&text_command(300));
+		assert!(low < mid && mid < high);
+	}
+
+	#[test]
+	fn sort_key_groups_same_texture_within_a_layer() {
+		let commands = vec![
+			sprite_command(Some(5), 0, None),
+			sprite_command(Some(9), 0, None),
+			sprite_command(Some(5), 0, None),
+		];
+		let mut indices: Vec<usize> = (0..commands.len()).collect();
+		indices.sort_unstable_by_key(|&i| draw_sort_key(&commands[i]));
+		// the two texture-5 sprites must come out adjacent so they batch
+		let position_of = |i: usize| indices.iter().position(|&x| x == i).unwrap();
+		assert_eq!(position_of(0).abs_diff(position_of(2)), 1);
+	}
+
+	#[test]
+	fn sort_key_y_sort_overrides_texture_grouping() {
+		// y-sorted sprites order by world y even when textures interleave
+		let back = draw_sort_key(&sprite_command(Some(9), 0, Some(100)));
+		let front = draw_sort_key(&sprite_command(Some(5), 0, Some(200)));
+		assert!(back < front);
+	}
+
+	#[test]
+	fn sort_key_text_groups_under_the_glyph_atlas() {
+		let (_, secondary) = draw_sort_key(&text_command(0));
+		assert_eq!(secondary, i64::from(GLYPH_ATLAS_BIND_ID));
+		// glyph atlas id sorts after ordinary texture ids, so text in a layer
+		// draws over same-layer sprites
+		let (_, sprite_secondary) = draw_sort_key(&sprite_command(Some(42), 0, None));
+		assert!(secondary > sprite_secondary);
+	}
+
+	#[test]
+	fn sort_key_untextured_primitives_sort_last_in_layer() {
+		assert_eq!(draw_sort_key(&rect_command(0)).1, i64::MAX);
+		assert_eq!(draw_sort_key(&sprite_command(None, 0, None)).1, i64::MAX);
+	}
+
+	#[test]
+	fn auto_sprite_system_extracts_transform_and_sprite() {
+		let mut world = World::new();
+		world.insert_resource(RenderQueue::new());
+		world.spawn((
+			Transform::from_xy(10.0, 20.0).with_scale(Vec2::new(2.0, 2.0)),
+			Sprite::new(Handle::new(7, 0))
+				.with_size(Vec2::new(16.0, 16.0))
+				.with_layer(42),
+		));
+		world.run_system_once(auto_sprite_system).unwrap();
+
+		let queue = world.resource::<RenderQueue>();
+		assert_eq!(queue.commands().len(), 1);
+		let DrawKind::Sprite {
+			texture,
+			position,
+			scale,
+			layer,
+			origin,
+			sort_key,
+			..
+		} = &queue.commands()[0].kind
+		else {
+			panic!("expected a sprite command");
+		};
+		assert_eq!(*texture, Some(7));
+		assert_eq!(*position, Vec2::new(10.0, 20.0));
+		// final size = sprite size * transform scale
+		assert_eq!(*scale, Vec2::new(32.0, 32.0));
+		assert_eq!(*layer, 42);
+		// default origin is the sprite center
+		assert_eq!(*origin, Vec2::new(16.0, 16.0));
+		assert_eq!(*sort_key, None);
+	}
+
+	#[test]
+	fn auto_sprite_system_encodes_y_sort_key() {
+		let mut world = World::new();
+		world.insert_resource(RenderQueue::new());
+		world.spawn((
+			Transform::from_xy(0.0, 12.0),
+			Sprite::new(Handle::new(1, 0)).with_size(Vec2::ONE),
+			YSort,
+		));
+		world.run_system_once(auto_sprite_system).unwrap();
+
+		let queue = world.resource::<RenderQueue>();
+		let DrawKind::Sprite { sort_key, .. } = &queue.commands()[0].kind else {
+			panic!("expected a sprite command");
+		};
+		// world y is encoded as y * 100 for sub-pixel sort precision
+		assert_eq!(*sort_key, Some(1200));
+	}
+
+	#[test]
+	fn auto_sprite_system_uses_placeholder_size_without_assets() {
+		let mut world = World::new();
+		world.insert_resource(RenderQueue::new());
+		// no AssetServer resource and no explicit size: 32x32 placeholder
+		world.spawn((Transform::from_xy(0.0, 0.0), Sprite::new(Handle::new(1, 0))));
+		world.run_system_once(auto_sprite_system).unwrap();
+
+		let queue = world.resource::<RenderQueue>();
+		let DrawKind::Sprite { scale, .. } = &queue.commands()[0].kind else {
+			panic!("expected a sprite command");
+		};
+		assert_eq!(*scale, Vec2::new(32.0, 32.0));
+	}
+
+	#[test]
+	fn auto_sprite_system_scales_custom_origin() {
+		let mut world = World::new();
+		world.insert_resource(RenderQueue::new());
+		world.spawn((
+			Transform::from_xy(0.0, 0.0).with_scale(Vec2::new(2.0, 3.0)),
+			Sprite::new(Handle::new(1, 0))
+				.with_size(Vec2::new(8.0, 8.0))
+				.with_origin(Vec2::new(4.0, 6.0)),
+		));
+		world.run_system_once(auto_sprite_system).unwrap();
+
+		let queue = world.resource::<RenderQueue>();
+		let DrawKind::Sprite { origin, .. } = &queue.commands()[0].kind else {
+			panic!("expected a sprite command");
+		};
+		// a custom pivot is in sprite-local pixels, so it scales with the transform
+		assert_eq!(*origin, Vec2::new(8.0, 18.0));
+	}
+
+	#[test]
+	fn auto_text_system_extracts_transform_and_text() {
+		let mut world = World::new();
+		world.insert_resource(RenderQueue::new());
+		world.spawn((
+			Transform::from_xy(1.0, 2.0),
+			Text::new("score", Handle::new(3, 0)).with_size(20.0).with_layer(7),
+		));
+		world.run_system_once(auto_text_system).unwrap();
+
+		let queue = world.resource::<RenderQueue>();
+		assert_eq!(queue.commands().len(), 1);
+		let DrawKind::Text {
+			font,
+			content,
+			position,
+			font_size,
+			layer,
+			wrap_width,
+			..
+		} = &queue.commands()[0].kind
+		else {
+			panic!("expected a text command");
+		};
+		assert_eq!(*font, Some(3));
+		assert_eq!(&**content, "score");
+		assert_eq!(*position, Vec2::new(1.0, 2.0));
+		assert_eq!(*font_size, 20.0);
+		assert_eq!(*layer, 7);
+		assert_eq!(*wrap_width, None);
+	}
+
+	#[test]
+	fn render_queue_clear_resets_commands_and_target() {
+		let mut queue = RenderQueue::new();
+		queue.push(rect_command(0));
+		queue.set_target(Some(1));
+		queue.clear();
+		assert!(queue.commands().is_empty());
+		assert_eq!(queue.target(), None);
+	}
 }
