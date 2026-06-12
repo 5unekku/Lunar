@@ -1440,18 +1440,39 @@ impl RenderEngine3d {
 		if upload_size > 0 {
 			#[cfg(not(target_arch = "wasm32"))]
 			{
-				// StagingBelt batches large per-frame uploads into GPU-side staging memory
+				// StagingBelt batches large per-frame uploads into GPU-side staging
+				// memory. the copies go through their own encoder submitted right
+				// here: the shadow + z-prepass command buffers are submitted before
+				// the main encoder, so a belt copy recorded on the main encoder
+				// would land after them and those passes would read last frame's
+				// transforms (per-frame movers like billboards then leave
+				// sprite-shaped clear-color holes where stale prepass depth
+				// occludes the scene)
+				let mut upload_encoder =
+					self.device
+						.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+							label: Some("[frame] uniform upload"),
+						});
 				let entity_size = wgpu::BufferSize::new(upload_size).unwrap();
 				let mat_size = wgpu::BufferSize::new(material_upload_size).unwrap();
-				let mut view =
-					self.staging_belt
-						.write_buffer(&mut encoder, &self.entity_buf, 0, entity_size);
+				let mut view = self.staging_belt.write_buffer(
+					&mut upload_encoder,
+					&self.entity_buf,
+					0,
+					entity_size,
+				);
 				view.copy_from_slice(&self.uniform_staging[..upload_size as usize]);
 				drop(view);
-				let mut view =
-					self.staging_belt
-						.write_buffer(&mut encoder, &self.material_buf, 0, mat_size);
+				let mut view = self.staging_belt.write_buffer(
+					&mut upload_encoder,
+					&self.material_buf,
+					0,
+					mat_size,
+				);
 				view.copy_from_slice(&self.material_staging[..material_upload_size as usize]);
+				drop(view);
+				self.staging_belt.finish();
+				self.queue.submit(Some(upload_encoder.finish()));
 			}
 			#[cfg(target_arch = "wasm32")]
 			{
@@ -1842,8 +1863,7 @@ impl RenderEngine3d {
 		self.record_gtao_reflection(&fc, world, &mut encoder);
 		let draw_calls = self.record_scene_passes(&fc, world, &mut encoder);
 		self.record_post_processing(&fc, world, &mut encoder, view);
-		#[cfg(not(target_arch = "wasm32"))]
-		self.staging_belt.finish();
+		// staging belt already finished + submitted with the uniform uploads above
 		self.queue.submit(Some(encoder.finish()));
 		frame.present();
 		if reconfigure_after_present {
