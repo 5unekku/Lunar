@@ -158,7 +158,7 @@ impl RenderGraph {
 		let mut order = Vec::with_capacity(n);
 		while let Some(i) = queue.pop_front() {
 			order.push(PassId(i as u32));
-			for j in adj[i].iter().copied().collect::<Vec<_>>() {
+			for &j in &adj[i] {
 				in_degree[j] -= 1;
 				if in_degree[j] == 0 {
 					queue.push_back(j);

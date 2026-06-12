@@ -5,6 +5,13 @@
 
 use super::*;
 
+/// static pass labels indexed by cascade — avoids per-frame format! allocations
+const SHADOW_CASCADE_LABELS: [&str; NUM_CASCADES as usize] = [
+	"[shadow] cascade-0",
+	"[shadow] cascade-1",
+	"[shadow] cascade-2",
+];
+
 impl RenderEngine3d {
 	/// build the detail-sprite compute bind group. resolves the density map view
 	/// (1×1 fallback until the texture uploads). returns `None` if the layout isn't ready.
@@ -1490,25 +1497,21 @@ impl RenderEngine3d {
 			// rebuild at most 1 dirty cascade per frame (prioritise cascade 0 — nearest/highest detail).
 			// remaining dirty cascades stay dirty and are rebuilt on subsequent frames, spreading
 			// the spike across frames. a stale cascade 2 (far, low detail) is imperceptible for 1-2 frames.
-			let all_dirty: Vec<usize> = (0..NUM_CASCADES as usize)
-				.filter(|&c| {
-					dir_enabled != 0
-						&& dir_casts_shadows
-						&& dev_shadows && c < dev_max_cascades
-						&& self.shadow_cascade_dirty[c]
-				})
-				.collect();
-			let dirty_cascades: Vec<usize> = all_dirty.into_iter().take(1).collect();
-			for &c in &dirty_cascades {
+			let dirty_cascade: Option<usize> = (0..NUM_CASCADES as usize).find(|&c| {
+				dir_enabled != 0
+					&& dir_casts_shadows
+					&& dev_shadows && c < dev_max_cascades
+					&& self.shadow_cascade_dirty[c]
+			});
+			if let Some(c) = dirty_cascade {
 				self.shadow_cascade_dirty[c] = false;
 			}
 
 			// clear skipped cascades on the main encoder (no content change, just clear)
 			for cascade in 0..NUM_CASCADES as usize {
-				if !dirty_cascades.contains(&cascade) {
-					let label = format!("[shadow] cascade-{cascade}");
+				if dirty_cascade != Some(cascade) {
 					let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-						label: Some(label.as_str()),
+						label: Some(SHADOW_CASCADE_LABELS[cascade]),
 						color_attachments: &[],
 						depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
 							view: &self.shadow_cascade_views[cascade],
@@ -1529,13 +1532,18 @@ impl RenderEngine3d {
 			#[cfg(not(target_arch = "wasm32"))]
 			let parallel_cmds = {
 				use rayon::prelude::*;
-				// total parallel tasks: dirty cascades + 1 if z-prepass needed
+				// at most 2 tasks: the dirty cascade + z-prepass (usize::MAX sentinel)
 				let needs_zprepass = self.render_tier != RenderTier::LowGles;
-				let _task_count = dirty_cascades.len() + if needs_zprepass { 1 } else { 0 };
-				let mut tasks: Vec<usize> = dirty_cascades.clone(); // cascade indices
+				let mut tasks = [0usize; 2];
+				let mut task_count = 0usize;
+				if let Some(c) = dirty_cascade {
+					tasks[task_count] = c;
+					task_count += 1;
+				}
 				if needs_zprepass {
-					tasks.push(usize::MAX);
-				} // sentinel for z-prepass
+					tasks[task_count] = usize::MAX;
+					task_count += 1;
+				}
 
 				// extract the read-only references needed by all recording closures.
 				// all wgpu pipeline/buffer types are Send+Sync on native, so the
@@ -1556,7 +1564,7 @@ impl RenderEngine3d {
 				let draw_ref = &self.draw_scratch;
 				let surf_ref = &self.surface_scratch;
 				let shadow_ref = &self.shadow_list_scratch;
-				tasks
+				tasks[..task_count]
 					.par_iter()
 					.map(move |&task| {
 						// shadow_list is shared by reference (read-only) across tasks
@@ -1577,13 +1585,13 @@ impl RenderEngine3d {
 						let s_draw = draw_ref;
 						let s_surf = surf_ref;
 						let label = if task == usize::MAX {
-							"[z-prepass]".to_string()
+							"[z-prepass]"
 						} else {
-							format!("[shadow] cascade-{task}")
+							SHADOW_CASCADE_LABELS[task]
 						};
 						let mut enc =
 							s_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-								label: Some(&label),
+								label: Some(label),
 							});
 						if task == usize::MAX {
 							let mut zpass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1700,7 +1708,7 @@ impl RenderEngine3d {
 						} else {
 							let cascade = task;
 							let mut spass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-								label: Some(&label),
+								label: Some(label),
 								color_attachments: &[],
 								depth_stencil_attachment: Some(
 									wgpu::RenderPassDepthStencilAttachment {
@@ -1765,10 +1773,9 @@ impl RenderEngine3d {
 			#[cfg(target_arch = "wasm32")]
 			{
 				let shadow_list = &self.shadow_list_scratch;
-				for &cascade in &dirty_cascades {
-					let label = format!("[shadow] cascade-{cascade}");
+				if let Some(cascade) = dirty_cascade {
 					let mut sp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-						label: Some(label.as_str()),
+						label: Some(SHADOW_CASCADE_LABELS[cascade]),
 						color_attachments: &[],
 						depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
 							view: &self.shadow_cascade_views[cascade],

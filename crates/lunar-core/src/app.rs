@@ -593,7 +593,7 @@ mod tests {
 				app.add_plugin(Recorder {
 					name: "child",
 					deps: vec!["parent"],
-					log: log_for_child.clone(),
+					log: log_for_child,
 					spawn: None,
 				});
 			})),

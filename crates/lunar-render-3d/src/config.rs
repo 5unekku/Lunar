@@ -769,7 +769,7 @@ impl RenderEngine3d {
 						cull_mode: Some(wgpu::Face::Back),
 						..Default::default()
 					},
-					depth_stencil: depth_state.clone(),
+					depth_stencil: depth_state,
 					multisample: msaa_state,
 					cache,
 					multiview_mask: None,

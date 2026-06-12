@@ -329,7 +329,7 @@ impl<T: Asset> AssetStore<T> {
 			.is_some_and(|e| e.ref_count == 0)
 	}
 
-	fn is_ready(&self, handle: &Handle<T>) -> bool {
+	fn is_ready(&self, handle: Handle<T>) -> bool {
 		self.entries
 			.get(handle.id as usize)
 			.and_then(|e| e.as_ref())
@@ -338,7 +338,7 @@ impl<T: Asset> AssetStore<T> {
 			})
 	}
 
-	fn is_loaded(&self, handle: &Handle<T>) -> bool {
+	fn is_loaded(&self, handle: Handle<T>) -> bool {
 		self.entries
 			.get(handle.id as usize)
 			.and_then(|e| e.as_ref())
@@ -347,7 +347,7 @@ impl<T: Asset> AssetStore<T> {
 			})
 	}
 
-	fn get_info(&self, handle: &Handle<T>) -> Option<AssetInfo> {
+	fn get_info(&self, handle: Handle<T>) -> Option<AssetInfo> {
 		self.entries
 			.get(handle.id as usize)
 			.and_then(|e| e.as_ref())
@@ -357,7 +357,7 @@ impl<T: Asset> AssetStore<T> {
 			})
 	}
 
-	fn get(&self, handle: &Handle<T>) -> Option<&T> {
+	fn get(&self, handle: Handle<T>) -> Option<&T> {
 		self.entries
 			.get(handle.id as usize)
 			.and_then(|e| e.as_ref())
@@ -1147,7 +1147,7 @@ impl AssetServer {
 			TextureSource::Embedded(bytes) => {
 				let key = format!("__embedded_{:p}", bytes.as_ptr());
 				let handle = self.texture_store.allocate_slot(key);
-				if self.texture_store.is_ready(&handle) {
+				if self.texture_store.is_ready(handle) {
 					return handle;
 				}
 				let id = handle.id();
@@ -1193,73 +1193,73 @@ impl AssetServer {
 	/// check if a texture handle is ready
 	#[must_use]
 	pub fn is_texture_ready(&self, handle: &Handle<Texture>) -> bool {
-		self.texture_store.is_ready(handle)
+		self.texture_store.is_ready(*handle)
 	}
 
 	/// check if a sound handle is ready
 	#[must_use]
 	pub fn is_sound_ready(&self, handle: &Handle<Sound>) -> bool {
-		self.sound_store.is_ready(handle)
+		self.sound_store.is_ready(*handle)
 	}
 
 	/// check if a font handle is ready
 	#[must_use]
 	pub fn is_font_ready(&self, handle: &Handle<Font>) -> bool {
-		self.font_store.is_ready(handle)
+		self.font_store.is_ready(*handle)
 	}
 
 	/// check if a texture is loaded
 	#[must_use]
 	pub fn is_texture_loaded(&self, handle: &Handle<Texture>) -> bool {
-		self.texture_store.is_loaded(handle)
+		self.texture_store.is_loaded(*handle)
 	}
 
 	/// check if a sound is loaded
 	#[must_use]
 	pub fn is_sound_loaded(&self, handle: &Handle<Sound>) -> bool {
-		self.sound_store.is_loaded(handle)
+		self.sound_store.is_loaded(*handle)
 	}
 
 	/// check if a font is loaded
 	#[must_use]
 	pub fn is_font_loaded(&self, handle: &Handle<Font>) -> bool {
-		self.font_store.is_loaded(handle)
+		self.font_store.is_loaded(*handle)
 	}
 
 	/// get texture info
 	#[must_use]
 	pub fn get_texture_info(&self, handle: &Handle<Texture>) -> Option<AssetInfo> {
-		self.texture_store.get_info(handle)
+		self.texture_store.get_info(*handle)
 	}
 
 	/// get sound info
 	#[must_use]
 	pub fn get_sound_info(&self, handle: &Handle<Sound>) -> Option<AssetInfo> {
-		self.sound_store.get_info(handle)
+		self.sound_store.get_info(*handle)
 	}
 
 	/// get font info
 	#[must_use]
 	pub fn get_font_info(&self, handle: &Handle<Font>) -> Option<AssetInfo> {
-		self.font_store.get_info(handle)
+		self.font_store.get_info(*handle)
 	}
 
 	/// get a loaded texture reference
 	#[must_use]
 	pub fn get_texture(&self, handle: &Handle<Texture>) -> Option<&Texture> {
-		self.texture_store.get(handle)
+		self.texture_store.get(*handle)
 	}
 
 	/// get a loaded sound reference
 	#[must_use]
 	pub fn get_sound(&self, handle: &Handle<Sound>) -> Option<&Sound> {
-		self.sound_store.get(handle)
+		self.sound_store.get(*handle)
 	}
 
 	/// get a loaded font reference
 	#[must_use]
 	pub fn get_font(&self, handle: &Handle<Font>) -> Option<&Font> {
-		self.font_store.get(handle)
+		self.font_store.get(*handle)
 	}
 
 	/// load a batch of textures, returns handles immediately
@@ -1458,7 +1458,7 @@ impl AssetServer {
 	/// block until the given texture handle is loaded or failed.
 	#[cfg(not(target_arch = "wasm32"))]
 	pub fn block_until_texture_ready(&self, handle: &Handle<Texture>) {
-		while !self.texture_store.is_ready(handle)
+		while !self.texture_store.is_ready(*handle)
 			&& self
 				.texture_store
 				.entries
@@ -1473,7 +1473,7 @@ impl AssetServer {
 	/// block until the given font handle is loaded or failed.
 	#[cfg(not(target_arch = "wasm32"))]
 	pub fn block_until_font_ready(&self, handle: &Handle<Font>) {
-		while !self.font_store.is_ready(handle)
+		while !self.font_store.is_ready(*handle)
 			&& self
 				.font_store
 				.entries
@@ -2094,7 +2094,7 @@ mod handle_tests {
 		let mut store = AssetStore::<TestAsset>::new();
 		let h = store.allocate_slot("test".into());
 		store.insert(h.id(), TestAsset);
-		assert_eq!(store.get(&h), Some(&TestAsset));
+		assert_eq!(store.get(h), Some(&TestAsset));
 	}
 
 	#[test]
@@ -2112,16 +2112,16 @@ mod handle_tests {
 		let h = store.allocate_slot("test".into());
 		store.insert(h.id(), TestAsset);
 		let stale = Handle::<TestAsset>::new(h.id(), 42);
-		assert!(store.get(&stale).is_none());
+		assert!(store.get(stale).is_none());
 	}
 
 	#[test]
 	fn asset_store_is_ready_after_insert() {
 		let mut store = AssetStore::<TestAsset>::new();
 		let h = store.allocate_slot("test".into());
-		assert!(!store.is_ready(&h));
+		assert!(!store.is_ready(h));
 		store.insert(h.id(), TestAsset);
-		assert!(store.is_ready(&h));
+		assert!(store.is_ready(h));
 	}
 
 	#[test]
@@ -2141,13 +2141,13 @@ mod handle_tests {
 		let h = store.allocate_slot("test".into());
 		assert!(
 			store
-				.get_info(&h)
+				.get_info(h)
 				.is_some_and(|i| i.state == LoadState::Loading)
 		);
 		store.mark_failed(h.id());
 		assert!(
 			store
-				.get_info(&h)
+				.get_info(h)
 				.is_some_and(|i| i.state == LoadState::Failed)
 		);
 	}
