@@ -182,6 +182,33 @@ impl Bvh {
 	}
 }
 
+/// system that builds the BVH from current entity AABBs and frustum-culls them.
+pub fn build_bvh_visible(
+	query: Query<(Entity, &Aabb3d, &WorldTransform3d, &ComputedVisibility)>,
+	frustum: Res<Frustum>,
+	mut bvh: ResMut<Bvh>,
+	mut visible: ResMut<BvhVisible>,
+) {
+	bvh.build(&query);
+	visible.entities.clear();
+	bvh.query_frustum(&frustum, &mut visible.entities);
+}
+
+/// plugin that inserts BVH resources and registers the build system.
+pub struct BvhPlugin;
+
+impl GamePlugin for BvhPlugin {
+	fn name(&self) -> &str {
+		"BvhPlugin"
+	}
+	fn build(&mut self, app: &mut App) {
+		app.insert_resource(Bvh::default())
+			.insert_resource(BvhVisible::default());
+		// run after transform propagation so WorldTransform3d is current
+		app.add_system_to_stage(UpdateStage::Render, build_bvh_visible);
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -252,32 +279,5 @@ mod tests {
 		visible.sort();
 		expected.sort();
 		assert_eq!(visible, expected);
-	}
-}
-
-/// system that builds the BVH from current entity AABBs and frustum-culls them.
-pub fn build_bvh_visible(
-	query: Query<(Entity, &Aabb3d, &WorldTransform3d, &ComputedVisibility)>,
-	frustum: Res<Frustum>,
-	mut bvh: ResMut<Bvh>,
-	mut visible: ResMut<BvhVisible>,
-) {
-	bvh.build(&query);
-	visible.entities.clear();
-	bvh.query_frustum(&frustum, &mut visible.entities);
-}
-
-/// plugin that inserts BVH resources and registers the build system.
-pub struct BvhPlugin;
-
-impl GamePlugin for BvhPlugin {
-	fn name(&self) -> &str {
-		"BvhPlugin"
-	}
-	fn build(&mut self, app: &mut App) {
-		app.insert_resource(Bvh::default())
-			.insert_resource(BvhVisible::default());
-		// run after transform propagation so WorldTransform3d is current
-		app.add_system_to_stage(UpdateStage::Render, build_bvh_visible);
 	}
 }
