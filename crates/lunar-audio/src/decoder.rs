@@ -161,8 +161,8 @@ fn decode(sound: &Sound) -> Result<Vec<f32>, String> {
         raw.extend_from_slice(sbuf.samples());
     }
 
-    // upmix mono to stereo; dowmix >2 channels to stereo
-    let stereo = match channels {
+    // upmix mono to stereo; downmix >2 channels to stereo
+    let stereo: Vec<f32> = match channels {
         1 => raw.iter().flat_map(|&s| [s, s]).collect(),
         2 => raw,
         n => raw
@@ -171,13 +171,72 @@ fn decode(sound: &Sound) -> Result<Vec<f32>, String> {
             .collect(),
     };
 
-    // if source rate differs, log and use as-is for now
-    // TODO: resample with rubato when source_rate != SAMPLE_RATE
-    if source_rate != SAMPLE_RATE {
-        log::warn!(
-            "lunar-audio: source is {source_rate} Hz, device expects {SAMPLE_RATE} Hz — pitch will be off until resampling is added"
-        );
+    // decode runs once per sound and the result is cached, so the resample
+    // cost is load-time only
+    if source_rate != SAMPLE_RATE && source_rate > 0 {
+        return Ok(resample_stereo(&stereo, source_rate, SAMPLE_RATE));
     }
 
     Ok(stereo)
+}
+
+/// linearly resample interleaved stereo f32 PCM from `source_rate` to `target_rate`.
+///
+/// linear interpolation is transparent for game sfx and short music loops; the
+/// engine mixes at a fixed [`SAMPLE_RATE`] so this runs only on mismatched files.
+fn resample_stereo(input: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
+    let frame_count = input.len() / 2;
+    if frame_count == 0 {
+        return Vec::new();
+    }
+    let out_frames = (frame_count as u64 * target_rate as u64 / source_rate as u64) as usize;
+    let step = source_rate as f64 / target_rate as f64;
+    let mut out = Vec::with_capacity(out_frames * 2);
+    for i in 0..out_frames {
+        let pos = i as f64 * step;
+        let idx = pos as usize;
+        let frac = (pos - idx as f64) as f32;
+        let next = (idx + 1).min(frame_count - 1);
+        let left = input[idx * 2] * (1.0 - frac) + input[next * 2] * frac;
+        let right = input[idx * 2 + 1] * (1.0 - frac) + input[next * 2 + 1] * frac;
+        out.push(left);
+        out.push(right);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resample_scales_frame_count_by_rate_ratio() {
+        // 441 frames at 44.1kHz → 480 frames at 48kHz
+        let input = vec![0.5f32; 441 * 2];
+        let out = resample_stereo(&input, 44_100, 48_000);
+        assert_eq!(out.len(), 480 * 2);
+    }
+
+    #[test]
+    fn resample_preserves_constant_signal() {
+        let input = vec![0.25f32; 100 * 2];
+        let out = resample_stereo(&input, 22_050, 48_000);
+        assert!(out.iter().all(|&s| (s - 0.25).abs() < 1e-6));
+    }
+
+    #[test]
+    fn resample_interpolates_a_ramp() {
+        // left channel ramps 0,1,2,3 — downsampling by 2 should land between samples
+        let input: Vec<f32> = (0..8).flat_map(|i| [i as f32, 0.0]).collect();
+        let out = resample_stereo(&input, 48_000, 24_000);
+        assert_eq!(out.len(), 4 * 2);
+        assert_eq!(out[0], 0.0);
+        assert_eq!(out[2], 2.0);
+        assert_eq!(out[4], 4.0);
+    }
+
+    #[test]
+    fn resample_handles_empty_input() {
+        assert!(resample_stereo(&[], 44_100, 48_000).is_empty());
+    }
 }
