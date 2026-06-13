@@ -26,7 +26,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - run: apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev clang
+      # mesa-vulkan-drivers ships lavapipe so the headless gpu tests actually
+      # run here instead of skipping for lack of an adapter
+      - run: apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev clang mesa-vulkan-drivers libvulkan1
       - run: cargo test --workspace
 
   build-wasm:
