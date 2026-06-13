@@ -19,6 +19,47 @@ impl RenderEngine3d {
 		}))
 		.expect("no wgpu adapter found");
 
+		let (device, queue, hdr_format, has_indirect) = Self::negotiate_device(&adapter);
+		Self::init_with_adapter(
+			&adapter,
+			device,
+			queue,
+			Some(surface),
+			config,
+			hdr_format,
+			has_indirect,
+		)
+	}
+
+	/// create the 3d render engine with no window surface (native, blocking).
+	///
+	/// final output lands in an offscreen color target instead of a swapchain,
+	/// so headless tests and tooling can drive full frames without a window.
+	///
+	/// # Panics
+	///
+	/// panics if no adapter or device can be created.
+	#[cfg(not(target_arch = "wasm32"))]
+	pub fn headless(instance: &wgpu::Instance, config: &RenderConfig3d) -> Self {
+		let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+			power_preference: wgpu::PowerPreference::HighPerformance,
+			force_fallback_adapter: false,
+			compatible_surface: None,
+		}))
+		.expect("no wgpu adapter found");
+
+		let (device, queue, hdr_format, has_indirect) = Self::negotiate_device(&adapter);
+		Self::init_with_adapter(
+			&adapter, device, queue, None, config, hdr_format, has_indirect,
+		)
+	}
+
+	/// negotiate optional features against the adapter and create the device.
+	/// shared by the windowed and headless native constructors.
+	#[cfg(not(target_arch = "wasm32"))]
+	fn negotiate_device(
+		adapter: &wgpu::Adapter,
+	) -> (wgpu::Device, wgpu::Queue, wgpu::TextureFormat, bool) {
 		// request optional features based on adapter support
 		let has_r11 = adapter
 			.features()
@@ -71,15 +112,7 @@ impl RenderEngine3d {
 			wgpu::TextureFormat::Rgba16Float
 		};
 		log::info!("HDR format: {hdr_format:?}, indirect: {has_indirect}");
-		Self::init_with_adapter(
-			&adapter,
-			device,
-			queue,
-			surface,
-			config,
-			hdr_format,
-			has_indirect,
-		)
+		(device, queue, hdr_format, has_indirect)
 	}
 
 	/// create the 3d render engine from a surface (wasm async path).
@@ -124,7 +157,7 @@ impl RenderEngine3d {
 			&adapter,
 			device,
 			queue,
-			surface,
+			Some(surface),
 			config,
 			wgpu::TextureFormat::Rgba16Float,
 			false,
@@ -150,11 +183,37 @@ impl RenderEngine3d {
 			.and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
 			.ok_or_else(|| format!("canvas #{id} not found"))
 	}
+	/// create the offscreen color texture that stands in for the swapchain in
+	/// headless mode. COPY_SRC lets tests read pixels back.
+	pub(crate) fn make_headless_target(
+		device: &wgpu::Device,
+		width: u32,
+		height: u32,
+		format: wgpu::TextureFormat,
+	) -> (wgpu::Texture, wgpu::TextureView) {
+		let texture = device.create_texture(&wgpu::TextureDescriptor {
+			label: Some("[headless] color target"),
+			size: wgpu::Extent3d {
+				width,
+				height,
+				depth_or_array_layers: 1,
+			},
+			mip_level_count: 1,
+			sample_count: 1,
+			dimension: wgpu::TextureDimension::D2,
+			format,
+			usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+			view_formats: &[],
+		});
+		let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+		(texture, view)
+	}
+
 	pub(crate) fn init_with_adapter(
 		adapter: &wgpu::Adapter,
 		device: wgpu::Device,
 		queue: wgpu::Queue,
-		surface: wgpu::Surface<'static>,
+		surface: Option<wgpu::Surface<'static>>,
 		config: &RenderConfig3d,
 		hdr_format: wgpu::TextureFormat,
 		has_indirect: bool,
@@ -170,17 +229,22 @@ impl RenderEngine3d {
 			&& adapter.get_info().backend == wgpu::Backend::Vulkan;
 		log::info!("shader passthrough: {shader_passthrough}");
 
-		let caps = surface.get_capabilities(adapter);
+		let caps = surface.as_ref().map(|s| s.get_capabilities(adapter));
 		// prefer non-sRGB linear format — game colors are sRGB-defined and used directly;
-		// applying hardware gamma on top would wash them out on native vs browser
+		// applying hardware gamma on top would wash them out on native vs browser.
+		// headless has no swapchain to match, so the fallback applies there too.
 		let format = caps
-			.formats
-			.iter()
-			.find(|&&f| {
-				f == wgpu::TextureFormat::Bgra8Unorm || f == wgpu::TextureFormat::Rgba8Unorm
+			.as_ref()
+			.and_then(|caps| {
+				caps.formats
+					.iter()
+					.find(|&&f| {
+						f == wgpu::TextureFormat::Bgra8Unorm
+							|| f == wgpu::TextureFormat::Rgba8Unorm
+					})
+					.copied()
+					.or_else(|| caps.formats.first().copied())
 			})
-			.copied()
-			.or_else(|| caps.formats.first().copied())
 			.unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
 
 		let surface_config = wgpu::SurfaceConfiguration {
@@ -193,11 +257,22 @@ impl RenderEngine3d {
 			} else {
 				wgpu::PresentMode::AutoNoVsync
 			},
-			alpha_mode: caps.alpha_modes.first().copied().unwrap_or_default(),
+			alpha_mode: caps
+				.as_ref()
+				.and_then(|caps| caps.alpha_modes.first().copied())
+				.unwrap_or_default(),
 			view_formats: vec![],
 			desired_maximum_frame_latency: 2,
 		};
-		surface.configure(&device, &surface_config);
+		if let Some(surface) = &surface {
+			surface.configure(&device, &surface_config);
+		}
+
+		// headless mode renders the final frame into this texture instead of a
+		// swapchain frame
+		let headless_target = surface
+			.is_none()
+			.then(|| Self::make_headless_target(&device, config.width, config.height, format));
 
 		// derive quality settings early so msaa_samples and other tier-specific values come from one place
 		let quality_early = QualitySettings::from_tier(render_tier);
@@ -3408,6 +3483,7 @@ impl RenderEngine3d {
 			device,
 			queue,
 			surface,
+			headless_target,
 			msaa_samples,
 			msaa_color_view,
 			surface_config,

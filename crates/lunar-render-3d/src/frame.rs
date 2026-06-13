@@ -1377,33 +1377,45 @@ impl RenderEngine3d {
 		}
 
 		// ── acquire surface and create encoder ────────────────────────────
+		// headless mode has no swapchain: the frame stays None and the final
+		// output view comes from the offscreen headless target instead
 		let mut reconfigure_after_present = false;
-		let frame = match self.surface.get_current_texture() {
-			wgpu::CurrentSurfaceTexture::Success(f) => f,
-			wgpu::CurrentSurfaceTexture::Suboptimal(f) => {
-				// defer reconfigure until after present — can't configure while frame is alive
-				reconfigure_after_present = true;
-				f
+		let frame = if let Some(surface) = &self.surface {
+			match surface.get_current_texture() {
+				wgpu::CurrentSurfaceTexture::Success(f) => Some(f),
+				wgpu::CurrentSurfaceTexture::Suboptimal(f) => {
+					// defer reconfigure until after present — can't configure while frame is alive
+					reconfigure_after_present = true;
+					Some(f)
+				}
+				wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+					surface.configure(&self.device, &self.surface_config);
+					return 0;
+				}
+				wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+					return 0;
+				}
+				wgpu::CurrentSurfaceTexture::Validation => {
+					log::error!("wgpu validation error acquiring surface texture");
+					return 0;
+				}
 			}
-			wgpu::CurrentSurfaceTexture::Outdated => {
-				self.surface.configure(&self.device, &self.surface_config);
-				return 0;
-			}
-			wgpu::CurrentSurfaceTexture::Lost => {
-				self.surface.configure(&self.device, &self.surface_config);
-				return 0;
-			}
-			wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-				return 0;
-			}
-			wgpu::CurrentSurfaceTexture::Validation => {
-				log::error!("wgpu validation error acquiring surface texture");
-				return 0;
+		} else {
+			None
+		};
+		let view = match &frame {
+			Some(frame) => frame
+				.texture
+				.create_view(&wgpu::TextureViewDescriptor::default()),
+			// TextureView is a cheap arc handle, the clone is fine per frame
+			None => {
+				self.headless_target
+					.as_ref()
+					.expect("engine without a surface must have a headless target")
+					.1
+					.clone()
 			}
 		};
-		let view = frame
-			.texture
-			.create_view(&wgpu::TextureViewDescriptor::default());
 		let mut encoder = self
 			.device
 			.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1872,9 +1884,13 @@ impl RenderEngine3d {
 		self.record_post_processing(&fc, world, &mut encoder, view);
 		// staging belt already finished + submitted with the uniform uploads above
 		self.queue.submit(Some(encoder.finish()));
-		frame.present();
-		if reconfigure_after_present {
-			self.surface.configure(&self.device, &self.surface_config);
+		if let Some(frame) = frame {
+			frame.present();
+		}
+		if reconfigure_after_present
+			&& let Some(surface) = &self.surface
+		{
+			surface.configure(&self.device, &self.surface_config);
 		}
 		#[cfg(not(target_arch = "wasm32"))]
 		self.staging_belt.recall();

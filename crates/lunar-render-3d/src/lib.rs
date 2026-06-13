@@ -1335,8 +1335,12 @@ struct DetailSpriteEntry {
 pub struct RenderEngine3d {
 	device: wgpu::Device,
 	queue: wgpu::Queue,
-	surface: wgpu::Surface<'static>,
+	/// window swapchain surface. `None` in headless mode, where final output
+	/// lands in `headless_target` instead of a swapchain frame.
+	surface: Option<wgpu::Surface<'static>>,
 	surface_config: wgpu::SurfaceConfiguration,
+	/// offscreen substitute for the swapchain in headless mode (COPY_SRC for readback)
+	headless_target: Option<(wgpu::Texture, wgpu::TextureView)>,
 	render_tier: RenderTier,
 	hdr_format: wgpu::TextureFormat,
 
@@ -2078,5 +2082,77 @@ mod visual_style_tests {
 		assert_eq!(profile.style.vertex_snap, 240.0);
 		assert!(profile.style.affine_textures);
 		assert!(!profile.style.is_neutral());
+	}
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod headless_tests {
+	use super::*;
+	use bevy_ecs::world::World;
+
+	/// drives full 3d frames with no window: every pass in the frame graph
+	/// records and submits against a real device, so validation errors,
+	/// bind-group mismatches, and pipeline/shader regressions panic here.
+	#[test]
+	fn headless_engine_renders_frames_without_validation_errors() {
+		let instance = wgpu::Instance::default();
+		// skip rather than fail on machines with no usable gpu adapter
+		if pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+			power_preference: wgpu::PowerPreference::HighPerformance,
+			force_fallback_adapter: false,
+			compatible_surface: None,
+		}))
+		.is_err()
+		{
+			eprintln!("skipping headless 3d test: no gpu adapter available");
+			return;
+		}
+
+		let config = RenderConfig3d {
+			width: 128,
+			height: 128,
+			..RenderConfig3d::default()
+		};
+		let mut engine = RenderEngine3d::headless(&instance, &config);
+
+		let mut world = World::new();
+		world.insert_resource(ActiveViewports::default());
+		world.insert_resource(Frustum::default());
+		world.insert_resource(ViewportAspect(1.0));
+		world.insert_resource(CullSoa::default());
+		world.insert_resource(lunar_core::Time::default());
+		world.insert_resource(lunar_assets::AssetServer::new(1));
+
+		// a real mesh so the gather → uniform packing → buffer upload → scene
+		// pass path runs, not just the post stack
+		let mut registry = MeshRegistry::default();
+		let quad = registry.add_mesh(quad_mesh(1.0, 1.0));
+		let material = registry.add_material(lunar_3d::MaterialData::default());
+		world.insert_resource(registry);
+		world.spawn((
+			Mesh3d(quad),
+			Material3d(material),
+			WorldTransform3d {
+				translation: Vec3::new(0.0, 0.0, -5.0),
+				..WorldTransform3d::new()
+			},
+			ComputedVisibility(true),
+		));
+
+		let camera = world
+			.spawn((Camera3d::default(), WorldTransform3d::new()))
+			.id();
+		world.insert_resource(ActiveCamera3d { entity: Some(camera) });
+
+		// several frames so temporal paths (taa jitter, hzb pipelining) cycle too
+		let mut draw_calls = 0;
+		for _ in 0..3 {
+			draw_calls = engine.render_frame(&mut world);
+		}
+		assert!(draw_calls > 0, "a visible mesh must produce at least one draw call");
+		engine
+			.device
+			.poll(wgpu::PollType::wait_indefinitely())
+			.unwrap();
 	}
 }

@@ -23,7 +23,17 @@ impl RenderEngine3d {
 		}
 		self.surface_config.width = width;
 		self.surface_config.height = height;
-		self.surface.configure(&self.device, &self.surface_config);
+		if let Some(surface) = &self.surface {
+			surface.configure(&self.device, &self.surface_config);
+		}
+		if self.headless_target.is_some() {
+			self.headless_target = Some(Self::make_headless_target(
+				&self.device,
+				width,
+				height,
+				self.surface_config.format,
+			));
+		}
 		// compute render resolution (may be smaller than display when render_scale < 1.0)
 		let render_w = ((width as f32 * self.render_scale).ceil() as u32).max(1);
 		let render_h = ((height as f32 * self.render_scale).ceil() as u32).max(1);
