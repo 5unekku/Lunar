@@ -53,25 +53,50 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertOut {
 
 const TAU: f32 = 6.28318530717958;
 
+// average of one full texture repeat along an edge row — the fill color for
+// pixels past the texture's vertical coverage (steep look-up/down)
+fn edge_average(v_edge: f32) -> vec3<f32> {
+    var sum = vec3<f32>(0.0);
+    for (var i = 0u; i < 16u; i++) {
+        sum += textureSampleLevel(sky_tex, sky_sampler, vec2<f32>(f32(i) / 16.0, v_edge), 0.0).rgb;
+    }
+    return sum / 16.0;
+}
+
 @fragment
 fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
-    // reconstruct the world-space view ray (same basis trick as atmos.wgsl)
+    // camera basis from view_proj rows: row 3 is the unit forward axis
+    // (projection row 3 is (0,0,-1,0), which negates the view matrix's z row)
+    // and the lengths of rows 0/1 are the projection scales, so tan(half-fov)
+    // is their reciprocal. never read fov from a single element like vp[0][0]
+    // — that is sx*right.x, which varies (and flips sign) with camera yaw
     let ndc = in.uv * 2.0 - 1.0;
-    let right = vec3<f32>(globals.view_proj[0][0], globals.view_proj[1][0], globals.view_proj[2][0]);
-    let up    = vec3<f32>(globals.view_proj[0][1], globals.view_proj[1][1], globals.view_proj[2][1]);
-    let fwd   = vec3<f32>(-globals.view_proj[0][2], -globals.view_proj[1][2], -globals.view_proj[2][2]);
-    let tan_fov_x = 1.0 / globals.view_proj[0][0];
-    let tan_fov_y = 1.0 / globals.view_proj[1][1];
-    let ray = normalize(fwd + right * ndc.x * tan_fov_x + up * (-ndc.y) * tan_fov_y);
+    let row_x = vec3<f32>(globals.view_proj[0][0], globals.view_proj[1][0], globals.view_proj[2][0]);
+    let row_y = vec3<f32>(globals.view_proj[0][1], globals.view_proj[1][1], globals.view_proj[2][1]);
+    let fwd   = vec3<f32>(globals.view_proj[0][3], globals.view_proj[1][3], globals.view_proj[2][3]);
+    let tan_half_fov_x = 1.0 / length(row_x);
+    let tan_half_fov_y = 1.0 / length(row_y);
 
-    // cylinder mapping: yaw → u, tan(pitch) → v. v is clamped, not wrapped,
-    // so steep look-up/down smears the texture edge instead of re-tiling it
-    let yaw = atan2(-ray.z, ray.x);
-    let horizontal = max(length(ray.xz), 1e-4);
-    let tan_pitch = ray.y / horizontal;
+    // software-renderer mapping, not a true cylinder: doom pans the sky per
+    // screen COLUMN (u from view yaw + column angle) and shears it per screen
+    // ROW (v linear in screen y, offset by tan of the look pitch), so cloud
+    // bands stay straight and sky columns stay vertical at any pitch. mapping
+    // through the actual view ray instead bows the bands into arcs once the
+    // camera pitches. ndc.y is negated: screen top = -1 = looking up
+    let cam_yaw = atan2(-fwd.z, fwd.x);
+    let yaw = cam_yaw - atan(ndc.x * tan_half_fov_x);
+    let tan_pitch = fwd.y / max(length(fwd.xz), 1e-4) - ndc.y * tan_half_fov_y;
+
     let u = yaw / TAU * params.repeats;
-    let v = clamp(params.v_offset - tan_pitch * params.tan_scale, 0.001, 0.999);
+    let v_raw = params.v_offset - tan_pitch * params.tan_scale;
+    let v = clamp(v_raw, 0.001, 0.999);
+    var color = textureSampleLevel(sky_tex, sky_sampler, vec2<f32>(u, v), 0.0).rgb;
 
-    let color = textureSampleLevel(sky_tex, sky_sampler, vec2<f32>(u, v), 0.0);
-    return vec4<f32>(color.rgb, 1.0);
+    // doom skies only cover a limited pitch band; past it fade to the average
+    // edge-row color so the zenith reads as solid haze, not smeared texels
+    let overshoot = max(-v_raw, v_raw - 1.0);
+    if overshoot > 0.0 {
+        color = mix(color, edge_average(v), clamp(overshoot * 4.0, 0.0, 1.0));
+    }
+    return vec4<f32>(color, 1.0);
 }

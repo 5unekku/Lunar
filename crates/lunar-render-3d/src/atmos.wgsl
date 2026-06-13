@@ -85,21 +85,19 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     let depth = textureLoad(depth_tex, px, 0).r;
     if depth < 1.0 { return vec4<f32>(0.0, 0.0, 0.0, 0.0); }
 
-    // reconstruct view-space ray direction from UV
+    // reconstruct the world-space view ray from view_proj rows. row 3 is the
+    // unit forward axis (projection row 3 is (0,0,-1,0), which negates the view
+    // matrix's z row); rows 0/1 are right*sx and up*sy, so dividing by their
+    // squared length normalizes AND applies tan(half-fov) = 1/s in one step.
+    // never read fov from a single element like vp[0][0] — that is sx*right.x,
+    // which varies (and flips sign) with camera yaw
     let ndc = in.uv * 2.0 - 1.0;
-    // unproject from clip space — need to invert the projection; use globals.view_proj
-    // since cam is at origin for sky, just negate ndc for the ray direction
-    let ray_dir_clip = vec4<f32>(ndc, 0.0, 1.0);
-    // The view ray in world space — derive from view_proj inverse
-    // Shortcut: construct ray from NDC using the view-proj transform embedded in globals
-    // view_proj[0..3] columns give right, up, fwd. row-major extract:
-    let right = vec3<f32>(globals.view_proj[0][0], globals.view_proj[1][0], globals.view_proj[2][0]);
-    let up    = vec3<f32>(globals.view_proj[0][1], globals.view_proj[1][1], globals.view_proj[2][1]);
-    let fwd   = vec3<f32>(-globals.view_proj[0][2], -globals.view_proj[1][2], -globals.view_proj[2][2]);
-    // NDC to view dir (perspective correct)
-    let tan_fov_x = 1.0 / globals.view_proj[0][0]; // 1/(2*tan(fov/2)*aspect) inverse
-    let tan_fov_y = 1.0 / globals.view_proj[1][1];
-    let ray_view = normalize(fwd + right * ndc.x * tan_fov_x + up * (-ndc.y) * tan_fov_y);
+    let row_x = vec3<f32>(globals.view_proj[0][0], globals.view_proj[1][0], globals.view_proj[2][0]);
+    let row_y = vec3<f32>(globals.view_proj[0][1], globals.view_proj[1][1], globals.view_proj[2][1]);
+    let fwd   = vec3<f32>(globals.view_proj[0][3], globals.view_proj[1][3], globals.view_proj[2][3]);
+    let ray_view = normalize(fwd
+        + row_x * (ndc.x / dot(row_x, row_x))
+        + row_y * (-ndc.y / dot(row_y, row_y)));
 
     // camera position — offset to planet surface (assume cam is near planet centre)
     let planet_r = atmos.planet_radius;
