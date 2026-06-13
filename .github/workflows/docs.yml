@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     container: rust:slim-trixie
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
       - run: apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev clang
 
