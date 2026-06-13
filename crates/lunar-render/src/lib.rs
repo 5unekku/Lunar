@@ -429,7 +429,9 @@ const VERTEX_STRIDE: usize = 20;
 /// needs direct GPU access for custom draw calls or render target operations.
 #[cfg_attr(not(target_arch = "wasm32"), derive(Resource))]
 pub struct RenderEngine {
-	surface: wgpu::Surface<'static>,
+	/// window swapchain surface. `None` in headless mode, where rendering goes
+	/// exclusively to offscreen render targets and surface draws are dropped.
+	surface: Option<wgpu::Surface<'static>>,
 	device: wgpu::Device,
 	queue: wgpu::Queue,
 	config: wgpu::SurfaceConfiguration,
@@ -515,7 +517,38 @@ impl RenderEngine {
 		}))
 		.expect("failed to request device");
 
-		Self::init_inner(&adapter, &device, queue, surface, config)
+		Self::init_inner(&adapter, &device, queue, Some(surface), config)
+	}
+
+	/// create a render engine with no window surface (native, blocking).
+	///
+	/// rendering goes exclusively to offscreen render targets directed via
+	/// `Camera.target`; commands aimed at the main surface are dropped. used by
+	/// headless tests and tooling, works on software adapters like lavapipe.
+	///
+	/// # Panics
+	///
+	/// panics if no adapter or device can be created.
+	#[cfg(not(target_arch = "wasm32"))]
+	pub fn headless(instance: &wgpu::Instance, config: RenderConfig) -> Self {
+		let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+			power_preference: wgpu::PowerPreference::HighPerformance,
+			force_fallback_adapter: false,
+			compatible_surface: None,
+		}))
+		.expect("failed to request adapter");
+
+		let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+			label: Some("lunar render device"),
+			required_features: wgpu::Features::empty(),
+			required_limits: wgpu::Limits::default(),
+			memory_hints: wgpu::MemoryHints::Performance,
+			trace: wgpu::Trace::default(),
+			experimental_features: wgpu::ExperimentalFeatures::disabled(),
+		}))
+		.expect("failed to request device");
+
+		Self::init_inner(&adapter, &device, queue, None, config)
 	}
 
 	/// create render engine from a surface (WASM, async)
@@ -546,7 +579,7 @@ impl RenderEngine {
 			.await
 			.expect("failed to request device");
 
-		Self::init_inner(&adapter, &device, queue, surface, config)
+		Self::init_inner(&adapter, &device, queue, Some(surface), config)
 	}
 
 	/// create a WebGPU surface from a canvas element (WASM only).
@@ -590,15 +623,15 @@ impl RenderEngine {
 		adapter: &wgpu::Adapter,
 		device: &wgpu::Device,
 		queue: wgpu::Queue,
-		surface: wgpu::Surface<'static>,
+		surface: Option<wgpu::Surface<'static>>,
 		config: RenderConfig,
 	) -> Self {
-		let caps = surface.get_capabilities(adapter);
+		let caps = surface.as_ref().map(|s| s.get_capabilities(adapter));
+		// headless has no swapchain to match, so pick a portable srgb format
 		let format = caps
-			.formats
-			.first()
-			.copied()
-			.unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb);
+			.as_ref()
+			.and_then(|caps| caps.formats.first().copied())
+			.unwrap_or(wgpu::TextureFormat::Rgba8UnormSrgb);
 
 		let surface_config = wgpu::SurfaceConfiguration {
 			usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -610,12 +643,17 @@ impl RenderEngine {
 			} else {
 				wgpu::PresentMode::AutoNoVsync
 			},
-			alpha_mode: caps.alpha_modes.first().copied().unwrap_or_default(),
+			alpha_mode: caps
+				.as_ref()
+				.and_then(|caps| caps.alpha_modes.first().copied())
+				.unwrap_or_default(),
 			view_formats: vec![],
 			desired_maximum_frame_latency: 2,
 		};
 
-		surface.configure(device, &surface_config);
+		if let Some(surface) = &surface {
+			surface.configure(device, &surface_config);
+		}
 
 		// projection matrix uniform (4x4 f32 = 64 bytes)
 		let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1060,7 +1098,9 @@ impl RenderEngine {
 	pub fn resize(&mut self, width: u32, height: u32) {
 		self.config.width = width;
 		self.config.height = height;
-		self.surface.configure(&self.device, &self.config);
+		if let Some(surface) = &self.surface {
+			surface.configure(&self.device, &self.config);
+		}
 		self.render_config.width = width;
 		self.render_config.height = height;
 	}
@@ -1330,9 +1370,11 @@ impl RenderEngine {
 		// check if camera is targeting an offscreen render target
 		let rt_tex_id = camera.and_then(|c| c.target).map(|rt| rt.0);
 
-		// acquire swapchain frame only when rendering to window (not offscreen)
+		// acquire swapchain frame only when rendering to window (not offscreen);
+		// headless mode has no swapchain, so surface-bound draws are dropped
 		let surface_frame = if rt_tex_id.is_none() {
-			match self.surface.get_current_texture() {
+			let Some(surface) = &self.surface else { return };
+			match surface.get_current_texture() {
 				wgpu::CurrentSurfaceTexture::Success(f)
 				| wgpu::CurrentSurfaceTexture::Suboptimal(f) => Some(f),
 				_ => return,
@@ -3337,7 +3379,7 @@ mod tests {
 
 	#[test]
 	fn sort_key_groups_same_texture_within_a_layer() {
-		let commands = vec![
+		let commands = [
 			sprite_command(Some(5), 0, None),
 			sprite_command(Some(9), 0, None),
 			sprite_command(Some(5), 0, None),
@@ -3503,5 +3545,104 @@ mod tests {
 		queue.clear();
 		assert!(queue.commands().is_empty());
 		assert_eq!(queue.target(), None);
+	}
+
+	/// drives the full pipeline with no window: engine → offscreen target →
+	/// pixel readback. catches projection, batching, and render-pass
+	/// regressions end to end, including the srgb clear color.
+	#[test]
+	fn headless_render_draws_rect_into_offscreen_target() {
+		let instance = wgpu::Instance::default();
+		// skip rather than fail on machines with no usable gpu adapter
+		if pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+			power_preference: wgpu::PowerPreference::HighPerformance,
+			force_fallback_adapter: false,
+			compatible_surface: None,
+		}))
+		.is_err()
+		{
+			eprintln!("skipping headless render test: no gpu adapter available");
+			return;
+		}
+
+		let mut engine = RenderEngine::headless(
+			&instance,
+			RenderConfig {
+				width: 64,
+				height: 64,
+				..RenderConfig::default()
+			},
+		);
+		let mut store = RenderTargetStore::default();
+		let (rt_id, _texture_handle) = engine.create_render_target(&mut store, 64, 64);
+
+		// the default camera sees world [-32,32]²; this rect covers exactly the
+		// top-left quadrant of the target
+		let commands = [DrawCommand {
+			kind: DrawKind::Rect {
+				position: Vec2::new(-32.0, -32.0),
+				size: Vec2::new(32.0, 32.0),
+				color: Color::RED,
+				layer: 0,
+			},
+		}];
+		let mut camera = Camera::new();
+		camera.target = Some(rt_id);
+		let mut render_info = RenderInfo::new();
+		engine.render(&commands, Some(&camera), &mut render_info);
+		assert_eq!(render_info.draw_calls, 1, "one rect must batch into one draw call");
+
+		// 64 px × 4 bytes = 256 = wgpu's required row alignment, so no padding
+		let bytes_per_row: u32 = 64 * 4;
+		let readback = engine.device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("headless readback"),
+			size: u64::from(bytes_per_row) * 64,
+			usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+			mapped_at_creation: false,
+		});
+		let mut encoder = engine
+			.device
+			.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+		encoder.copy_texture_to_buffer(
+			engine.textures[&rt_id.0].texture.as_image_copy(),
+			wgpu::TexelCopyBufferInfo {
+				buffer: &readback,
+				layout: wgpu::TexelCopyBufferLayout {
+					offset: 0,
+					bytes_per_row: Some(bytes_per_row),
+					rows_per_image: None,
+				},
+			},
+			wgpu::Extent3d {
+				width: 64,
+				height: 64,
+				depth_or_array_layers: 1,
+			},
+		);
+		engine.queue.submit([encoder.finish()]);
+
+		let slice = readback.slice(..);
+		let (sender, receiver) = std::sync::mpsc::channel();
+		slice.map_async(wgpu::MapMode::Read, move |result| sender.send(result).unwrap());
+		engine.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+		receiver.recv().unwrap().unwrap();
+		let data = slice.get_mapped_range();
+
+		let pixel = |x: usize, y: usize| {
+			let offset = y * bytes_per_row as usize + x * 4;
+			(data[offset], data[offset + 1], data[offset + 2])
+		};
+		// (8,8) sits inside the rect: solid red survives srgb encoding unchanged
+		let (red_r, red_g, red_b) = pixel(8, 8);
+		assert!(
+			red_r > 200 && red_g < 60 && red_b < 60,
+			"expected red rect pixel at (8,8), got ({red_r}, {red_g}, {red_b})"
+		);
+		// (40,40) is outside the rect: the 0.07-linear clear encodes to ~73 srgb
+		let (clear_r, clear_g, clear_b) = pixel(40, 40);
+		assert!(
+			clear_r > 40 && clear_r < 120 && clear_r == clear_g && clear_g == clear_b,
+			"expected neutral clear-color pixel at (40,40), got ({clear_r}, {clear_g}, {clear_b})"
+		);
 	}
 }
