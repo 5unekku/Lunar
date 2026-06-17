@@ -1,0 +1,13 @@
+[package]
+name = "lunar-plugin-loader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "dlopen-based plugin loader for lunar-engine — calls lunar_plugin_init and dispatches external systems"
+publish = false
+
+[dependencies]
+lunar-ffi = { path = "../../bindings/c" }
+bevy_ecs  = { workspace = true }
+log       = { workspace = true }
+libloading = { workspace = true }
