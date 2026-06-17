@@ -1,0 +1,22 @@
+[package]
+name = "lunar-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "stable C ABI layer for lunar-engine — entity/component/system/time access from C, C++, and C#"
+publish = false
+
+[lib]
+name = "lunar_ffi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+bevy_ecs  = { workspace = true }
+glam      = { workspace = true }
+log       = { workspace = true }
+lunar-core = { path = "../../crates/lunar-core" }
+lunar-3d   = { path = "../../crates/lunar-3d" }
+lunar-math = { path = "../../crates/lunar-math" }
+
+[build-dependencies]
+cbindgen = "0.27"
