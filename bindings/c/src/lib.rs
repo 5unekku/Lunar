@@ -204,6 +204,8 @@ pub fn init_registry(world: &mut World) {
     cache_builtin(world, "WorldTransform3d", world.component_id::<WorldTransform3d>());
     cache_builtin(world, "LocalTransform2d", world.component_id::<LocalTransform>());
     cache_builtin(world, "WorldTransform2d", world.component_id::<WorldTransform>());
+    cache_builtin(world, "Mesh3d",           world.component_id::<Mesh3d>());
+    cache_builtin(world, "Camera3d",         world.component_id::<Camera3d>());
 }
 
 fn cache_builtin(world: &mut World, name: &str, id: Option<ComponentId>) {
