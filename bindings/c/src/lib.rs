@@ -163,6 +163,8 @@ pub struct FfiRegistry {
     update_systems:      HashMap<LunarSystemId, RegisteredSystem>,
     fixed_update_systems:HashMap<LunarSystemId, RegisteredSystem>,
     shutdown_systems:    HashMap<LunarSystemId, RegisteredSystem>,
+    /// true while a hot-reload is in progress so C# Init can skip scene setup.
+    pub is_reload: bool,
 }
 
 impl FfiRegistry {
@@ -210,6 +212,20 @@ fn cache_builtin(world: &mut World, name: &str, id: Option<ComponentId>) {
     let mut reg = world.resource_mut::<FfiRegistry>();
     reg.component_names.insert(name.to_string(), id);
     reg.component_ids.insert(ffi_id, id);
+}
+
+/// clear all FFI systems registered for `schedule`. call before reloading a plugin.
+pub fn clear_schedule(world: &mut World, schedule: LunarSchedule) {
+    if let Some(mut reg) = world.get_resource_mut::<FfiRegistry>() {
+        reg.systems_mut(schedule).clear();
+    }
+}
+
+/// set the `is_reload` flag on the registry.
+pub fn set_is_reload(world: &mut World, value: bool) {
+    if let Some(mut reg) = world.get_resource_mut::<FfiRegistry>() {
+        reg.is_reload = value;
+    }
 }
 
 /// call all systems registered for `schedule`. invoke this from the engine game loop.
@@ -935,4 +951,16 @@ pub unsafe extern "C" fn lunar_spawn_camera(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_set_active_camera(_world: *mut LunarWorld, entity: LunarEntity) {
     set_main_camera_entity(entity);
+}
+
+// ─── hot reload ───────────────────────────────────────────────────────────────
+
+/// returns true if `lunar_plugin_init` is being called as part of a hot reload.
+///
+/// during a reload, [`FfiRegistry::is_reload`] is set to true by the loader
+/// so that C# `Init` can skip one-time scene setup and only re-register systems.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lunar_is_reload(world: *mut LunarWorld) -> bool {
+    let world = unsafe { world_from_ffi(world) };
+    world.resource::<FfiRegistry>().is_reload
 }

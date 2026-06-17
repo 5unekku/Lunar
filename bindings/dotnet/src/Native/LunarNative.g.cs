@@ -156,6 +156,13 @@ internal static unsafe partial class LunarNative
 
     [LibraryImport("lunar_ffi", EntryPoint = "lunar_set_active_camera")]
     internal static partial void LunarSetActiveCamera(LunarWorld* world, uint entity);
+
+    // ── hot reload ───────────────────────────────────────────────────────────
+
+    /// <summary>true when <c>lunar_plugin_init</c> is being called during a hot reload.</summary>
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_is_reload")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool LunarIsReload(LunarWorld* world);
 }
 
 /// <summary>

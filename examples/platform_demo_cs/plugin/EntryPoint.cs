@@ -15,17 +15,20 @@ class GamePlugin : IPlugin
 
     public void Init(World world)
     {
-        world.SetCursorLocked(true);
-        world.SetQuality(msaaSamples: 4, staa: true, renderScale: 1.0f);
-        world.SetSky(SkyColor, SunColor, showSun: true);
+        if (!world.IsReload())
+        {
+            world.SetCursorLocked(true);
+            world.SetQuality(msaaSamples: 4, staa: true, renderScale: 1.0f);
+            world.SetSky(SkyColor, SunColor, showSun: true);
 
-        var floorMesh = world.CreateMeshQuad(HalfPlatform, HalfPlatform);
-        var grassMat  = world.CreateMaterial(GrassColor, ShadingModel.Unlit);
-        world.SpawnMesh(floorMesh, grassMat, 0.0f, 0.0f, 0.0f);
+            var floorMesh = world.CreateMeshQuad(HalfPlatform, HalfPlatform);
+            var grassMat  = world.CreateMaterial(GrassColor, ShadingModel.Unlit);
+            world.SpawnMesh(floorMesh, grassMat, 0.0f, 0.0f, 0.0f);
 
-        float fovY = FovDegrees * (float)Math.PI / 180.0f;
-        var camera = world.SpawnCamera(0.0f, EyeHeight, 0.0f, fovY, near: 0.1f, far: 1000.0f);
-        world.SetActiveCamera(camera);
+            float fovY = FovDegrees * (float)Math.PI / 180.0f;
+            var camera = world.SpawnCamera(0.0f, EyeHeight, 0.0f, fovY, near: 0.1f, far: 1000.0f);
+            world.SetActiveCamera(camera);
+        }
 
         world.RegisterSystem(LunarSchedule.Update, new FpsController());
     }

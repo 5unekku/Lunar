@@ -238,6 +238,21 @@ public unsafe ref struct World
     /// <summary>set <paramref name="entity"/> as the active camera.</summary>
     public void SetActiveCamera(Entity entity) =>
         LunarNative.LunarSetActiveCamera(_handle, entity.Id);
+
+    // ── hot reload ────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// returns true when <c>Init</c> is being called as part of a hot reload.
+    /// use this to skip one-time scene setup and only re-register systems:
+    /// <code>
+    /// public void Init(World world)
+    /// {
+    ///     if (!world.IsReload()) SetupScene(world);
+    ///     world.RegisterSystem(LunarSchedule.Update, new MySystem());
+    /// }
+    /// </code>
+    /// </summary>
+    public bool IsReload() => LunarNative.LunarIsReload(_handle);
 }
 
 /// <summary>schedule constants matching LUNAR_SCHEDULE_* in lunar.h.</summary>

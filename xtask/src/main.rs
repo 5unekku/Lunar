@@ -1,9 +1,10 @@
 //! cargo xtask — build/dist/run task runner.
 //!
 //! usage:
-//!   cargo xtask build [--release]   build C# plugin + Rust binary
-//!   cargo xtask dist                release build, copy artifacts to dist/
-//!   cargo xtask run                 debug build, then run platform_demo_cs
+//!   cargo xtask build [--release]            build C# plugin + Rust binary
+//!   cargo xtask dist --modular               release build, separate binary + .so → dist/
+//!   cargo xtask dist --single                release build, .so embedded in binary → dist/
+//!   cargo xtask run                          debug build, then run platform_demo_cs
 
 use std::{
     path::{Path, PathBuf},
@@ -15,15 +16,25 @@ fn main() -> ExitCode {
     let task = match args.next() {
         Some(t) => t,
         None => {
-            eprintln!("usage: cargo xtask <build|dist|run> [--release]");
+            eprintln!("usage: cargo xtask <build|dist|run> [--release] [--single|--modular]");
             return ExitCode::FAILURE;
         }
     };
-    let release = args.any(|a| a == "--release");
+    let rest: Vec<String> = args.collect();
+    let release  = rest.iter().any(|a| a == "--release");
+    let single   = rest.iter().any(|a| a == "--single");
+    let modular  = rest.iter().any(|a| a == "--modular");
 
     let result = match task.as_str() {
         "build" => build(release),
-        "dist"  => dist(),
+        "dist"  => {
+            if single && modular {
+                eprintln!("error: --single and --modular are mutually exclusive");
+                return ExitCode::FAILURE;
+            }
+            if single  { dist_single() }
+            else       { dist_modular() }  // --modular is the default
+        }
         "run"   => run(),
         other   => {
             eprintln!("unknown task '{other}'. available: build, dist, run");
@@ -59,24 +70,61 @@ fn build(release: bool) -> Result<(), String> {
     cmd("cargo", &rust_args, &root)
 }
 
-fn dist() -> Result<(), String> {
+/// modular profile: binary + .so as separate files.
+/// smallest patch unit: a renderer fix ships as a new binary, a script fix as a new .so.
+fn dist_modular() -> Result<(), String> {
     let root     = workspace_root();
-    let dist_dir = root.join("dist");
+    let dist_dir = root.join("dist/modular");
     std::fs::create_dir_all(&dist_dir).map_err(|e| e.to_string())?;
 
     build(true)?;
 
-    // copy Rust binary
-    let bin_name = if cfg!(windows) { "platform_demo_cs.exe" } else { "platform_demo_cs" };
-    let bin_src  = root.join("target/release/examples").join(bin_name);
-    copy(&bin_src, &dist_dir.join(bin_name))?;
-
-    // copy C# plugin
+    let bin_name = binary_name();
     let lib_name = plugin_lib_name();
-    let lib_src  = root.join("examples/platform_demo_cs/plugin/publish").join(lib_name);
-    copy(&lib_src, &dist_dir.join(lib_name))?;
+    copy(
+        &root.join("target/release/examples").join(bin_name),
+        &dist_dir.join(bin_name))?;
+    copy(
+        &root.join("examples/platform_demo_cs/plugin/publish").join(lib_name),
+        &dist_dir.join(lib_name))?;
 
-    println!("dist/  →  {bin_name}  +  {lib_name}");
+    println!("dist/modular/  →  {bin_name}  +  {lib_name}");
+    Ok(())
+}
+
+/// single profile: .so bytes embedded in the binary — one file to ship.
+fn dist_single() -> Result<(), String> {
+    let root     = workspace_root();
+    let dist_dir = root.join("dist/single");
+    std::fs::create_dir_all(&dist_dir).map_err(|e| e.to_string())?;
+
+    // build C# first so we can embed the .so
+    let plugin_dir  = root.join("examples/platform_demo_cs/plugin");
+    let publish_dir = plugin_dir.join("publish");
+    cmd("dotnet", &[
+        "publish",
+        "-r", dotnet_rid(),
+        "-c", "Release",
+        "-o", publish_dir.to_str().unwrap(),
+    ], &plugin_dir)?;
+
+    let lib_path = publish_dir.join(plugin_lib_name());
+
+    // build Rust with the plugin path set so build.rs embeds it
+    println!("» embedding {} into binary", lib_path.display());
+    cmd_env(
+        "cargo",
+        &["build", "--release", "--example", "platform_demo_cs"],
+        &root,
+        &[("LUNAR_CS_PLUGIN_PATH", lib_path.to_str().unwrap())],
+    )?;
+
+    let bin_name = binary_name();
+    copy(
+        &root.join("target/release/examples").join(bin_name),
+        &dist_dir.join(bin_name))?;
+
+    println!("dist/single/  →  {bin_name}  (plugin embedded)");
     Ok(())
 }
 
@@ -99,7 +147,6 @@ fn run() -> Result<(), String> {
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 fn workspace_root() -> PathBuf {
-    // CARGO_MANIFEST_DIR is <workspace>/xtask; parent is the workspace root
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("xtask has no parent directory")
@@ -118,6 +165,10 @@ fn dotnet_rid() -> &'static str {
     }
 }
 
+fn binary_name() -> &'static str {
+    if cfg!(windows) { "platform_demo_cs.exe" } else { "platform_demo_cs" }
+}
+
 fn plugin_lib_name() -> &'static str {
     match std::env::consts::OS {
         "windows" => "lunar_scripts.dll",
@@ -127,11 +178,17 @@ fn plugin_lib_name() -> &'static str {
 }
 
 fn cmd(program: &str, args: &[&str], dir: &Path) -> Result<(), String> {
+    cmd_env(program, args, dir, &[])
+}
+
+fn cmd_env(program: &str, args: &[&str], dir: &Path, env: &[(&str, &str)]) -> Result<(), String> {
     println!("» {program} {}", args.join(" "));
-    let status = Command::new(program)
-        .args(args)
-        .current_dir(dir)
-        .status()
+    let mut command = Command::new(program);
+    command.args(args).current_dir(dir);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let status = command.status()
         .map_err(|e| format!("failed to spawn '{program}': {e}"))?;
 
     if status.success() {
