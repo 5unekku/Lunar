@@ -12,3 +12,11 @@ RUSTDOCFLAGS = "-Zunstable-options --html-no-source"
 # every WebGPU-capable browser supports simd128, so this costs no compatibility.
 [target.wasm32-unknown-unknown]
 rustflags = ["-C", "target-feature=+simd128"]
+
+# export all symbols from the host binary so dlopen'd C# NativeAOT plugins can
+# find lunar_ffi functions via NativeLibrary.GetMainProgramHandle().
+[target.'cfg(target_os = "linux")']
+rustflags = ["-C", "link-args=-Wl,-export-dynamic"]
+
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "link-args=-Wl,-export_dynamic"]

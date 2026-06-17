@@ -7,65 +7,65 @@ namespace Lunar.Native;
 
 internal static unsafe partial class LunarNative
 {
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_spawn")]
     internal static partial uint LunarSpawn(LunarWorld* world);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_despawn")]
     internal static partial void LunarDespawn(LunarWorld* world, uint entity);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_alive")]
     [return: MarshalAs(UnmanagedType.U1)]
     internal static partial bool LunarAlive(LunarWorld* world, uint entity);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_component_register")]
     internal static partial uint LunarComponentRegister(
         LunarWorld* world, byte* name, nuint size, nuint alignment);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_component_id")]
     internal static partial uint LunarComponentId(LunarWorld* world, byte* name);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_component_insert")]
     internal static partial void LunarComponentInsert(
         LunarWorld* world, uint entity, uint componentId, void* data, nuint size);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_component_remove")]
     internal static partial void LunarComponentRemove(
         LunarWorld* world, uint entity, uint componentId);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_component_has")]
     [return: MarshalAs(UnmanagedType.U1)]
     internal static partial bool LunarComponentHas(
         LunarWorld* world, uint entity, uint componentId);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_component_get")]
     internal static partial void* LunarComponentGet(
         LunarWorld* world, uint entity, uint componentId);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_component_get_mut")]
     internal static partial void* LunarComponentGetMut(
         LunarWorld* world, uint entity, uint componentId);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_get_transform3d")]
     [return: MarshalAs(UnmanagedType.U1)]
     internal static partial bool LunarGetTransform3d(
         LunarWorld* world, uint entity, LunarTransform3d* outValue);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_set_transform3d")]
     [return: MarshalAs(UnmanagedType.U1)]
     internal static partial bool LunarSetTransform3d(
         LunarWorld* world, uint entity, LunarTransform3d* value);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_get_transform2d")]
     [return: MarshalAs(UnmanagedType.U1)]
     internal static partial bool LunarGetTransform2d(
         LunarWorld* world, uint entity, LunarTransform2d* outValue);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_set_transform2d")]
     [return: MarshalAs(UnmanagedType.U1)]
     internal static partial bool LunarSetTransform2d(
         LunarWorld* world, uint entity, LunarTransform2d* value);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_query_foreach")]
     internal static partial void LunarQueryForeach(
         LunarWorld* world,
         uint* include, nuint includeCount,
@@ -73,36 +73,36 @@ internal static unsafe partial class LunarNative
         delegate* unmanaged[Cdecl]<uint, void*, void> callback,
         void* userData);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_system_register")]
     internal static partial uint LunarSystemRegister(
         LunarWorld* world, uint schedule,
         delegate* unmanaged[Cdecl]<LunarWorld*, void*, void> callback,
         void* userData);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_system_unregister")]
     internal static partial void LunarSystemUnregister(LunarWorld* world, uint systemId);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_delta_seconds")]
     internal static partial float LunarDeltaSeconds(LunarWorld* world);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_elapsed_seconds")]
     internal static partial float LunarElapsedSeconds(LunarWorld* world);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_input_key_held")]
     [return: MarshalAs(UnmanagedType.U1)]
     internal static partial bool LunarInputKeyHeld(LunarWorld* world, uint key);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_input_key_just_pressed")]
     [return: MarshalAs(UnmanagedType.U1)]
     internal static partial bool LunarInputKeyJustPressed(LunarWorld* world, uint key);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_input_mouse_delta")]
     internal static partial void LunarInputMouseDelta(LunarWorld* world, float* outDx, float* outDy);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_input_gamepad_axis")]
     internal static partial float LunarInputGamepadAxis(LunarWorld* world, uint gamepadIndex, uint axis);
 
-    [LibraryImport("lunar_ffi")]
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_get_main_camera")]
     internal static partial uint LunarGetMainCamera(LunarWorld* world);
 }
 
