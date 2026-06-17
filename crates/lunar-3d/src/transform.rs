@@ -13,6 +13,7 @@ use lunar_math::{Mat4, Quat, Vec3};
 ///     .with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2))
 ///     .with_scale(Vec3::splat(2.0));
 /// ```
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub struct LocalTransform3d {
 	pub translation: Vec3,
@@ -66,6 +67,7 @@ impl Default for LocalTransform3d {
 ///
 /// computed automatically by [`crate::propagate_transforms_3d`] from [`LocalTransform3d`]
 /// and the parent hierarchy. do not modify this component directly.
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub struct WorldTransform3d {
 	pub translation: Vec3,
@@ -132,5 +134,41 @@ impl From<LocalTransform3d> for WorldTransform3d {
 			rotation: local.rotation,
 			scale: local.scale,
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::mem::{align_of, offset_of};
+
+	#[test]
+	fn local_transform3d_layout() {
+		// translation must be first, rotation directly after, scale after rotation
+		assert_eq!(offset_of!(LocalTransform3d, translation), 0);
+		assert_eq!(
+			offset_of!(LocalTransform3d, rotation),
+			offset_of!(LocalTransform3d, translation) + size_of::<lunar_math::Vec3>()
+		);
+		assert_eq!(
+			offset_of!(LocalTransform3d, scale),
+			offset_of!(LocalTransform3d, rotation) + size_of::<lunar_math::Quat>()
+		);
+		// alignment matches Quat (16 on SIMD builds, 4 on scalar-math)
+		assert_eq!(align_of::<LocalTransform3d>(), align_of::<lunar_math::Quat>());
+	}
+
+	#[test]
+	fn world_transform3d_layout() {
+		assert_eq!(offset_of!(WorldTransform3d, translation), 0);
+		assert_eq!(
+			offset_of!(WorldTransform3d, rotation),
+			offset_of!(WorldTransform3d, translation) + size_of::<lunar_math::Vec3>()
+		);
+		assert_eq!(
+			offset_of!(WorldTransform3d, scale),
+			offset_of!(WorldTransform3d, rotation) + size_of::<lunar_math::Quat>()
+		);
+		assert_eq!(align_of::<WorldTransform3d>(), align_of::<lunar_math::Quat>());
 	}
 }

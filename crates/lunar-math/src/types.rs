@@ -80,6 +80,7 @@ impl Default for Transform {
 ///
 /// when an entity has no parent, this is equivalent to world space.
 /// used in entity hierarchies for parent-child transform propagation.
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub struct LocalTransform {
 	/// x, y position relative to parent
@@ -136,6 +137,7 @@ impl Default for LocalTransform {
 ///
 /// this component is computed automatically from [`LocalTransform`] and
 /// parent hierarchy. do not modify directly — use [`LocalTransform`] instead.
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub struct WorldTransform {
 	/// absolute x, y position
@@ -600,5 +602,26 @@ mod transform_tests {
 		let t = WorldTransform::from_xy(30.0, 40.0);
 		assert_eq!(t.translation.x, 30.0);
 		assert_eq!(t.translation.y, 40.0);
+	}
+
+	#[test]
+	fn local_transform_layout() {
+		// Vec2(8) + f32(4) + Vec2(8) = 20 bytes, align 4
+		use std::mem::{align_of, offset_of, size_of};
+		assert_eq!(size_of::<LocalTransform>(), 20);
+		assert_eq!(align_of::<LocalTransform>(), 4);
+		assert_eq!(offset_of!(LocalTransform, translation), 0);
+		assert_eq!(offset_of!(LocalTransform, rotation), 8);
+		assert_eq!(offset_of!(LocalTransform, scale), 12);
+	}
+
+	#[test]
+	fn world_transform_layout() {
+		use std::mem::{align_of, offset_of, size_of};
+		assert_eq!(size_of::<WorldTransform>(), 20);
+		assert_eq!(align_of::<WorldTransform>(), 4);
+		assert_eq!(offset_of!(WorldTransform, translation), 0);
+		assert_eq!(offset_of!(WorldTransform, rotation), 8);
+		assert_eq!(offset_of!(WorldTransform, scale), 12);
 	}
 }
