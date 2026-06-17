@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -68,6 +69,33 @@ func main() {
 		fmt.Println("wasm-opt not found, skipping (install binaryen for smaller/faster wasm)")
 	}
 
+	// copy jolt physics sidecar if it has been built (optional, only needed for
+	// physics examples). sidecar dist lives in the sibling jolt repo.
+	sidecarDist := filepath.Join(filepath.Dir(root), "jolt", "jolt-rust", "sidecar", "dist")
+	hasSidecar := fileExists(filepath.Join(sidecarDist, "jolt_sidecar.js")) &&
+		fileExists(filepath.Join(sidecarDist, "jolt_sidecar.wasm"))
+	if hasSidecar {
+		for _, fname := range []string{"jolt_sidecar.js", "jolt_sidecar.wasm"} {
+			if err := copyFile(filepath.Join(sidecarDist, fname), filepath.Join(tmpDir, fname)); err != nil {
+				log.Fatalf("failed to copy sidecar file %s: %v", fname, err)
+			}
+		}
+		fmt.Println("sidecar: jolt_sidecar.{js,wasm} included")
+	}
+
+	// build the module init block — load the jolt sidecar first when present so
+	// window.__jolt is ready before the main wasm initializes.
+	var moduleScript string
+	if hasSidecar {
+		moduleScript = fmt.Sprintf(`import createJoltModule from './jolt_sidecar.js';
+window.__jolt = await createJoltModule();
+import init from './%s.js';
+await init();`, name)
+	} else {
+		moduleScript = fmt.Sprintf(`import init from './%s.js';
+await init();`, name)
+	}
+
 	// minimal index.html — canvas fits the viewport while preserving aspect ratio.
 	// JS sets the canvas buffer size to match its CSS-rendered size so there is
 	// no extra browser-level scaling. ResizeObserver keeps it in sync on resize.
@@ -102,11 +130,10 @@ canvas { display: block; width: min(100vw, calc(100vh * 1280 / 720)); aspect-rat
 })();
 </script>
 <script type="module">
-import init from './%s.js';
-await init();
+%s
 </script>
 </body>
-</html>`, name, name)
+</html>`, name, moduleScript)
 
 	if err := os.WriteFile(filepath.Join(tmpDir, "index.html"), []byte(html), 0644); err != nil {
 		log.Fatalf("failed to write index.html: %v", err)
@@ -200,6 +227,26 @@ func listTargets(root string) {
 		fmt.Println("  (none found — run from the repo root)")
 	}
 	fmt.Println("\nusage: go run scripts/run_wasm.go <example_name>")
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }
 
 func openBrowser(url string) {
