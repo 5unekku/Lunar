@@ -3511,6 +3511,7 @@ impl RenderEngine3d {
 			lights_bgl,
 			lights_buf,
 			lights_bg,
+			shadow_map,
 			shadow_map_view,
 			shadow_sampler,
 			shadow_globals_buf,
@@ -3869,6 +3870,8 @@ impl RenderEngine3d {
 			lod_staging_pending: false,
 			lod_pending_entity_count: 0,
 			lod_staging_ready: Arc::new(AtomicBool::new(false)),
+
+			shadow_hook: None,
 		}
 	}
 	/// load the 3d pipeline cache from disk if available (Vulkan/DX12 only).

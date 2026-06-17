@@ -1699,13 +1699,17 @@ impl RenderEngine3d {
 			}
 		}
 
-		self.record_shadows(
-			world,
-			&mut encoder,
-			dir_direction,
-			dir_enabled,
-			dir_casts_shadows,
-		);
+		if let Some(hook) = self.shadow_hook.as_mut() {
+			hook.0.render_shadows(crate::hooks::ShadowCtx {
+				world,
+				device: &self.device,
+				queue: &self.queue,
+				shadow_atlas: &self.shadow_map,
+				shadow_atlas_view: &self.shadow_map_view,
+			});
+		} else {
+			self.record_shadows(world, &mut encoder, dir_direction, dir_enabled, dir_casts_shadows);
+		}
 
 		// ── HZB build (high tier only) ───────────────────────────────────
 		// builds a hierarchical min-depth buffer from the z-prepass result.

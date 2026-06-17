@@ -1143,4 +1143,28 @@ impl RenderEngine3d {
 			next
 		}
 	}
+
+	/// register a custom shadow technique.
+	///
+	/// the engine calls [`ShadowProvider::render_shadows`] in place of its
+	/// built-in cascade + point-light shadow pass every frame. pass `None` to
+	/// revert to the built-in technique.
+	///
+	/// # example
+	///
+	/// ```ignore
+	/// fn setup_shadows(world: &mut World) {
+	///     world.resource_mut::<RenderEngine3d>()
+	///          .set_shadow_provider(MyShadowImpl::new());
+	/// }
+	/// app.add_startup_system(setup_shadows);
+	/// ```
+	pub fn set_shadow_provider(&mut self, provider: impl crate::hooks::ShadowProvider) {
+		self.shadow_hook = Some(crate::hooks::ShadowHook(Box::new(provider)));
+	}
+
+	/// remove any registered shadow provider, reverting to the built-in cascade pass.
+	pub fn clear_shadow_provider(&mut self) {
+		self.shadow_hook = None;
+	}
 }

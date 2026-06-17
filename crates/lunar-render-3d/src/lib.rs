@@ -166,6 +166,7 @@ macro_rules! make_shader {
 
 // method impls split across sibling modules — declared after `make_shader!`
 // so the macro is in textual scope for the modules that expand it.
+pub mod hooks;
 mod config;
 mod cull;
 mod frame;
@@ -1403,6 +1404,7 @@ pub struct RenderEngine3d {
 	lights_bgl: wgpu::BindGroupLayout,
 	lights_buf: wgpu::Buffer,
 	lights_bg: wgpu::BindGroup,
+	shadow_map: wgpu::Texture,
 	shadow_map_view: wgpu::TextureView,
 	shadow_sampler: wgpu::Sampler,
 
@@ -1922,6 +1924,9 @@ pub struct RenderEngine3d {
 	lod_staging_pending: bool,
 	lod_pending_entity_count: usize,
 	lod_staging_ready: Arc<AtomicBool>,
+
+	// ── render hooks ──────────────────────────────────────────────────────
+	shadow_hook: Option<crate::hooks::ShadowHook>,
 }
 
 // wasm is single-threaded; wgpu's WebGPU backend uses RefCell instead of Mutex,
@@ -2038,6 +2043,7 @@ pub mod prelude {
 		QualityPreset, QualitySettings, RenderConfig3d, RenderEngine3d, RenderInfo3d,
 		RenderPlugin3d, Sky, UpscaleMode,
 	};
+	pub use crate::hooks::{ShadowCtx, ShadowProvider};
 }
 
 #[cfg(test)]
