@@ -104,6 +104,58 @@ internal static unsafe partial class LunarNative
 
     [LibraryImport("lunar_ffi", EntryPoint = "lunar_get_main_camera")]
     internal static partial uint LunarGetMainCamera(LunarWorld* world);
+
+    // ── scene setup ──────────────────────────────────────────────────────────
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_set_cursor_locked")]
+    internal static partial void LunarSetCursorLocked(LunarWorld* world,
+        [MarshalAs(UnmanagedType.U1)] bool locked);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_set_sky")]
+    internal static partial void LunarSetSky(LunarWorld* world,
+        float skyR, float skyG, float skyB,
+        float sunR, float sunG, float sunB,
+        [MarshalAs(UnmanagedType.U1)] bool showSun);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_set_quality")]
+    internal static partial void LunarSetQuality(LunarWorld* world,
+        uint msaaSamples,
+        [MarshalAs(UnmanagedType.U1)] bool staa,
+        float renderScale,
+        [MarshalAs(UnmanagedType.U1)] bool bloom,
+        [MarshalAs(UnmanagedType.U1)] bool ssao,
+        uint shadowRes,
+        uint shadowCascades);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_mesh_quad")]
+    internal static partial ulong LunarMeshQuad(LunarWorld* world, float halfX, float halfZ);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_mesh_box")]
+    internal static partial ulong LunarMeshBox(LunarWorld* world, float hx, float hy, float hz);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_mesh_sphere")]
+    internal static partial ulong LunarMeshSphere(LunarWorld* world,
+        float radius, uint sectors, uint stacks);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_mesh_cylinder")]
+    internal static partial ulong LunarMeshCylinder(LunarWorld* world,
+        float radius, float height, uint sectors,
+        [MarshalAs(UnmanagedType.U1)] bool caps);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_material_create")]
+    internal static partial ulong LunarMaterialCreate(LunarWorld* world,
+        float r, float g, float b, float a, uint shading);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_spawn_mesh")]
+    internal static partial uint LunarSpawnMesh(LunarWorld* world,
+        ulong meshHandle, ulong matHandle, float x, float y, float z);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_spawn_camera")]
+    internal static partial uint LunarSpawnCamera(LunarWorld* world,
+        float x, float y, float z, float fovY, float near, float far);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_set_active_camera")]
+    internal static partial void LunarSetActiveCamera(LunarWorld* world, uint entity);
 }
 
 /// <summary>

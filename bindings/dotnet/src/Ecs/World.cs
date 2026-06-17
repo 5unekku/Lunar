@@ -170,6 +170,74 @@ public unsafe ref struct World
 
     public void UnregisterSystem(uint id) =>
         LunarHandles.UnregisterSystem(_handle, id);
+
+    // ── scene setup ───────────────────────────────────────────────────────────
+
+    /// <summary>lock or release the cursor.</summary>
+    public void SetCursorLocked(bool locked) =>
+        LunarNative.LunarSetCursorLocked(_handle, locked);
+
+    /// <summary>insert or replace the sky resource.</summary>
+    public void SetSky(Color skyColor, Color sunColor, bool showSun = true) =>
+        LunarNative.LunarSetSky(_handle,
+            skyColor.R, skyColor.G, skyColor.B,
+            sunColor.R, sunColor.G, sunColor.B,
+            showSun);
+
+    /// <summary>insert or replace quality settings from common parameters.</summary>
+    public void SetQuality(
+        int msaaSamples   = 1,
+        bool staa         = false,
+        float renderScale = 1.0f,
+        bool bloom        = false,
+        bool ssao         = false,
+        int shadowRes     = 512,
+        int shadowCascades= 1)
+    {
+        LunarNative.LunarSetQuality(_handle,
+            (uint)msaaSamples, staa, renderScale,
+            bloom, ssao,
+            (uint)shadowRes, (uint)shadowCascades);
+    }
+
+    // ── mesh primitives ───────────────────────────────────────────────────────
+
+    /// <summary>create a flat quad mesh with the given half-extents along X and Z.</summary>
+    public MeshHandle CreateMeshQuad(float halfX, float halfZ) =>
+        new(LunarNative.LunarMeshQuad(_handle, halfX, halfZ));
+
+    /// <summary>create a box mesh with the given half-extents.</summary>
+    public MeshHandle CreateMeshBox(float hx, float hy, float hz) =>
+        new(LunarNative.LunarMeshBox(_handle, hx, hy, hz));
+
+    /// <summary>create a UV sphere mesh.</summary>
+    public MeshHandle CreateMeshSphere(float radius, uint sectors = 16, uint stacks = 12) =>
+        new(LunarNative.LunarMeshSphere(_handle, radius, sectors, stacks));
+
+    /// <summary>create a cylinder mesh.</summary>
+    public MeshHandle CreateMeshCylinder(float radius, float height, uint sectors = 16, bool caps = true) =>
+        new(LunarNative.LunarMeshCylinder(_handle, radius, height, sectors, caps));
+
+    // ── material ──────────────────────────────────────────────────────────────
+
+    /// <summary>create a flat-color material.</summary>
+    public MaterialHandle CreateMaterial(Color color, ShadingModel shading = ShadingModel.Phong) =>
+        new(LunarNative.LunarMaterialCreate(_handle, color.R, color.G, color.B, color.A, (uint)shading));
+
+    // ── entity spawning ───────────────────────────────────────────────────────
+
+    /// <summary>spawn a mesh entity at world position <c>(x, y, z)</c>.</summary>
+    public Entity SpawnMesh(MeshHandle mesh, MaterialHandle material, float x, float y, float z) =>
+        new(LunarNative.LunarSpawnMesh(_handle, mesh.Raw, material.Raw, x, y, z));
+
+    /// <summary>spawn a perspective camera at <c>(x, y, z)</c>. <paramref name="fovY"/> in radians.</summary>
+    public Entity SpawnCamera(float x, float y, float z,
+        float fovY = 1.5708f, float near = 0.1f, float far = 1000.0f) =>
+        new(LunarNative.LunarSpawnCamera(_handle, x, y, z, fovY, near, far));
+
+    /// <summary>set <paramref name="entity"/> as the active camera.</summary>
+    public void SetActiveCamera(Entity entity) =>
+        LunarNative.LunarSetActiveCamera(_handle, entity.Id);
 }
 
 /// <summary>schedule constants matching LUNAR_SCHEDULE_* in lunar.h.</summary>

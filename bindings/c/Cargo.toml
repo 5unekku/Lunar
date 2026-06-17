@@ -14,10 +14,12 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 bevy_ecs  = { workspace = true }
 glam      = { workspace = true }
 log       = { workspace = true }
-lunar-core  = { path = "../../crates/lunar-core" }
-lunar-input = { path = "../../crates/lunar-input" }
-lunar-3d   = { path = "../../crates/lunar-3d" }
-lunar-math = { path = "../../crates/lunar-math" }
+lunar-core       = { path = "../../crates/lunar-core" }
+lunar-input      = { path = "../../crates/lunar-input" }
+lunar-3d         = { path = "../../crates/lunar-3d" }
+lunar-assets     = { path = "../../crates/lunar-assets" }
+lunar-math       = { path = "../../crates/lunar-math" }
+lunar-render-3d  = { path = "../../crates/lunar-render-3d" }
 
 [build-dependencies]
 cbindgen = "0.27"

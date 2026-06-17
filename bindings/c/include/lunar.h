@@ -16,6 +16,9 @@
 
 #define LUNAR_SCHEDULE_SHUTDOWN 3
 
+// sentinel for null/invalid asset handles.
+#define LUNAR_NULL_HANDLE UINT64_MAX
+
 // opaque handle to the engine world — only valid during a system callback.
 //
 // the engine passes a pointer to its internal [`bevy_ecs::world::World`].

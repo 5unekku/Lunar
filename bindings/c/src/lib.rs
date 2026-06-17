@@ -32,9 +32,15 @@ use bevy_ecs::{
     world::EntityRef,
 };
 use glam;
-use lunar_3d::{LocalTransform3d, WorldTransform3d};
+use lunar_3d::{
+    Camera3d, Camera3dBundle, LocalTransform3d, Material3d, MaterialData, Mesh3d, Mesh3dBundle,
+    MeshData, MeshRegistry, Projection, ShadingModel, WorldTransform3d, primitives,
+};
+use lunar_assets::{Asset, Handle};
+use lunar_core::WindowSettings;
 use lunar_input::{GamepadAxis, InputState, KeyCode};
-use lunar_math::{LocalTransform, WorldTransform};
+use lunar_math::{Color, LocalTransform, WorldTransform};
+use lunar_render_3d::{QualitySettings, Sky};
 
 // ─── opaque world handle ─────────────────────────────────────────────────────
 
@@ -725,4 +731,208 @@ pub unsafe extern "C" fn lunar_input_gamepad_axis(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_get_main_camera(_world: *mut LunarWorld) -> LunarEntity {
     MAIN_CAMERA_ENTITY.load(Ordering::Relaxed)
+}
+
+// ─── scene setup ─────────────────────────────────────────────────────────────
+
+/// sentinel for null/invalid asset handles.
+pub const LUNAR_NULL_HANDLE: u64 = u64::MAX;
+
+// pack Handle<T> (id: u32, generation: u16) into a u64.
+// low 32 bits = id, bits 32..47 = generation.
+fn pack_handle<T: Asset>(handle: Handle<T>) -> u64 {
+    (handle.id() as u64) | ((handle.generation() as u64) << 32)
+}
+
+fn unpack_handle<T: Asset>(raw: u64) -> Handle<T> {
+    Handle::new(raw as u32, (raw >> 32) as u16)
+}
+
+/// lock or unlock the cursor. mirrored into [`WindowSettings::cursor_locked`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lunar_set_cursor_locked(world: *mut LunarWorld, locked: bool) {
+    let world = unsafe { world_from_ffi(world) };
+    if let Some(mut settings) = world.get_resource_mut::<WindowSettings>() {
+        settings.cursor_locked = locked;
+    }
+}
+
+/// insert or replace the [`Sky`] resource.
+///
+/// `sky_r/g/b` — skydome color (linear 0..1).
+/// `sun_r/g/b` — sun disc color (linear 0..1).
+/// `show_sun`  — whether to draw the sun disc.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lunar_set_sky(
+    world: *mut LunarWorld,
+    sky_r: f32, sky_g: f32, sky_b: f32,
+    sun_r: f32, sun_g: f32, sun_b: f32,
+    show_sun: bool,
+) {
+    let world = unsafe { world_from_ffi(world) };
+    world.insert_resource(Sky {
+        sky_color: Color::rgb(sky_r, sky_g, sky_b),
+        sun_color: Color::rgb(sun_r, sun_g, sun_b),
+        show_sun,
+        ..Sky::default()
+    });
+}
+
+/// insert or replace [`QualitySettings`].
+///
+/// all other fields are taken from [`QualitySettings::minimum()`] as a base.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lunar_set_quality(
+    world:           *mut LunarWorld,
+    msaa_samples:    u32,
+    staa:            bool,
+    render_scale:    f32,
+    bloom:           bool,
+    ssao:            bool,
+    shadow_res:      u32,
+    shadow_cascades: u32,
+) {
+    let world = unsafe { world_from_ffi(world) };
+    world.insert_resource(QualitySettings {
+        msaa_samples,
+        staa,
+        render_scale,
+        bloom,
+        ssao,
+        shadow_res,
+        shadow_cascades,
+        ..QualitySettings::minimum()
+    });
+}
+
+/// add a quad mesh to the registry and return a packed handle (u64).
+///
+/// `half_x` and `half_z` are the half-extents of the flat quad along X and Z.
+/// returns [`LUNAR_NULL_HANDLE`] if [`MeshRegistry`] is not available.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lunar_mesh_quad(
+    world: *mut LunarWorld,
+    half_x: f32,
+    half_z: f32,
+) -> u64 {
+    let world = unsafe { world_from_ffi(world) };
+    let Some(mut registry) = world.get_resource_mut::<MeshRegistry>() else { return LUNAR_NULL_HANDLE };
+    pack_handle(registry.add_mesh(primitives::quad_mesh(half_x, half_z)))
+}
+
+/// add a box mesh to the registry and return a packed handle.
+///
+/// `hx`, `hy`, `hz` are the half-extents along each axis.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lunar_mesh_box(
+    world: *mut LunarWorld,
+    hx: f32, hy: f32, hz: f32,
+) -> u64 {
+    let world = unsafe { world_from_ffi(world) };
+    let Some(mut registry) = world.get_resource_mut::<MeshRegistry>() else { return LUNAR_NULL_HANDLE };
+    pack_handle(registry.add_mesh(primitives::box_mesh(glam::Vec3::new(hx, hy, hz))))
+}
+
+/// add a UV sphere mesh to the registry and return a packed handle.
+///
+/// `sectors` and `stacks` control tessellation (minimum 3).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lunar_mesh_sphere(
+    world: *mut LunarWorld,
+    radius: f32,
+    sectors: u32,
+    stacks: u32,
+) -> u64 {
+    let world = unsafe { world_from_ffi(world) };
+    let Some(mut registry) = world.get_resource_mut::<MeshRegistry>() else { return LUNAR_NULL_HANDLE };
+    pack_handle(registry.add_mesh(primitives::sphere_mesh(radius, sectors.max(3), stacks.max(3))))
+}
+
+/// add a cylinder mesh to the registry and return a packed handle.
+///
+/// `caps` controls whether the top and bottom disc faces are included.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lunar_mesh_cylinder(
+    world: *mut LunarWorld,
+    radius: f32,
+    height: f32,
+    sectors: u32,
+    caps: bool,
+) -> u64 {
+    let world = unsafe { world_from_ffi(world) };
+    let Some(mut registry) = world.get_resource_mut::<MeshRegistry>() else { return LUNAR_NULL_HANDLE };
+    pack_handle(registry.add_mesh(primitives::cylinder_mesh(radius, height, sectors.max(3), caps)))
+}
+
+/// create a material and return a packed handle.
+///
+/// `shading`: 0 = Unlit, 1 = Phong, 2 = Pbr.
+/// returns [`LUNAR_NULL_HANDLE`] if [`MeshRegistry`] is not available.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lunar_material_create(
+    world: *mut LunarWorld,
+    r: f32, g: f32, b: f32, a: f32,
+    shading: u32,
+) -> u64 {
+    let world = unsafe { world_from_ffi(world) };
+    let Some(mut registry) = world.get_resource_mut::<MeshRegistry>() else { return LUNAR_NULL_HANDLE };
+    let shading_model = match shading {
+        0 => ShadingModel::Unlit,
+        2 => ShadingModel::Pbr,
+        _ => ShadingModel::Phong,
+    };
+    pack_handle(registry.add_material(MaterialData {
+        base_color: Color::rgba(r, g, b, a),
+        shading: shading_model,
+        ..MaterialData::default()
+    }))
+}
+
+/// spawn a mesh entity at `(x, y, z)` with the given mesh and material handles.
+///
+/// handles must come from `lunar_mesh_*` and `lunar_material_create`.
+/// returns the entity index, or [`LUNAR_NULL_ENTITY`] on failure.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lunar_spawn_mesh(
+    world:      *mut LunarWorld,
+    mesh_raw:   u64,
+    mat_raw:    u64,
+    x: f32, y: f32, z: f32,
+) -> LunarEntity {
+    let world = unsafe { world_from_ffi(world) };
+    let mesh: Handle<MeshData>     = unpack_handle(mesh_raw);
+    let mat:  Handle<MaterialData> = unpack_handle(mat_raw);
+    world.spawn(Mesh3dBundle {
+        local:    LocalTransform3d::from_xyz(x, y, z),
+        mesh:     Mesh3d(mesh),
+        material: Material3d(mat),
+        ..Mesh3dBundle::default()
+    }).id().index_u32()
+}
+
+/// spawn a perspective camera entity at `(x, y, z)`.
+///
+/// `fov_y` is in radians. returns the entity index.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lunar_spawn_camera(
+    world: *mut LunarWorld,
+    x: f32, y: f32, z: f32,
+    fov_y: f32, near: f32, far: f32,
+) -> LunarEntity {
+    let world = unsafe { world_from_ffi(world) };
+    world.spawn(Camera3dBundle {
+        local: LocalTransform3d::from_xyz(x, y, z),
+        camera: Camera3d {
+            projection: Projection::Perspective { fov_y, near, far },
+            ..Camera3d::default()
+        },
+        ..Camera3dBundle::default()
+    }).id().index_u32()
+}
+
+/// set the active camera to `entity`. equivalent to calling
+/// [`set_main_camera_entity`] from Rust.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lunar_set_active_camera(_world: *mut LunarWorld, entity: LunarEntity) {
+    set_main_camera_entity(entity);
 }
