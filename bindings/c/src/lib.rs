@@ -22,6 +22,7 @@ use std::{
     collections::HashMap,
     ffi::{CStr, c_void, c_char},
     ptr::{NonNull, null, null_mut},
+    sync::atomic::{AtomicU32, Ordering},
 };
 
 use bevy_ecs::{
@@ -32,6 +33,7 @@ use bevy_ecs::{
 };
 use glam;
 use lunar_3d::{LocalTransform3d, WorldTransform3d};
+use lunar_input::{GamepadAxis, InputState, KeyCode};
 use lunar_math::{LocalTransform, WorldTransform};
 
 // ─── opaque world handle ─────────────────────────────────────────────────────
@@ -58,6 +60,18 @@ pub type LunarSystemId = u32;
 
 pub const LUNAR_INVALID_COMPONENT_ID: LunarComponentId = u32::MAX;
 pub const LUNAR_INVALID_SYSTEM_ID: LunarSystemId = u32::MAX;
+/// sentinel meaning "no camera set" for [`lunar_get_main_camera`].
+pub const LUNAR_NULL_ENTITY: LunarEntity = u32::MAX;
+
+// global main-camera entity index (set from Rust via [`set_main_camera_entity`])
+static MAIN_CAMERA_ENTITY: AtomicU32 = AtomicU32::new(u32::MAX);
+
+/// set the main camera entity that C# can retrieve with `lunar_get_main_camera`.
+/// call this after spawning the camera entity (the index is available immediately even
+/// though the entity is spawned deferred via Commands).
+pub fn set_main_camera_entity(index: LunarEntity) {
+    MAIN_CAMERA_ENTITY.store(index, Ordering::Relaxed);
+}
 
 // ─── C value types ────────────────────────────────────────────────────────────
 
@@ -146,6 +160,11 @@ pub struct FfiRegistry {
 }
 
 impl FfiRegistry {
+    /// look up a component id by its registered name.
+    pub fn component_id_by_name(&self, name: &str) -> Option<ComponentId> {
+        self.component_names.get(name).copied()
+    }
+
     fn systems(&self, schedule: LunarSchedule) -> &HashMap<LunarSystemId, RegisteredSystem> {
         match schedule {
             LunarSchedule::Startup     => &self.startup_systems,
@@ -603,4 +622,107 @@ pub unsafe extern "C" fn lunar_delta_seconds(world: *mut LunarWorld) -> f32 {
 pub unsafe extern "C" fn lunar_elapsed_seconds(world: *mut LunarWorld) -> f32 {
     let world = unsafe { world_from_ffi(world) };
     world.resource::<lunar_core::Time>().elapsed_seconds()
+}
+
+// ─── input ───────────────────────────────────────────────────────────────────
+
+/// map a u32 discriminant to a KeyCode. discriminants match the Rust enum layout:
+/// A-Z = 0-25, Num0-9 = 26-35, F1-12 = 36-47, Escape-Down = 48-56,
+/// modifiers = 57-62, punctuation = 63-73, nav = 74-79, numpad = 80-96,
+/// lock/super/media = 97-109, F13-24 = 128-139.
+fn keycode_from_u32(value: u32) -> Option<KeyCode> {
+    use KeyCode::*;
+    const TABLE: &[KeyCode] = &[
+        // A-Z (0-25)
+        A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+        // Num0-9 (26-35)
+        Num0, Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9,
+        // F1-F12 (36-47)
+        F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
+        // special (48-56)
+        Escape, Space, Enter, Tab, Backspace, Left, Right, Up, Down,
+        // modifiers (57-62)
+        LShift, RShift, LCtrl, RCtrl, LAlt, RAlt,
+        // punctuation (63-73)
+        Minus, Equals, Semicolon, Apostrophe, Comma, Period, Slash, Backslash, LeftBracket, RightBracket, Grave,
+        // navigation cluster (74-79)
+        Home, End, PageUp, PageDown, Insert, Delete,
+        // numpad (80-96)
+        Numpad0, Numpad1, Numpad2, Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8, Numpad9,
+        NumpadAdd, NumpadSub, NumpadMul, NumpadDiv, NumpadEnter, NumpadDecimal, NumLock,
+        // lock/control (97-100)
+        CapsLock, ScrollLock, Pause, PrintScreen,
+        // super (101-102)
+        LSuper, RSuper,
+        // media (103-109)
+        MediaPlay, MediaStop, MediaNext, MediaPrev, VolumeUp, VolumeDown, Mute,
+    ];
+    if value >= 128 {
+        const EXT: &[KeyCode] = &[F13, F14, F15, F16, F17, F18, F19, F20, F21, F22, F23, F24];
+        return EXT.get((value - 128) as usize).copied();
+    }
+    TABLE.get(value as usize).copied()
+}
+
+fn gamepad_axis_from_u32(value: u32) -> Option<GamepadAxis> {
+    match value {
+        0 => Some(GamepadAxis::LeftStickX),
+        1 => Some(GamepadAxis::LeftStickY),
+        2 => Some(GamepadAxis::RightStickX),
+        3 => Some(GamepadAxis::RightStickY),
+        4 => Some(GamepadAxis::LeftTrigger),
+        5 => Some(GamepadAxis::RightTrigger),
+        _ => None,
+    }
+}
+
+/// return true if the key is currently held down.
+/// `key` must be a `LUNAR_KEY_*` constant.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lunar_input_key_held(world: *mut LunarWorld, key: u32) -> bool {
+    let world = unsafe { world_from_ffi(world) };
+    let Some(keycode) = keycode_from_u32(key) else { return false };
+    world.resource::<InputState>().is_key_held(keycode)
+}
+
+/// return true if the key was pressed this frame (edge-triggered).
+/// `key` must be a `LUNAR_KEY_*` constant.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lunar_input_key_just_pressed(world: *mut LunarWorld, key: u32) -> bool {
+    let world = unsafe { world_from_ffi(world) };
+    let Some(keycode) = keycode_from_u32(key) else { return false };
+    world.resource::<InputState>().is_key_just_pressed(keycode)
+}
+
+/// write the mouse movement delta for this frame into `*out_dx` and `*out_dy`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lunar_input_mouse_delta(
+    world:  *mut LunarWorld,
+    out_dx: *mut f32,
+    out_dy: *mut f32,
+) {
+    let world = unsafe { world_from_ffi(world) };
+    let (dx, dy) = world.resource::<InputState>().mouse_delta();
+    unsafe { *out_dx = dx; *out_dy = dy; }
+}
+
+/// return the current value of a gamepad axis (0.0 if gamepad not connected).
+/// `axis` must be a `LUNAR_GAMEPAD_AXIS_*` constant.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lunar_input_gamepad_axis(
+    world:         *mut LunarWorld,
+    gamepad_index: u32,
+    axis:          u32,
+) -> f32 {
+    let world = unsafe { world_from_ffi(world) };
+    let Some(axis) = gamepad_axis_from_u32(axis) else { return 0.0 };
+    world.resource::<InputState>()
+        .gamepad(gamepad_index as usize)
+        .map_or(0.0, |gp| gp.axis(axis))
+}
+
+/// return the entity index set by [`set_main_camera_entity`], or [`LUNAR_NULL_ENTITY`] if unset.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lunar_get_main_camera(_world: *mut LunarWorld) -> LunarEntity {
+    MAIN_CAMERA_ENTITY.load(Ordering::Relaxed)
 }

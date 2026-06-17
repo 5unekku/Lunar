@@ -87,6 +87,23 @@ internal static unsafe partial class LunarNative
 
     [LibraryImport("lunar_ffi")]
     internal static partial float LunarElapsedSeconds(LunarWorld* world);
+
+    [LibraryImport("lunar_ffi")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool LunarInputKeyHeld(LunarWorld* world, uint key);
+
+    [LibraryImport("lunar_ffi")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool LunarInputKeyJustPressed(LunarWorld* world, uint key);
+
+    [LibraryImport("lunar_ffi")]
+    internal static partial void LunarInputMouseDelta(LunarWorld* world, float* outDx, float* outDy);
+
+    [LibraryImport("lunar_ffi")]
+    internal static partial float LunarInputGamepadAxis(LunarWorld* world, uint gamepadIndex, uint axis);
+
+    [LibraryImport("lunar_ffi")]
+    internal static partial uint LunarGetMainCamera(LunarWorld* world);
 }
 
 /// <summary>opaque engine world — only valid during a system callback.</summary>

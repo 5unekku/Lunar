@@ -133,6 +133,29 @@ public unsafe ref struct World
 
     public QueryBuilder Query() => new(_handle);
 
+    // ── input ─────────────────────────────────────────────────────────────────
+
+    public bool IsKeyHeld(LunarKey key) =>
+        LunarNative.LunarInputKeyHeld(_handle, (uint)key);
+
+    public bool IsKeyJustPressed(LunarKey key) =>
+        LunarNative.LunarInputKeyJustPressed(_handle, (uint)key);
+
+    public void MouseDelta(out float dx, out float dy)
+    {
+        float x, y;
+        LunarNative.LunarInputMouseDelta(_handle, &x, &y);
+        dx = x; dy = y;
+    }
+
+    public float GamepadAxis(uint index, LunarGamepadAxis axis) =>
+        LunarNative.LunarInputGamepadAxis(_handle, index, (uint)axis);
+
+    // ── main camera ───────────────────────────────────────────────────────────
+
+    /// <summary>entity set by the host via <c>set_main_camera_entity</c>, or an invalid entity if unset.</summary>
+    public Entity MainCamera => new(LunarNative.LunarGetMainCamera(_handle));
+
     // ── system registration ───────────────────────────────────────────────────
 
     public uint RegisterSystem(LunarSchedule schedule, ISystem system) =>
