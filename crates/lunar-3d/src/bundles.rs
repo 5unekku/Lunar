@@ -23,6 +23,7 @@
 //! ```
 
 use bevy_ecs::bundle::Bundle;
+use lunar_math::Vec3;
 
 use crate::camera::Camera3d;
 use crate::light::{DirectionalLight, PointLight, SpotLight};
@@ -58,6 +59,23 @@ impl Default for Camera3dBundle {
 	}
 }
 
+impl Camera3dBundle {
+	/// spawn a perspective camera at `position`.
+	///
+	/// `fov_y` is the vertical field of view in radians.
+	/// uses sane defaults for all other fields.
+	pub fn perspective(position: Vec3, fov_y: f32, near: f32, far: f32) -> Self {
+		Self {
+			local: LocalTransform3d::from_xyz(position.x, position.y, position.z),
+			camera: Camera3d {
+				projection: crate::Projection::Perspective { fov_y, near, far },
+				..Camera3d::default()
+			},
+			..Self::default()
+		}
+	}
+}
+
 /// bundle for a static (non-animated) mesh entity.
 ///
 /// `mesh` and `material` must be set — there is no sensible default handle.
@@ -84,6 +102,24 @@ impl Default for Mesh3dBundle {
 			visibility: Visibility::Inherited,
 			computed: ComputedVisibility::default(),
 			render_layers: RenderLayers::DEFAULT,
+		}
+	}
+}
+
+impl Mesh3dBundle {
+	/// spawn a static mesh at `position`.
+	///
+	/// uses [`Visibility::Inherited`] and [`RenderLayers::DEFAULT`].
+	pub fn at(
+		position: Vec3,
+		mesh: lunar_assets::Handle<super::mesh::MeshData>,
+		material: lunar_assets::Handle<super::material::MaterialData>,
+	) -> Self {
+		Self {
+			local: LocalTransform3d::from_xyz(position.x, position.y, position.z),
+			mesh: Mesh3d(mesh),
+			material: Material3d(material),
+			..Self::default()
 		}
 	}
 }

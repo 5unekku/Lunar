@@ -93,3 +93,15 @@ impl Default for Sky {
 		}
 	}
 }
+
+impl Sky {
+	/// create a flat-color sky with a visible sun disc. other fields take defaults.
+	pub fn solid(sky_color: Color, sun_color: Color) -> Self {
+		Self { sky_color, sun_color, show_sun: true, ..Self::default() }
+	}
+
+	/// create a flat-color sky with the sun disc hidden. useful for overcast setups.
+	pub fn overcast(sky_color: Color) -> Self {
+		Self { sky_color, show_sun: false, ..Self::default() }
+	}
+}

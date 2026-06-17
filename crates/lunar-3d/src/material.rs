@@ -92,6 +92,13 @@ impl Default for MaterialData {
 	}
 }
 
+impl MaterialData {
+	/// flat-color material with the given shading model. all other fields default.
+	pub fn color(base_color: Color, shading: ShadingModel) -> Self {
+		Self { base_color, shading, ..Self::default() }
+	}
+}
+
 impl Asset for MaterialData {}
 
 /// component that references the material used to render this entity's mesh.

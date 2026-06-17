@@ -568,6 +568,27 @@ impl QualitySettings {
 		Self::from_tier(RenderTier::High)
 	}
 
+	/// set the MSAA sample count (1 = off, 4 = 4×). returns `self` for chaining.
+	#[must_use]
+	pub fn with_msaa(mut self, samples: u32) -> Self {
+		self.msaa_samples = samples;
+		self
+	}
+
+	/// enable or disable selective temporal AA. returns `self` for chaining.
+	#[must_use]
+	pub fn with_staa(mut self, enabled: bool) -> Self {
+		self.staa = enabled;
+		self
+	}
+
+	/// set the render scale (1.0 = native). returns `self` for chaining.
+	#[must_use]
+	pub fn with_render_scale(mut self, scale: f32) -> Self {
+		self.render_scale = scale;
+		self
+	}
+
 	/// build settings for a given tier, overriding the preset.
 	/// useful for adaptive quality stepping: tier determines hardware capabilities,
 	/// preset determines feature toggles within that capability.
