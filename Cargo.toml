@@ -76,6 +76,14 @@ path = "examples/platform_demo/main.rs"
 name = "shooter_example"
 path = "examples/shooter_example/main.rs"
 
+[[example]]
+name = "platform_demo_cs"
+path = "examples/platform_demo_cs/main.rs"
+
+[dev-dependencies]
+lunar-ffi           = { path = "bindings/c" }
+lunar-plugin-loader = { path = "crates/lunar-plugin-loader" }
+
 [dependencies]
 # `lunar` is the only dependency a real game needs. enable optional modules
 # via feature flags.

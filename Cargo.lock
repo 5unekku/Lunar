@@ -2205,6 +2205,7 @@ dependencies = [
  "log",
  "lunar-3d",
  "lunar-core",
+ "lunar-input",
  "lunar-math",
 ]
 
@@ -2216,6 +2217,8 @@ dependencies = [
  "console_error_panic_hook",
  "log",
  "lunar-engine",
+ "lunar-ffi",
+ "lunar-plugin-loader",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
