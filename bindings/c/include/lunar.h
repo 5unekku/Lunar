@@ -77,4 +77,7 @@ typedef void (*LunarSystemFn)(struct LunarWorld*, void*);
 
 #define LUNAR_INVALID_SYSTEM_ID UINT32_MAX
 
+// sentinel meaning "no camera set" for [`lunar_get_main_camera`].
+#define LUNAR_NULL_ENTITY UINT32_MAX
+
 #endif  /* LUNAR_H */

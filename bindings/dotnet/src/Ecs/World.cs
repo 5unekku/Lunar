@@ -14,7 +14,7 @@ public unsafe ref struct World
 {
     readonly LunarWorld* _handle;
 
-    internal World(LunarWorld* handle) => _handle = handle;
+    public World(LunarWorld* handle) => _handle = handle;
 
     // ── entities ──────────────────────────────────────────────────────────────
 
@@ -29,6 +29,13 @@ public unsafe ref struct World
 
     // ── component registration ────────────────────────────────────────────────
 
+    // { byte; T } in Sequential layout: sizeof = alignment(T) + sizeof(T)
+    // so alignment(T) = sizeof(helper) - sizeof(T)
+    [StructLayout(LayoutKind.Sequential)]
+    private struct AlignHelper<T> where T : unmanaged { private byte _b; private T _v; }
+    private static nuint AlignOf<T>() where T : unmanaged =>
+        (nuint)(sizeof(AlignHelper<T>) - sizeof(T));
+
     public ComponentId RegisterComponent<T>(ReadOnlySpan<byte> name) where T : unmanaged
     {
         fixed (byte* namePtr = name)
@@ -36,7 +43,7 @@ public unsafe ref struct World
             var id = LunarNative.LunarComponentRegister(
                 _handle, namePtr,
                 (nuint)sizeof(T),
-                (nuint)Unsafe.AlignOf<T>());
+                AlignOf<T>());
             return new ComponentId(id);
         }
     }

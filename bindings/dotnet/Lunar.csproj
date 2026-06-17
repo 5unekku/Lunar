@@ -4,11 +4,9 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <PublishAot>true</PublishAot>
+    <!-- game plugins reference this as a class library and publish it via their own NativeAOT step -->
     <IsAotCompatible>true</IsAotCompatible>
-    <!-- scripts are compiled to a native shared library loaded by the engine -->
     <OutputType>Library</OutputType>
-    <AssemblyName>lunar_scripts</AssemblyName>
     <RootNamespace>Lunar</RootNamespace>
   </PropertyGroup>
 </Project>

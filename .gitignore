@@ -1,6 +1,11 @@
 # rust
 **/target/
 
+# dotnet build artifacts
+**/bin/
+**/obj/
+**/publish/
+
 # cross-compiled output
 /dist/
 **/*.rs.bk

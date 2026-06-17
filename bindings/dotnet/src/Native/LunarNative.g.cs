@@ -106,9 +106,12 @@ internal static unsafe partial class LunarNative
     internal static partial uint LunarGetMainCamera(LunarWorld* world);
 }
 
-/// <summary>opaque engine world — only valid during a system callback.</summary>
+/// <summary>
+/// opaque engine world handle. only valid during a system callback.
+/// don't construct or dereference this type — pass it straight to <see cref="World"/>.
+/// </summary>
 [StructLayout(LayoutKind.Sequential)]
-internal struct LunarWorld { }
+public struct LunarWorld { }
 
 /// <summary>portable 3D transform: 40 bytes, 4-byte aligned.</summary>
 [StructLayout(LayoutKind.Sequential)]
