@@ -26,6 +26,7 @@
 //! ```
 
 use std::{
+    io,
     path::{Path, PathBuf},
     sync::{Mutex, mpsc},
     time::SystemTime,
@@ -37,11 +38,12 @@ use lunar_core::{App, GamePlugin};
 
 // ── PluginLoader ──────────────────────────────────────────────────────────────
 
-/// error returned by [`PluginLoader::load`].
+/// error returned by [`PluginLoader::load`] and [`PluginLoader::reload`].
 #[derive(Debug)]
 pub enum LoadError {
     DlOpen(libloading::Error),
     MissingSymbol(libloading::Error),
+    Copy(io::Error),
 }
 
 impl std::fmt::Display for LoadError {
@@ -49,6 +51,7 @@ impl std::fmt::Display for LoadError {
         match self {
             Self::DlOpen(error) => write!(formatter, "failed to open library: {error}"),
             Self::MissingSymbol(error) => write!(formatter, "lunar_plugin_init not found: {error}"),
+            Self::Copy(error) => write!(formatter, "failed to copy plugin for reload: {error}"),
         }
     }
 }
@@ -95,19 +98,23 @@ impl PluginLoader {
         Ok(())
     }
 
-    /// unload the current plugin and load a new one, preserving ECS state.
+    /// reload a new version of the plugin, preserving ECS world state.
     ///
-    /// clears update/fixedupdate/shutdown systems before dropping the old code,
-    /// sets the `is_reload` flag so C# `Init` can skip one-time scene setup,
-    /// then calls `lunar_plugin_init` on the new library to re-register systems.
+    /// clears update/fixedupdate/shutdown systems, then loads the new library
+    /// and calls `lunar_plugin_init` to re-register systems.
+    ///
+    /// old libraries are intentionally kept alive rather than dlclosed: NativeAOT
+    /// embeds a GC + signal handler per .so that cannot safely be torn down
+    /// mid-process. each reload gets a versioned copy of the file so dlopen
+    /// treats it as a distinct shared object with its own runtime instance.
     pub fn reload(&mut self, world: &mut World, path: &Path) -> Result<(), LoadError> {
-        log::info!("hot reload: unloading old plugin");
+        log::info!("hot reload: loading version {}", self.libs.len());
         lunar_ffi::clear_schedule(world, LunarSchedule::Update);
         lunar_ffi::clear_schedule(world, LunarSchedule::FixedUpdate);
         lunar_ffi::clear_schedule(world, LunarSchedule::Shutdown);
-        self.libs.clear();
+        let versioned = versioned_plugin_copy(path, self.libs.len())?;
         lunar_ffi::set_is_reload(world, true);
-        let result = self.load(world, path);
+        let result = self.load(world, &versioned);
         lunar_ffi::set_is_reload(world, false);
         if result.is_ok() {
             log::info!("hot reload: done");
@@ -124,6 +131,20 @@ pub struct ReloadReceiver(pub Mutex<mpsc::Receiver<PathBuf>>);
 
 fn mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+}
+
+/// copy `src` to a per-version temp path so each reload is a distinct .so file.
+///
+/// linux dlopen returns the same handle for the same path; a distinct path forces
+/// a fresh mapping and a separate NativeAOT runtime instance.
+fn versioned_plugin_copy(src: &Path, version: usize) -> Result<PathBuf, LoadError> {
+    let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("plugin");
+    let ext  = src.extension().and_then(|s| s.to_str()).unwrap_or("so");
+    let dir  = std::env::temp_dir().join("lunar_cs_hot");
+    std::fs::create_dir_all(&dir).map_err(LoadError::Copy)?;
+    let dest = dir.join(format!("{stem}_v{version}.{ext}"));
+    std::fs::copy(src, &dest).map_err(LoadError::Copy)?;
+    Ok(dest)
 }
 
 fn watch_for_changes(path: PathBuf, sender: mpsc::Sender<PathBuf>) {
@@ -202,9 +223,18 @@ fn dispatch_ffi_update(world: &mut World) {
 }
 
 fn dispatch_ffi_update_hot(world: &mut World) {
+    // drain all queued paths and use the last one — guards against double-trigger
+    // when dotnet publish touches the .so more than once during a single write
     let pending = world
         .get_resource::<ReloadReceiver>()
-        .and_then(|receiver| receiver.0.lock().ok()?.try_recv().ok());
+        .and_then(|receiver| {
+            let guard = receiver.0.lock().ok()?;
+            let mut latest = None;
+            while let Ok(path) = guard.try_recv() {
+                latest = Some(path);
+            }
+            latest
+        });
 
     if let Some(new_path) = pending {
         world.resource_scope(|world, mut loader: bevy_ecs::world::Mut<PluginLoader>| {
