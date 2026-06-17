@@ -7,7 +7,8 @@ description = "dlopen-based plugin loader for lunar-engine — calls lunar_plugi
 publish = false
 
 [dependencies]
-lunar-ffi = { path = "../../bindings/c" }
-bevy_ecs  = { workspace = true }
-log       = { workspace = true }
+lunar-ffi  = { path = "../../bindings/c" }
+lunar-core = { path = "../lunar-core" }
+bevy_ecs   = { workspace = true }
+log        = { workspace = true }
 libloading = { workspace = true }
