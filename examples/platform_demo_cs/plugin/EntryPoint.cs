@@ -1,15 +1,8 @@
 using Lunar;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 
 namespace PlatformDemoCs;
 
-static class EntryPoint
-{
-    [UnmanagedCallersOnly(EntryPoint = "lunar_plugin_init", CallConvs = [typeof(CallConvCdecl)])]
-    public static unsafe void Init(void* world) => Plugin.Run(world, new GamePlugin());
-}
-
+[LunarPlugin]
 class GamePlugin : IPlugin
 {
     static readonly Color GrassColor = new(0.22f, 0.52f, 0.09f);
@@ -30,8 +23,8 @@ class GamePlugin : IPlugin
         var grassMat  = world.CreateMaterial(GrassColor, ShadingModel.Unlit);
         world.SpawnMesh(floorMesh, grassMat, 0.0f, 0.0f, 0.0f);
 
-        float fovY  = FovDegrees * (float)Math.PI / 180.0f;
-        var camera  = world.SpawnCamera(0.0f, EyeHeight, 0.0f, fovY, near: 0.1f, far: 1000.0f);
+        float fovY = FovDegrees * (float)Math.PI / 180.0f;
+        var camera = world.SpawnCamera(0.0f, EyeHeight, 0.0f, fovY, near: 0.1f, far: 1000.0f);
         world.SetActiveCamera(camera);
 
         world.RegisterSystem(LunarSchedule.Update, new FpsController());

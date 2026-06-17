@@ -13,5 +13,8 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../../bindings/dotnet/Lunar.csproj" />
+    <ProjectReference Include="../../../bindings/dotnet-gen/Lunar.SourceGen.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>
