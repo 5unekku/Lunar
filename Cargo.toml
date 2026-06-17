@@ -20,6 +20,7 @@ members = [
 		"crates/lunar-audio",
 		"bindings/c",
 		"crates/lunar-plugin-loader",
+		"xtask",
 		"tests/api_seal",
 	"tools/navmesh-bench",
 ]
