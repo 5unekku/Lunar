@@ -80,11 +80,8 @@ fn build_debug(root: &Path) -> Result<(), String> {
         "-o", plugin_out.to_str().unwrap(),
     ], &plugin_dir)?;
 
-    // 3. Rust binary with coreclr feature
-    cmd("cargo", &[
-        "build", "--example", "platform_demo_cs",
-        "--features", "coreclr",
-    ], root)
+    // 3. Rust binary (coreclr is a default feature, no flag needed)
+    cmd("cargo", &["build", "--example", "platform_demo_cs"], root)
 }
 
 fn build_release(root: &Path) -> Result<(), String> {
@@ -99,8 +96,8 @@ fn build_release(root: &Path) -> Result<(), String> {
         "-o", publish_dir.to_str().unwrap(),
     ], &plugin_dir)?;
 
-    // 2. Rust binary without coreclr feature
-    cmd("cargo", &["build", "--release", "--example", "platform_demo_cs"], root)
+    // 2. Rust binary with NativeAOT path (coreclr is a default feature, opt out for release)
+    cmd("cargo", &["build", "--release", "--no-default-features", "--example", "platform_demo_cs"], root)
 }
 
 /// modular distribution: binary + .so as separate files.
@@ -144,7 +141,7 @@ fn dist_single() -> Result<(), String> {
     println!("» embedding {} into binary", lib_path.display());
     cmd_env(
         "cargo",
-        &["build", "--release", "--example", "platform_demo_cs"],
+        &["build", "--release", "--no-default-features", "--example", "platform_demo_cs"],
         &root,
         &[("LUNAR_CS_PLUGIN_PATH", lib_path.to_str().unwrap())],
     )?;
@@ -172,7 +169,6 @@ fn run() -> Result<(), String> {
     cmd("cargo", &[
         "run",
         "--example", "platform_demo_cs",
-        "--features", "coreclr",
         "--",
         host_dll.to_str().unwrap(),
         plugin_dll.to_str().unwrap(),

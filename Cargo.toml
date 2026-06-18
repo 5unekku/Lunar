@@ -60,9 +60,10 @@ license.workspace = true
 publish = false
 
 [features]
+default = ["coreclr"]
 debug   = ["bevy_ecs/debug"]
-# use CoreCLR hosting instead of NativeAOT dlopen — enables proper hot reload.
-# set automatically by `cargo xtask run/build`; propagates to lunar-plugin-loader.
+# CoreCLR hosting for proper hot reload; default for dev. release builds
+# disable it via --no-default-features and use NativeAOT instead.
 coreclr = ["lunar-plugin-loader/coreclr"]
 
 [[bin]]
