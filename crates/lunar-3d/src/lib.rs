@@ -34,6 +34,7 @@
 
 pub mod animation;
 pub mod bundles;
+pub mod scene_format_3d;
 pub mod collision;
 pub mod decals;
 pub mod fog;

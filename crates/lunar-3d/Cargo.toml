@@ -16,6 +16,9 @@ lunar-math = { path = "../lunar-math", version = "1.0.0" }
 lunar-assets = { path = "../lunar-assets", version = "1.0.0" }
 bevy_ecs = { workspace = true }
 log = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+ron = "0.12"
+bincode = "1"
 
 # native-only: parallel cull-SoA build (wasm falls back to the sequential path)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
