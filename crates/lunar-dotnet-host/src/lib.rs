@@ -181,13 +181,17 @@ impl DotnetRuntime {
         let type_name = CString::new(type_name).map_err(|_| HostError::NulPath)?;
         let method    = CString::new(method_name).map_err(|_| HostError::NulPath)?;
 
+        // UNMANAGEDCALLERSONLY_METHOD sentinel: (const char_t*)-1
+        // passing null would mean "use a managed delegate type", which is wrong here
+        const UNMANAGEDCALLERSONLY_METHOD: *const c_char = usize::MAX as *const c_char;
+
         let mut fp: *const c_void = std::ptr::null();
         let rc = unsafe {
             (self.get_fn_ptr)(
                 assembly.as_ptr(),
                 type_name.as_ptr(),
                 method.as_ptr(),
-                std::ptr::null(), // null = [UnmanagedCallersOnly] default
+                UNMANAGEDCALLERSONLY_METHOD,
                 std::ptr::null(),
                 &mut fp,
             )

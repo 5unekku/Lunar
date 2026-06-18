@@ -7,6 +7,8 @@
     <OutputType>Library</OutputType>
     <AssemblyName>LunarHost</AssemblyName>
     <RootNamespace>LunarHost</RootNamespace>
+    <!-- hostfxr requires a runtimeconfig.json even for library projects -->
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
     <!-- no NativeAOT — this assembly is always loaded as managed code via hostfxr -->
   </PropertyGroup>
 </Project>
