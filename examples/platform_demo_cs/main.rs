@@ -14,33 +14,48 @@ impl GamePlugin for PlatformDemoCs {
     fn name(&self) -> &str { "platform-demo-cs" }
 
     fn build(&mut self, app: &mut App) {
-        app.add_plugin(CsPlugin::new(plugin_path()).with_hot_reload());
+        let plugin = build_cs_plugin();
+        app.add_plugin(plugin);
     }
 }
 
-/// returns the path to the C# plugin .so.
-///
-/// in single-binary mode (LUNAR_EMBEDDED=1), the .so is embedded as bytes and
-/// extracted to a temp directory on first run. otherwise the first CLI argument
-/// (or the default `./lunar_scripts.so`) is used.
-#[cfg(lunar_embed_plugin)]
-fn plugin_path() -> PathBuf {
-    static BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/embedded_plugin.bin"));
-    let dir = std::env::temp_dir().join("lunar_cs_plugin");
-    std::fs::create_dir_all(&dir).expect("failed to create temp dir");
-    let path = dir.join(plugin_lib_name());
-    std::fs::write(&path, BYTES).expect("failed to extract embedded C# plugin");
-    path
+/// coreclr mode: xtask passes <host_dll_path> <plugin_dll_path> as CLI args.
+#[cfg(feature = "coreclr")]
+fn build_cs_plugin() -> CsPlugin {
+    let host_dll   = std::env::args().nth(1).map(PathBuf::from)
+        .expect("coreclr mode requires: <LunarHost.dll path> <plugin.dll path>");
+    let plugin_dll = std::env::args().nth(2).map(PathBuf::from)
+        .expect("coreclr mode requires: <LunarHost.dll path> <plugin.dll path>");
+    CsPlugin::new(plugin_dll).with_host_dll(host_dll).with_hot_reload()
 }
 
-#[cfg(not(lunar_embed_plugin))]
-fn plugin_path() -> PathBuf {
-    std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(plugin_lib_name()))
+/// nativeaot mode: first CLI arg (or default `.so`) is the compiled plugin.
+#[cfg(not(feature = "coreclr"))]
+fn build_cs_plugin() -> CsPlugin {
+    CsPlugin::new(plugin_path()).with_hot_reload()
 }
 
+#[cfg(not(feature = "coreclr"))]
+fn plugin_path() -> PathBuf {
+    #[cfg(lunar_embed_plugin)]
+    {
+        static BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/embedded_plugin.bin"));
+        let dir = std::env::temp_dir().join("lunar_cs_plugin");
+        std::fs::create_dir_all(&dir).expect("failed to create temp dir");
+        let path = dir.join(plugin_lib_name());
+        std::fs::write(&path, BYTES).expect("failed to extract embedded C# plugin");
+        path
+    }
+    #[cfg(not(lunar_embed_plugin))]
+    {
+        std::env::args()
+            .nth(1)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(plugin_lib_name()))
+    }
+}
+
+#[cfg(not(feature = "coreclr"))]
 fn plugin_lib_name() -> &'static str {
     match std::env::consts::OS {
         "windows" => "lunar_scripts.dll",

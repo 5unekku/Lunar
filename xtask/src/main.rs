@@ -4,7 +4,10 @@
 //!   cargo xtask build [--release]            build C# plugin + Rust binary
 //!   cargo xtask dist --modular               release build, separate binary + .so → dist/
 //!   cargo xtask dist --single                release build, .so embedded in binary → dist/
-//!   cargo xtask run                          debug build, then run platform_demo_cs
+//!   cargo xtask run                          debug build (CoreCLR), then run platform_demo_cs
+//!
+//! debug builds use the CoreCLR hosting path (dotnet build → .dll, no NativeAOT).
+//! release / dist builds use NativeAOT (dotnet publish -p:PublishAot=true → .so).
 
 use std::{
     path::{Path, PathBuf},
@@ -21,9 +24,9 @@ fn main() -> ExitCode {
         }
     };
     let rest: Vec<String> = args.collect();
-    let release  = rest.iter().any(|a| a == "--release");
-    let single   = rest.iter().any(|a| a == "--single");
-    let modular  = rest.iter().any(|a| a == "--modular");
+    let release = rest.iter().any(|a| a == "--release");
+    let single  = rest.iter().any(|a| a == "--single");
+    let modular = rest.iter().any(|a| a == "--modular");
 
     let result = match task.as_str() {
         "build" => build(release),
@@ -32,8 +35,7 @@ fn main() -> ExitCode {
                 eprintln!("error: --single and --modular are mutually exclusive");
                 return ExitCode::FAILURE;
             }
-            if single  { dist_single() }
-            else       { dist_modular() }  // --modular is the default
+            if single { dist_single() } else { dist_modular() }
         }
         "run"   => run(),
         other   => {
@@ -50,34 +52,64 @@ fn main() -> ExitCode {
 
 // ── tasks ─────────────────────────────────────────────────────────────────────
 
+/// debug build: CoreCLR path. dotnet build → .dll, Rust with coreclr feature.
 fn build(release: bool) -> Result<(), String> {
     let root = workspace_root();
-    let profile = if release { "Release" } else { "Debug" };
 
-    // 1. C# plugin
+    if release {
+        build_release(&root)
+    } else {
+        build_debug(&root)
+    }
+}
+
+fn build_debug(root: &Path) -> Result<(), String> {
+    // 1. LunarHost bootstrapper (always managed, never NativeAOT)
+    let host_dir     = root.join("bindings/dotnet-host");
+    let host_out_dir = host_dir.join("publish");
+    cmd("dotnet", &[
+        "publish", "-c", "Debug",
+        "-o", host_out_dir.to_str().unwrap(),
+    ], &host_dir)?;
+
+    // 2. game plugin as managed .dll (no NativeAOT)
+    let plugin_dir  = root.join("examples/platform_demo_cs/plugin");
+    let plugin_out  = plugin_dir.join("publish");
+    cmd("dotnet", &[
+        "publish", "-c", "Debug",
+        "-o", plugin_out.to_str().unwrap(),
+    ], &plugin_dir)?;
+
+    // 3. Rust binary with coreclr feature
+    cmd("cargo", &[
+        "build", "--example", "platform_demo_cs",
+        "--features", "coreclr",
+    ], root)
+}
+
+fn build_release(root: &Path) -> Result<(), String> {
+    // 1. game plugin as NativeAOT .so (no bootstrapper needed)
     let plugin_dir  = root.join("examples/platform_demo_cs/plugin");
     let publish_dir = plugin_dir.join("publish");
     cmd("dotnet", &[
         "publish",
         "-r", dotnet_rid(),
-        "-c", profile,
+        "-c", "Release",
+        "-p:PublishAot=true",
         "-o", publish_dir.to_str().unwrap(),
     ], &plugin_dir)?;
 
-    // 2. Rust example
-    let mut rust_args = vec!["build", "--example", "platform_demo_cs"];
-    if release { rust_args.push("--release"); }
-    cmd("cargo", &rust_args, &root)
+    // 2. Rust binary without coreclr feature
+    cmd("cargo", &["build", "--release", "--example", "platform_demo_cs"], root)
 }
 
-/// modular profile: binary + .so as separate files.
-/// smallest patch unit: a renderer fix ships as a new binary, a script fix as a new .so.
+/// modular distribution: binary + .so as separate files.
 fn dist_modular() -> Result<(), String> {
     let root     = workspace_root();
     let dist_dir = root.join("dist/modular");
     std::fs::create_dir_all(&dist_dir).map_err(|e| e.to_string())?;
 
-    build(true)?;
+    build_release(&root)?;
 
     let bin_name = binary_name();
     let lib_name = plugin_lib_name();
@@ -92,25 +124,23 @@ fn dist_modular() -> Result<(), String> {
     Ok(())
 }
 
-/// single profile: .so bytes embedded in the binary — one file to ship.
+/// single-file distribution: .so bytes embedded in the binary.
 fn dist_single() -> Result<(), String> {
     let root     = workspace_root();
     let dist_dir = root.join("dist/single");
     std::fs::create_dir_all(&dist_dir).map_err(|e| e.to_string())?;
 
-    // build C# first so we can embed the .so
     let plugin_dir  = root.join("examples/platform_demo_cs/plugin");
     let publish_dir = plugin_dir.join("publish");
     cmd("dotnet", &[
         "publish",
         "-r", dotnet_rid(),
         "-c", "Release",
+        "-p:PublishAot=true",
         "-o", publish_dir.to_str().unwrap(),
     ], &plugin_dir)?;
 
     let lib_path = publish_dir.join(plugin_lib_name());
-
-    // build Rust with the plugin path set so build.rs embeds it
     println!("» embedding {} into binary", lib_path.display());
     cmd_env(
         "cargo",
@@ -128,19 +158,24 @@ fn dist_single() -> Result<(), String> {
     Ok(())
 }
 
+/// debug run: build via coreclr path, then launch with host dll + plugin dll paths.
 fn run() -> Result<(), String> {
-    let root       = workspace_root();
-    let plugin_lib = root
-        .join("examples/platform_demo_cs/plugin/publish")
-        .join(plugin_lib_name());
+    let root = workspace_root();
 
-    build(false)?;
+    build_debug(&root)?;
+
+    let host_dll   = root.join("bindings/dotnet-host/publish/LunarHost.dll");
+    let plugin_dll = root
+        .join("examples/platform_demo_cs/plugin/publish")
+        .join(plugin_dll_name());
 
     cmd("cargo", &[
         "run",
         "--example", "platform_demo_cs",
+        "--features", "coreclr",
         "--",
-        plugin_lib.to_str().unwrap(),
+        host_dll.to_str().unwrap(),
+        plugin_dll.to_str().unwrap(),
     ], &root)
 }
 
@@ -175,6 +210,10 @@ fn plugin_lib_name() -> &'static str {
         "macos"   => "lunar_scripts.dylib",
         _         => "lunar_scripts.so",
     }
+}
+
+fn plugin_dll_name() -> &'static str {
+    "lunar_scripts.dll"
 }
 
 fn cmd(program: &str, args: &[&str], dir: &Path) -> Result<(), String> {

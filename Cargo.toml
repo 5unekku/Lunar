@@ -20,6 +20,7 @@ members = [
 		"crates/lunar-audio",
 		"bindings/c",
 		"crates/lunar-plugin-loader",
+	"crates/lunar-dotnet-host",
 		"xtask",
 		"tests/api_seal",
 	"tools/navmesh-bench",
@@ -59,7 +60,10 @@ license.workspace = true
 publish = false
 
 [features]
-debug = ["bevy_ecs/debug"]
+debug   = ["bevy_ecs/debug"]
+# use CoreCLR hosting instead of NativeAOT dlopen — enables proper hot reload.
+# set automatically by `cargo xtask run/build`; propagates to lunar-plugin-loader.
+coreclr = ["lunar-plugin-loader/coreclr"]
 
 [[bin]]
 name = "lunar"
@@ -110,15 +114,20 @@ codegen-units = 1        # single codegen unit: best optimisation, slowest compi
 panic         = "abort"  # no unwind tables: smaller binary, no overhead
 strip         = "symbols"  # strip debug symbols, keep minimal export table
 
-# faster debug iteration: optimise dependencies (wgpu, bevy_ecs, zstd) at -O3 while
-# keeping our own crates unoptimised and fully debuggable. big win for dev builds of
-# a gpu-heavy engine, with no cost to debugging lunar's own code.
-[profile.dev.package."*"]
-opt-level = 3
+# faster debug iteration: cranelift skips LLVM's expensive passes for workspace
+# crates so incremental rebuilds are near-instant. external deps keep LLVM at -O3
+# so the hot path (wgpu, bevy_ecs, zstd) still runs fast at dev time.
+[profile.dev]
+codegen-backend = "cranelift"
 
-# cubeb-sys must stay at the profile default: at opt-level 3 the cmake crate flips
-# libcubeb to RelWithDebInfo, whose nested `cargo build --release` drops
-# libcubeb_pulse.a in release/ while cubeb-sys's build.rs (PROFILE=debug) searches
-# debug/ — dev builds then fail to link on any machine with libpulse installed.
+[profile.dev.package."*"]
+opt-level       = 3
+codegen-backend = "llvm"
+
+# cubeb-sys must stay at opt-level 0: at -O3 the cmake crate flips libcubeb to
+# RelWithDebInfo, whose nested `cargo build --release` drops libcubeb_pulse.a in
+# release/ while cubeb-sys's build.rs (PROFILE=debug) searches debug/ — dev builds
+# then fail to link on any machine with libpulse installed.
 [profile.dev.package.cubeb-sys]
-opt-level = 0
+opt-level       = 0
+codegen-backend = "llvm"

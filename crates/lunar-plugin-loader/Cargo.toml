@@ -6,9 +6,15 @@ license.workspace = true
 description = "dlopen-based plugin loader for lunar-engine — calls lunar_plugin_init and dispatches external systems"
 publish = false
 
+[features]
+# use CoreCLR (via hostfxr) instead of NativeAOT dlopen — enables proper hot reload
+# through AssemblyLoadContext. enabled automatically by `cargo xtask run/build`.
+coreclr = ["dep:lunar-dotnet-host"]
+
 [dependencies]
-lunar-ffi  = { path = "../../bindings/c" }
-lunar-core = { path = "../lunar-core" }
-bevy_ecs   = { workspace = true }
-log        = { workspace = true }
-libloading = { workspace = true }
+lunar-ffi         = { path = "../../bindings/c" }
+lunar-core        = { path = "../lunar-core" }
+bevy_ecs          = { workspace = true }
+log               = { workspace = true }
+libloading        = { workspace = true }
+lunar-dotnet-host = { path = "../lunar-dotnet-host", optional = true }

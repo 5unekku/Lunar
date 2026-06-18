@@ -58,11 +58,18 @@ public sealed class LunarPluginGenerator : IIncrementalGenerator
         source.AppendLine("using System.Runtime.InteropServices;");
         source.AppendLine("using Lunar;");
         source.AppendLine();
-        source.AppendLine($"// entry point generated from [LunarPlugin] on {qualifiedName}");
+        source.AppendLine($"// NativeAOT path: called by Rust via dlopen + lunar_plugin_init symbol");
         source.AppendLine("file static class LunarGeneratedEntryPoint");
         source.AppendLine("{");
         source.AppendLine("    [UnmanagedCallersOnly(EntryPoint = \"lunar_plugin_init\", CallConvs = [typeof(CallConvCdecl)])]");
         source.AppendLine($"    public static unsafe void Init(void* world) => Plugin.Run(world, new {qualifiedName}());");
+        source.AppendLine("}");
+        source.AppendLine();
+        source.AppendLine("// CoreCLR path: called by LunarHost bootstrapper via reflection");
+        source.AppendLine("// internal so it's visible to reflection from any assembly");
+        source.AppendLine("internal static class LunarGeneratedHost");
+        source.AppendLine("{");
+        source.AppendLine($"    public static unsafe void ManagedInit(nint worldPtr) => Plugin.Run((void*)worldPtr, new {qualifiedName}());");
         source.AppendLine("}");
 
         ctx.AddSource("LunarPlugin.g.cs", source.ToString());

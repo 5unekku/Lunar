@@ -2164,6 +2164,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunar-dotnet-host"
+version = "1.0.0"
+dependencies = [
+ "libloading",
+ "log",
+]
+
+[[package]]
 name = "lunar-engine"
 version = "1.0.0"
 dependencies = [
@@ -2312,6 +2320,7 @@ dependencies = [
  "libloading",
  "log",
  "lunar-core",
+ "lunar-dotnet-host",
  "lunar-ffi",
 ]
 

@@ -4,12 +4,14 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <PublishAot>true</PublishAot>
+    <!-- PublishAot is set by xtask dist (release only); debug builds stay as managed .dll -->
     <IsAotCompatible>true</IsAotCompatible>
     <OutputType>Library</OutputType>
     <!-- output name must match what the Rust host passes to PluginLoader::load -->
     <AssemblyName>lunar_scripts</AssemblyName>
     <RootNamespace>PlatformDemoCs</RootNamespace>
+    <!-- write generated source to disk so it's inspectable and hot-reload works cleanly -->
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../../bindings/dotnet/Lunar.csproj" />
