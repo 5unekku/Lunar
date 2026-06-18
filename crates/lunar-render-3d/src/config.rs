@@ -1167,4 +1167,70 @@ impl RenderEngine3d {
 	pub fn clear_shadow_provider(&mut self) {
 		self.shadow_hook = None;
 	}
+
+	/// read the latest rendered frame from the headless target as raw bytes.
+	///
+	/// returns `(bytes, width, height)` where bytes are in bgra8 order
+	/// (matching the headless target format). returns `None` when not in headless mode.
+	///
+	/// blocks the calling thread until the gpu copy completes — only suitable for
+	/// editor/test use, not game-loop hot paths.
+	#[cfg(not(target_arch = "wasm32"))]
+	pub fn read_headless_rgba(&self) -> Option<(Vec<u8>, u32, u32)> {
+		let (texture, _view) = self.headless_target.as_ref()?;
+		let width = self.surface_config.width;
+		let height = self.surface_config.height;
+
+		let bytes_per_pixel = 4u32;
+		let unpadded_bytes_per_row = width * bytes_per_pixel;
+		let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+		let padded_bytes_per_row = (unpadded_bytes_per_row + align - 1) / align * align;
+		let staging_size = u64::from(padded_bytes_per_row) * u64::from(height);
+
+		let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("headless readback staging"),
+			size: staging_size,
+			usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+			mapped_at_creation: false,
+		});
+
+		let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+			label: Some("headless readback"),
+		});
+		encoder.copy_texture_to_buffer(
+			texture.as_image_copy(),
+			wgpu::TexelCopyBufferInfo {
+				buffer: &staging,
+				layout: wgpu::TexelCopyBufferLayout {
+					offset: 0,
+					bytes_per_row: Some(padded_bytes_per_row),
+					rows_per_image: Some(height),
+				},
+			},
+			wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+		);
+		self.queue.submit([encoder.finish()]);
+
+		// block until copy completes, then map and read
+		self.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+
+		let (sender, receiver) = std::sync::mpsc::channel();
+		staging.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+			let _ = sender.send(result);
+		});
+		self.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+		receiver.recv().ok()?.ok()?;
+
+		let mapped = staging.slice(..).get_mapped_range();
+		// de-pad rows: copy only the actual pixels, skip the row-alignment padding
+		let mut out = Vec::with_capacity((width * height * bytes_per_pixel) as usize);
+		for row in 0..height as usize {
+			let row_start = row * padded_bytes_per_row as usize;
+			let row_end = row_start + unpadded_bytes_per_row as usize;
+			out.extend_from_slice(&mapped[row_start..row_end]);
+		}
+		drop(mapped);
+
+		Some((out, width, height))
+	}
 }
