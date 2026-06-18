@@ -121,6 +121,26 @@ pub struct MaterialDef {
     pub emissive: Option<String>,
 }
 
+impl Default for EntityDefinition3d {
+    fn default() -> Self {
+        Self {
+            id: None,
+            parent: None,
+            position: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0, 0.0),
+            scale: (1.0, 1.0, 1.0),
+            mesh: None,
+            material: None,
+            camera: None,
+            directional_light: None,
+            point_light: None,
+            spot_light: None,
+            sub_scene: None,
+            tags: Vec::new(),
+        }
+    }
+}
+
 impl Default for MaterialDef {
     fn default() -> Self {
         Self {
@@ -230,6 +250,14 @@ impl SceneDefinition3d {
     /// returns an error if serialization fails.
     pub fn to_binary(&self) -> Result<Vec<u8>, String> {
         bincode::serialize(self).map_err(|e| format!("failed to serialize scene3d: {e}"))
+    }
+
+    /// serialize to a RON string.
+    /// # Errors
+    /// returns an error if serialization fails.
+    pub fn to_ron(&self) -> Result<String, String> {
+        ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())
+            .map_err(|e| format!("failed to serialize scene3d to ron: {e}"))
     }
 
     /// deserialize from binary.

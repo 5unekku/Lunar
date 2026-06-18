@@ -2066,12 +2066,15 @@ name = "lunar-3d"
 version = "1.0.0"
 dependencies = [
  "bevy_ecs",
+ "bincode",
  "log",
  "lunar-assets",
  "lunar-core",
  "lunar-math",
  "rayon",
+ "ron",
  "rustc-hash 2.1.2",
+ "serde",
 ]
 
 [[package]]
