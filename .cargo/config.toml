@@ -1,3 +1,7 @@
+[unstable]
+# enables codegen-backend in profile tables (nightly only)
+codegen-backend = true
+
 [alias]
 # Build API docs without embedded source HTML.
 doc-no-source = "doc --workspace --no-deps"
