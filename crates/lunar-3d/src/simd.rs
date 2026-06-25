@@ -2,10 +2,11 @@
 //!
 //! the renderer's mid/low tiers (no GPU compute cull) test every cullable AABB
 //! against the camera frustum on the CPU each frame. [`cull_aabbs_soa`] does that
-//! eight boxes at a time on x86_64 with AVX2+FMA, four at a time on aarch64 with
-//! NEON (baseline, no runtime detection), and falls back to a scalar reference
-//! elsewhere or when AVX2 is absent at runtime. the box data comes from
-//! [`crate::visibility::CullSoa`], whose axes are already laid out as contiguous
+//! eight boxes at a time on x86_64 with AVX2+FMA, four at a time with SSE2 when
+//! AVX2 is absent (SSE2 is the x86_64 baseline so no runtime detection needed),
+//! four at a time on aarch64 with NEON (also baseline, no runtime detection needed),
+//! and falls back to a scalar reference on other architectures. the box data comes
+//! from [`crate::visibility::CullSoa`], whose axes are already laid out as contiguous
 //! `f32` slices so each lane is a straight load.
 //!
 //! the test is conservative and matches [`crate::visibility::Frustum::intersects_aabb`]:
@@ -54,8 +55,8 @@ fn precompute(planes: &[Vec4; 6]) -> [PlanePrecomp; 6] {
 /// is provably outside. the six axis slices must each be at least `out.len()` long;
 /// element `i` of every slice describes the same box.
 ///
-/// dispatches to an AVX2+FMA kernel when the running CPU supports it, else the
-/// scalar reference. both produce the same result.
+/// dispatches to the best available kernel: AVX2+FMA (8-wide) → SSE2 (4-wide) →
+/// NEON (4-wide on aarch64) → scalar. all produce the same result.
 pub fn cull_aabbs_soa(
 	planes: &[Vec4; 6],
 	center_x: &[f32],
@@ -88,8 +89,14 @@ pub fn cull_aabbs_soa(
 			unsafe {
 				cull_avx2(&pre, center_x, center_y, center_z, half_x, half_y, half_z, out);
 			}
-			return;
+		} else {
+			// SAFETY: SSE2 is part of the mandatory x86_64 baseline, so the kernel's
+			// target-feature precondition always holds (no runtime detection needed).
+			unsafe {
+				cull_sse2(&pre, center_x, center_y, center_z, half_x, half_y, half_z, out);
+			}
 		}
+		return;
 	}
 
 	#[cfg(target_arch = "aarch64")]
@@ -100,7 +107,7 @@ pub fn cull_aabbs_soa(
 		return;
 	}
 
-	#[cfg_attr(target_arch = "aarch64", allow(unreachable_code))]
+	#[cfg_attr(any(target_arch = "x86_64", target_arch = "aarch64"), allow(unreachable_code))]
 	cull_scalar_into(&pre, center_x, center_y, center_z, half_x, half_y, half_z, out);
 }
 
@@ -254,6 +261,100 @@ unsafe fn cull_avx2(
 	}
 }
 
+/// SSE2 kernel: four boxes per iteration, scalar tail for the remainder.
+///
+/// used on x86_64 CPUs that lack AVX2. SSE2 is the x86_64 baseline so no runtime
+/// detection is needed. no FMA available at this feature level; plain mul+add is
+/// used instead — a last-ulp difference vs the AVX2 path that cannot affect
+/// conservativeness.
+///
+/// # Safety
+/// caller must ensure the target CPU supports SSE2 (always true on x86_64).
+/// all axis slices must be at least `out.len()` elements.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse2")]
+unsafe fn cull_sse2(
+	pre: &[PlanePrecomp; 6],
+	center_x: &[f32],
+	center_y: &[f32],
+	center_z: &[f32],
+	half_x: &[f32],
+	half_y: &[f32],
+	half_z: &[f32],
+	out: &mut [u8],
+) {
+	use std::arch::x86_64::*;
+
+	// SAFETY: every intrinsic below is gated by the function's sse2 target feature
+	// (SSE1 is implied by SSE2 and always present on x86_64); pointers are read 4
+	// lanes at a time strictly within `lanes <= n`, and each `out` byte is written
+	// exactly once. the scalar tail covers n % 4.
+	unsafe {
+		let n = out.len();
+		let zero = _mm_setzero_ps();
+
+		// broadcast each plane's scalars to all 4 lanes once.
+		let nx: [__m128; 6] = core::array::from_fn(|p| _mm_set1_ps(pre[p].nx));
+		let ny: [__m128; 6] = core::array::from_fn(|p| _mm_set1_ps(pre[p].ny));
+		let nz: [__m128; 6] = core::array::from_fn(|p| _mm_set1_ps(pre[p].nz));
+		let dd: [__m128; 6] = core::array::from_fn(|p| _mm_set1_ps(pre[p].d));
+		let anx: [__m128; 6] = core::array::from_fn(|p| _mm_set1_ps(pre[p].anx));
+		let any: [__m128; 6] = core::array::from_fn(|p| _mm_set1_ps(pre[p].any));
+		let anz: [__m128; 6] = core::array::from_fn(|p| _mm_set1_ps(pre[p].anz));
+
+		let lanes = n - (n % 4);
+		let mut i = 0;
+		while i < lanes {
+			let cxv = _mm_loadu_ps(center_x.as_ptr().add(i));
+			let cyv = _mm_loadu_ps(center_y.as_ptr().add(i));
+			let czv = _mm_loadu_ps(center_z.as_ptr().add(i));
+			let hxv = _mm_loadu_ps(half_x.as_ptr().add(i));
+			let hyv = _mm_loadu_ps(half_y.as_ptr().add(i));
+			let hzv = _mm_loadu_ps(half_z.as_ptr().add(i));
+
+			let mut inside = _mm_setzero_ps();
+			for p in 0..6 {
+				let dot = _mm_add_ps(
+					_mm_add_ps(_mm_mul_ps(nx[p], cxv), _mm_mul_ps(ny[p], cyv)),
+					_mm_mul_ps(nz[p], czv),
+				);
+				let radius = _mm_add_ps(
+					_mm_add_ps(_mm_mul_ps(anx[p], hxv), _mm_mul_ps(any[p], hyv)),
+					_mm_mul_ps(anz[p], hzv),
+				);
+				let test = _mm_add_ps(_mm_add_ps(dot, dd[p]), radius);
+				// all-ones in lanes where test >= 0 (inside-or-touching this plane).
+				let ge = _mm_cmpge_ps(test, zero);
+				if p == 0 {
+					inside = ge;
+				} else {
+					inside = _mm_and_ps(inside, ge);
+				}
+			}
+			// bit j set => lane j passed all planes => visible.
+			let mask = _mm_movemask_ps(inside) as u32;
+			for j in 0..4 {
+				*out.get_unchecked_mut(i + j) = ((mask >> j) & 1) as u8;
+			}
+			i += 4;
+		}
+
+		// scalar tail (n % 4 boxes).
+		while i < n {
+			*out.get_unchecked_mut(i) = cull_one(
+				pre,
+				*center_x.get_unchecked(i),
+				*center_y.get_unchecked(i),
+				*center_z.get_unchecked(i),
+				*half_x.get_unchecked(i),
+				*half_y.get_unchecked(i),
+				*half_z.get_unchecked(i),
+			) as u8;
+			i += 1;
+		}
+	}
+}
+
 /// NEON kernel: four boxes per iteration, scalar tail for the remainder.
 ///
 /// same plane-accumulation structure as [`cull_avx2`]; `vfmaq_f32` keeps the
@@ -365,7 +466,7 @@ mod tests {
 		Frustum::from_view_proj(proj * view)
 	}
 
-	/// the dispatched kernel (AVX2 where available) must equal the scalar reference.
+	/// the dispatched kernel (AVX2, SSE2, or NEON) must equal the scalar reference.
 	#[test]
 	fn simd_matches_scalar_reference() {
 		let frustum = test_frustum();
