@@ -186,6 +186,12 @@ practical risks (expected, not blockers):
   set) rather than 20 individual flags a dev must learn and combine. "not at
   a cost to the developer" means a small game is one switch away, not a
   research project.
+- verify the gated configs, not just the default. feature gates are the
+  classic source of broken non-default builds: every new config (size-min,
+  2d-only, no-coreclr, etc.) must compile AND pass the existing test suite,
+  and the minimal config should be added to the CI matrix so it cannot
+  bitrot. a size win that only builds in one feature combination is not a
+  win.
 - everything riskier (removing a dep outright, algorithmic rewrites from
   part A) stays a recommendation in the report.
 
