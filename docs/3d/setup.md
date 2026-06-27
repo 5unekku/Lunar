@@ -61,7 +61,7 @@ impl GamePlugin for MyGame {
 
 `Plugin3d` must be registered. it adds transform propagation, frustum culling,
 3d collision, and all 3d systems. `RenderPlugin3d` is added automatically by
-`bootstrap_3d` — you don't need to add it manually.
+`bootstrap_3d`, you don't need to add it manually.
 
 ```rust
 impl GamePlugin for MyGame {

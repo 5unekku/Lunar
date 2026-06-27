@@ -1,17 +1,17 @@
-//! `RenderEngine3d` — top-level frame render, dynamic resolution, cascade helpers.
+//! `RenderEngine3d`: top-level frame render, dynamic resolution, cascade helpers.
 //!
 //! split out of `lib.rs`; methods stay on `RenderEngine3d` (one type, many
-//! `impl` blocks across sibling modules — all share the struct's private fields).
+//! `impl` blocks across sibling modules; all share the struct's private fields).
 
 use super::*;
 
 impl RenderEngine3d {
 	// a few loops below index multiple parallel arrays by the same counter, or use a
-	// sentinel final iteration for batch flushing — clearer as indexed loops than as
+	// sentinel final iteration for batch flushing, clearer as indexed loops than as
 	// iterator adapters, so the range-loop/counter lints are intentionally allowed.
 	#[allow(clippy::needless_range_loop, clippy::explicit_counter_loop)]
 	pub(crate) fn render_frame(&mut self, world: &mut World) -> u32 {
-		// ── gather camera — copy immediately so world borrows end here ────
+		// ── gather camera: copy immediately so world borrows end here ────
 		let cam_entity = {
 			let active = world.resource::<ActiveCamera3d>();
 			let Some(e) = active.entity else {
@@ -79,7 +79,7 @@ impl RenderEngine3d {
 			world.resource::<ViewportAspect>().0
 		};
 
-		// unjittered vp — used for taa prev_vp storage and as the shadow/other-pass matrix
+		// unjittered vp: used for taa prev_vp storage and as the shadow/other-pass matrix
 		let view_proj_unjittered = camera.view_proj(cam_wt, aspect);
 
 		// when taa is active, jitter the projection matrix using Halton(2,3) 8-point sequence.
@@ -89,7 +89,7 @@ impl RenderEngine3d {
 		// these samples to achieve effective temporal super-sampling on edge-adjacent pixels.
 		// we jitter EVERY frame (standard TAA): the shader reprojects + un-jitters history, so
 		// there is no motion stutter, and accumulation never resets. (it used to gate on an exact
-		// `prev_vp == vp` stationary check, but that flickered off on the tiniest mouse motion —
+		// `prev_vp == vp` stationary check, but that flickered off on the tiniest mouse motion,
 		// resetting the accumulation before it could converge, which read as permanent softness.)
 
 		// precompute before the jitter decision (full dev_staa is built below with the rest)
@@ -131,7 +131,7 @@ impl RenderEngine3d {
 			// NDC jitter: ≤0.5px in display-resolution screen space.
 			// using display (not render) dimensions means the oscillation stays
 			// sub-pixel at the output regardless of render scale. at render_scale < 1
-			// the render-pixel shift is render_scale * 0.5px — effectively zero at
+			// the render-pixel shift is render_scale * 0.5px, effectively zero at
 			// very low scales, which is correct: no sub-pixel info to accumulate there.
 			let dw = self.surface_config.width as f32;
 			let dh = self.surface_config.height as f32;
@@ -145,7 +145,7 @@ impl RenderEngine3d {
 			let mut jittered_proj = camera.projection.matrix(aspect);
 			jittered_proj.z_axis.x -= jx;
 			jittered_proj.z_axis.y -= jy;
-			// jitter in UV space: NDC/2, with y NEGATED — ndc is y-up but uv is y-down,
+			// jitter in UV space: NDC/2, with y NEGATED; ndc is y-up but uv is y-down,
 			// so +jy in ndc moves the image by -jy/2 in uv. the shader subtracts this
 			// value from uv to un-jitter; a positive y here would double the y jitter
 			// in the velocity estimate instead of cancelling it (≈2px phantom motion on
@@ -199,11 +199,11 @@ impl RenderEngine3d {
 			.as_ref()
 			.map(|d| d.contact_shadows)
 			.unwrap_or(false);
-		// visual style options — lighting model, vertex snap, affine textures.
+		// visual style options: lighting model, vertex snap, affine textures.
 		// neutral by default; every globals slot stays unchanged when not set.
 		let dev_style = dev_profile.as_ref().map(|d| d.style).unwrap_or_default();
 
-		// upscale resources — set_render_scale already ran above, just check active state
+		// upscale resources: set_render_scale already ran above, just check active state
 		self.upscale_active = self.render_scale < 0.999;
 		if self.upscale_active {
 			self.ensure_upscale_resources(
@@ -513,7 +513,7 @@ impl RenderEngine3d {
 			);
 		}
 
-		// ── texture coverage hints (item E — mip streaming) ──────────────
+		// ── texture coverage hints (item E: mip streaming) ──────────────
 		// collect (lm_id, coverage) pairs, then update asset server in one pass.
 		{
 			self.coverage_hints_scratch.clear();
@@ -1074,7 +1074,7 @@ impl RenderEngine3d {
 				.write_buffer(&self.cluster_params_buf, 0, &cp_data);
 
 			// CPU path: every cluster points to the whole light list. that table is
-			// camera- and position-independent, so it only changes when light_count does —
+			// camera- and position-independent, so it only changes when light_count does;
 			// rebuilding+uploading ~432KB every frame is pure waste. gate on the cached count.
 			if !cluster_needs_compute && light_count != self.cpu_cluster_last_count {
 				self.cluster_counts_scratch.clear();
@@ -1183,7 +1183,7 @@ impl RenderEngine3d {
 								depth_or_array_layers: 1,
 							},
 						);
-						// the texture is allocated with its full mip chain — upload
+						// the texture is allocated with its full mip chain; upload
 						// every level, or minified sampling reads unwritten memory
 						for (mip_idx, mip_data) in tex.mips.iter().enumerate() {
 							let mip_w = (tex.width >> (mip_idx + 1)).max(1);
@@ -1384,7 +1384,7 @@ impl RenderEngine3d {
 			match surface.get_current_texture() {
 				wgpu::CurrentSurfaceTexture::Success(f) => Some(f),
 				wgpu::CurrentSurfaceTexture::Suboptimal(f) => {
-					// defer reconfigure until after present — can't configure while frame is alive
+					// defer reconfigure until after present; can't configure while frame is alive
 					reconfigure_after_present = true;
 					Some(f)
 				}
@@ -1435,8 +1435,8 @@ impl RenderEngine3d {
 
 		// ── render graph pass ordering (debug diagnostic only) ────────────
 		// log the topological pass order so the DAG is visibly driving intent.
-		// compile-time gated: in release this whole block — including the sorted_pass_ids
-		// copy — is gone, instead of allocating a Vec every frame that nothing then reads.
+		// compile-time gated: in release this whole block, including the sorted_pass_ids
+		// copy, is gone, instead of allocating a Vec every frame that nothing then reads.
 		#[cfg(debug_assertions)]
 		{
 			let pass_ids: Vec<_> = self.render_graph.sorted_pass_ids().to_vec();
@@ -1567,7 +1567,7 @@ impl RenderEngine3d {
 						usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
 						mapped_at_creation: false,
 					}));
-					// the late-cull bind group binds indirect_buf — rebuild it
+					// the late-cull bind group binds indirect_buf; rebuild it
 					self.late_cull_bg = None;
 				}
 				self.queue.write_buffer(

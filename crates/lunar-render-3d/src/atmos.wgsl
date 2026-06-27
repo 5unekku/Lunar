@@ -1,4 +1,4 @@
-// atmospheric scattering sky — Nishita-style single-scattering Rayleigh + Mie.
+// atmospheric scattering sky: Nishita-style single-scattering Rayleigh + Mie.
 //
 // replaces the flat-color dome on mid+ tier when AtmosphericScattering resource
 // is present. rendered as an additive fullscreen pass over the cleared framebuffer
@@ -7,7 +7,7 @@
 // reference: Nishita et al. 1993 "Display of the Earth taking into account
 // atmospheric scattering"; simplified for real-time per Preetham 1999 and
 // Hillaire 2020 "A Scalable and Production Ready Sky and Atmosphere Rendering
-// Technique" (simplified single-scattering path only — no multi-scatter LUTs).
+// Technique" (simplified single-scattering path only: no multi-scatter LUTs).
 
 struct AtmosParams {
     sun_direction:    vec3<f32>,  // normalised direction towards sun
@@ -67,7 +67,7 @@ fn mie_phase(cos_theta: f32, g: f32) -> f32 {
          / ((2.0 + g2) * pow(1.0 + g2 - 2.0 * g * cos_theta, 1.5));
 }
 
-// ray-sphere intersection — returns (t_near, t_far), negative if no hit
+// ray-sphere intersection: returns (t_near, t_far), negative if no hit
 fn ray_sphere(origin: vec3<f32>, dir: vec3<f32>, radius: f32) -> vec2<f32> {
     let a = dot(dir, dir);
     let b = 2.0 * dot(origin, dir);
@@ -89,7 +89,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     // unit forward axis (projection row 3 is (0,0,-1,0), which negates the view
     // matrix's z row); rows 0/1 are right*sx and up*sy, so dividing by their
     // squared length normalizes AND applies tan(half-fov) = 1/s in one step.
-    // never read fov from a single element like vp[0][0] — that is sx*right.x,
+    // never read fov from a single element like vp[0][0], that is sx*right.x,
     // which varies (and flips sign) with camera yaw
     let ndc = in.uv * 2.0 - 1.0;
     let row_x = vec3<f32>(globals.view_proj[0][0], globals.view_proj[1][0], globals.view_proj[2][0]);
@@ -99,7 +99,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
         + row_x * (ndc.x / dot(row_x, row_x))
         + row_y * (-ndc.y / dot(row_y, row_y)));
 
-    // camera position — offset to planet surface (assume cam is near planet centre)
+    // camera position: offset to planet surface (assume cam is near planet centre)
     let planet_r = atmos.planet_radius;
     let atmos_r  = atmos.atmos_radius;
     // place camera above planet surface
@@ -166,7 +166,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
         mie_sum      * atmos.mie_scatter      * phase_m
     );
 
-    // simple Reinhard tone map — outputs into HDR target (composite will ACES the whole frame)
+    // simple Reinhard tone map: outputs into HDR target (composite will ACES the whole frame)
     let mapped = 1.0 - exp(-color * atmos.exposure);
     return vec4<f32>(mapped, 1.0);
 }

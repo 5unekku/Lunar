@@ -23,7 +23,7 @@ pub type Vec3 = glam::Vec3;
 /// 16-byte aligned 3D vector type alias.
 ///
 /// backed by [`glam::Vec3A`]. use in hot-loop math (culling, physics, SoA buffers)
-/// where SIMD register fit matters — same cost as Vec3 on most paths but aligns
+/// where SIMD register fit matters, same cost as Vec3 on most paths but aligns
 /// to 16 bytes so glam's SSE2/NEON paths can load it in one instruction.
 pub type Vec3A = glam::Vec3A;
 

@@ -1,4 +1,4 @@
-// hierarchical Z-buffer (HZB) shaders — three entry points.
+// hierarchical Z-buffer (HZB) shaders: three entry points.
 //
 // cs_copy_depth: copies a Depth32Float texture to the R32Float HZB mip 0.
 // cs_downsample: downsamples one HZB mip to the next (MIN of 4 texels).

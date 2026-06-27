@@ -2,7 +2,7 @@
 //!
 //! bundles group the components that always go together, so game code can
 //! `commands.spawn(Mesh3dBundle { ... })` instead of manually listing every component.
-//! all bundles include `WorldTransform3d` — it starts as identity and is overwritten
+//! all bundles include `WorldTransform3d`, it starts as identity and is overwritten
 //! by the propagation system each frame.
 //!
 //! # example
@@ -78,7 +78,7 @@ impl Camera3dBundle {
 
 /// bundle for a static (non-animated) mesh entity.
 ///
-/// `mesh` and `material` must be set — there is no sensible default handle.
+/// `mesh` and `material` must be set, there is no sensible default handle.
 /// add [`ShadowCaster`] manually if the mesh should cast shadows.
 /// add [`Aabb3d`] manually to enable CPU-side frustum culling.
 #[derive(Bundle)]
@@ -124,7 +124,7 @@ impl Mesh3dBundle {
 	}
 }
 
-/// [`Mesh3dBundle`] plus shadow casting and AABB bounds — for any geometry that
+/// [`Mesh3dBundle`] plus shadow casting and AABB bounds: for any geometry that
 /// should cast shadows and participate in frustum culling.
 #[derive(Bundle)]
 pub struct ShadowMesh3dBundle {
@@ -136,7 +136,7 @@ pub struct ShadowMesh3dBundle {
 /// bundle for a directional light (sun/moon).
 ///
 /// direction is taken from the entity's `WorldTransform3d` forward vector.
-/// position is irrelevant for directional lights — only rotation matters.
+/// position is irrelevant for directional lights, only rotation matters.
 #[derive(Bundle, Default)]
 pub struct DirectionalLightBundle {
 	pub local: LocalTransform3d,

@@ -1,4 +1,4 @@
-// Gerstner wave water shader — mid-tier forward water rendering.
+// Gerstner wave water shader: mid-tier forward water rendering.
 //
 // 4 wave components in the vertex shader: each displaces the mesh surface
 // using the Gerstner (trochoidal) wave model. reference: Jerry Tessendorf

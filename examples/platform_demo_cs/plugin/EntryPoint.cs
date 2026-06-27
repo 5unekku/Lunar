@@ -17,7 +17,7 @@ class GamePlugin : IPlugin
 
     public void Init(World world)
     {
-        // resources are safe to overwrite — runs on every load including reload
+        // resources are safe to overwrite: runs on every load including reload
         world.SetCursorLocked(true);
         world.SetQuality(msaaSamples: 4, staa: true, renderScale: 1.0f);
         world.SetSky(SkyColor, SunColor, showSun: true);
@@ -32,7 +32,7 @@ class GamePlugin : IPlugin
         var grassMat  = world.CreateMaterial(GrassColor, ShadingModel.Unlit);
         world.SpawnMesh(floorMesh, grassMat, 0.0f, 0.0f, 0.0f);
 
-        // camera only on first load — already exists on reload
+        // camera only on first load: already exists on reload
         if (!world.IsReload())
         {
             float fovY = FovDegrees * (float)Math.PI / 180.0f;

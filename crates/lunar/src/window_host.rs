@@ -7,7 +7,7 @@ use lunar_input::{ActionMap, InputState, KeyCode};
 /// drives fullscreen (F11 / Alt+Enter), cursor lock, aspect-ratio snapping, and
 /// surface resize in lockstep with [`WindowSettings`], for native game loops.
 ///
-/// both [`bootstrap`](crate::bootstrap) and `bootstrap_3d` use this — and so can a
+/// both [`bootstrap`](crate::bootstrap) and `bootstrap_3d` use this, and so can a
 /// custom loop: own the SDL3 window plus a `WindowHost`, call [`WindowHost::sync`]
 /// once per frame after pumping input, and forward the `resize` callback to your
 /// render engine. It is render-engine-agnostic (2D or 3D) by design.
@@ -58,7 +58,7 @@ impl WindowHost {
 	/// final `(width, height)` whenever the surface must resize, so the caller can
 	/// forward to whichever render engine it owns (`re.resize(w, h)`).
 	pub fn sync(&mut self, world: &mut World, mut resize: impl FnMut(&mut World, u32, u32)) {
-		// read input once for the frame — capture both the edge (just pressed) and
+		// read input once for the frame, capturing both the edge (just pressed) and
 		// whether any toggle combo is still physically held, for the keyup re-arm.
 		let input_snap = world.get_resource::<InputState>().map(|i| {
 			let enter_just = i.is_key_just_pressed(KeyCode::Enter);
@@ -79,7 +79,7 @@ impl WindowHost {
 			self.fullscreen_key_down = false;
 		}
 
-		// fire only on the keydown edge — gate blocks until full release
+		// fire only on the keydown edge; gate blocks until full release
 		let request_toggle = !self.fullscreen_key_down
 			&& (input_snap.is_some_and(|(alt_enter, _, _)| alt_enter)
 				|| input_snap.is_some_and(|(_, fs, _)| fs));
@@ -94,7 +94,7 @@ impl WindowHost {
 			}
 		}
 
-		// game code set is_fullscreen directly (e.g. settings menu) — optimistic update
+		// game code set is_fullscreen directly (e.g. settings menu), optimistic update
 		if let Some(settings) = world.get_resource::<WindowSettings>()
 			&& settings.is_fullscreen != self.fullscreen
 		{
@@ -102,7 +102,7 @@ impl WindowHost {
 			let _ = self.window.set_fullscreen(self.fullscreen);
 		}
 
-		// cursor lock (relative mouse mode) — for fps-style mouse-look
+		// cursor lock (relative mouse mode): for fps-style mouse-look
 		if let Some(settings) = world.get_resource::<WindowSettings>()
 			&& settings.cursor_locked != self.cursor_locked
 		{
@@ -111,7 +111,7 @@ impl WindowHost {
 				.set_relative_mouse_mode(&self.window, self.cursor_locked);
 		}
 
-		// window resize — enforce aspect ratio in windowed mode, then notify renderer
+		// window resize: enforce aspect ratio in windowed mode, then notify renderer
 		let (w, h) = self.window.size();
 		if w != self.last_w || h != self.last_h {
 			let target = world.get_resource::<WindowSettings>().and_then(|s| {

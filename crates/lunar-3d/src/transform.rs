@@ -4,7 +4,7 @@ use lunar_math::{Mat4, Quat, Vec3};
 /// local 3D transform: position, rotation, and scale relative to the parent entity.
 ///
 /// when an entity has no parent, this is equivalent to world space.
-/// rotation uses a quaternion — no gimbal lock, clean slerp interpolation.
+/// rotation uses a quaternion, no gimbal lock, clean slerp interpolation.
 ///
 /// # builder pattern
 ///

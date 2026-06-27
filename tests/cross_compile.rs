@@ -29,7 +29,7 @@ fn target_installed(target: &str) -> bool {
 
 /// apple targets need a macOS SDK plus a cross C toolchain that plain `cargo check`
 /// can find (zstd, SDL3). on linux that plumbing lives in build_all.go (zigbuild +
-/// cmake sysroot patches), so a bare check can't work — skip on non-mac hosts unless
+/// cmake sysroot patches), so a bare check can't work: skip on non-mac hosts unless
 /// the caller opts in after wiring CC/SDKROOT themselves.
 fn apple_check_enabled() -> bool {
 	cfg!(target_os = "macos") || std::env::var_os("LUNAR_CROSS_APPLE").is_some()
@@ -37,12 +37,12 @@ fn apple_check_enabled() -> bool {
 
 fn check_target(target: &str, label: &str) {
 	if !target_installed(target) {
-		println!("skipping {label} ({target}) — run: rustup target add {target}");
+		println!("skipping {label} ({target}): run: rustup target add {target}");
 		return;
 	}
 	if target.contains("apple") && !apple_check_enabled() {
 		println!(
-			"skipping {label} ({target}) — needs a wired macOS cross toolchain; set LUNAR_CROSS_APPLE=1 to force (or use scripts/build_all.go)"
+			"skipping {label} ({target}): needs a wired macOS cross toolchain; set LUNAR_CROSS_APPLE=1 to force (or use scripts/build_all.go)"
 		);
 		return;
 	}

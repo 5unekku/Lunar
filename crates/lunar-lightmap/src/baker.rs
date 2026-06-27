@@ -454,7 +454,7 @@ fn ray_blocked(origin: Vec3, direction: Vec3, tris: &[BakeTri]) -> bool {
 	false
 }
 
-/// Möller–Trumbore ray-triangle intersection test.
+/// Möller-Trumbore ray-triangle intersection test.
 fn moller_trumbore(origin: Vec3, direction: Vec3, v0: Vec3, v1: Vec3, v2: Vec3) -> Option<f32> {
 	const EPSILON: f32 = 1e-7;
 	let e1 = v1 - v0;

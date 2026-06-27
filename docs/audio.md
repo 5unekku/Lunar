@@ -19,7 +19,7 @@ impl GamePlugin for MyGame {
 
 `AudioPlugin` initializes the platform backend (cubeb on native, WebAudio on WASM)
 and inserts the `AudioPlayer` resource. if backend initialization fails, it logs an
-error and continues without audio — the rest of your game still runs.
+error and continues without audio, the rest of your game still runs.
 
 ## loading sounds
 
@@ -74,8 +74,8 @@ fn on_jump(
 ```
 
 `PlaybackOptions` fields:
-- `volume: f32` — linear scalar in `0.0..=1.0`
-- `looping: bool` — loop from the beginning when playback ends
+- `volume: f32`: linear scalar in `0.0..=1.0`
+- `looping: bool`: loop from the beginning when playback ends
 
 `PlaybackOptions::default()` is `{ volume: 1.0, looping: false }`.
 
@@ -109,7 +109,7 @@ fn play_when_ready(
 
 ## custom audio sources
 
-`AudioPlayer::play_source` accepts any type implementing `AudioSource` — useful
+`AudioPlayer::play_source` accepts any type implementing `AudioSource`: useful
 for procedural audio, tracker engines, or streaming decoders:
 
 ```rust

@@ -1,4 +1,4 @@
-// masked surface z-prepass — depth-only variant of surface.wgsl for surfaces
+// masked surface z-prepass: depth-only variant of surface.wgsl for surfaces
 // with alpha_test stages (sprites, grates, fences). the regular prepass draws
 // positions only, which would stamp the full quad into the depth buffer and
 // punch holes into everything behind the transparent texels; this one mirrors
@@ -58,7 +58,7 @@ struct VertOut {
     @builtin(position) clip_pos:    vec4<f32>,
     @location(0)       uv:          vec2<f32>,
     @location(1)       uv_lightmap: vec2<f32>,
-    // screen-linear interpolant, selected when affine_textures is on — must
+    // screen-linear interpolant, selected when affine_textures is on, must
     // match the main pass so the discard pattern lines up under affine warping
     @location(2) @interpolate(linear) uv_affine: vec2<f32>,
 }

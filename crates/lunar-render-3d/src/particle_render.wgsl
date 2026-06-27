@@ -2,7 +2,7 @@
 //
 // one instance per live particle; six vertices per instance form a camera-aligned quad.
 // reads particle SoA from a storage buffer (mid+ tier compute path) OR from a plain
-// vertex buffer (low tier CPU path — same struct layout in both cases).
+// vertex buffer (low tier CPU path, same struct layout in both cases).
 
 struct Globals {
     view_proj:    mat4x4<f32>,

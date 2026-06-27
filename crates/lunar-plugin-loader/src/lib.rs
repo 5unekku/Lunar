@@ -106,7 +106,7 @@ impl PluginLoader {
 
     /// (NativeAOT) load a plugin `.so` and call its `lunar_plugin_init`.
     ///
-    /// old libraries are accumulated rather than dropped — NativeAOT embeds a GC
+    /// old libraries are accumulated rather than dropped: NativeAOT embeds a GC
     /// per `.so` that cannot safely be torn down mid-process via dlclose.
     #[allow(irrefutable_let_patterns)]
     pub fn load_nativeaot(&mut self, world: &mut World, path: &Path) -> Result<(), LoadError> {
@@ -374,7 +374,7 @@ fn dispatch_ffi_update(world: &mut World) {
 }
 
 fn dispatch_ffi_update_hot(world: &mut World) {
-    // drain all queued paths and use the last — guards against double-trigger
+    // drain all queued paths and use the last: guards against double-trigger
     // when the build tool touches the file more than once per write
     let pending = world
         .get_resource::<ReloadReceiver>()

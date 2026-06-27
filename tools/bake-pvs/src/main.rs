@@ -21,7 +21,7 @@
 //! 4. encode into flat pvs bitset with pvs_stride = ceil(leaf_count / 64)
 //!
 //! for levels with no portals (pvs_stride would stay 0), the tool exits early
-//! and does not modify the blob — the runtime correctly falls back to full
+//! and does not modify the blob: the runtime correctly falls back to full
 //! BVH culling in that case.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -101,7 +101,7 @@ fn bake(blob: &mut BspBlob) {
 	let leaf_count = blob.leaf_count as usize;
 
 	if blob.portals.is_empty() || blob.area_map.is_empty() {
-		println!("no portals or area_map — level has no indoor PVS to bake. skipping.");
+		println!("no portals or area_map: level has no indoor PVS to bake. skipping.");
 		return;
 	}
 
@@ -127,7 +127,7 @@ fn bake(blob: &mut BspBlob) {
 		pvs[row_base + leaf as usize / 64] |= 1u64 << (leaf % 64);
 
 		let Some(&area) = leaf_area.get(&leaf) else {
-			// leaf not in any area — only sees itself
+			// leaf not in any area: only sees itself
 			leaves_without_area += 1;
 			continue;
 		};

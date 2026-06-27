@@ -44,7 +44,7 @@ use lunar_render_3d::{QualitySettings, Sky};
 
 // ─── opaque world handle ─────────────────────────────────────────────────────
 
-/// opaque handle to the engine world — only valid during a system callback.
+/// opaque handle to the engine world: only valid during a system callback.
 ///
 /// the engine passes a pointer to its internal [`bevy_ecs::world::World`].
 /// never construct or dereference this type directly.
@@ -57,11 +57,11 @@ unsafe fn world_from_ffi<'a>(world: *mut LunarWorld) -> &'a mut World {
 
 // ─── C integer handle types ───────────────────────────────────────────────────
 
-/// entity identifier — index into the world's entity table.
+/// entity identifier: index into the world's entity table.
 pub type LunarEntity = u32;
-/// component type identifier — stable for the lifetime of the world.
+/// component type identifier: stable for the lifetime of the world.
 pub type LunarComponentId = u32;
-/// registered system identifier — used to unregister systems.
+/// registered system identifier: used to unregister systems.
 pub type LunarSystemId = u32;
 
 pub const LUNAR_INVALID_COMPONENT_ID: LunarComponentId = u32::MAX;
@@ -90,7 +90,7 @@ pub struct LunarVec3 { pub x: f32, pub y: f32, pub z: f32 }
 /// quaternion in portable C layout (4-byte aligned, 16 bytes).
 ///
 /// the engine's internal `glam::Quat` may have 16-byte alignment on SIMD builds.
-/// the typed accessors (`lunar_get_transform3d` etc.) handle the conversion —
+/// the typed accessors (`lunar_get_transform3d` etc.) handle the conversion;
 /// do not use raw component access for `LocalTransform3d`.
 #[repr(C)]
 pub struct LunarQuat { pub x: f32, pub y: f32, pub z: f32, pub w: f32 }
@@ -119,7 +119,7 @@ pub const LUNAR_SCHEDULE_UPDATE:       u32 = 1;
 pub const LUNAR_SCHEDULE_FIXED_UPDATE: u32 = 2;
 pub const LUNAR_SCHEDULE_SHUTDOWN:     u32 = 3;
 
-/// internal schedule discriminant — convert from raw u32 at the FFI boundary.
+/// internal schedule discriminant: convert from raw u32 at the FFI boundary.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LunarSchedule { Startup, Update, FixedUpdate, Shutdown }
 
@@ -777,9 +777,9 @@ pub unsafe extern "C" fn lunar_set_cursor_locked(world: *mut LunarWorld, locked:
 
 /// insert or replace the [`Sky`] resource.
 ///
-/// `sky_r/g/b` — skydome color (linear 0..1).
-/// `sun_r/g/b` — sun disc color (linear 0..1).
-/// `show_sun`  — whether to draw the sun disc.
+/// `sky_r/g/b`: skydome color (linear 0..1).
+/// `sun_r/g/b`: sun disc color (linear 0..1).
+/// `show_sun` : whether to draw the sun disc.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_set_sky(
     world: *mut LunarWorld,

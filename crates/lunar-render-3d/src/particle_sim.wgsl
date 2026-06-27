@@ -1,4 +1,4 @@
-// GPU particle simulation — compute shader.
+// GPU particle simulation: compute shader.
 //
 // dispatched as ceil(particle_cap / 64) workgroups of 64 threads.
 // each thread owns one particle slot. dead particles (lifetime <= 0) are re-emitted

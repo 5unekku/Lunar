@@ -136,7 +136,7 @@ impl Default for LocalTransform {
 /// world transform: absolute position, rotation, and scale in world space.
 ///
 /// this component is computed automatically from [`LocalTransform`] and
-/// parent hierarchy. do not modify directly — use [`LocalTransform`] instead.
+/// parent hierarchy. do not modify directly, use [`LocalTransform`] instead.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Component)]
 pub struct WorldTransform {
@@ -336,13 +336,13 @@ impl Rect {
 		self.h = (y2 - self.y).max(0.0);
 	}
 
-	/// alias for [`Rect::contains`] — point collision check.
+	/// alias for [`Rect::contains`]: point collision check.
 	#[must_use]
 	pub fn collide_point(&self, point: Vec2) -> bool {
 		self.contains(point)
 	}
 
-	/// alias for [`Rect::intersects`] — rect collision check.
+	/// alias for [`Rect::intersects`]: rect collision check.
 	#[must_use]
 	pub fn collide_rect(&self, other: &Self) -> bool {
 		self.intersects(other)

@@ -91,7 +91,7 @@ impl SpriteAnimation {
 
 /// advance all [`SpriteAnimation`] components by `delta_seconds`.
 ///
-/// registers via [`crate::Plugin2d`] — no manual setup needed.
+/// registers via [`crate::Plugin2d`]: no manual setup needed.
 pub fn advance_sprite_animations(
 	time: bevy_ecs::system::Res<Time>,
 	mut query: bevy_ecs::system::Query<&mut SpriteAnimation>,

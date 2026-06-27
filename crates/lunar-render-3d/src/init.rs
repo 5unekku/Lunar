@@ -1,7 +1,7 @@
-//! `RenderEngine3d` — construction, adapter/device init, canvas + pipeline-cache plumbing.
+//! `RenderEngine3d`: construction, adapter/device init, canvas + pipeline-cache plumbing.
 //!
 //! split out of `lib.rs`; methods stay on `RenderEngine3d` (one type, many
-//! `impl` blocks across sibling modules — all share the struct's private fields).
+//! `impl` blocks across sibling modules; all share the struct's private fields).
 
 use super::*;
 
@@ -68,7 +68,7 @@ impl RenderEngine3d {
 		let has_indirect = adapter
 			.features()
 			.contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
-		// PIPELINE_CACHE (Vulkan/DX12) lets the driver persist compiled PSOs across runs —
+		// PIPELINE_CACHE (Vulkan/DX12) lets the driver persist compiled PSOs across runs;
 		// without it the create_pipeline_cache calls below are inert, so request it up front.
 		let has_pipeline_cache = adapter
 			.features()
@@ -135,7 +135,7 @@ impl RenderEngine3d {
 			})
 			.await
 			.expect(
-				"no WebGPU adapter — Chrome 113+, Firefox with dom.webgpu.enabled, or Safari 17+",
+				"no WebGPU adapter. Chrome 113+, Firefox with dom.webgpu.enabled, or Safari 17+",
 			);
 		// WebGPU does not expose RG11B10UFLOAT_RENDERABLE or INDIRECT_FIRST_INSTANCE
 		let (device, queue) = adapter
@@ -230,7 +230,7 @@ impl RenderEngine3d {
 		log::info!("shader passthrough: {shader_passthrough}");
 
 		let caps = surface.as_ref().map(|s| s.get_capabilities(adapter));
-		// prefer non-sRGB linear format — game colors are sRGB-defined and used directly;
+		// prefer non-sRGB linear format; game colors are sRGB-defined and used directly;
 		// applying hardware gamma on top would wash them out on native vs browser.
 		// headless has no swapchain to match, so the fallback applies there too.
 		let format = caps
@@ -303,7 +303,7 @@ impl RenderEngine3d {
 			}],
 		});
 
-		// group 1: material — storage array indexed by instance_id, set once per pass
+		// group 1: material: storage array indexed by instance_id, set once per pass
 		let material_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("[material] bgl"),
 			entries: &[wgpu::BindGroupLayoutEntry {
@@ -318,7 +318,7 @@ impl RenderEngine3d {
 			}],
 		});
 
-		// group 2: per-mesh — dynamic offset, one slot per draw call (model matrix)
+		// group 2: per-mesh: dynamic offset, one slot per draw call (model matrix)
 		let mesh_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("[mesh] bgl"),
 			entries: &[wgpu::BindGroupLayoutEntry {
@@ -428,7 +428,7 @@ impl RenderEngine3d {
 			mapped_at_creation: false,
 		});
 
-		// 3-layer depth array — one layer per cascade
+		// 3-layer depth array: one layer per cascade
 		let shadow_map = device.create_texture(&wgpu::TextureDescriptor {
 			label: Some("[shadow] cascade depth array"),
 			size: wgpu::Extent3d {
@@ -598,7 +598,7 @@ impl RenderEngine3d {
 		let pipeline_cache_path = Self::pipeline_cache_path(adapter);
 		#[cfg(not(target_arch = "wasm32"))]
 		let pipeline_cache = Self::load_pipeline_cache(&device, pipeline_cache_path.as_deref());
-		// PipelineCache is Vulkan/DX12 only — WebGPU has no equivalent
+		// PipelineCache is Vulkan/DX12 only; WebGPU has no equivalent
 		#[cfg(not(target_arch = "wasm32"))]
 		let pipeline_cache_ref: Option<&wgpu::PipelineCache> = pipeline_cache.as_ref();
 		#[cfg(target_arch = "wasm32")]
@@ -879,7 +879,7 @@ impl RenderEngine3d {
 			},
 			depth_stencil: Some(wgpu::DepthStencilState {
 				format: wgpu::TextureFormat::Depth32Float,
-				// with z-prepass (mid/high) depth is already populated — use LessEqual
+				// with z-prepass (mid/high) depth is already populated, use LessEqual
 				depth_write_enabled: Some(render_tier == RenderTier::LowGles),
 				depth_compare: Some(if render_tier == RenderTier::LowGles {
 					wgpu::CompareFunction::Less
@@ -1197,7 +1197,7 @@ impl RenderEngine3d {
 			address_mode_v: wgpu::AddressMode::Repeat,
 			..Default::default()
 		});
-		// per-stage opt-in (SurfaceStage::nearest) — crisp texels for pixel art
+		// per-stage opt-in (SurfaceStage::nearest), crisp texels for pixel art
 		let surface_nearest_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
 			label: Some("[surface] nearest sampler"),
 			mag_filter: wgpu::FilterMode::Nearest,
@@ -1670,7 +1670,7 @@ impl RenderEngine3d {
 			],
 		});
 
-		// 1×1 zero R8Unorm texture — fallback contact shadow when pass is disabled
+		// 1×1 zero R8Unorm texture: fallback contact shadow when pass is disabled
 		let contact_shadow_fallback_tex = device.create_texture(&wgpu::TextureDescriptor {
 			label: Some("[contact shadow] fallback tex"),
 			size: wgpu::Extent3d {
@@ -2387,7 +2387,7 @@ impl RenderEngine3d {
 		});
 		// atmos_bg0 needs gtao_depth_tex (created in GTAO section); assigned after that section.
 
-		// ── panorama sky — cylindrical texture over sky pixels ────────────
+		// ── panorama sky: cylindrical texture over sky pixels ────────────
 		let panorama_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("[panorama sky] params buffer"),
 			size: 16,
@@ -2445,7 +2445,7 @@ impl RenderEngine3d {
 		let panorama_scene_pipeline =
 			Self::make_panorama_scene_pipeline(&device, &panorama_pipeline_layout, &panorama_scene_shader, hdr_format, msaa_samples, pipeline_cache_ref);
 
-		// ── water rendering — Gerstner waves + refraction ─────────────────
+		// ── water rendering: Gerstner waves + refraction ─────────────────
 
 		let water_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("[water] params buffer"),
@@ -2511,7 +2511,7 @@ impl RenderEngine3d {
 			}],
 		});
 
-		// 1×1 black Rgba16Float fallback — used as reflection_tex when planar reflections are off
+		// 1×1 black Rgba16Float fallback: used as reflection_tex when planar reflections are off
 		let reflection_fallback_tex = device.create_texture(&wgpu::TextureDescriptor {
 			label: Some("[reflection] fallback tex"),
 			size: wgpu::Extent3d {
@@ -2607,7 +2607,7 @@ impl RenderEngine3d {
 			multiview_mask: None,
 		});
 
-		// ── decal system — box-projected, depth-sampled ───────────────────
+		// ── decal system: box-projected, depth-sampled ───────────────────
 
 		let decal_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("[decal] params buffer"),
@@ -2703,7 +2703,7 @@ impl RenderEngine3d {
 		});
 		// decal_bg0 needs gtao_depth_tex; assigned after GTAO section.
 
-		// ── terrain rendering — geometry clipmap ───────────────────────────
+		// ── terrain rendering: geometry clipmap ───────────────────────────
 
 		// bg group 0: globals only (shared view-global bind group)
 		let terrain_globals_bgl =
@@ -3475,7 +3475,7 @@ impl RenderEngine3d {
 		});
 		drop(staa_bg_placeholder);
 
-		// clone before move into struct — wgpu::Device is Arc-backed, clone is cheap
+		// clone before move into struct: wgpu::Device is Arc-backed, clone is cheap
 		#[cfg(not(target_arch = "wasm32"))]
 		let device_for_belt = device.clone();
 
@@ -3706,7 +3706,7 @@ impl RenderEngine3d {
 			pipeline_cache,
 			#[cfg(not(target_arch = "wasm32"))]
 			pipeline_cache_path,
-			// 4 MiB chunk — larger than any single write, handles most scene sizes
+			// 4 MiB chunk: larger than any single write, handles most scene sizes
 			#[cfg(not(target_arch = "wasm32"))]
 			staging_belt: wgpu::util::StagingBelt::new(device_for_belt, 4 * 1024 * 1024),
 			frame_time_ema_ms: 16.67,
@@ -3903,7 +3903,7 @@ impl RenderEngine3d {
 		let data = std::fs::read(path).ok();
 		match &data {
 			Some(bytes) => log::info!("[render-3d] loaded pipeline cache ({} bytes)", bytes.len()),
-			None => log::info!("[render-3d] no pipeline cache yet — bootstrapping empty"),
+			None => log::info!("[render-3d] no pipeline cache yet: bootstrapping empty"),
 		}
 		// SAFETY: fallback=true so wgpu rebuilds a fresh cache if validation fails; only runs
 		// on Vulkan/DX12 (gated by the PIPELINE_CACHE feature) where the format is stable.

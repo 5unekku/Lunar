@@ -25,14 +25,14 @@ fn vs_upscale(@builtin(vertex_index) vid: u32) -> @builtin(position) vec4<f32> {
     return vec4<f32>(x, -y, 0.0, 1.0);
 }
 
-// render-to-display UV: normalize display pixel coords to [0,1] — the sampler maps
+// render-to-display UV: normalize display pixel coords to [0,1]: the sampler maps
 // this to the render texture regardless of its actual pixel dimensions.
 fn render_uv(frag_pos: vec2<f32>) -> vec2<f32> {
     return frag_pos / vec2<f32>(params.display_w, params.display_h);
 }
 
 // ── Nearest ─────────────────────────────────────────────────────────────────
-// integer-aligned point sampling — correct for pixel art, zero blur.
+// integer-aligned point sampling: correct for pixel art, zero blur.
 // uses textureLoad to avoid any sampler filtering.
 
 @fragment
@@ -44,7 +44,7 @@ fn fs_nearest(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> 
 }
 
 // ── Linear ──────────────────────────────────────────────────────────────────
-// hardware bilinear via sampler — essentially free.
+// hardware bilinear via sampler: essentially free.
 
 @fragment
 fn fs_linear(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {
@@ -91,7 +91,7 @@ fn fs_lanczos(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> 
 }
 
 // ── Bicubic (Mitchell-Netravali) ─────────────────────────────────────────────
-// B=1/3, C=1/3 — smooth with minimal ringing. good for 2D and UI-heavy content.
+// B=1/3, C=1/3: smooth with minimal ringing. good for 2D and UI-heavy content.
 
 fn mitchell(x: f32, B: f32, C: f32) -> f32 {
     let ax = abs(x);
@@ -137,7 +137,7 @@ fn fs_bicubic(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> 
 }
 
 // ── FSR 3 EASU ───────────────────────────────────────────────────────────────
-// edge adaptive spatial upsampling — ported from AMD FidelityFX SDK (MIT).
+// edge adaptive spatial upsampling: ported from AMD FidelityFX SDK (MIT).
 
 fn fsr_luma(c: vec3<f32>) -> f32 { return dot(c, vec3<f32>(0.299, 0.587, 0.114)); }
 
@@ -184,7 +184,7 @@ fn fs_easu(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {
 }
 
 // ── FSR 3 RCAS ───────────────────────────────────────────────────────────────
-// robust contrast adaptive sharpening — sharpens EASU output.
+// robust contrast adaptive sharpening: sharpens EASU output.
 
 @fragment
 fn fs_rcas(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {

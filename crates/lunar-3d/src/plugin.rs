@@ -9,7 +9,7 @@ use crate::visibility::{CullSoa, Frustum, ViewportAspect, build_cull_soa, update
 
 /// core 3D plugin.
 ///
-/// registers all 3D systems and inserts default resources — transforms, animation,
+/// registers all 3D systems and inserts default resources: transforms, animation,
 /// camera selection, frustum culling, and collision detection.
 ///
 /// # usage

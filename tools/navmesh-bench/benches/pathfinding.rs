@@ -54,7 +54,7 @@ fn dust2_navmesh() -> NavMesh {
     NavMesh::new(verts, tris).expect("dust2 navmesh construction failed")
 }
 
-/// room split by a gap — correct path must detour over the top section.
+/// room split by a gap: correct path must detour over the top section.
 fn obstacle_navmesh() -> NavMesh {
     let mut verts = Vec::new();
     let mut tris = Vec::new();

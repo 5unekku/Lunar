@@ -140,7 +140,7 @@ impl BspLevel {
 	///
 	/// calls back with every leaf (0..leaf_count) if pvs_stride is 0 or the leaf
 	/// is out of range, so downstream code always gets a valid visible set. the
-	/// renderer uses this each frame — no allocation, and the bitset scan skips
+	/// renderer uses this each frame: no allocation, and the bitset scan skips
 	/// empty words via trailing_zeros instead of probing every bit.
 	pub fn for_each_visible_leaf(&self, camera_leaf: usize, mut callback: impl FnMut(usize)) {
 		let Some(blob) = &self.blob else { return };
@@ -171,7 +171,7 @@ impl BspLevel {
 	/// return all leaf indices visible from `camera_leaf` according to the PVS.
 	///
 	/// returns all leaves (0..leaf_count) if no blob is loaded or pvs_stride is 0,
-	/// so downstream code always gets a valid visible set. allocates — prefer
+	/// so downstream code always gets a valid visible set. allocates: prefer
 	/// [`BspLevel::for_each_visible_leaf`] in per-frame code.
 	pub fn visible_leaves(&self, camera_leaf: usize) -> Vec<usize> {
 		let mut out = Vec::new();

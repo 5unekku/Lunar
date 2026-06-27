@@ -1,4 +1,4 @@
-//! top-down shooter example — player, bullets, enemies, AABB collision, score.
+//! top-down shooter example: player, bullets, enemies, AABB collision, score.
 //!
 //! depends only on `lunar::prelude`. demonstrates:
 //! - 2D movement and input via `InputState` and `KeyCode`

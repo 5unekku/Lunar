@@ -1,7 +1,7 @@
-//! `RenderEngine3d` — resize, render scale, msaa, quality-preset stepping, accessors.
+//! `RenderEngine3d`: resize, render scale, msaa, quality-preset stepping, accessors.
 //!
 //! split out of `lib.rs`; methods stay on `RenderEngine3d` (one type, many
-//! `impl` blocks across sibling modules — all share the struct's private fields).
+//! `impl` blocks across sibling modules: all share the struct's private fields).
 
 use super::*;
 
@@ -75,7 +75,7 @@ impl RenderEngine3d {
 		let ao_h = (render_h / 2).max(1);
 		(self.gtao_depth_texture, self.gtao_depth_view) =
 			Self::make_depth_view(&self.device, render_w, render_h, 1);
-		// the contact-shadow pass bind group references gtao_depth_view — invalidate it
+		// the contact-shadow pass bind group references gtao_depth_view: invalidate it
 		self.contact_shadow_bg = None;
 		let gtao_ao_a = self.device.create_texture(&wgpu::TextureDescriptor {
 			label: Some("[gtao] ao ping"),
@@ -296,7 +296,7 @@ impl RenderEngine3d {
 		self.fog_texture = fog_texture;
 
 		// rebuild water bg0 with the new hdr_view (for refraction sampling).
-		// binding 3 is the planar reflection texture (1×1 fallback when disabled) — must be
+		// binding 3 is the planar reflection texture (1×1 fallback when disabled): must be
 		// included or the bind group won't match water_bgl0's 4-entry layout.
 		let refl_v = self
 			.reflection_view
@@ -326,7 +326,7 @@ impl RenderEngine3d {
 		});
 
 		// rebuild composite bind group (binding 4=ssr, 5=fog, 6=sampler, 7=contact shadow).
-		// binding 7 is the contact-shadow texture (1×1 fallback when disabled) — must be
+		// binding 7 is the contact-shadow texture (1×1 fallback when disabled): must be
 		// included or the bind group won't match composite_bgl's 8-entry layout.
 		let bloom_view = self.bloom_mip_views.first().unwrap_or(&self.hdr_view);
 		let cs_view_ref = self
@@ -531,7 +531,7 @@ impl RenderEngine3d {
 		let dw = self.surface_config.width;
 		let dh = self.surface_config.height;
 		if dw > 0 && dh > 0 {
-			// resize() early-returns when surface dimensions are unchanged — bypass by
+			// resize() early-returns when surface dimensions are unchanged: bypass by
 			// clearing the stored size so it sees a dimension change and rebuilds textures
 			self.surface_config.width = 0;
 			self.resize(dw, dh);
@@ -567,9 +567,9 @@ impl RenderEngine3d {
 		self.static_bundle = None;
 		log::info!("msaa changed to {samples}x");
 	}
-	/// panorama sky pipeline — fullscreen triangle at far depth drawn inside the
+	/// panorama sky pipeline: fullscreen triangle at far depth drawn inside the
 	/// main color pass after the opaque section, so it must match the pass's
-	/// msaa count and depth attachment (test LessEqual, no write — early-z
+	/// msaa count and depth attachment (test LessEqual, no write: early-z
 	/// rejects every pixel geometry already covered)
 	pub(crate) fn make_panorama_scene_pipeline(
 		device: &wgpu::Device,
@@ -625,7 +625,7 @@ impl RenderEngine3d {
 		#[cfg(target_arch = "wasm32")]
 		let cache: Option<&wgpu::PipelineCache> = None;
 
-		// vertex buffer layouts — same constants as from_surface
+		// vertex buffer layouts: same constants as from_surface
 		let vert_attrs = [
 			wgpu::VertexAttribute {
 				format: wgpu::VertexFormat::Float32x3,
@@ -1173,7 +1173,7 @@ impl RenderEngine3d {
 	/// returns `(bytes, width, height)` where bytes are in bgra8 order
 	/// (matching the headless target format). returns `None` when not in headless mode.
 	///
-	/// blocks the calling thread until the gpu copy completes — only suitable for
+	/// blocks the calling thread until the gpu copy completes: only suitable for
 	/// editor/test use, not game-loop hot paths.
 	#[cfg(not(target_arch = "wasm32"))]
 	pub fn read_headless_rgba(&self) -> Option<(Vec<u8>, u32, u32)> {

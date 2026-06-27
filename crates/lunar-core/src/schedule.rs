@@ -7,11 +7,11 @@
 //! # stage ordering
 //!
 //! stages ensure that systems run in a predictable order:
-//! 1. [`Input`](UpdateStage::Input) — poll input, update input state
-//! 2. [`Physics`](UpdateStage::Physics) — collision detection, physics simulation
-//! 3. [`Update`](UpdateStage::Update) — general game logic
-//! 4. [`Render`](UpdateStage::Render) — queue render commands
-//! 5. [`PostUpdate`](UpdateStage::PostUpdate) — end-of-tick cleanup (e.g. clearing edge-triggered input)
+//! 1. [`Input`](UpdateStage::Input): poll input, update input state
+//! 2. [`Physics`](UpdateStage::Physics): collision detection, physics simulation
+//! 3. [`Update`](UpdateStage::Update): general game logic
+//! 4. [`Render`](UpdateStage::Render): queue render commands
+//! 5. [`PostUpdate`](UpdateStage::PostUpdate): end-of-tick cleanup (e.g. clearing edge-triggered input)
 
 use bevy_ecs::schedule::ScheduleLabel;
 
@@ -28,14 +28,14 @@ pub enum UpdateStage {
 	Update,
 	/// queue render commands
 	Render,
-	/// end-of-tick cleanup — runs after Render
+	/// end-of-tick cleanup, runs after Render
 	PostUpdate,
 }
 
 /// relative stage ordering for custom stage placement.
 ///
 /// reserved for future custom-stage support (needs the `bevy_ecs` schedule graph).
-/// not part of the public API yet — kept internal until the feature lands.
+/// not part of the public API yet; kept internal until the feature lands.
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum StageOrder {

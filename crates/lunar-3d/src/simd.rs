@@ -14,8 +14,8 @@
 //! positive is harmless (a redundant draw); a false negative would drop geometry,
 //! so the scalar reference and the SIMD paths use the same `>= 0` plane comparison.
 
-// the cull kernels take the six SoA axis slices as separate params by design — that's
-// the whole point of the layout — so the arg-count lint doesn't apply here.
+// the cull kernels take the six SoA axis slices as separate params by design, that's
+// the whole point of the layout: so the arg-count lint doesn't apply here.
 #![allow(clippy::too_many_arguments)]
 
 use lunar_math::Vec4;
@@ -111,7 +111,7 @@ pub fn cull_aabbs_soa(
 	cull_scalar_into(&pre, center_x, center_y, center_z, half_x, half_y, half_z, out);
 }
 
-/// scalar reference path — also the exact arithmetic the AVX2 kernel mirrors.
+/// scalar reference path: also the exact arithmetic the AVX2 kernel mirrors.
 #[inline]
 fn cull_scalar_into(
 	pre: &[PlanePrecomp; 6],
@@ -133,7 +133,7 @@ fn cull_scalar_into(
 /// fused multiply-add where the hardware has it, plain mul+add elsewhere.
 ///
 /// on targets without native FMA (armv7 default float ABI, i686, pre-Haswell
-/// x86_64), `f32::mul_add` lowers to an `fmaf` libcall — an order of magnitude
+/// x86_64), `f32::mul_add` lowers to an `fmaf` libcall: an order of magnitude
 /// slower than the two-instruction form, and this runs 24 times per box. the
 /// cull's conservativeness does not depend on last-bit rounding, so the unfused
 /// form is safe; where FMA is native the fused form keeps the scalar reference
@@ -154,7 +154,7 @@ fn fused_mul_add(a: f32, b: f32, c: f32) -> f32 {
 /// (no early-out) so the result matches the branchless SIMD accumulation. on
 /// hardware-FMA targets the arithmetic is bit-identical to the SIMD kernels; on
 /// default x86_64 builds (no compile-time fma) the runtime-dispatched AVX2 kernel
-/// fuses while this doesn't — a last-ulp difference that can only matter for a box
+/// fuses while this doesn't: a last-ulp difference that can only matter for a box
 /// landing exactly on a plane, where either answer is acceptable (conservative test).
 #[inline]
 fn cull_one(
@@ -168,7 +168,7 @@ fn cull_one(
 ) -> bool {
 	let mut inside = true;
 	for p in pre {
-		// dot(normal, center): innermost product plain, outer two fused — matches fmadd order.
+		// dot(normal, center): innermost product plain, outer two fused: matches fmadd order.
 		let dot = fused_mul_add(p.nz, cz, fused_mul_add(p.ny, cy, p.nx * cx));
 		// projected box radius along the plane normal.
 		let radius = fused_mul_add(p.anz, hz, fused_mul_add(p.any, hy, p.anx * hx));
@@ -265,7 +265,7 @@ unsafe fn cull_avx2(
 ///
 /// used on x86_64 CPUs that lack AVX2. SSE2 is the x86_64 baseline so no runtime
 /// detection is needed. no FMA available at this feature level; plain mul+add is
-/// used instead — a last-ulp difference vs the AVX2 path that cannot affect
+/// used instead: a last-ulp difference vs the AVX2 path that cannot affect
 /// conservativeness.
 ///
 /// # Safety
@@ -405,7 +405,7 @@ unsafe fn cull_neon(
 
 			let mut inside = vdupq_n_u32(u32::MAX);
 			for p in 0..6 {
-				// vfmaq_f32(a, b, c) = a + b*c — same order as the scalar reference:
+				// vfmaq_f32(a, b, c) = a + b*c, same order as the scalar reference:
 				// nz*cz + (ny*cy + (nx*cx))
 				let dot = vfmaq_f32(vfmaq_f32(vmulq_f32(nx[p], cxv), ny[p], cyv), nz[p], czv);
 				let radius =

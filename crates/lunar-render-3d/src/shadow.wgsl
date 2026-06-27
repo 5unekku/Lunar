@@ -1,4 +1,4 @@
-// depth-only shadow pass — renders scene geometry from the directional light's POV.
+// depth-only shadow pass: renders scene geometry from the directional light's POV.
 // only the vertex position is needed; no fragment output.
 
 // group 0: light view-projection
@@ -7,7 +7,7 @@ struct ShadowGlobals {
 }
 @group(0) @binding(0) var<uniform> shadow_globals: ShadowGlobals;
 
-// group 1: per-instance transforms — storage array, indexed by @builtin(instance_index).
+// group 1: per-instance transforms: storage array, indexed by @builtin(instance_index).
 // layout matches group 2 in shader.wgsl (256 bytes per entry, UNIFORM_STRIDE padding).
 struct MeshInstance {
     model:     mat4x4<f32>,

@@ -75,7 +75,7 @@ pub(crate) fn screen_shake_system(
 	let intensity = shake.trauma * shake.trauma;
 	let t = shake.elapsed;
 
-	// two-axis noise from sin harmonics — no extra deps, deterministic
+	// two-axis noise from sin harmonics, no extra deps, deterministic
 	let noise_x = (t * 13.7).sin() * 0.6 + (t * 29.3).sin() * 0.3 + (t * 53.1).sin() * 0.1;
 	let noise_y = (t * 11.3).sin() * 0.6 + (t * 31.7).sin() * 0.3 + (t * 47.9).sin() * 0.1;
 

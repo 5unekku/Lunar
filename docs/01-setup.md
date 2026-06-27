@@ -21,7 +21,7 @@ available features:
 ## your first game
 
 a lunar game is defined by implementing the `GamePlugin` trait. every game
-has exactly one root plugin — it adds systems, resources, and sub-plugins:
+has exactly one root plugin: it adds systems, resources, and sub-plugins:
 
 ```rust
 use lunar::prelude::*;
@@ -97,5 +97,5 @@ the engine resolves plugin build order via topological sort. circular dependenci
 log a warning and leave the offending plugins unbuilt.
 
 plugins have two lifecycle methods:
-- `build` — add systems, resources, sub-plugins
-- `finish` — called after all plugins are built; use for cross-plugin wiring
+- `build`: add systems, resources, sub-plugins
+- `finish`: called after all plugins are built; use for cross-plugin wiring

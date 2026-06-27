@@ -1,7 +1,7 @@
-//! `RenderEngine3d` — gpu resource creation: ensure_*, make_*, build_*_resources, render graph, mega buffers.
+//! `RenderEngine3d`: gpu resource creation: ensure_*, make_*, build_*_resources, render graph, mega buffers.
 //!
 //! split out of `lib.rs`; methods stay on `RenderEngine3d` (one type, many
-//! `impl` blocks across sibling modules — all share the struct's private fields).
+//! `impl` blocks across sibling modules; all share the struct's private fields).
 
 use super::*;
 
@@ -116,8 +116,8 @@ impl RenderEngine3d {
 				usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
 				mapped_at_creation: false,
 			});
-			// mark entries dirty — caller will re-upload when these meshes are next needed
-			// simpler: just mark all mega entries dirty — they'll be re-uploaded by caller
+			// mark entries dirty: caller will re-upload when these meshes are next needed
+			// simpler: just mark all mega entries dirty: they'll be re-uploaded by caller
 			self.mega_mesh_entries.clear();
 			self.mega_vbuf_bytes = 0;
 			self.mega_ibuf_bytes = 0;
@@ -226,7 +226,7 @@ impl RenderEngine3d {
 			let cap = entity_count.next_power_of_two().max(256);
 			self.cull_entity_capacity = cap;
 
-			// these buffers back the cull + LOD bind groups — force a rebuild of both
+			// these buffers back the cull + LOD bind groups: force a rebuild of both
 			self.cull_bg = None;
 			self.lod_select_bg = None;
 			self.late_cull_bg = None;
@@ -672,7 +672,7 @@ impl RenderEngine3d {
 			return;
 		}
 
-		// the hzb-cull bind group references these buffers — force a rebuild
+		// the hzb-cull bind group references these buffers: force a rebuild
 		self.hzb_cull_bg = None;
 
 		self.hzb_occ_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -817,7 +817,7 @@ impl RenderEngine3d {
 		let mut data = [0f32; 24];
 		let inv_proj_cols = inv_proj.to_cols_array();
 		data[..16].copy_from_slice(&inv_proj_cols);
-		data[16] = 0.0; // light_dir_vs.x (placeholder — set each frame)
+		data[16] = 0.0; // light_dir_vs.x (placeholder, set each frame)
 		data[17] = -1.0; // light_dir_vs.y (pointing down as default)
 		data[18] = 0.0; // light_dir_vs.z
 		data[19] = f32::from_bits(8u32); // step_count
@@ -912,7 +912,7 @@ impl RenderEngine3d {
 		));
 		self.detail_sprite_compute_bgl = Some(compute_bgl);
 
-		// render pipeline — binds globals + texture atlas + instance buffer
+		// render pipeline: binds globals + texture atlas + instance buffer
 		let render_bgl_0 = self
 			.device
 			.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1004,7 +1004,7 @@ impl RenderEngine3d {
 
 		let needs_rebuild = self.lod_indices_buf.is_none() || cap > self.cull_entity_capacity;
 		if needs_rebuild {
-			// lod indices buffer is rebuilt — the cached LOD bind group references it
+			// lod indices buffer is rebuilt: the cached LOD bind group references it
 			self.lod_select_bg = None;
 			self.lod_indices_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
 				label: Some("[lod] indices buf"),
@@ -1102,7 +1102,7 @@ impl RenderEngine3d {
 	) -> (wgpu::Texture, wgpu::TextureView) {
 		// non-MSAA depth also gets TEXTURE_BINDING so GTAO can sample it, plus
 		// COPY usage so the z-prepass result can be blitted into the gtao depth
-		// copy instead of re-rendering the scene (msaa off only — multisampled
+		// copy instead of re-rendering the scene (msaa off only: multisampled
 		// depth can't be copied)
 		let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
 			| if sample_count == 1 {

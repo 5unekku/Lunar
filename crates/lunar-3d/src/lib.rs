@@ -10,7 +10,7 @@
 //! is the baseline, not lightmaps. targets the Halo CE visual quality level.
 //!
 //! all propagation systems use persistent scratch resources to avoid per-frame heap
-//! allocations — steady-state operation (no new entities) is fully allocation-free.
+//! allocations, steady-state operation (no new entities) is fully allocation-free.
 //!
 //! # quick start
 //!
@@ -96,10 +96,10 @@ pub use water::Water;
 /// common, game-facing 3D types for `use lunar::prelude::*`.
 ///
 /// the full surface (mesh internals, surface shaders, probe grids, propagation
-/// systems, …) stays at the crate root — reach it via `lunar::lunar_3d::X`.
+/// systems, …) stays at the crate root: reach it via `lunar::lunar_3d::X`.
 pub mod prelude {
 	// note: skeletal-animation types (`AnimationClip`, `AnimationPlayer`, …) are
-	// intentionally NOT here — they'd clash with the 2D sprite `animation` plugin's
+	// intentionally NOT here: they'd clash with the 2D sprite `animation` plugin's
 	// `AnimationClip`. reach them via `lunar::lunar_3d::AnimationClip`.
 	pub use crate::{
 		ActiveCamera3d, AmbientLight, Camera3d, Camera3dBundle, Collider3d, ColliderShape3d,

@@ -1,4 +1,4 @@
-//! prelude for lunar-core — re-exports bevy_ecs essentials and lunar-core's
+//! prelude for lunar-core: re-exports bevy_ecs essentials and lunar-core's
 //! own types (app/plugin, scenes, hierarchy, world manifest, etc.).
 //!
 //! domain crates (`lunar-dialogue`, `lunar-localization`, `lunar-zones`)

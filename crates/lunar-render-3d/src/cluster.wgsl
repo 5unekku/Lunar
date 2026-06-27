@@ -1,4 +1,4 @@
-// cluster light assignment — one thread per cluster cell, tests all lights.
+// cluster light assignment: one thread per cluster cell, tests all lights.
 // produces cluster_counts and cluster_light_indices for the fragment shader.
 //
 // cluster grid: CLUSTER_X × CLUSTER_Y × CLUSTER_Z (16×9×24 = 3456 cells).
@@ -18,7 +18,7 @@ struct ClusterParams {
     near:        f32,            //  4 bytes (offset 80)
     far:         f32,            //  4 bytes
     focal_x:     f32,            //  4 bytes  (proj[0][0])
-    _pad1:       f32,            //  4 bytes  — total: 96 bytes
+    _pad1:       f32,            //  4 bytes  // total: 96 bytes
 }
 
 struct PointLightEntry {

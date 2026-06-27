@@ -5,9 +5,9 @@ use lunar_math::Color;
 /// how a surface is shaded.
 ///
 /// matches what the reference engines use:
-/// - `Unlit` — no lighting, full-bright color/texture (HUD elements, debug geometry)
-/// - `Phong` — classic diffuse + specular, one texture per channel (Quake 3 / Doom 3 baseline)
-/// - `Pbr` — metallic-roughness PBR (Halo CE and later, modern target)
+/// - `Unlit`: no lighting, full-bright color/texture (HUD elements, debug geometry)
+/// - `Phong`: classic diffuse + specular, one texture per channel (Quake 3 / Doom 3 baseline)
+/// - `Pbr`: metallic-roughness PBR (Halo CE and later, modern target)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShadingModel {
 	Unlit,
@@ -19,7 +19,7 @@ pub enum ShadingModel {
 /// face culling mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CullMode {
-	/// cull back faces (standard — solids use this).
+	/// cull back faces (standard: solids use this).
 	#[default]
 	Back,
 	/// cull front faces (shadow volumes, portals).
@@ -30,14 +30,14 @@ pub enum CullMode {
 
 /// surface material data.
 ///
-/// defines how a mesh surface responds to light — color, roughness, metallic,
+/// defines how a mesh surface responds to light, color, roughness, metallic,
 /// normal map, and optional lightmap. pass to [`MeshRegistry::add_material`] to
 /// get a handle you can assign to a [`Material3d`] component.
 ///
 /// # normal maps
 ///
 /// normal maps use the Doom 3 / id Tech 4 convention: store only XY tangent-space
-/// components in R and G. do not store the Z component — it is reconstructed at runtime.
+/// components in R and G. do not store the Z component; it is reconstructed at runtime.
 ///
 /// # lightmap
 ///
@@ -50,14 +50,14 @@ pub struct MaterialData {
 	pub base_color: Color,
 	/// diffuse / albedo texture. none = use base_color alone.
 	pub diffuse: Option<Handle<Texture>>,
-	/// tangent-space normal map. XY channels only — Z reconstructed in shader.
+	/// tangent-space normal map. XY channels only; Z reconstructed in shader.
 	/// none = face normals only.
 	pub normal_map: Option<Handle<Texture>>,
 	/// specular texture:
 	/// - phong: intensity/gloss map (greyscale, sampled from B channel)
 	/// - pbr: roughness (R) + metallic (G) combined texture
 	pub specular: Option<Handle<Texture>>,
-	/// phong: specular exponent (shininess). typical range 8–128.
+	/// phong: specular exponent (shininess). typical range 8-128.
 	/// pbr: metallic factor (0.0 = dielectric, 1.0 = full metal).
 	pub specular_intensity: f32,
 	/// pbr: metallic factor. 0.0 = dielectric (plastic, stone), 1.0 = full metal.

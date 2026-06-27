@@ -25,15 +25,15 @@ fn setup(mut commands: Commands, mut assets: ResMut<AssetServer>) {
 
 `Plugin2d` advances all `SpriteAnimation` components automatically each tick and
 writes the correct `source_rect` into the paired `Sprite`. the sheet is assumed
-to be a horizontal strip — frame 0 is at x=0, frame 1 at x=frame_size.x, etc.
+to be a horizontal strip: frame 0 is at x=0, frame 1 at x=frame_size.x, etc.
 
 `SpriteAnimation` fields:
-- `frame_count: usize` — total number of frames in the strip
-- `frame_size: Vec2` — pixel size of one frame
-- `fps: f32` — playback speed in frames per second
-- `looping: bool` — restart from frame 0 when the last frame is reached
-- `current_frame: usize` — current frame index (writable to jump to a frame)
-- `timer: f32` — time accumulated since the last frame advance (writable to reset)
+- `frame_count: usize`: total number of frames in the strip
+- `frame_size: Vec2`: pixel size of one frame
+- `fps: f32`: playback speed in frames per second
+- `looping: bool`: restart from frame 0 when the last frame is reached
+- `current_frame: usize`: current frame index (writable to jump to a frame)
+- `timer: f32`: time accumulated since the last frame advance (writable to reset)
 
 to switch animations (e.g. idle → walk), swap the texture and reset the component:
 

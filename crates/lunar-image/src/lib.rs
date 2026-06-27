@@ -1,8 +1,8 @@
-//! Lunar Image Format (LIF / `.li`) — a fast, lossless, zstd-compressed
+//! Lunar Image Format (LIF / `.li`): a fast, lossless, zstd-compressed
 //! internal image format for the Lunar engine.
 //!
 //! designed for fast decode and direct GPU upload. not a general-purpose
-//! image format — source assets are PNG/WebP/BMP, compiled bundles use `.li`.
+//! image format: source assets are PNG/WebP/BMP, compiled bundles use `.li`.
 //!
 //! # quick start
 //!
@@ -80,7 +80,7 @@
 //! on the per-channel coherence from planar layout. measured gains: smooth gradients
 //! compress ~90% smaller, photographic content ~35% smaller than planar-only.
 //! flat/sparse sprites can come out slightly larger, so the encoder compresses both
-//! ways and keeps the smaller — the flag is only set when filtering wins, making it
+//! ways and keeps the smaller, the flag is only set when filtering wins, making it
 //! a guaranteed non-regression. decode cost is one extra linear pass, paid only on
 //! files that used it.
 //!

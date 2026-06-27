@@ -1,4 +1,4 @@
-//! engine patch traits — replace built-in render passes without forking.
+//! engine patch traits: replace built-in render passes without forking.
 //!
 //! each trait covers one hookable seam in the render pipeline. register an
 //! implementation on [`RenderEngine3d`] from a startup system and the engine
@@ -11,7 +11,7 @@
 //!
 //! impl ShadowProvider for FlatShadow {
 //!     fn render_shadows(&mut self, _context: ShadowCtx<'_>) {
-//!         // writes nothing — disables all shadows
+//!         // writes nothing: disables all shadows
 //!     }
 //! }
 //!
@@ -28,7 +28,7 @@ use bevy_ecs::world::World;
 
 /// input to a custom shadow provider, available each frame.
 pub struct ShadowCtx<'a> {
-    /// read-only world — query lights, transforms, shadow-caster flags, etc.
+    /// read-only world: query lights, transforms, shadow-caster flags, etc.
     pub world:             &'a World,
     pub device:            &'a wgpu::Device,
     pub queue:             &'a wgpu::Queue,

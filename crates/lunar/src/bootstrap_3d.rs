@@ -112,7 +112,7 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
 		// state and must stay valid for the whole lifetime of the surface.
 		// `window` is moved into `host` below; the explicit `drop(app)` after the
 		// loop tears the surface down (it lives in the `RenderEngine3d` app
-		// resource) while `host` — and thus `window` — is still alive, so the
+		// resource) while `host`, and thus `window`, is still alive, so the
 		// window outlives the surface, satisfying `create_surface_unsafe`.
 		instance
 			.create_surface_unsafe(
@@ -145,7 +145,7 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
 
 	app.add_plugin(Plugin::default());
 
-	// stop after the first rendered frame — only active when --smoke is passed in debug builds
+	// stop after the first rendered frame: only active when --smoke is passed in debug builds
 	#[cfg(debug_assertions)]
 	if smoke {
 		use lunar_core::{EngineState, Time};
@@ -174,7 +174,7 @@ pub fn bootstrap_3d<Plugin: lunar_core::GamePlugin + Default + 'static>(
 	});
 
 	// tear the surface down (lives in the RenderEngine3d app resource) before
-	// `host`/`window` drop at scope exit — wgpu requires the window to outlive
+	// `host`/`window` drop at scope exit: wgpu requires the window to outlive
 	// the surface created from its handles.
 	drop(app);
 

@@ -23,7 +23,7 @@
 //!     ..
 //! });
 //!
-//! // add the plugin — registers BVH build + portal cull systems
+//! // add the plugin: registers BVH build + portal cull systems
 //! app.add_plugin(BspPlugin);
 //! ```
 //!

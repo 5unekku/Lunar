@@ -5,7 +5,7 @@
 //! the mechanism that lets game crates depend on `lunar` alone without
 //! needing `bevy_ecs` in their `Cargo.toml`.
 //!
-//! Game code should never name this crate directly — `lunar` re-exports the
+//! Game code should never name this crate directly, `lunar` re-exports the
 //! derives at its crate root (`lunar::Component`, `lunar::Resource`, etc.)
 //! and through `lunar::prelude`.
 //!
@@ -33,9 +33,9 @@ use syn::{DeriveInput, parse_macro_input};
 ///
 /// # path resolution
 ///
-/// - `texture!("sprites/player")` — finds `player.webp`, `player.png`, etc.
+/// - `texture!("sprites/player")`: finds `player.webp`, `player.png`, etc.
 ///   fails to compile if none or more than one match exists.
-/// - `texture!("sprites/player.webp")` — explicit extension; validates magic bytes.
+/// - `texture!("sprites/player.webp")`: explicit extension; validates magic bytes.
 ///
 /// # example
 ///
@@ -140,7 +140,7 @@ fn resolve_texture(
 		.unwrap_or("")
 		.to_lowercase();
 
-	// explicit extension — one candidate
+	// explicit extension: one candidate
 	if format_from_ext(&ext).is_some() {
 		let full = assets_dir.join(path_str);
 		if !full.exists() {
@@ -159,14 +159,14 @@ fn resolve_texture(
 			return Err(syn::Error::new(
 				span,
 				format!(
-					"{path_str}: extension says {ext} but magic bytes say otherwise — rename the file to match its actual format"
+					"{path_str}: extension says {ext} but magic bytes say otherwise. rename the file to match its actual format"
 				),
 			));
 		}
 		return Ok((full, detected));
 	}
 
-	// bare name — search for candidates
+	// bare name: search for candidates
 	let stem = path_str.trim_end_matches('/');
 	let candidates: Vec<(PathBuf, ImageFormat)> = ["webp", "png", "jpg", "jpeg", "bmp"]
 		.iter()
@@ -207,7 +207,7 @@ fn resolve_texture(
 			Err(syn::Error::new(
 				span,
 				format!(
-					"ambiguous: multiple images match \"{path_str}\" — use the full name with extension ({})",
+					"ambiguous: multiple images match \"{path_str}\". use the full name with extension ({})",
 					names.join(", ")
 				),
 			))
@@ -254,7 +254,7 @@ pub fn derive_component(input: TokenStream) -> TokenStream {
 	.into()
 }
 
-/// Derive `Resource` for a type. `Resource` is a marker trait — no associated
+/// Derive `Resource` for a type. `Resource` is a marker trait: no associated
 /// items.
 #[proc_macro_derive(Resource)]
 pub fn derive_resource(input: TokenStream) -> TokenStream {

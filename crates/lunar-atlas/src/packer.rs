@@ -119,7 +119,7 @@ impl AtlasPacker {
 			});
 		}
 
-		// pass 2: allocate exact canvas and blit — no over-allocation
+		// pass 2: allocate exact canvas and blit, no over-allocation
 		let mut packed = Image::new(used_w, used_h);
 		for source in &sorted {
 			if let Some(region) = regions.get(&source.name) {

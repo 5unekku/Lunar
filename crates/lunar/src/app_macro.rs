@@ -2,7 +2,7 @@
 ///
 /// generates a `main` that hands off to [`bootstrap`](crate::bootstrap), which
 /// initializes SDL3, creates a window, sets up the wgpu render surface, adds all
-/// built-in plugins, and runs the game loop. this is purely sugar — calling
+/// built-in plugins, and runs the game loop. this is purely sugar, calling
 /// `lunar::bootstrap::<MyGame>(config)` directly is equivalent.
 ///
 /// fullscreen: F11 or Alt+Enter. game code can rebind F11 via [`ActionMap`](crate::ActionMap).

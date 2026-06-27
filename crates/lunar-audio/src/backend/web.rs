@@ -2,7 +2,7 @@
 //!
 //! cpal's webaudio host wraps the browser's AudioContext and runs the callback
 //! on the main thread under a ScriptProcessorNode. latency is higher than native
-//! (~50–100 ms typical) but it's the only safe option without AudioWorklet.
+//! (~50-100 ms typical) but it's the only safe option without AudioWorklet.
 
 use crate::mixer::Mixer;
 use crate::source::{AudioSource, SAMPLE_RATE};
@@ -12,7 +12,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 // cpal's webaudio Stream holds JS objects (AudioContext, callbacks) and is !Send.
 // SAFETY: wasm32-unknown-unknown without the `atomics` target feature is
-// single-threaded — no second thread can exist to observe the stream, so Send is
+// single-threaded: no second thread can exist to observe the stream, so Send is
 // vacuously satisfied. revisit if wasm threads are ever enabled for this target.
 struct StreamHandle(#[allow(dead_code)] cpal::Stream);
 unsafe impl Send for StreamHandle {}

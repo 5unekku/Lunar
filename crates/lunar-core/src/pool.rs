@@ -1,4 +1,4 @@
-//! entity pooling — pre-spawned, reusable entities for high-churn objects.
+//! entity pooling: pre-spawned, reusable entities for high-churn objects.
 //!
 //! insert a [`Pool`] resource to maintain a reservoir of dormant entities.
 //! calling [`Pool::acquire`] pops one from the pool and marks it active;
@@ -35,7 +35,7 @@ use bevy_ecs::prelude::*;
 
 /// pre-spawned entity reservoir for high-churn objects like bullets or particles.
 ///
-/// entities in the pool are considered dormant — game code should hide or disable
+/// entities in the pool are considered dormant, game code should hide or disable
 /// them when released (e.g. move off-screen, remove render components). acquire
 /// reactivates one; release puts it back. grows automatically when empty.
 #[derive(Resource)]

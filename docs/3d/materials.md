@@ -1,7 +1,7 @@
 # 3d materials
 
 meshes and materials are registered in `MeshRegistry` (a resource inserted by `Plugin3d`)
-and referenced by handle. they are not assets loaded from disk — they live in the registry.
+and referenced by handle. they are not assets loaded from disk: they live in the registry.
 
 ## creating a material
 
@@ -44,21 +44,21 @@ fn setup(mut registry: ResMut<MeshRegistry>, mut assets: ResMut<AssetServer>) {
 | `diffuse` | `Option<Handle<Texture>>` | albedo texture |
 | `normal_map` | `Option<Handle<Texture>>` | tangent-space normal map (XY only, Z reconstructed) |
 | `specular` | `Option<Handle<Texture>>` | phong: intensity map; pbr: R=roughness, G=metallic |
-| `specular_intensity` | `f32` | phong shininess (8–128); pbr metallic factor |
+| `specular_intensity` | `f32` | phong shininess (8-128); pbr metallic factor |
 | `metallic` | `f32` | pbr: 0.0 = dielectric, 1.0 = full metal |
 | `roughness` | `f32` | pbr: 0.04 = mirror-smooth, 1.0 = fully diffuse |
 | `alpha` | `f32` | < 1.0 enables alpha blending |
 | `depth_write` | `bool` | false for decals, transparent surfaces, particles |
 
 `ShadingModel` variants:
-- `Unlit` — no lighting, full-bright (HUD elements, debug)
-- `Phong` — classic diffuse + specular (Quake 3 / Doom 3 baseline, default)
-- `Pbr` — metallic-roughness physically-based rendering
+- `Unlit`: no lighting, full-bright (HUD elements, debug)
+- `Phong`: classic diffuse + specular (Quake 3 / Doom 3 baseline, default)
+- `Pbr`: metallic-roughness physically-based rendering
 
 ## normal map convention
 
 normal maps use the **Doom 3 / id Tech 4 convention**: store only XY tangent-space
-components in R and G. do not store Z — the shader reconstructs it as `sqrt(1 - x² - y²)`.
+components in R and G. do not store Z: the shader reconstructs it as `sqrt(1 - x² - y²)`.
 this allows packing other data in the B channel.
 
 ## transparent materials

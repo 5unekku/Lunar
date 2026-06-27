@@ -1,4 +1,4 @@
-// screen-space reflections — half-resolution ray march over the HDR buffer.
+// screen-space reflections: half-resolution ray march over the HDR buffer.
 //
 // mid+ tier only. reads scene depth via textureLoad (no sampler needed for depth),
 // then marches the reflected ray in clip space, sampling the HDR color on hit.

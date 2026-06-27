@@ -17,7 +17,7 @@ use lunar_math::{LocalTransform, Vec2, WorldTransform};
 
 use collision::build_collision_world;
 
-/// scratch buffers for `propagate_transforms` — allocated once, reused every frame.
+/// scratch buffers for `propagate_transforms`: allocated once, reused every frame.
 #[derive(Default, Resource)]
 struct TransformScratch2d {
 	snapshot: Vec<(Entity, LocalTransform, Option<Entity>)>,
@@ -35,7 +35,7 @@ struct TransformScratch2d {
 
 /// plugin that registers the 2d transform propagation system.
 ///
-/// add this alongside [`lunar_core::HierarchyPlugin`] — hierarchy manages
+/// add this alongside [`lunar_core::HierarchyPlugin`]; hierarchy manages
 /// parent/child relationships, plugin2d propagates 2d transforms through them.
 pub struct Plugin2d;
 
@@ -59,7 +59,7 @@ impl GamePlugin for Plugin2d {
 /// exclusive system that propagates 2d transforms from parents to children.
 ///
 /// O(N log N) sort + binary-search parent lookups, then one transform compose per entity.
-/// all scratch vecs are reused each frame — no per-frame heap allocation in steady state.
+/// all scratch vecs are reused each frame; no per-frame heap allocation in steady state.
 pub fn propagate_transforms(world: &mut World) {
 	let mut scratch = world
 		.remove_resource::<TransformScratch2d>()

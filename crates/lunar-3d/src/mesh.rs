@@ -87,7 +87,7 @@ impl Default for SkinWeights {
 	}
 }
 
-/// index format — 16-bit for meshes under 65536 verts, 32-bit for larger ones.
+/// index format: 16-bit for meshes under 65536 verts, 32-bit for larger ones.
 ///
 /// prefer u16 where possible: half the index buffer size, better GPU cache utilization.
 #[derive(Debug, Clone)]
@@ -141,7 +141,7 @@ pub struct MeshData {
 	pub skin: Option<Vec<SkinWeights>>,
 	pub usage: MeshUsage,
 	/// when true, the renderer drops vertex/index data from MeshRegistry after GPU upload.
-	/// safe to set after collision world is built — Collider3d holds its own vertex copy.
+	/// safe to set after collision world is built, Collider3d holds its own vertex copy.
 	/// do not set for skinned meshes (cpu data needed for bone blending).
 	pub gpu_only: bool,
 }
@@ -252,7 +252,7 @@ impl ImpostorAtlas {
 /// renderer substitutes a camera-facing quad rendered with the impostor atlas texture
 /// instead of the full mesh. zero vertex throughput: just one quad (2 triangles).
 ///
-/// pairs naturally with [`MeshLod`] — add the coarsest LOD level at the distance
+/// pairs naturally with [`MeshLod`], add the coarsest LOD level at the distance
 /// where the mesh still looks correct, then add `MeshImpostor` to kick in beyond that.
 ///
 /// # workflow

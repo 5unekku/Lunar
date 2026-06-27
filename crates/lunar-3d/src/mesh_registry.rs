@@ -12,7 +12,7 @@ use crate::mesh::MeshData;
 /// [`Handle`]s back. the 3d renderer reads from this registry to
 /// upload data to the GPU on first use.
 ///
-/// insert via [`Plugin3d`](crate::plugin::Plugin3d) — no manual setup needed.
+/// insert via [`Plugin3d`](crate::plugin::Plugin3d), no manual setup needed.
 ///
 /// # example
 ///

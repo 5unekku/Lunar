@@ -2,53 +2,53 @@
 
 ## project rules
 
-- **audio is minimal** — `lunar-audio` (cubeb native, cpal on wasm) lives here behind the off-by-default `audio` feature. deeper audio work (tracker engines, DSP, mixing graphs) belongs to the moonwalker project.
-- **no async runtime** — async needs are covered by `pollster::block_on` (wgpu init), `std::thread` + crossbeam (asset IO), and `wasm_bindgen_futures::spawn_local` (wasm fetch). rayon only if profiling proves it necessary.
-- **prelude is the contract** — game code depends only on `lunar`. `bevy_ecs`, `wgpu`, `sdl3` never appear in a game's `Cargo.toml`. any leak is a bug.
-- **editor is downstream** — the editor lives in a separate repo that depends on `lunar`. no editor code in this workspace.
-- **performance trinity** — maximum performance, optimized resources, ease of use. YAGNI / KISS / DRY. unsafe only in engine internals with `// SAFETY:` blocks.
-- **breaking changes are fine** — this codebase has no public users. never add backward-compat shims. just change the thing.
+- **audio is minimal**: `lunar-audio` (cubeb native, cpal on wasm) lives here behind the off-by-default `audio` feature. deeper audio work (tracker engines, DSP, mixing graphs) belongs to the moonwalker project.
+- **no async runtime**: async needs are covered by `pollster::block_on` (wgpu init), `std::thread` + crossbeam (asset IO), and `wasm_bindgen_futures::spawn_local` (wasm fetch). rayon only if profiling proves it necessary.
+- **prelude is the contract**: game code depends only on `lunar`. `bevy_ecs`, `wgpu`, `sdl3` never appear in a game's `Cargo.toml`. any leak is a bug.
+- **editor is downstream**: the editor lives in a separate repo that depends on `lunar`. no editor code in this workspace.
+- **performance trinity**: maximum performance, optimized resources, ease of use. YAGNI / KISS / DRY. unsafe only in engine internals with `// SAFETY:` blocks.
+- **breaking changes are fine**: this codebase has no public users. never add backward-compat shims. just change the thing.
 
 ## code style
 
 **naming**
-- no abbreviated names — `request` not `req`, `transform` not `tr`, `texture` not `tex`
+- no abbreviated names: `request` not `req`, `transform` not `tr`, `texture` not `tex`
 - unused parameters must be prefixed with `_`
 - prefer self-documenting names; use doc comments (`///`) so tooling can surface them
 
 **comments**
-- lowercase, casual, succinct — capitalize only proper names and identifiers
+- lowercase, casual, succinct: capitalize only proper names and identifiers
 - only comment the _why_, never the _what_; good names make the what obvious
 
 **formatting**
-- functions: no space before `(` — `fn spawn(mut commands: Commands) {`
-- control flow: space before and after parens, space before brace — `if (x) {`, `for (item in list) {`
+- functions: no space before `(`: `fn spawn(mut commands: Commands) {`
+- control flow: space before and after parens, space before brace: `if (x) {`, `for (item in list) {`
 - one-liners when possible; break to next line + indent only when using braces
-- never use braces on a one-liner — use expression/arrow syntax:
+- never use braces on a one-liner: use expression/arrow syntax:
   - `fn name(&self) -> &str { "MyPlugin" }` → `fn name(&self) -> &str => "MyPlugin"`
   - or just the inline block form if the language requires it
-- when braces are required (multi-statement body), always break lines — never inline brace bodies
+- when braces are required (multi-statement body), always break lines: never inline brace bodies
 
 ## hosting & publishing
 
-- **[GitLab](https://gitlab.com/5unekku/Lunar)** is the canonical home — development and contributions (MRs) live here
+- **[GitLab](https://gitlab.com/5unekku/Lunar)** is the canonical home: development and contributions (MRs) live here
 - **[GitHub](https://github.com/5unekku/Lunar)** runs CI (Actions) and handles crates.io integration
 - **[Codeberg](https://codeberg.org/5unekku/Lunar)** is a mirror
 
-CI runs on GitHub Actions (`.github/workflows/ci.yml`): clippy, tests, a wasm build, an xvfb smoke run, and a zigbuild cross matrix over the supported linux/windows triples. this is a library, not a deployed service — the release job is `cargo publish` to crates.io.
+CI runs on GitHub Actions (`.github/workflows/ci.yml`): clippy, tests, a wasm build, an xvfb smoke run, and a zigbuild cross matrix over the supported linux/windows triples. this is a library, not a deployed service; the release job is `cargo publish` to crates.io.
 
 ## render rules
 
 violations have known downstream costs:
 
 1. no CPU wait on `Device::poll(WaitForSubmissionIndex)` from the render thread steady-state path
-2. no allocations in the render hot path — use pre-allocated scratch resources that clear each frame
-3. no GPU readback in steady state (fatal on ARM — full pipeline stall)
+2. no allocations in the render hot path: use pre-allocated scratch resources that clear each frame
+3. no GPU readback in steady state (fatal on ARM: full pipeline stall)
 4. no shader compilation mid-frame (compile in queue/prepare stage)
 5. every `wgpu::Buffer` and `wgpu::Texture` must have a non-empty label
-6. all GPU-bound structs: `#[repr(C)]` + `bytemuck::Pod + Zeroable`, no `Vec3` (use `Vec4` or `[f32; 4]` — std140 expands Vec3 silently)
-7. all matrices: column-major, standard-z convention (near=0, far=1, Less/LessEqual compares, sky at depth 1) — reverse-z is a possible future precision upgrade but it must flip every depth compare, clear, and shader test in one sweep
-8. `wgpu::Limits::default()` is the floor — never rely on elevated limits without a feature gate
+6. all GPU-bound structs: `#[repr(C)]` + `bytemuck::Pod + Zeroable`, no `Vec3` (use `Vec4` or `[f32; 4]`; std140 expands Vec3 silently)
+7. all matrices: column-major, standard-z convention (near=0, far=1, Less/LessEqual compares, sky at depth 1): reverse-z is a possible future precision upgrade but it must flip every depth compare, clear, and shader test in one sweep
+8. `wgpu::Limits::default()` is the floor: never rely on elevated limits without a feature gate
 
 ## render principles
 

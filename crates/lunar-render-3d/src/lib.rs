@@ -6,7 +6,7 @@
 
 // on wasm, many native-only items (shadow shaders, mega-buffer constants, etc.)
 // have no callers since their use sites are #[cfg(not(wasm32))]. suppress the
-// resulting dead_code noise — the items are genuinely used on native.
+// resulting dead_code noise; the items are genuinely used on native.
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 //!
 //! # rendering model
@@ -120,7 +120,7 @@ const STAA_HISTORY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Floa
 /// build a `wgpu::ShaderModule`, taking the SPIR-V passthrough path when `$passthrough` is set.
 ///
 /// passthrough hands the precompiled SPIR-V straight to the driver, skipping wgpu's runtime naga
-/// re-validation — safe here because `build.rs` already validated every module at compile time.
+/// re-validation; safe here because `build.rs` already validated every module at compile time.
 /// only ever enabled on Vulkan with the `PASSTHROUGH_SHADERS` feature; otherwise this is exactly
 /// the old `create_shader_module(shader_source!(…))` behaviour (wgsl in debug/wasm, spirv in
 /// native release). all pipelines use explicit layouts, so the lack of reflection is fine.
@@ -164,7 +164,7 @@ macro_rules! make_shader {
 	}};
 }
 
-// method impls split across sibling modules — declared after `make_shader!`
+// method impls split across sibling modules, declared after `make_shader!`
 // so the macro is in textual scope for the modules that expand it.
 pub mod hooks;
 mod config;
@@ -181,7 +181,7 @@ const SUN_Y: f32 = 895.0;
 
 // quantized gpu vertex: 36 bytes (vs cpu Vertex3d 60 bytes).
 // normals/tangents snorm8×4, position stays f32.
-// primary uv stays f32 too — tiled geometry (e.g. classic level formats) uses
+// primary uv stays f32 too: tiled geometry (e.g. classic level formats) uses
 // coordinates far outside [0,1], which unorm quantization would clamp.
 // lightmap uv is always atlas-normalized [0,1] so unorm16 is safe there.
 // the upload path converts Vertex3d → GpuVertex3d at upload time.
@@ -189,10 +189,10 @@ const SUN_Y: f32 = 895.0;
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GpuVertex3d {
 	position: [f32; 3],    // 12 bytes
-	normal: [i8; 4],       // 4 bytes — snorm8×4, w=0
-	tangent: [i8; 4],      // 4 bytes — snorm8×4, w=handedness (±127)
-	uv: [f32; 2],          // 8 bytes — float32×2 (unbounded for tiling)
-	uv_lightmap: [u16; 2], // 4 bytes — unorm16×2
+	normal: [i8; 4],       // 4 bytes: snorm8×4, w=0
+	tangent: [i8; 4],      // 4 bytes: snorm8×4, w=handedness (±127)
+	uv: [f32; 2],          // 8 bytes: float32×2 (unbounded for tiling)
+	uv_lightmap: [u16; 2], // 4 bytes: unorm16×2
 	color: [u8; 4],        // 4 bytes
 }
 
@@ -306,7 +306,7 @@ const WATER_PARAMS_SIZE: u64 = 192;
 /// terrain params UBO per ring: ring_origin(16)+terrain_origin(16)+misc(16)+tint(16)+sun_dir(16)+ambient_pad(16) = 96 bytes.
 const TERRAIN_PARAMS_SIZE: u64 = 96;
 
-/// stride for dynamic UBO slots — must be ≥ min_uniform_buffer_offset_alignment (256).
+/// stride for dynamic UBO slots: must be ≥ min_uniform_buffer_offset_alignment (256).
 const UNIFORM_STRIDE: u64 = 256;
 
 /// initial number of slots (dome + sun + entities) in the entity uniform buffer.
@@ -337,14 +337,14 @@ struct SurfaceStagePacked {
 
 struct GpuMesh {
 	vbuf: wgpu::Buffer,
-	/// positions-only (f32x3, 12 bytes/vertex) — bound in shadow and z-prepass pipelines
+	/// positions-only (f32x3, 12 bytes/vertex): bound in shadow and z-prepass pipelines
 	pos_buf: wgpu::Buffer,
 	ibuf: wgpu::Buffer,
 	index_count: u32,
 	index_fmt: wgpu::IndexFormat,
 }
 
-/// per-particle GPU layout — must match the WGSL Particle struct exactly.
+/// per-particle GPU layout: must match the WGSL Particle struct exactly.
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct GpuParticle {
@@ -473,15 +473,15 @@ pub enum QualityPreset {
 /// users control it through [`QualitySettings::upscale_mode`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpscaleMode {
-	/// integer-aligned point sampling — zero blur, correct for pixel art at integer scales.
+	/// integer-aligned point sampling: zero blur, correct for pixel art at integer scales.
 	Nearest,
-	/// hardware bilinear — essentially free, acceptable general-purpose quality.
+	/// hardware bilinear: essentially free, acceptable general-purpose quality.
 	Linear,
-	/// Lanczos-2 — sharper than bilinear, preserves fine detail better.
+	/// Lanczos-2: sharper than bilinear, preserves fine detail better.
 	Lanczos,
-	/// Mitchell-Netravali bicubic — smooth upscaling, good for 2D and UI-heavy content.
+	/// Mitchell-Netravali bicubic: smooth upscaling, good for 2D and UI-heavy content.
 	Bicubic,
-	/// FSR 3 EASU + RCAS — edge-adaptive spatial upsampling with contrast sharpening.
+	/// FSR 3 EASU + RCAS: edge-adaptive spatial upsampling with contrast sharpening.
 	/// best quality for rendered 3D content; two-pass algorithm.
 	Fsr3,
 }
@@ -520,7 +520,7 @@ pub struct QualitySettings {
 	/// mid/high tier uses MSAA instead and leaves this off by default.
 	pub fxaa: bool,
 	/// enable selective TAA: stabilizes shimmer and accumulates jitter-based sub-pixel AA.
-	/// only modifies edge-adjacent and shimmering pixels — smooth surfaces pass through unchanged.
+	/// only modifies edge-adjacent and shimmering pixels; smooth surfaces pass through unchanged.
 	/// runs on top of MSAA on mid/high tier. requires compute (non-GLES).
 	pub staa: bool,
 	/// enable quarter-res screen-space reflections (mid+ tier).
@@ -648,7 +648,7 @@ impl QualitySettings {
 				chromatic_aberration: false,
 				film_grain: false,
 				particle_cap: 1024,
-				fxaa: true, // no MSAA on low tier — FXAA is the only AA path
+				fxaa: true, // no MSAA on low tier; FXAA is the only AA path
 				staa: false,
 				ssr: false,
 				volumetric_fog: false,
@@ -668,7 +668,7 @@ impl QualitySettings {
 				chromatic_aberration: false,
 				film_grain: false,
 				particle_cap: 8192,
-				fxaa: false, // 4× MSAA is active — FXAA redundant
+				fxaa: false, // 4× MSAA is active; FXAA redundant
 				staa: true,  // selective temporal AA on top of MSAA: shimmer + sub-pixel jitter
 				ssr: true,
 				volumetric_fog: true,
@@ -769,7 +769,7 @@ impl Default for AutoQuality {
 
 // ── visual style / lighting model ────────────────────────────────────────────
 
-/// global lighting model for lit meshes — a quality tier that controls how much
+/// global lighting model for lit meshes: a quality tier that controls how much
 /// shading work the GPU does per pixel, independent of per-material [`lunar_3d::ShadingModel`].
 ///
 /// cheaper tiers skip whole shader blocks, so a simpler look automatically costs
@@ -780,10 +780,10 @@ pub enum LightingModel {
 	/// full PBR: GGX specular, Fresnel, Smith geometry, SH ambient, soft shadows.
 	#[default]
 	Pbr,
-	/// Lambert diffuse only — no specular, no Fresnel. keeps dynamic lights and
+	/// Lambert diffuse only: no specular, no Fresnel. keeps dynamic lights and
 	/// shadows but drops the expensive microfacet terms.
 	Lambert,
-	/// lightmap + ambient only — no runtime light or shadow loops at all.
+	/// lightmap + ambient only: no runtime light or shadow loops at all.
 	/// the cheapest lit path; pair with baked GI.
 	Baked,
 }
@@ -805,24 +805,24 @@ impl LightingModel {
 /// coarser dots). only has an effect when [`VisualStyle::color_bits`] is set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DitherMode {
-	/// no dithering — quantization produces hard colour bands.
+	/// no dithering: quantization produces hard colour bands.
 	#[default]
 	Off,
 	/// 2×2 Bayer matrix.
 	Bayer2,
 	/// 4×4 Bayer matrix.
 	Bayer4,
-	/// 8×8 Bayer matrix — finest dot pattern, smoothest gradients.
+	/// 8×8 Bayer matrix: finest dot pattern, smoothest gradients.
 	Bayer8,
 }
 
 /// HDR → LDR transfer applied in the composite pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TonemapMode {
-	/// ACES filmic curve — the cinematic default for lit/PBR content.
+	/// ACES filmic curve: the cinematic default for lit/PBR content.
 	#[default]
 	Aces,
-	/// plain clamp to [0, 1] — preserves authored colors exactly. ACES crushes
+	/// plain clamp to [0, 1]: preserves authored colors exactly. ACES crushes
 	/// dark values, so unlit retro content (palette-based games, vertex-lit
 	/// surfaces) should use this.
 	Clamp,
@@ -844,7 +844,7 @@ impl DitherMode {
 /// composable render style knobs. every field is neutral by default, so a default
 /// `VisualStyle` is a guaranteed no-op that renders exactly as before.
 ///
-/// each option is a genuine cost reduction when enabled — never an added pass on top
+/// each option is a genuine cost reduction when enabled, never an added pass on top
 /// of the default path. the quantize/dither is a few ALU ops at the tail of the
 /// existing composite pass; a lighting downgrade removes shader work; vertex snapping
 /// is two vertex ops. a simpler look automatically costs less.
@@ -906,7 +906,7 @@ impl VisualStyle {
 		}
 	}
 
-	/// true when every option is at its default — lets the renderer skip all style work.
+	/// true when every option is at its default; lets the renderer skip all style work.
 	#[must_use]
 	pub fn is_neutral(&self) -> bool {
 		self.color_bits == 0
@@ -921,7 +921,7 @@ impl VisualStyle {
 
 // ── dev render profile ────────────────────────────────────────────────────
 
-/// what the game is designed to use — a per-feature ceiling the developer controls.
+/// what the game is designed to use: a per-feature ceiling the developer controls.
 ///
 /// `QualitySettings` is the user's slider within this ceiling. `DevRenderProfile`
 /// is the developer's decision about the game's visual design. they are orthogonal:
@@ -934,7 +934,7 @@ impl VisualStyle {
 /// here are never executed regardless of user or hardware tier.
 ///
 /// insert as a resource before adding `RenderPlugin3d`. if not inserted, `default()` is
-/// used — every feature the hardware supports is available to the user.
+/// used; every feature the hardware supports is available to the user.
 #[derive(Resource, Clone)]
 pub struct DevRenderProfile {
 	/// real-time cascaded shadow maps. disable for fully lightmapped games (quake-style).
@@ -957,7 +957,7 @@ pub struct DevRenderProfile {
 	pub chromatic_aberration: bool,
 	/// film grain overlay.
 	pub film_grain: bool,
-	/// maximum shadow cascades the game will use (developer ceiling, 1–3).
+	/// maximum shadow cascades the game will use (developer ceiling, 1-3).
 	/// independently from whether shadows are on, this caps the cascade count
 	/// regardless of what the user's quality preset requests.
 	pub max_shadow_cascades: u32,
@@ -965,7 +965,7 @@ pub struct DevRenderProfile {
 	pub max_msaa: u32,
 	/// maximum particle cap. keep low for lightweight games, high for effects-heavy titles.
 	pub max_particles: u32,
-	/// point light cube shadow maps. off by default — enable for doom/hl2 style flashlight games.
+	/// point light cube shadow maps. off by default; enable for doom/hl2 style flashlight games.
 	/// requires `with_point_light_shadows(true)` since `classic()` leaves this off.
 	pub point_light_shadows: bool,
 	/// maximum point lights in the scene. classic/standard cap at 8; full allows up to 256
@@ -982,12 +982,12 @@ pub struct DevRenderProfile {
 	/// example: `Some(UpscaleMode::Nearest)` for pixel art games.
 	pub forced_upscale_mode: Option<UpscaleMode>,
 	/// composable render style options (colour quantization, dithering, lighting model,
-	/// vertex snapping, affine textures). neutral by default — costs nothing until set.
+	/// vertex snapping, affine textures). neutral by default, costs nothing until set.
 	pub style: VisualStyle,
 }
 
 impl Default for DevRenderProfile {
-	/// defaults to `classic()` — no runtime lighting, no post-processing.
+	/// defaults to `classic()`: no runtime lighting, no post-processing.
 	/// the cheapest possible starting point. devs opt in to complexity rather than
 	/// opting out of it. this matches the accessibility goal.
 	fn default() -> Self {
@@ -1051,7 +1051,7 @@ impl DevRenderProfile {
 		}
 	}
 
-	/// everything on — full modern pipeline. use for photorealistic / high-budget titles.
+	/// everything on: full modern pipeline. use for photorealistic / high-budget titles.
 	/// user can turn individual features off but this is the ceiling.
 	#[must_use]
 	pub fn full() -> Self {
@@ -1231,7 +1231,7 @@ pub struct RenderConfig3d {
 	pub vsync: bool,
 	/// target render frame cap (0 = uncapped/vsync-limited)
 	pub frame_cap: u32,
-	/// fixed logic tick rate — independent of render frame rate
+	/// fixed logic tick rate, independent of render frame rate
 	pub tick_rate: lunar_core::TickRate,
 	/// window title bar text.
 	pub title: String,
@@ -1336,7 +1336,7 @@ struct FrameContext {
 ///
 /// buffers and bind groups are persistent; only `params_buf` is re-written each frame
 /// and the bind groups are rebuilt when the resolved density/atlas texture view changes
-/// (tracked via `density_key`/`atlas_key` — `(texture id, uploaded yet?)`).
+/// (tracked via `density_key`/`atlas_key`: `(texture id, uploaded yet?)`).
 struct DetailSpriteEntry {
 	inst_buf: wgpu::Buffer,
 	count_buf: wgpu::Buffer,
@@ -1351,7 +1351,7 @@ struct DetailSpriteEntry {
 /// the 3d rendering engine. owns the wgpu device, queue, and surface.
 ///
 /// inserted as a resource by [`RenderPlugin3d`]. game code should not
-/// interact with this directly — use [`MeshRegistry`] and ECS components instead.
+/// interact with this directly; use [`MeshRegistry`] and ECS components instead.
 #[derive(Resource)]
 #[allow(dead_code)]
 pub struct RenderEngine3d {
@@ -1384,13 +1384,13 @@ pub struct RenderEngine3d {
 	globals_bg: wgpu::BindGroup,
 	globals_bgl: wgpu::BindGroupLayout,
 
-	// group 1: material (base_color — dynamic UBO, one slot per draw call)
+	// group 1: material (base_color, dynamic UBO, one slot per draw call)
 	material_bgl: wgpu::BindGroupLayout,
 	material_buf: wgpu::Buffer,
 	material_bg: wgpu::BindGroup,
 	material_staging: Vec<u8>,
 
-	// group 2: per-mesh (model matrix — dynamic UBO, one slot per draw call)
+	// group 2: per-mesh (model matrix, dynamic UBO, one slot per draw call)
 	mesh_bgl: wgpu::BindGroupLayout,
 	entity_buf: wgpu::Buffer,
 	entity_bg: wgpu::BindGroup,
@@ -1408,7 +1408,7 @@ pub struct RenderEngine3d {
 	shadow_map_view: wgpu::TextureView,
 	shadow_sampler: wgpu::Sampler,
 
-	// shadow pass — 3 cascades, each a layer of the array depth texture
+	// shadow pass: 3 cascades, each a layer of the array depth texture
 	shadow_globals_buf: wgpu::Buffer, // 3 × UNIFORM_STRIDE slots
 	shadow_globals_bgl: wgpu::BindGroupLayout,
 	shadow_globals_bg: wgpu::BindGroup, // bound with dynamic offset per cascade
@@ -1424,7 +1424,7 @@ pub struct RenderEngine3d {
 	shadow_entities_scratch: HashSet<Entity>,
 	shadow_list_scratch: Vec<(u32, usize)>,
 
-	// point light cube shadow maps — 4 lights × 6 faces as 24-layer depth 2D array.
+	// point light cube shadow maps: 4 lights × 6 faces as 24-layer depth 2D array.
 	// layer = shadow_index * 6 + face; face order: 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z.
 	point_shadow_tex: wgpu::Texture,
 	point_shadow_face_views: Vec<wgpu::TextureView>,
@@ -1470,7 +1470,7 @@ pub struct RenderEngine3d {
 	dome_mesh: GpuMesh,
 	sun_mesh: GpuMesh,
 
-	// HDR render target — color pass writes here; bloom + composite read it
+	// HDR render target: color pass writes here; bloom + composite read it
 	hdr_texture: wgpu::Texture,
 	hdr_view: wgpu::TextureView,
 
@@ -1515,7 +1515,7 @@ pub struct RenderEngine3d {
 	// second depth-only pass at sample_count=1 for GTAO depth input
 	zprepass_nonmsaa_pipeline: wgpu::RenderPipeline,
 
-	// dynamic resolution scaling — EMA of frame time drives scale adjustments
+	// dynamic resolution scaling: EMA of frame time drives scale adjustments
 	frame_time_ema_ms: f32,
 	resolution_scale: f32,     // current scale factor [0.5, 1.0]
 	frame_time_budget_ms: f32, // target frame time (e.g. 14 ms for 60 fps)
@@ -1523,13 +1523,13 @@ pub struct RenderEngine3d {
 	auto_quality_over_frames: u32,  // frames consecutively over budget
 	auto_quality_under_frames: u32, // frames consecutively under budget
 
-	// FXAA post-process AA — single pass on LDR composite output (low tier only)
-	// upscaling — active when render_scale < 1.0. all modes share one BGL.
+	// FXAA post-process AA: single pass on LDR composite output (low tier only)
+	// upscaling: active when render_scale < 1.0. all modes share one BGL.
 	upscale_active: bool,
-	// render-resolution LDR target — composite writes here when upscaling
+	// render-resolution LDR target: composite writes here when upscaling
 	fsr_ldr_texture: Option<wgpu::Texture>,
 	fsr_ldr_view: Option<wgpu::TextureView>,
-	// display-resolution intermediate — single-pass modes write output here;
+	// display-resolution intermediate: single-pass modes write output here;
 	// FSR EASU writes here and RCAS reads from here
 	fsr_mid_texture: Option<wgpu::Texture>,
 	fsr_mid_view: Option<wgpu::TextureView>,
@@ -1545,7 +1545,7 @@ pub struct RenderEngine3d {
 	fsr_params_buf: Option<wgpu::Buffer>,
 
 	fxaa_enabled: bool,
-	// intermediate LDR target — composite (or FSR output) writes here when FXAA or TAA active
+	// intermediate LDR target: composite (or FSR output) writes here when FXAA or TAA active
 	fxaa_ldr_texture: wgpu::Texture,
 	fxaa_ldr_view: wgpu::TextureView,
 	fxaa_bgl: wgpu::BindGroupLayout,
@@ -1573,7 +1573,7 @@ pub struct RenderEngine3d {
 	staa_nearest_sampler: wgpu::Sampler,
 	staa_ping: bool,
 
-	// SSR — quarter-res screen-space reflections (mid+ tier)
+	// SSR: quarter-res screen-space reflections (mid+ tier)
 	ssr_enabled: bool,
 	ssr_texture: wgpu::Texture,
 	ssr_view: wgpu::TextureView,
@@ -1584,7 +1584,7 @@ pub struct RenderEngine3d {
 	ssr_params_buf: wgpu::Buffer,
 	ssr_pipeline: wgpu::RenderPipeline,
 
-	// atmospheric scattering sky (mid+ tier) — replaces flat dome when AtmosphericScattering is present
+	// atmospheric scattering sky (mid+ tier): replaces flat dome when AtmosphericScattering is present
 	atmos_bgl0: wgpu::BindGroupLayout,
 	atmos_bgl1: wgpu::BindGroupLayout,
 	atmos_bg0: wgpu::BindGroup,
@@ -1592,7 +1592,7 @@ pub struct RenderEngine3d {
 	atmos_params_buf: wgpu::Buffer,
 	atmos_pipeline: wgpu::RenderPipeline,
 
-	// panorama sky — cylindrical texture drawn in the main pass instead of the
+	// panorama sky: cylindrical texture drawn in the main pass instead of the
 	// dome (Sky::panorama), so geometry covers it and msaa edges resolve right
 	panorama_bgl1: wgpu::BindGroupLayout,
 	panorama_sampler: wgpu::Sampler,
@@ -1603,7 +1603,7 @@ pub struct RenderEngine3d {
 	/// when the surface cache didn't already hold a gpu copy
 	panorama_sky_cache: Option<(u32, Option<wgpu::Texture>, wgpu::BindGroup)>,
 
-	// volumetric fog — quarter-res ray-marched sun scattering (mid+ tier)
+	// volumetric fog: quarter-res ray-marched sun scattering (mid+ tier)
 	fog_enabled: bool,
 	fog_texture: wgpu::Texture,
 	fog_view: wgpu::TextureView,
@@ -1614,7 +1614,7 @@ pub struct RenderEngine3d {
 	fog_params_buf: wgpu::Buffer,
 	fog_pipeline: wgpu::RenderPipeline,
 
-	// particle system — GPU compute simulation (mid+ tier); CPU fallback on low tier
+	// particle system: GPU compute simulation (mid+ tier); CPU fallback on low tier
 	particles_enabled: bool,
 	particle_cap: u32,
 	particle_buf: wgpu::Buffer,
@@ -1633,7 +1633,7 @@ pub struct RenderEngine3d {
 	particle_gpu_writes: Vec<(u32, GpuParticle)>,
 	particle_upload_scratch: Vec<u8>,
 
-	// water rendering — Gerstner wave displacement + refraction (mid+ tier)
+	// water rendering: Gerstner wave displacement + refraction (mid+ tier)
 	water_params_buf: wgpu::Buffer,
 	water_bgl0: wgpu::BindGroupLayout,
 	water_bgl1: wgpu::BindGroupLayout,
@@ -1641,7 +1641,7 @@ pub struct RenderEngine3d {
 	water_bg1: wgpu::BindGroup,
 	water_pipeline: wgpu::RenderPipeline,
 
-	// decal system — box-projected decals rendered after opaques (uses scene depth)
+	// decal system: box-projected decals rendered after opaques (uses scene depth)
 	decal_params_buf: wgpu::Buffer,
 	decal_bgl0: wgpu::BindGroupLayout,
 	decal_bgl1: wgpu::BindGroupLayout,
@@ -1649,14 +1649,14 @@ pub struct RenderEngine3d {
 	decal_bg1: wgpu::BindGroup,
 	decal_pipeline: wgpu::RenderPipeline,
 
-	// terrain rendering — geometry clipmap heightmap (all tiers, LOD level varies)
+	// terrain rendering: geometry clipmap heightmap (all tiers, LOD level varies)
 	terrain_pipeline: wgpu::RenderPipeline,
 	terrain_globals_bgl: wgpu::BindGroupLayout,
 	terrain_globals_bg: wgpu::BindGroup,
 	terrain_params_bgl: wgpu::BindGroupLayout,
 	terrain_gpu: HashMap<Entity, TerrainGpu>,
 
-	// transparent pass — alpha < 1.0 entities drawn back-to-front after opaques
+	// transparent pass: alpha < 1.0 entities drawn back-to-front after opaques
 	transparent_pipeline: wgpu::RenderPipeline,
 	// (entity, mesh_id, mat_id, color, metallic, roughness, model, alpha)
 	// sorted by (mesh_id, mat_id) before the draw loop for batching
@@ -1676,7 +1676,7 @@ pub struct RenderEngine3d {
 	msaa_terrain_shader: wgpu::ShaderModule,
 	msaa_particle_render_shader: wgpu::ShaderModule,
 
-	// pipeline cache — persists compiled shader binaries across runs (Vulkan/DX12 only)
+	// pipeline cache: persists compiled shader binaries across runs (Vulkan/DX12 only)
 	#[cfg(not(target_arch = "wasm32"))]
 	pipeline_cache: Option<wgpu::PipelineCache>,
 	// disk path the cache is loaded from / saved to, keyed per adapter so a different
@@ -1684,7 +1684,7 @@ pub struct RenderEngine3d {
 	#[cfg(not(target_arch = "wasm32"))]
 	pipeline_cache_path: Option<std::path::PathBuf>,
 
-	// staging belt — explicit frame-temporary upload staging for large buffers (native only)
+	// staging belt: explicit frame-temporary upload staging for large buffers (native only)
 	#[cfg(not(target_arch = "wasm32"))]
 	staging_belt: wgpu::util::StagingBelt,
 
@@ -1718,7 +1718,7 @@ pub struct RenderEngine3d {
 	dir_lm_tex_cache: HashMap<u32, (wgpu::Texture, wgpu::TextureView)>,
 	// combined bind groups keyed by (lm_id, dir_lm_id); u32::MAX = use fallback
 	lightmap_bg_cache: HashMap<(u32, u32), wgpu::BindGroup>,
-	// lightmap atlas (phase 3) — packs all lightmap textures into one RGBA8 4096×4096 texture.
+	// lightmap atlas (phase 3): packs all lightmap textures into one RGBA8 4096×4096 texture.
 	// built/rebuilt when has_indirect and lm_tex_cache changes.
 	// atlas_lm_uvs maps lm_id → [offset_u, offset_v, scale_u, scale_v]
 	atlas_tex: Option<wgpu::Texture>,
@@ -1727,7 +1727,7 @@ pub struct RenderEngine3d {
 	atlas_lm_uvs: HashMap<u32, [f32; 4]>,
 	atlas_lm_ids: Vec<u32>, // sorted list of lm_ids in current atlas (change detection)
 
-	// mega vertex/index buffers (phase 4) — all meshes packed into one buffer.
+	// mega vertex/index buffers (phase 4): all meshes packed into one buffer.
 	// enables one multi_draw_indexed_indirect_count call for all visible geometry.
 	mega_vbuf: Option<wgpu::Buffer>,
 	mega_ibuf: Option<wgpu::Buffer>,
@@ -1738,14 +1738,14 @@ pub struct RenderEngine3d {
 	// per-entity GPU draw params buffer for cull shader input (index_count, first_index, base_vertex, entity_slot)
 	entity_draw_params_buf: Option<wgpu::Buffer>,
 
-	// per-frame scratch — cleared at frame start, never reallocated in steady state
+	// per-frame scratch: cleared at frame start, never reallocated in steady state
 	frustum_visible: HashSet<Entity>,
 	// per-box CPU frustum-cull result (1 visible, 0 culled), parallel to CullSoa.
 	// reused every frame so the SIMD mid/low-tier cull never allocates in the hot path.
 	frustum_flags_scratch: Vec<u8>,
 	// (entity, mesh_id, mat_id, model, lm_id, dir_lm_id); u32::MAX = none
 	raw_scratch: Vec<(Entity, u32, u32, Mat4, u32, u32)>,
-	// impostor billboard draw list — entities replaced by impostors this frame.
+	// impostor billboard draw list: entities replaced by impostors this frame.
 	// (world_pos, half_w, half_h, texture_id, u_min, u_max)
 	impostor_scratch: Vec<(Vec3, f32, f32, u32, f32, f32)>,
 	// (entity, mesh_id, mat_id, base_color, metallic, roughness, model, alpha, mat_flags, lm_id, dir_lm_id)
@@ -1768,7 +1768,7 @@ pub struct RenderEngine3d {
 	portal_visible_active: bool,
 	// static-mesh entity set, refilled each frame to diff against static_entity_slots
 	static_entities_scratch: HashSet<Entity>,
-	// per-entity AABB upload data (CullSoa order) — built once, fed to both frustum + HZB cull
+	// per-entity AABB upload data (CullSoa order): built once, fed to both frustum + HZB cull
 	cull_aabb_scratch: Vec<f32>,
 	// packed point-light list bytes uploaded to light_list_buf
 	light_data_scratch: Vec<u8>,
@@ -1777,7 +1777,7 @@ pub struct RenderEngine3d {
 	cluster_indices_scratch: Vec<u32>,
 	// light_count the CPU cluster buffers were last filled+uploaded for. the CPU path
 	// writes the same camera-independent table for every cluster, so it only needs a
-	// rebuild when the count changes — usize::MAX forces the first frame to upload.
+	// rebuild when the count changes: usize::MAX forces the first frame to upload.
 	cpu_cluster_last_count: usize,
 	// late indirect-cull upload data (draw_scratch order): AABBs + draw params
 	late_aabb_scratch: Vec<f32>,
@@ -1791,7 +1791,7 @@ pub struct RenderEngine3d {
 	surface_evict_scratch: Vec<u32>, // surface texture ids to evict cpu data for
 	surface_params_staging: Vec<u8>, // strided stage params, uploaded in one write_buffer
 
-	// render graph DAG — built once at init, drives pass execution order in render_frame.
+	// render graph DAG: built once at init, drives pass execution order in render_frame.
 	// models pass dependencies via declared texture reads/writes and topological sort.
 	render_graph: render_graph::RenderGraph,
 
@@ -1802,7 +1802,7 @@ pub struct RenderEngine3d {
 	// true when shaders are created via SPIR-V passthrough (Vulkan + PASSTHROUGH_SHADERS),
 	// skipping runtime naga re-validation. always false on wasm / non-Vulkan / debug.
 	shader_passthrough: bool,
-	// DrawIndexedIndirect × entity_capacity — CPU-filled in phase 2, GPU-filled in phase 4
+	// DrawIndexedIndirect × entity_capacity: CPU-filled in phase 2, GPU-filled in phase 4
 	indirect_buf: Option<wgpu::Buffer>,
 	indirect_args: Vec<u32>, // scratch: 5 u32s per entry (index_count, inst_count, first_idx, base_vert, first_inst)
 
@@ -1826,7 +1826,7 @@ pub struct RenderEngine3d {
 	// whether the staging buffer has been written and is ready to map next frame
 	cull_staging_pending: bool,
 	cull_pending_entity_count: usize,
-	// indirect cull pipeline (6 bindings) — created alongside standard pipeline when has_indirect
+	// indirect cull pipeline (6 bindings): created alongside standard pipeline when has_indirect
 	cull_indirect_bgl: Option<wgpu::BindGroupLayout>,
 	cull_indirect_pipeline: Option<wgpu::ComputePipeline>,
 	// per-entity draw params buffer (input to indirect cull shader)
@@ -1862,7 +1862,7 @@ pub struct RenderEngine3d {
 	// per-entity occlusion flags from hzb cull (combined with gpu_cull_flags)
 	hzb_occ_flags: Vec<u32>,
 	hzb_occ_buf: Option<wgpu::Buffer>,
-	// async staging readback signals — set by map_async callback, checked next frame
+	// async staging readback signals: set by map_async callback, checked next frame
 	cull_staging_ready: Arc<AtomicBool>,
 	hzb_staging_ready: Arc<AtomicBool>,
 	hzb_occ_staging: Option<wgpu::Buffer>,
@@ -2011,7 +2011,7 @@ fn render_3d_system(world: &mut World) {
 /// add this after [`Plugin3d`](lunar_3d::Plugin3d) in your app. inserts
 /// [`RenderEngine3d`], [`RenderInfo3d`], and [`RenderTier`] as resources.
 ///
-/// [`RenderEngine3d`] must be inserted before `build` is called — do this
+/// [`RenderEngine3d`] must be inserted before `build` is called: do this
 /// in `bootstrap_3d` after creating the wgpu surface.
 pub struct RenderPlugin3d;
 

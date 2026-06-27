@@ -1,23 +1,23 @@
-// lighting_model values — matches LightingModel enum on the CPU
+// lighting_model values: matches LightingModel enum on the CPU
 const LIGHTING_PBR:     u32 = 0u;  // full PBR (GGX specular, SH ambient, shadows)
 const LIGHTING_LAMBERT: u32 = 1u;  // diffuse-only, no microfacet specular
 const LIGHTING_BAKED:   u32 = 2u;  // lightmap + ambient only, no runtime lights
 
-// group 0: view-global — set once per pass
+// group 0: view-global: set once per pass
 struct Globals {
     view_proj:      mat4x4<f32>,  // 64 bytes
     cam_pos:        vec3<f32>,    // 12 bytes (offset 64)
     elapsed_secs:   f32,          //  4 bytes (offset 76)
     delta_secs:     f32,          //  4 bytes (offset 80)
     lighting_model: u32,          //  4 bytes (offset 84)
-    render_flags:   u32,          //  4 bytes (offset 88) — bit 0: soft_shadows, bit 1: contact_shadows, bit 2: affine_textures
-    vertex_snap:    f32,          //  4 bytes (offset 92) — snap grid (0 = off)
-    classic_light:  f32,          //  4 bytes (offset 96) — surface-path depth-cued light constant (0 = off)
+    render_flags:   u32,          //  4 bytes (offset 88): bit 0: soft_shadows, bit 1: contact_shadows, bit 2: affine_textures
+    vertex_snap:    f32,          //  4 bytes (offset 92): snap grid (0 = off)
+    classic_light:  f32,          //  4 bytes (offset 96): surface-path depth-cued light constant (0 = off)
     _pad0: f32, _pad1: f32, _pad2: f32, // total: 112 bytes
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 
-// group 1: material storage — indexed by instance_id, set once per pass
+// group 1: material storage: indexed by instance_id, set once per pass
 struct MaterialUniforms {
     base_color:    vec4<f32>,  // 16 bytes, offset  0
     metallic:      f32,         //  4 bytes, offset 16
@@ -30,15 +30,15 @@ struct MaterialUniforms {
 }
 @group(1) @binding(0) var<storage, read> materials: array<MaterialUniforms>;
 
-// group 2: per-instance transforms — storage array, indexed by @builtin(instance_index).
+// group 2: per-instance transforms: storage array, indexed by @builtin(instance_index).
 // padded to 256 bytes to match the UNIFORM_STRIDE staging layout on the CPU.
 struct MeshInstance {
-    model:     mat4x4<f32>,              // 64 bytes — offset   0
-    normal_c0: vec4<f32>,                // 16 bytes — offset  64
-    normal_c1: vec4<f32>,                // 16 bytes — offset  80
-    normal_c2: vec4<f32>,                // 16 bytes — offset  96
+    model:     mat4x4<f32>,              // 64 bytes, offset   0
+    normal_c0: vec4<f32>,                // 16 bytes, offset  64
+    normal_c1: vec4<f32>,                // 16 bytes, offset  80
+    normal_c2: vec4<f32>,                // 16 bytes, offset  96
     // 9 L2 SH coefficients: .xyz = RGB irradiance, .w = 1.0 when probe data present / 0.0 = fallback
-    sh_coeffs: array<vec4<f32>, 9>,      // 144 bytes — offset 112 (total: 256)
+    sh_coeffs: array<vec4<f32>, 9>,      // 144 bytes, offset 112 (total: 256)
 }
 @group(2) @binding(0) var<storage, read> instances: array<MeshInstance>;
 
@@ -51,7 +51,7 @@ struct PointLightGpu {
     shadow_index: u32,        // offset 32  (0xffffffff = unshadowed)
     _pad0:        u32,        // offset 36
     _pad1:        u32,        // offset 40
-    _pad2:        u32,        // offset 44  — total: 48 bytes
+    _pad2:        u32,        // offset 44, total: 48 bytes
 }
 
 // lights uniform buffer layout (total 816 bytes):
@@ -116,7 +116,7 @@ struct ClusterParamsF {
 @group(5) @binding(2) var<storage, read> cluster_counts_f:       array<u32>;
 @group(5) @binding(3) var<storage, read> cluster_light_indices_f: array<u32>;
 
-// group 4: lightmap — bound per draw group; fallback textures are 1×1
+// group 4: lightmap: bound per draw group; fallback textures are 1×1
 // binding 0: irradiance (rgba8 srgb, white fallback)
 // binding 1: dominant direction packed as rgb * 0.5 + 0.5 (neutral fallback = (0.5, 0.5, 1.0) = world up)
 // binding 2: shared sampler
@@ -128,8 +128,8 @@ struct ClusterParamsF {
 
 struct VertIn {
     @location(0) position:    vec3<f32>,
-    @location(1) normal:      vec4<f32>,  // snorm8×4 — hardware normalises to [-1,1]; use .xyz
-    @location(2) tangent:     vec4<f32>,  // snorm8×4 — .xyz = tangent, .w = handedness
+    @location(1) normal:      vec4<f32>,  // snorm8×4: hardware normalises to [-1,1]; use .xyz
+    @location(2) tangent:     vec4<f32>,  // snorm8×4: .xyz = tangent, .w = handedness
     @location(3) uv:          vec2<f32>,  // unorm16×2
     @location(4) uv_lightmap: vec2<f32>,  // unorm16×2
     @location(5) color:       vec4<f32>,  // unorm8×4
@@ -181,7 +181,7 @@ fn vs_main(in: VertIn, @builtin(instance_index) instance_id: u32) -> VertOut {
     return out;
 }
 
-// depth-only pass — reads position only, no varyings. used by z-prepass pipelines.
+// depth-only pass: reads position only, no varyings. used by z-prepass pipelines.
 @vertex
 fn vs_depth(
     @location(0) position: vec3<f32>,
@@ -424,7 +424,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     // Pbr/Lambert run the loops below; lit() picks the per-light shading model.
     let dynamic_lighting = globals.lighting_model != LIGHTING_BAKED;
 
-    // directional light with cascaded shadow — separate from point lights for lightmap path
+    // directional light with cascaded shadow, separate from point lights for lightmap path
     var dir_lo = vec3<f32>(0.0);
     if dynamic_lighting && lights.dir_enabled != 0u {
         let l = normalize(-lights.dir_direction);
@@ -436,7 +436,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
         }
     }
 
-    // point lights — clustered lookup from group 5 storage buffers
+    // point lights: clustered lookup from group 5 storage buffers
     var point_lo = vec3<f32>(0.0);
     if dynamic_lighting && cluster_params_f.light_count > 0u {
         // determine cluster cell for this fragment
@@ -498,7 +498,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
         }
     }
 
-    // ambient — per-entity SH from instance buffer when sh_coeffs[0].w > 0, else global lights.sh
+    // ambient: per-entity SH from instance buffer when sh_coeffs[0].w > 0, else global lights.sh
     var ambient: vec3<f32>;
     let inst_sh = instances[in.instance_id].sh_coeffs;
     let nx = n.x; let ny = n.y; let nz = n.z;
@@ -530,7 +530,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
         ambient = lights.ambient_color * lights.ambient_intensity * albedo * (1.0 - metallic * 0.9);
     }
 
-    // output raw HDR — composite pass applies ACES tonemap + post effects.
+    // output raw HDR; composite pass applies ACES tonemap + post effects.
     // lightmap replaces directional + ambient for static baked geometry.
     var hdr: vec3<f32>;
     if (material.has_lightmap != 0u) {

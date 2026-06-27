@@ -6,9 +6,9 @@ input is handled through `InputState` (raw key/button/axis state) and `ActionMap
 ## raw input
 
 `InputState` tracks three states per key/button each tick:
-- **held** — currently pressed
-- **just pressed** — went down this tick (edge-triggered)
-- **just released** — went up this tick (edge-triggered)
+- **held**: currently pressed
+- **just pressed**: went down this tick (edge-triggered)
+- **just released**: went up this tick (edge-triggered)
 
 ```rust
 fn player_movement(input: Res<InputState>, mut query: Query<&mut Transform, With<Player>>) {
@@ -20,7 +20,7 @@ fn player_movement(input: Res<InputState>, mut query: Query<&mut Transform, With
             transform.translation.x -= 3.0;
         }
         if input.is_key_just_pressed(KeyCode::Space) {
-            // jump — fires once on the frame the key is pressed
+            // jump: fires once on the frame the key is pressed
         }
     }
 }
@@ -64,12 +64,12 @@ input.is_gamepad_connected(0)               // bool
 ## action map
 
 `ActionMap` lets game code check named actions instead of hardcoded keys.
-multiple bindings can map to the same action — any one triggers it.
+multiple bindings can map to the same action: any one triggers it.
 
 ### setup
 
 bind actions in a startup system. `ActionMap` is inserted automatically by the
-input plugin — you don't need to insert it yourself:
+input plugin: you don't need to insert it yourself:
 
 ```rust
 fn setup_input(mut actions: ResMut<ActionMap>) {

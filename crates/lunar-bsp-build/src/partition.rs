@@ -193,7 +193,7 @@ fn build_node(
 			c_arr[best_axis as usize] < best_split
 		});
 
-	// all landed on one side (degenerate geometry) — force median split to avoid infinite recursion
+	// all landed on one side (degenerate geometry), force median split to avoid infinite recursion
 	if left_indices.is_empty() || right_indices.is_empty() {
 		let mid = indices.len() / 2;
 		let left_node = build_node(triangles, &indices[..mid], max_leaf_size, result);

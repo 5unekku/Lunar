@@ -1,4 +1,4 @@
-//! WASM bootstrap — WebGPU canvas init and requestAnimationFrame game loop
+//! WASM bootstrap: WebGPU canvas init and requestAnimationFrame game loop
 
 /// bootstrap a WASM lunar game via WebGPU and requestAnimationFrame.
 ///
@@ -59,7 +59,7 @@ pub async fn bootstrap_wasm<Plugin: lunar_core::GamePlugin + Default + 'static>(
 	app.insert_resource(lunar_core::TickRateConfig {
 		rate: config.tick_rate,
 	});
-	// wasm has no display mode API — use the curated standard list
+	// wasm has no display mode API, use the curated standard list
 	app.insert_resource(AvailableResolutions(STANDARD_RESOLUTIONS.to_vec()));
 	app.add_plugin(RenderPlugin);
 	app.add_plugin(InputPlugin);
@@ -67,7 +67,7 @@ pub async fn bootstrap_wasm<Plugin: lunar_core::GamePlugin + Default + 'static>(
 	app.add_plugin(Plugin::default());
 
 	// pump_frame handles startup on first call, so the RAF closure is uniform.
-	// RAF fires at display refresh rate, so real elapsed time must be measured —
+	// RAF fires at display refresh rate, so real elapsed time must be measured;
 	// a fixed per-callback delta would scale game speed with the monitor (2× at 120hz).
 	let app = Rc::new(RefCell::new(app));
 	let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));

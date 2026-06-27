@@ -1,4 +1,4 @@
-//! platform audio backends — cubeb on native, cpal/webaudio on wasm32.
+//! platform audio backends: cubeb on native, cpal/webaudio on wasm32.
 //!
 //! both expose the same `PlatformBackend` type alias so the rest of the
 //! crate never branches on platform. swap in a custom backend by forking

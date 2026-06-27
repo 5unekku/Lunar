@@ -1,4 +1,4 @@
-// motion vector pass — per-pixel screen-space reprojection vectors.
+// motion vector pass: per-pixel screen-space reprojection vectors.
 //
 // for each pixel: reads depth, reconstructs world position via inv_view_proj,
 // reprojects to previous frame via prev_view_proj, outputs the 2D NDC delta
@@ -43,7 +43,7 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertOut {
 @fragment
 fn fs_main(in: VertOut) -> @location(0) vec2<f32> {
     let depth = textureSample(depth_tex, depth_smp, in.uv);
-    if depth >= 0.9999 { return vec2<f32>(0.0); }  // sky — no motion
+    if depth >= 0.9999 { return vec2<f32>(0.0); }  // sky: no motion
 
     // current NDC from screen UV
     let cur_ndc = vec2<f32>(in.uv.x * 2.0 - 1.0, (1.0 - in.uv.y) * 2.0 - 1.0);

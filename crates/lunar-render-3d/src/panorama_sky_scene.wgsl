@@ -53,7 +53,7 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertOut {
 
 const TAU: f32 = 6.28318530717958;
 
-// average of one full texture repeat along an edge row — the fill color for
+// average of one full texture repeat along an edge row: the fill color for
 // pixels past the texture's vertical coverage (steep look-up/down)
 fn edge_average(v_edge: f32) -> vec3<f32> {
     var sum = vec3<f32>(0.0);
@@ -69,7 +69,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     // (projection row 3 is (0,0,-1,0), which negates the view matrix's z row)
     // and the lengths of rows 0/1 are the projection scales, so tan(half-fov)
     // is their reciprocal. never read fov from a single element like vp[0][0]
-    // — that is sx*right.x, which varies (and flips sign) with camera yaw
+    //: that is sx*right.x, which varies (and flips sign) with camera yaw
     let ndc = in.uv * 2.0 - 1.0;
     let row_x = vec3<f32>(globals.view_proj[0][0], globals.view_proj[1][0], globals.view_proj[2][0]);
     let row_y = vec3<f32>(globals.view_proj[0][1], globals.view_proj[1][1], globals.view_proj[2][1]);

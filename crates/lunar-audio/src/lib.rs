@@ -2,15 +2,15 @@
 //!
 //! # backends
 //!
-//! - **native** — cubeb (WASAPI / CoreAudio / PulseAudio / ALSA), low latency
-//! - **wasm32** — cpal webaudio (ScriptProcessorNode over the browser's AudioContext)
+//! - **native**: cubeb (WASAPI / CoreAudio / PulseAudio / ALSA), low latency
+//! - **wasm32**: cpal webaudio (ScriptProcessorNode over the browser's AudioContext)
 //!
 //! # extension point
 //!
 //! implement [`AudioSource`] to slot in a tracker engine, procedural synth, or any
 //! other custom generator without touching the engine. submit instances via
 //! [`AudioPlayer::play_source`]. the engine only calls [`AudioSource::fill`] and
-//! [`AudioSource::is_done`] — everything else is up to the implementor.
+//! [`AudioSource::is_done`]: everything else is up to the implementor.
 //!
 //! # quick start
 //!

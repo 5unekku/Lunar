@@ -57,7 +57,7 @@ fn main() {
 	for (path, result) in &results {
 		match result {
 			Ok(()) => ok += 1,
-			Err(msg) => eprintln!("error: {} — {msg}", path.display()),
+			Err(msg) => eprintln!("error: {}: {msg}", path.display()),
 		}
 	}
 	eprintln!("done: {ok}/{total} textures compressed");

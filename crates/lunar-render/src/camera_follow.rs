@@ -31,7 +31,7 @@ use crate::Camera;
 /// deadzone during a cutscene or remove bounds when zooming out to a world map).
 #[derive(Resource)]
 pub struct CameraFollow2d {
-	/// entity to follow — must have a [`WorldTransform`] component
+	/// entity to follow: must have a [`WorldTransform`] component
 	pub target: Entity,
 	/// world-space offset added to the target position before tracking.
 	/// positive X leads right, positive Y leads down (matches screen Y)
@@ -136,7 +136,7 @@ mod tests {
 		let _ = system.run((), &mut world);
 
 		let camera = world.resource::<Camera>();
-		// target (10, 5) is inside deadzone (50, 50) — camera should not move
+		// target (10, 5) is inside deadzone (50, 50), camera should not move
 		assert!((camera.position.x - 0.0).abs() < 0.001);
 		assert!((camera.position.y - 0.0).abs() < 0.001);
 	}

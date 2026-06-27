@@ -1,4 +1,4 @@
-// STAA — spatial-temporal anti-aliasing.
+// STAA: spatial-temporal anti-aliasing.
 //
 // a selective hybrid of spatial (smaa/fxaa-style) and temporal (taa) AA.
 // per pixel it chooses between, and blends, two resolves and applies neither to
@@ -105,7 +105,7 @@ fn clip_aabb(history: vec3<f32>, aabb_min: vec3<f32>, aabb_max: vec3<f32>) -> ve
 }
 
 // fxaa-style directional edge resolve. estimates the edge tangent from the diagonal
-// luma gradients, then blends ALONG that tangent — smoothing the staircase with
+// luma gradients, then blends ALONG that tangent, smoothing the staircase with
 // minimal cross-edge blur. 4 taps, run only on edge pixels.
 const FXAA_SPAN_MAX:   f32 = 8.0;
 const FXAA_REDUCE_MUL: f32 = 1.0 / 8.0;
@@ -133,12 +133,12 @@ fn fxaa_resolve(uv: vec2<f32>, rc: vec2<f32>,
         textureSampleLevel(current_tex, linear_smp, uv + dir *  0.5, 0.0).rgb);
 
     // if the wider blend overshoots the local luma range it has bled across the
-    // edge — fall back to the narrower (lower-blur) blend.
+    // edge; fall back to the narrower (lower-blur) blend.
     let luma_b = luma(rgb_b);
     return select(rgb_a, rgb_b, luma_b >= luma_min && luma_b <= luma_max);
 }
 
-// catmull-rom (bicubic) history sample — 9 bilinear taps via the standard weight
+// catmull-rom (bicubic) history sample: 9 bilinear taps via the standard weight
 // trick. preserves the high frequencies a single bilinear tap low-passes away, so
 // repeated reprojection keeps the accumulated image sharp instead of softening it.
 // negative side lobes can ring, but the aabb clip on the result tames that.
@@ -234,7 +234,7 @@ fn fs_main(in: VertOut) -> FragOut {
 
     // velocity in screen-pixels, with BOTH frames' jitter removed. prev_uv is sampled
     // from the jittered prev_vp (correct for history), so subtract prev_jitter here to
-    // recover true motion — otherwise a static camera reads ~0.5px of phantom speed.
+    // recover true motion, otherwise a static camera reads ~0.5px of phantom speed.
     let curr_uv_unjittered = uv - params.jitter;
     let prev_uv_unjittered = prev_uv - params.prev_jitter;
     let velocity_uv        = curr_uv_unjittered - prev_uv_unjittered;
@@ -246,7 +246,7 @@ fn fs_main(in: VertOut) -> FragOut {
 
     // ── spatial edge resolve (the "S") ────────────────────────────────────
     // only the 4 extra taps run on edges. directional along the edge tangent, so it
-    // removes the staircase with minimal cross-edge blur. independent of jitter —
+    // removes the staircase with minimal cross-edge blur. independent of jitter;
     // this is what anti-aliases moving edges, where temporal accumulation can't.
     var spatial = center;
     if edge_conf > 0.0 {

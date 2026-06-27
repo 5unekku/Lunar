@@ -1,4 +1,4 @@
-//! platform demo — all scene setup and game logic in C#, zero Rust game code.
+//! platform demo: all scene setup and game logic in C#, zero Rust game code.
 //!
 //! build and run via:
 //!   cargo xtask run

@@ -1,7 +1,7 @@
-//! 2d collision detection — AABB and circle shapes, overlap queries.
+//! 2d collision detection: AABB and circle shapes, overlap queries.
 //!
 //! no physics simulation (no rigid bodies, velocity integration, gravity).
-//! this module answers the question "what overlaps what" — game logic decides
+//! this module answers the question "what overlaps what", game logic decides
 //! what to do about it.
 //!
 //! # usage
@@ -43,9 +43,9 @@ pub enum ColliderShape {
 #[derive(Debug, Clone, Component)]
 pub struct Collider {
 	pub shape: ColliderShape,
-	/// bitmask — which collision layers this collider belongs to.
+	/// bitmask: which collision layers this collider belongs to.
 	pub layer: u32,
-	/// bitmask — which layers this collider checks against.
+	/// bitmask: which layers this collider checks against.
 	pub mask: u32,
 }
 
@@ -87,7 +87,7 @@ impl Collider {
 	}
 }
 
-/// convenience bundle — pairs a [`Transform`] with a [`Collider`].
+/// convenience bundle: pairs a [`Transform`] with a [`Collider`].
 #[derive(Bundle)]
 pub struct Collider2dBundle {
 	pub transform: Transform,
@@ -176,7 +176,7 @@ fn shapes_overlap(
 	}
 }
 
-/// resource rebuilt every physics tick — holds the current frame's collider snapshot.
+/// resource rebuilt every physics tick: holds the current frame's collider snapshot.
 ///
 /// read this from any system in the Update stage or later to query overlaps.
 ///
@@ -198,7 +198,7 @@ pub struct CollisionWorld {
 
 impl CollisionWorld {
 	/// sweep-and-prune range for a query span `[qmin_x, qmax_x]`.
-	/// returns a slice of entries that could overlap along X — use as a pre-filter.
+	/// returns a slice of entries that could overlap along X: use as a pre-filter.
 	fn x_candidates(&self, _qmin_x: f32, qmax_x: f32) -> &[ColliderEntry] {
 		// entries sorted by min_x; stop at the first entry entirely to the right
 		let end = self.entries.partition_point(|e| e.min_x <= qmax_x);
@@ -256,7 +256,7 @@ impl CollisionWorld {
 	///
 	/// uses a sweep-and-prune broad phase: entries are sorted by `min_x`, so the
 	/// inner loop breaks as soon as the next entry's left edge exceeds the current
-	/// entry's right edge — skipping all remaining pairs along X.
+	/// entry's right edge: skipping all remaining pairs along X.
 	pub fn all_overlaps(&self) -> impl Iterator<Item = (Entity, Entity)> + '_ {
 		(0..self.entries.len()).flat_map(move |i| {
 			let max_x_i = self.entries[i].max_x;
@@ -320,7 +320,7 @@ pub struct RayHit2d {
 /// cast a ray against all colliders in `world` and return the nearest hit.
 ///
 /// `direction` should be normalized. `max_dist` caps the search; use `f32::MAX`
-/// for unbounded. O(N) against all colliders in the world — suitable for
+/// for unbounded. O(N) against all colliders in the world, suitable for
 /// interactive use (player sight, hitscan) but not for mass parallel queries.
 ///
 /// only colliders whose `layer` is matched by `mask` are tested.

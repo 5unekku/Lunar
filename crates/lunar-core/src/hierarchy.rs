@@ -1,7 +1,7 @@
 //! entity hierarchy components: parent-child relationships.
 //!
 //! entities form trees via [`Parent`] and [`Children`] components.
-//! transform propagation is dimension-specific — use `lunar_2d::Plugin2d`
+//! transform propagation is dimension-specific, use `lunar_2d::Plugin2d`
 //! (or a future `lunar_3d::Plugin3d`) to register the appropriate system.
 
 use bevy_ecs::prelude::*;
@@ -64,10 +64,10 @@ impl Default for Children {
 /// exclusive system that syncs [`Parent`] and [`Children`] components.
 ///
 /// runs as an exclusive world system so `Children` is updated immediately
-/// (no command deferral) — children are visible to other systems in the same frame
+/// (no command deferral); children are visible to other systems in the same frame
 /// a `Parent` component is added.
 pub fn sync_children(world: &mut World) {
-	// only process entities where Parent was just added — fast-path skips stable hierarchies
+	// only process entities where Parent was just added; fast-path skips stable hierarchies
 	let pairs: Vec<(Entity, Entity)> = world
 		.query_filtered::<(Entity, &Parent), Added<Parent>>()
 		.iter(world)
@@ -84,7 +84,7 @@ pub fn sync_children(world: &mut World) {
 			world.entity_mut(parent_entity).insert(Children::new());
 		}
 
-		// add child if not already present — read then mutate to satisfy borrow checker
+		// add child if not already present, read then mutate to satisfy borrow checker
 		let already_present = world
 			.get::<Children>(parent_entity)
 			.is_some_and(|c| c.contains(child_entity));
@@ -136,7 +136,7 @@ mod tests {
 		let parent = world.spawn_empty().id();
 		let child = world.spawn(Parent(parent)).id();
 
-		// run sync_children directly — no command deferral
+		// run sync_children directly: no command deferral
 		sync_children(&mut world);
 
 		let children = world

@@ -1,4 +1,4 @@
-// surface shader — q3-style multi-stage fixed-function blender.
+// surface shader: q3-style multi-stage fixed-function blender.
 // renders up to 4 texture stages, each with a blend mode and UV transform.
 // only used with ShadingModel::Unlit entities.
 

@@ -238,7 +238,7 @@ mod tests {
 
 	#[test]
 	fn two_area_portals_detected() {
-		// two cubes side-by-side, different areas — should auto-detect a portal
+		// two cubes side-by-side, different areas: should auto-detect a portal
 		let mesh_a = unit_cube_mesh(Some(0));
 		let mesh_b = BspInputMesh {
 			vertices: unit_cube_mesh(Some(1))

@@ -1,8 +1,8 @@
-//! audio source trait — the extension seam for custom platforms and generators.
+//! audio source trait: the extension seam for custom platforms and generators.
 //!
 //! a custom tracker engine, procedural synth, or fork-specific audio system
 //! implements [`AudioSource`] and submits instances via [`crate::AudioPlayer::play_source`].
-//! the built-in engine only ever calls [`fill`] and [`is_done`] — everything else
+//! the built-in engine only ever calls [`fill`] and [`is_done`]: everything else
 //! is encapsulated in the implementor.
 
 /// produces f32 interleaved stereo samples at [`SAMPLE_RATE`] Hz.

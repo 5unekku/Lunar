@@ -1,4 +1,4 @@
-//! game save/load — serializes game-owned data to RON on native, stub on WASM.
+//! game save/load: serializes game-owned data to RON on native, stub on WASM.
 //!
 //! the engine owns file I/O; the game owns the schema. any `Serialize +
 //! DeserializeOwned` type can be round-tripped. paths are relative to the

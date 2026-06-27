@@ -244,7 +244,7 @@ impl WorldManifest {
 		}
 	}
 
-	/// find a scene entry by name — O(1) via index.
+	/// find a scene entry by name: O(1) via index.
 	#[must_use]
 	pub fn find_scene(&self, name: &str) -> Option<&SceneEntry> {
 		self.scene_index.get(name).map(|&i| &self.scenes[i])
@@ -256,7 +256,7 @@ impl WorldManifest {
 		self.find_scene(&self.start_scene)
 	}
 
-	/// iterate chunks that overlap a given bounding box — no allocation.
+	/// iterate chunks that overlap a given bounding box: no allocation.
 	pub fn chunks_in_bounds_iter(
 		&self,
 		x_min: f32,
@@ -281,7 +281,7 @@ impl WorldManifest {
 			.collect()
 	}
 
-	/// iterate chunks within a radius of a center point — no allocation.
+	/// iterate chunks within a radius of a center point: no allocation.
 	pub fn chunks_in_radius_iter(
 		&self,
 		cx: f32,

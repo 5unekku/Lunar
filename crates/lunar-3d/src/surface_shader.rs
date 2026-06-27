@@ -1,4 +1,4 @@
-//! surface shader — q3-style multi-stage fixed-function surface description.
+//! surface shader: q3-style multi-stage fixed-function surface description.
 //!
 //! a `SurfaceShader` component on a `Mesh3d` entity replaces the standard PBR
 //! material with a multi-stage blender. each stage samples one texture and
@@ -7,7 +7,7 @@
 //! only applies when `ShadingModel::Unlit` is set on the entity's material
 //! (surface shaders are inherently unlit; no PBR interaction).
 //!
-//! # example — scrolling lava, 2 stages
+//! # example: scrolling lava, 2 stages
 //!
 //! ```ignore
 //! commands.spawn((

@@ -32,7 +32,7 @@ type Handle = *mut c_void;
 // hdt_load_assembly_and_get_function_pointer = 5
 const HDT_LOAD_ASSEMBLY_AND_GET_FUNCTION_POINTER: i32 = 5;
 
-// success codes from hostfxr — anything else is an error
+// success codes from hostfxr: anything else is an error
 const SUCCESS: i32 = 0x00000000;
 const SUCCESS_HOST_ALREADY_INITIALIZED: i32 = 0x00000001;
 
@@ -105,7 +105,7 @@ pub struct DotnetRuntime {
 }
 
 // the runtime is accessed only through fn pointers whose threading contract is
-// defined by .NET — the runtime itself is thread-safe.
+// defined by .NET: the runtime itself is thread-safe.
 unsafe impl Send for DotnetRuntime {}
 unsafe impl Sync for DotnetRuntime {}
 
@@ -146,7 +146,7 @@ impl DotnetRuntime {
         let rc = unsafe {
             get_delegate(handle, HDT_LOAD_ASSEMBLY_AND_GET_FUNCTION_POINTER, &mut delegate_ptr)
         };
-        // close the init handle — the runtime stays alive
+        // close the init handle, the runtime stays alive
         unsafe { close(handle) };
 
         if rc != SUCCESS {

@@ -1,7 +1,7 @@
-//! `RenderEngine3d` — mesh upload, forsyth optimization, terrain/heightmap/clipmap, uniform packing.
+//! `RenderEngine3d`: mesh upload, forsyth optimization, terrain/heightmap/clipmap, uniform packing.
 //!
 //! split out of `lib.rs`; methods stay on `RenderEngine3d` (one type, many
-//! `impl` blocks across sibling modules — all share the struct's private fields).
+//! `impl` blocks across sibling modules: all share the struct's private fields).
 
 use super::*;
 

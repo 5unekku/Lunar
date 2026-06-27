@@ -439,7 +439,7 @@ impl SceneLoader {
 			}
 		}
 
-		// second pass: resolve parent references — group children per parent, insert once
+		// second pass: resolve parent references: group children per parent, insert once
 		let mut parent_to_children: HashMap<Entity, smallvec::SmallVec<[Entity; 4]>> =
 			HashMap::default();
 		for (entity, parent_id) in parent_refs {

@@ -6,7 +6,7 @@
 //! # uv convention
 //!
 //! all primitives map UVs so that (0,0) is the top-left and (1,1) is the bottom-right
-//! of each face. tangents follow the glTF 2.0 convention — bitangent is reconstructed
+//! of each face. tangents follow the glTF 2.0 convention: bitangent is reconstructed
 //! as `cross(normal, tangent.xyz) * tangent.w`.
 
 use lunar_math::{Vec2, Vec3};
@@ -20,7 +20,7 @@ use crate::mesh::{IndexBuffer, MeshData, Vertex3d};
 ///
 /// # arguments
 ///
-/// `half_extents` — half the width (X), height (Y), and depth (Z).
+/// `half_extents`: half the width (X), height (Y), and depth (Z).
 #[must_use]
 pub fn box_mesh(half_extents: Vec3) -> MeshData {
 	let ex = half_extents.x;
@@ -89,8 +89,8 @@ pub fn unit_cube() -> MeshData {
 ///
 /// # arguments
 ///
-/// - `half_x` — half-width along X
-/// - `half_z` — half-depth along Z
+/// - `half_x`: half-width along X
+/// - `half_z`: half-depth along Z
 #[must_use]
 pub fn quad_mesh(half_x: f32, half_z: f32) -> MeshData {
 	let normal = Vec3::Y;
@@ -134,9 +134,9 @@ pub fn quad_mesh(half_x: f32, half_z: f32) -> MeshData {
 ///
 /// # arguments
 ///
-/// - `radius` — sphere radius
-/// - `sectors` — longitude slices. 16 is low-poly, 32 is smooth.
-/// - `stacks` — latitude rings. 8 is low-poly, 16 is smooth.
+/// - `radius`: sphere radius
+/// - `sectors`: longitude slices. 16 is low-poly, 32 is smooth.
+/// - `stacks`: latitude rings. 8 is low-poly, 16 is smooth.
 #[must_use]
 pub fn sphere_mesh(radius: f32, sectors: u32, stacks: u32) -> MeshData {
 	let sectors = sectors.max(4);
@@ -203,10 +203,10 @@ pub fn sphere_mesh(radius: f32, sectors: u32, stacks: u32) -> MeshData {
 ///
 /// # arguments
 ///
-/// - `radius` — radius of the circular cross-section
-/// - `height` — total height (center is at origin, extents ±height/2)
-/// - `sectors` — number of radial subdivisions (minimum 4)
-/// - `caps` — whether to generate top and bottom disc caps
+/// - `radius`: radius of the circular cross-section
+/// - `height`: total height (center is at origin, extents ±height/2)
+/// - `sectors`: number of radial subdivisions (minimum 4)
+/// - `caps`: whether to generate top and bottom disc caps
 #[must_use]
 pub fn cylinder_mesh(radius: f32, height: f32, sectors: u32, caps: bool) -> MeshData {
 	let sectors = sectors.max(4);
@@ -217,7 +217,7 @@ pub fn cylinder_mesh(radius: f32, height: f32, sectors: u32, caps: bool) -> Mesh
 
 	let sector_step = 2.0 * std::f32::consts::PI / sectors as f32;
 
-	// side vertices — two rings: bottom and top
+	// side vertices: two rings: bottom and top
 	for stack in 0..=1u32 {
 		let y = if stack == 0 { -half_h } else { half_h };
 		for sector in 0..=sectors {

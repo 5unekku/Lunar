@@ -1,7 +1,7 @@
-//! `RenderEngine3d` — post-processing and gtao/reflection recording.
+//! `RenderEngine3d`: post-processing and gtao/reflection recording.
 //!
 //! split out of `lib.rs`; methods stay on `RenderEngine3d` (one type, many
-//! `impl` blocks across sibling modules — all share the struct's private fields).
+//! `impl` blocks across sibling modules: all share the struct's private fields).
 
 use super::*;
 
@@ -387,7 +387,7 @@ impl RenderEngine3d {
 					.write_buffer(params_buf, 64, bytemuck::cast_slice(&light_dir_data));
 			}
 
-			// (re)build the pass bind group only when missing — first use or after a resize
+			// (re)build the pass bind group only when missing: first use or after a resize
 			// invalidated it. references params_buf (stable), gtao_depth_view (rebuilt on
 			// resize), and post_sampler (stable), so it's otherwise identical every frame.
 			if self.contact_shadow_bg.is_none() {
@@ -809,7 +809,7 @@ impl RenderEngine3d {
 						view: history_write_view,
 						resolve_target: None,
 						ops: wgpu::Operations {
-							// fullscreen triangle overwrites every pixel — Clear skips
+							// fullscreen triangle overwrites every pixel: Clear skips
 							// the tile load a Load would force on mobile GPUs
 							load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
 							store: wgpu::StoreOp::Store,
@@ -897,7 +897,7 @@ impl RenderEngine3d {
 			// depth_texture on a parallel encoder that submits before this one,
 			// so a flat copy replaces a full scene depth re-render. wasm records
 			// its z-prepass into THIS encoder after this point, so the copy
-			// would read stale depth there — keep the re-render on wasm.
+			// would read stale depth there: keep the re-render on wasm.
 			let depth_copy_ok = cfg!(not(target_arch = "wasm32"))
 				&& self.msaa_samples == 1
 				&& self.render_tier != RenderTier::LowGles;
@@ -968,7 +968,7 @@ impl RenderEngine3d {
 						i += 1;
 					}
 				}
-				// surface shader meshes belong in this depth copy too — without
+				// surface shader meshes belong in this depth copy too: without
 				// them their pixels read as sky (same rule as the main prepass);
 				// masked meshes use the alpha-tested variant
 				let is_masked = |packed: &[SurfaceStagePacked; 4]| {

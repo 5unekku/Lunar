@@ -5,9 +5,9 @@
 //!
 //! # architecture
 //!
-//! - [`AtlasManifest`] — binary manifest describing region layout
-//! - [`AtlasRegion`] — UV coordinate sub-rect within an atlas texture
-//! - [`AtlasPacker`] — bin-packing algorithm for building atlases
+//! - [`AtlasManifest`]: binary manifest describing region layout
+//! - [`AtlasRegion`]: UV coordinate sub-rect within an atlas texture
+//! - [`AtlasPacker`]: bin-packing algorithm for building atlases
 //!
 //! # example
 //!

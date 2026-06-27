@@ -59,7 +59,7 @@ impl Default for Projection {
 /// active camera. the render system reads the first entity with both components
 /// and builds view + projection matrices from it.
 ///
-/// the view matrix is derived from the entity's world transform — position and
+/// the view matrix is derived from the entity's world transform, position and
 /// orientation live there, not here. this component only stores projection state.
 ///
 /// # example
@@ -84,7 +84,7 @@ pub struct Camera3d {
 impl Camera3d {
 	/// build the view matrix from this camera's world transform.
 	///
-	/// the view matrix is the inverse of the camera's world transform matrix —
+	/// the view matrix is the inverse of the camera's world transform matrix;
 	/// it transforms world-space positions into camera (eye) space.
 	#[must_use]
 	pub fn view_matrix(transform: WorldTransform3d) -> Mat4 {
@@ -111,7 +111,7 @@ impl Default for Camera3d {
 	}
 }
 
-/// camera target resource — the entity currently acting as the active 3D camera.
+/// camera target resource: the entity currently acting as the active 3D camera.
 ///
 /// the render system sets this automatically to the highest-priority active
 /// [`Camera3d`] entity each frame.
@@ -215,7 +215,7 @@ pub fn update_active_camera(
 
 /// ambient (scene-wide) light level.
 ///
-/// added as a resource rather than a component — there is only ever one ambient
+/// added as a resource rather than a component, there is only ever one ambient
 /// light. defaults to a dim grey so scenes without explicit lights aren't pitch black.
 #[derive(bevy_ecs::prelude::Resource, Debug, Clone, Copy)]
 pub struct AmbientLight {
@@ -233,5 +233,5 @@ impl Default for AmbientLight {
 	}
 }
 
-/// unused parameter placeholder — keeps the Vec3 import used.
+/// unused parameter placeholder: keeps the Vec3 import used.
 const _: Vec3 = Vec3::ZERO;

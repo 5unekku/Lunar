@@ -7,7 +7,7 @@ use lunar_math::Color;
 /// for this entity on mid+ tier. on low tier the entity renders normally
 /// without wave displacement.
 ///
-/// the entity mesh should be a flat XZ-plane centered at the origin — the
+/// the entity mesh should be a flat XZ-plane centered at the origin; the
 /// water shader handles the Y-displacement via Gerstner waves.
 #[derive(Component, Clone, Copy)]
 pub struct Water {

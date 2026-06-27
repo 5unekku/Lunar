@@ -91,7 +91,7 @@ impl ActionMap {
 
 	/// bind an input to an action name.
 	///
-	/// multiple bindings can be added to the same action — any one of them
+	/// multiple bindings can be added to the same action, any one of them
 	/// triggering will make the action active.
 	pub fn bind(&mut self, action: &str, binding: InputBinding) {
 		self.bindings
@@ -175,7 +175,7 @@ impl Default for ActionMap {
 
 /// fluent builder returned by [`ActionMap::action`].
 ///
-/// chain binding methods then let the builder drop — bindings are committed on drop.
+/// chain binding methods then let the builder drop; bindings are committed on drop.
 pub struct ActionBuilder<'a> {
 	action_map: &'a mut ActionMap,
 	name: String,
@@ -258,7 +258,7 @@ impl InputBinding {
 			Self::GamepadButton(index, button) => input
 				.gamepad(*index)
 				.is_some_and(|gp| gp.is_button_just_pressed(*button)),
-			// axis has no edge-triggered press — treat as held
+			// axis has no edge-triggered press, treat as held
 			Self::GamepadAxis(index, axis, threshold) => input
 				.gamepad(*index)
 				.is_some_and(|gp| Self::axis_active(gp.axis(*axis), *threshold)),
@@ -582,7 +582,7 @@ pub enum GamepadAxis {
 }
 
 /// input state resource, tracks current and previous frame input.
-/// uses fixed-size bool arrays indexed by discriminant value — O(1) lookup, no hashing.
+/// uses fixed-size bool arrays indexed by discriminant value: O(1) lookup, no hashing.
 #[derive(Resource, Clone)]
 pub struct InputState {
 	/// fast-path array for common keys (indices `0..KEY_ARRAY_SIZE`)
@@ -879,7 +879,7 @@ impl GamepadProvider for NoGamepad {
 ///
 /// receives gamepad events routed from [`process_events`] via the SDL3 event pump.
 /// event routing happens inside [`process_events`] because SDL3 delivers all input
-/// (keyboard, mouse, controller) through a single event pump — they cannot be split.
+/// (keyboard, mouse, controller) through a single event pump; they cannot be split.
 ///
 /// to swap to a different backend (e.g. gilrs):
 /// - pass `&mut NoGamepad` to [`process_events`]
@@ -975,12 +975,12 @@ pub fn process_events(
 
 	let mut got_quit = false;
 
-	// process events directly from the iterator — no intermediate Vec allocation.
+	// process events directly from the iterator, no intermediate Vec allocation.
 	// the InputState borrow must be released before we can access EngineState below,
 	// so it lives in its own block.
 	{
 		if let Some(mut input) = world.get_resource_mut::<InputState>() {
-			// clear just_pressed/just_released here, not in PostUpdate — this keeps
+			// clear just_pressed/just_released here, not in PostUpdate; this keeps
 			// edge events alive until the next logic tick even when ticks == 0 for a
 			// display frame (e.g. 360fps render with 60hz tick rate).
 			input.begin_frame();
@@ -1508,7 +1508,7 @@ pub fn setup_web_input(canvas: &web_sys::HtmlElement) {
 
 	let canvas_target: &EventTarget = canvas.as_ref();
 
-	// keyboard events on document body (not canvas — canvas doesn't receive keyboard events)
+	// keyboard events on document body (not canvas: canvas doesn't receive keyboard events)
 	{
 		let window = web_sys::window().expect("no window");
 		let document = window.document().expect("no document");

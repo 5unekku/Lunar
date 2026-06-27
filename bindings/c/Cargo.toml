@@ -3,7 +3,7 @@ name = "lunar-ffi"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "stable C ABI layer for lunar-engine — entity/component/system/time access from C, C++, and C#"
+description = "stable C ABI layer for lunar-engine: entity/component/system/time access from C, C++, and C#"
 publish = false
 
 [lib]

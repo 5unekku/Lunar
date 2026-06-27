@@ -1,4 +1,4 @@
-# ecs — entities, components, systems
+# ecs: entities, components, systems
 
 lunar uses an entity-component-system (ECS) architecture. game objects are
 entities with attached data (components). logic runs in systems that query
@@ -38,13 +38,13 @@ let entity = commands.spawn(Player { health: 100.0, speed: 200.0 }).id();
 
 ## systems
 
-a system is a plain function. its parameters declare what it needs — the engine
+a system is a plain function. its parameters declare what it needs: the engine
 injects them automatically:
 
 ```rust
-// Res<T>    — shared read access to a resource
-// ResMut<T> — exclusive write access to a resource
-// Query<...> — read/write components on matching entities
+// Res<T>   : shared read access to a resource
+// ResMut<T>: exclusive write access to a resource
+// Query<...>: read/write components on matching entities
 fn move_player(
     time: Res<Time>,
     input: Res<InputState>,
@@ -99,11 +99,11 @@ fn update_enemies(query: Query<&mut Transform, (With<Enemy>, Without<Dead>)>) {
 ```
 
 filter markers:
-- `With<T>` — entity must have T (not accessed)
-- `Without<T>` — entity must not have T
-- `Added<T>` — entity gained T this tick
-- `Changed<T>` — T changed value this tick
-- `Or<(A, B)>` — matches if A or B is true
+- `With<T>`: entity must have T (not accessed)
+- `Without<T>`: entity must not have T
+- `Added<T>`: entity gained T this tick
+- `Changed<T>`: T changed value this tick
+- `Or<(A, B)>`: matches if A or B is true
 
 ### querying a single entity
 
@@ -123,7 +123,7 @@ if the count might vary.
 
 ## resources
 
-resources are singleton values stored in the ECS world — not attached to any entity.
+resources are singleton values stored in the ECS world: not attached to any entity.
 use them for global state like the score, a game phase, or engine services.
 
 ```rust
@@ -145,17 +145,17 @@ fn display_score(score: Res<Score>) {
 ```
 
 built-in resources always available (no setup needed):
-- `Time` — delta time, elapsed time, frame count
-- `InputState` — keyboard, mouse, gamepad state
-- `ActionMap` — named action bindings
-- `AssetServer` — asset loading
-- `RenderQueue` — immediate-mode draw calls (2d)
-- `WindowSettings` — window dimensions and fullscreen state
-- `Camera` — 2d camera position and zoom (insert this yourself if needed)
+- `Time`: delta time, elapsed time, frame count
+- `InputState`: keyboard, mouse, gamepad state
+- `ActionMap`: named action bindings
+- `AssetServer`: asset loading
+- `RenderQueue`: immediate-mode draw calls (2d)
+- `WindowSettings`: window dimensions and fullscreen state
+- `Camera`: 2d camera position and zoom (insert this yourself if needed)
 
 ## commands
 
-`Commands` is a deferred write buffer — changes apply at the end of the current
+`Commands` is a deferred write buffer: changes apply at the end of the current
 stage, not immediately. use it to spawn, despawn, and mutate entities:
 
 ```rust
@@ -172,9 +172,9 @@ fn cleanup_dead(
 ```
 
 `commands.entity(id)` returns an `EntityCommands` with:
-- `.insert(component)` — add a component
-- `.remove::<T>()` — remove a component
-- `.despawn()` — destroy the entity
+- `.insert(component)`: add a component
+- `.remove::<T>()`: remove a component
+- `.despawn()`: destroy the entity
 
 ## local state
 
@@ -194,7 +194,7 @@ fn spawn_enemies(mut timer: Local<f32>, time: Res<Time>, mut commands: Commands)
 
 ## messages (events)
 
-messages are buffered streams — one system writes, another reads. useful for
+messages are buffered streams: one system writes, another reads. useful for
 decoupled communication between systems:
 
 ```rust

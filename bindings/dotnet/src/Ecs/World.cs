@@ -8,7 +8,7 @@ namespace Lunar;
 /// access to the engine world during a system callback.
 ///
 /// this is a <c>ref struct</c> so the compiler prevents it from being heap-allocated
-/// or stored in a field — enforcing the "only valid during callback" rule at the type level.
+/// or stored in a field: enforcing the "only valid during callback" rule at the type level.
 /// </summary>
 public unsafe ref struct World
 {

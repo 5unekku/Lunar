@@ -1,4 +1,4 @@
-// detail sprite system — GPU-driven billboarded ground cover sprites.
+// detail sprite system: GPU-driven billboarded ground cover sprites.
 //
 // compute pass: reads density map + camera position, generates instance data
 //   (world_pos: vec3, scale: f32, variant_u: f32, rotation: f32) for sprites
@@ -59,7 +59,7 @@ fn cs_generate_instances(@builtin(global_invocation_id) gid: vec3<u32>) {
     let fade_start = detail_params.max_dist * 0.7;
     let density_t  = 1.0 - clamp((dist - fade_start) / (detail_params.max_dist - fade_start), 0.0, 1.0);
 
-    // sample density map (textureSampleLevel required in compute — explicit mip 0)
+    // sample density map (textureSampleLevel required in compute: explicit mip 0)
     let uv = (vec2<f32>(grid_x, grid_z) - detail_params.world_origin) / detail_params.world_size;
     let density = textureSampleLevel(density_map, density_smp, clamp(uv, vec2(0.001), vec2(0.999)), 0.0).r;
     let effective_density = density * density_t * detail_params.density_scale;

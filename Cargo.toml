@@ -127,7 +127,7 @@ codegen-backend = "llvm"
 
 # cubeb-sys must stay at opt-level 0: at -O3 the cmake crate flips libcubeb to
 # RelWithDebInfo, whose nested `cargo build --release` drops libcubeb_pulse.a in
-# release/ while cubeb-sys's build.rs (PROFILE=debug) searches debug/ — dev builds
+# release/ while cubeb-sys's build.rs (PROFILE=debug) searches debug/: dev builds
 # then fail to link on any machine with libpulse installed.
 [profile.dev.package.cubeb-sys]
 opt-level       = 0

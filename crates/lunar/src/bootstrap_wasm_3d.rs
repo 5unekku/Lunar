@@ -3,7 +3,7 @@
 /// finds `<canvas id="lunar-canvas">` in the page, initializes the 3d WebGPU
 /// render engine, and drives the game loop via RAF.
 ///
-/// the 3d renderer runs at `RenderTier::Mid` on WebGPU — compute shaders (GTAO,
+/// the 3d renderer runs at `RenderTier::Mid` on WebGPU: compute shaders (GTAO,
 /// STAA, particles) are active; GPU-driven culling and HZB are disabled since
 /// WebGPU lacks `INDIRECT_EXECUTION`.
 ///
@@ -64,7 +64,7 @@ pub async fn bootstrap_wasm_3d<Plugin: lunar_core::GamePlugin + Default + 'stati
 	initial_settings.target_aspect = config.target_aspect;
 	initial_settings.allow_resize = config.allow_resize;
 	app.insert_resource(initial_settings);
-	// wasm has no display mode API — use the curated standard list
+	// wasm has no display mode API: use the curated standard list
 	app.insert_resource(AvailableResolutions(STANDARD_RESOLUTIONS.to_vec()));
 	app.insert_resource(engine);
 	// pump_frame reads the tick rate from this resource, so set_tick_rate works on wasm too
@@ -82,7 +82,7 @@ pub async fn bootstrap_wasm_3d<Plugin: lunar_core::GamePlugin + Default + 'stati
 	let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
 	let g = f.clone();
 
-	// RAF fires at display refresh rate, so real elapsed time must be measured —
+	// RAF fires at display refresh rate, so real elapsed time must be measured;
 	// a fixed per-callback delta would scale game speed with the monitor (2× at 120hz).
 	let performance = web_sys::window()
 		.and_then(|w| w.performance())

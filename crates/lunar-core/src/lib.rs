@@ -76,7 +76,7 @@ pub use world_manifest::{
 	AdvancedSceneLoader, ChunkEntry, ComponentScene, EntityData, LoadMode, LoadedScenes,
 	SceneEntry, StreamingConfig, StreamingState, WorldManifest,
 };
-/// compiled/interned manifest internals — reachable for tooling, but not part of
+/// compiled/interned manifest internals: reachable for tooling, but not part of
 /// the game-facing contract (the manifest pipeline produces these; games don't author them).
 #[doc(hidden)]
 pub use world_manifest::{

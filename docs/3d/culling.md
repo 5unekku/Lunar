@@ -1,7 +1,7 @@
-# 3d culling — BSP, BVH, portal
+# 3d culling: BSP, BVH, portal
 
 the engine has three complementary culling systems. use them together for
-best performance — they're additive, not mutually exclusive.
+best performance: they're additive, not mutually exclusive.
 
 ## frustum culling (always on)
 
@@ -79,10 +79,10 @@ app.add_plugin(BspPlugin);  // includes BVH; BspPlugin depends on BvhPlugin
 
 the portal system runs a BFS from the camera's current area, only traversing
 portals visible within the camera frustum. entities in unreachable areas are
-skipped before the GPU sees them — a closed door eliminates an entire wing
+skipped before the GPU sees them: a closed door eliminates an entire wing
 at zero GPU cost.
 
-entities without an `Area` component are **always visible** — portal culling
+entities without an `Area` component are **always visible**: portal culling
 only prunes tagged entities.
 
 ## combining strategies

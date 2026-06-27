@@ -61,7 +61,7 @@ fn project_to_uv(view_pos: vec3<f32>) -> vec2<f32> {
 @fragment
 fn fs_main(in: VertOut) -> @location(0) f32 {
     let depth = textureSample(depth_tex, depth_smp, in.uv);
-    // skip sky (depth == 1.0 in reversed-Z or 0.0 in regular Z — use near-to-far convention)
+    // skip sky (depth == 1.0 in reversed-Z or 0.0 in regular Z, use near-to-far convention)
     if depth >= 0.9999 { return 0.0; }
 
     let view_pos   = view_pos_from_depth(in.uv, depth);

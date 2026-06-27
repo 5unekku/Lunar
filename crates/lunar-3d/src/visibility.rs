@@ -11,7 +11,7 @@ use crate::transform::WorldTransform3d;
 /// if an entity has no parent, `Inherited` and `Visible` are equivalent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component, Default)]
 pub enum Visibility {
-	/// inherit from parent — hidden if any ancestor is `Hidden`.
+	/// inherit from parent: hidden if any ancestor is `Hidden`.
 	#[default]
 	Inherited,
 	/// always hidden regardless of parent or children.
@@ -20,7 +20,7 @@ pub enum Visibility {
 	Visible,
 }
 
-/// computed visibility — propagated from [`Visibility`] through the entity hierarchy.
+/// computed visibility: propagated from [`Visibility`] through the entity hierarchy.
 ///
 /// set each frame by [`propagate_visibility`]. the render system reads this to skip
 /// invisible entities without walking the hierarchy itself.
@@ -43,9 +43,9 @@ impl Default for ComputedVisibility {
 pub struct RenderLayers(pub u64);
 
 impl RenderLayers {
-	/// layer 0 only — the standard default for all entities and cameras.
+	/// layer 0 only: the standard default for all entities and cameras.
 	pub const DEFAULT: Self = Self(1);
-	/// no layers — entity is invisible to all cameras.
+	/// no layers: entity is invisible to all cameras.
 	pub const NONE: Self = Self(0);
 
 	/// bitmask with only `layer` set (0-indexed, max 63).
@@ -112,12 +112,12 @@ impl Aabb3d {
 	}
 }
 
-/// camera frustum — 6 half-space planes bounding the view volume.
+/// camera frustum: 6 half-space planes bounding the view volume.
 ///
 /// computed from the view-projection matrix each frame by [`update_frustum`].
 /// stored as a resource so the render backend can use it without recomputing.
 ///
-/// planes are in world space, facing inward — a point is inside if all 6 plane
+/// planes are in world space, facing inward: a point is inside if all 6 plane
 /// tests pass: `dot(plane.xyz, point) + plane.w >= 0`.
 #[derive(Debug, Clone, Copy, Resource)]
 pub struct Frustum {
@@ -129,7 +129,7 @@ impl Frustum {
 	/// extract frustum planes from a combined view-projection matrix.
 	///
 	/// uses the Gribb/Hartmann method (column-major, right-handed clip space).
-	/// planes are not normalized — use for overlap tests only.
+	/// planes are not normalized: use for overlap tests only.
 	#[must_use]
 	pub fn from_view_proj(vp: Mat4) -> Self {
 		let cols = vp.to_cols_array_2d();
@@ -153,7 +153,7 @@ impl Frustum {
 	/// conservative AABB visibility test.
 	///
 	/// returns false only when the AABB is provably outside the frustum. false positives
-	/// are safe — they result in a redundant draw call, not a visual artifact.
+	/// are safe: they result in a redundant draw call, not a visual artifact.
 	#[must_use]
 	pub fn intersects_aabb(self, center: Vec3A, half_extents: Vec3A) -> bool {
 		for plane in &self.planes {
@@ -168,7 +168,7 @@ impl Frustum {
 }
 
 impl Default for Frustum {
-	/// pass-everything default — replaced on the first frame by `update_frustum`.
+	/// pass-everything default: replaced on the first frame by `update_frustum`.
 	fn default() -> Self {
 		Self {
 			planes: [Vec4::new(0.0, 0.0, 0.0, f32::MAX); 6],
@@ -198,17 +198,17 @@ impl Default for ViewportAspect {
 	}
 }
 
-/// marker component — this entity casts shadows.
+/// marker component: this entity casts shadows.
 ///
 /// the render backend skips shadow map draw calls for entities without this.
 #[derive(Debug, Clone, Copy, Default, Component)]
 pub struct ShadowCaster;
 
-/// marker component — this surface receives projected shadows.
+/// marker component: this surface receives projected shadows.
 #[derive(Debug, Clone, Copy, Default, Component)]
 pub struct ShadowReceiver;
 
-/// scratch storage for visibility propagation — allocated once, reused every frame.
+/// scratch storage for visibility propagation: allocated once, reused every frame.
 ///
 /// uses parallel Vecs keyed by snapshot index rather than HashMaps keyed by Entity.
 #[derive(Resource, Default)]
@@ -321,7 +321,7 @@ fn vis_depth_of(idx: usize, parent_idx: &[Option<usize>], depths: &mut [u32]) ->
 
 /// recompute the [`Frustum`] resource from the active camera each frame.
 ///
-/// reads [`ViewportAspect`] for the projection matrix — set this resource from the
+/// reads [`ViewportAspect`] for the projection matrix, set this resource from the
 /// render/windowing layer whenever the window is resized.
 pub fn update_frustum(
 	active: Res<ActiveCamera3d>,
@@ -346,8 +346,8 @@ pub fn update_frustum(
 ///
 /// stored as a structure-of-arrays: each axis lives in its own contiguous `f32`
 /// slice so the frustum culler can load 8 boxes per AVX2 lane (see
-/// [`crate::simd::cull_aabbs_soa`]). this is also denser than `Vec<Vec3A>` — 12
-/// bytes/box instead of the 16 a padded `Vec3A` occupies — so the SIMD layout
+/// [`crate::simd::cull_aabbs_soa`]). this is also denser than `Vec<Vec3A>`: 12
+/// bytes/box instead of the 16 a padded `Vec3A` occupies: so the SIMD layout
 /// costs no extra memory over the old array-of-structs form.
 ///
 /// all six axis vecs plus `entities` share the same length; index `i` is one box.

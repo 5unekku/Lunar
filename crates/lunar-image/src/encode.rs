@@ -7,7 +7,7 @@ use crate::simd;
 #[derive(Debug, Clone)]
 pub struct EncodeOptions {
 	/// zstd compression level (1-22).
-	/// level 9 sits at the pareto knee — ~80% of max ratio for ~20% of max encode cost.
+	/// level 9 sits at the pareto knee: ~80% of max ratio for ~20% of max encode cost.
 	/// encoding is a build-time operation so levels above 3 are always worth it.
 	pub compression_level: i32,
 	/// whether the image contains alpha channel data.
@@ -60,7 +60,7 @@ pub fn encode_with_opts(
 		});
 	}
 
-	// deinterleave then compress — channels separate means zstd sees coherent data
+	// deinterleave then compress: channels separate means zstd sees coherent data
 	let planar = simd::deinterleave_rgba(rgba);
 	let unfiltered = zstd::encode_all(planar.as_slice(), opts.compression_level)
 		.map_err(EncodeError::ZstdError)?;

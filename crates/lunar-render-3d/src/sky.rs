@@ -4,7 +4,7 @@ use lunar_math::Color;
 /// physically-based atmospheric scattering parameters for the sky.
 ///
 /// when inserted as a resource, the renderer replaces the flat-color skydome with
-/// a Nishita-style Rayleigh+Mie single-scattering sky. mid+ tier only — on LowGles
+/// a Nishita-style Rayleigh+Mie single-scattering sky. mid+ tier only, on LowGles
 /// the renderer falls back to the flat `Sky` sky_color.
 ///
 /// default values approximate Earth's atmosphere.

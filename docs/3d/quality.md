@@ -2,7 +2,7 @@
 
 `QualitySettings` is a resource inserted by `RenderPlugin3d` with defaults
 derived from the detected GPU capability tier. game code can read and write it
-at any time — changes apply next frame.
+at any time: changes apply next frame.
 
 ## quality presets
 
@@ -11,7 +11,7 @@ use lunar::lunar_render_3d::QualitySettings;
 
 // set from a preset
 fn apply_settings(mut quality: ResMut<QualitySettings>) {
-    *quality = QualitySettings::minimum();  // accessibility floor — all post-fx off
+    *quality = QualitySettings::minimum();  // accessibility floor: all post-fx off
     // or:
     *quality = QualitySettings::from_tier(RenderTier::detect(adapter_info));
 }
@@ -50,7 +50,7 @@ fn setup_quality(mut quality: ResMut<QualitySettings>) {
 | `bloom_mips` | `u32` | bloom downsample mip levels |
 | `ssao` | `bool` | half-res GTAO ambient occlusion |
 | `fxaa` | `bool` | FXAA post-process AA (for low tier, no MSAA) |
-| `staa` | `bool` | selective TAA — stabilizes shimmer on edges |
+| `staa` | `bool` | selective TAA: stabilizes shimmer on edges |
 | `ssr` | `bool` | quarter-res screen-space reflections |
 | `volumetric_fog` | `bool` | quarter-res ray-marched volumetric fog |
 | `vignette` | `bool` | screen-edge vignette |
@@ -74,7 +74,7 @@ fn setup_quality(mut quality: ResMut<QualitySettings>) {
 | `High` | compute + indirect draw | modern discrete GPU |
 
 the `Minimum` preset runs at acceptable fps on any tier. games should expose
-a quality slider and let players choose — don't auto-detect and assume.
+a quality slider and let players choose: don't auto-detect and assume.
 
 ## sky and atmosphere
 
@@ -112,6 +112,6 @@ fn setup(mut commands: Commands) {
 ```
 
 `FogFalloff` variants:
-- `Linear { start, end }` — linear fog between start and end distances
-- `Exponential { density }` — exponential fog density
-- `ExponentialSquared { density }` — denser exponential falloff
+- `Linear { start, end }`: linear fog between start and end distances
+- `Exponential { density }`: exponential fog density
+- `ExponentialSquared { density }`: denser exponential falloff

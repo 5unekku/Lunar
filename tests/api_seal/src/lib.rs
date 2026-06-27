@@ -1,4 +1,4 @@
-//! API seal test — verifies game code can use the full ECS contract through
+//! API seal test: verifies game code can use the full ECS contract through
 //! `lunar` alone, without naming `bevy_ecs` anywhere.
 //!
 //! If this compiles, the seal holds. If it ever fails, the abstraction is
@@ -8,7 +8,7 @@
 
 use lunar::prelude::*;
 
-// component derive — generated impl routes through lunar's hidden bevy_ecs
+// component derive: generated impl routes through lunar's hidden bevy_ecs
 #[derive(Component)]
 struct Player {
 	health: u32,
@@ -36,7 +36,7 @@ fn spawn_player(mut commands: Commands, mut assets: ResMut<AssetServer>) {
 		Player { health: 100 },
 		Velocity(Vec2::ZERO),
 		Transform::default(),
-		// high-level component-driven rendering — no DrawCommand in sight
+		// high-level component-driven rendering, no DrawCommand in sight
 		Sprite::new(texture)
 			.with_size(Vec2::new(32.0, 32.0))
 			.with_color(Color::WHITE)
@@ -55,7 +55,7 @@ fn spawn_label(mut commands: Commands, mut assets: ResMut<AssetServer>) {
 }
 
 fn draw_hud(mut queue: ResMut<RenderQueue>) {
-	// imperative escape hatch for HUD / debug — still part of the sealed API
+	// imperative escape hatch for HUD / debug, still part of the sealed API
 	queue.draw_rect(
 		Vec2::ZERO,
 		Vec2::new(200.0, 40.0),

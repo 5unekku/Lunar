@@ -47,7 +47,7 @@ pub struct TransformScratch3d {
 /// propagate [`LocalTransform3d`] and [`Visibility`] through the entity hierarchy in one pass.
 ///
 /// replaces the separate `propagate_transforms_3d` + `propagate_visibility` systems.
-/// both share the same hierarchy sort (O(N log N)) — doing them together halves that cost.
+/// both share the same hierarchy sort (O(N log N)), doing them together halves that cost.
 ///
 /// produces [`WorldTransform3d`] and [`ComputedVisibility`] for all relevant entities.
 pub fn propagate_transforms_3d(world: &mut World) {
@@ -217,7 +217,7 @@ pub fn propagate_transforms_3d(world: &mut World) {
 					}
 				}
 			} else if let Some(parent_i) = scratch.parent_idx[i] {
-				// no local transform — inherit parent matrix for downstream child chains
+				// no local transform: inherit parent matrix for downstream child chains
 				scratch.world_mats[i] = scratch.world_mats[parent_i];
 			}
 
@@ -274,7 +274,7 @@ pub fn propagate_transforms_3d(world: &mut World) {
 			}
 		}
 	}
-	// structural insert — cold path, only entities missing the component (e.g. first frame)
+	// structural insert: cold path, only entities missing the component (e.g. first frame)
 	for i in 0..n {
 		if scratch.snapshot[i].1.is_some()
 			&& !scratch.wt_written[i]

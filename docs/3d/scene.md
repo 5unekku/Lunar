@@ -1,9 +1,9 @@
-# 3d scene — transforms, meshes, camera
+# 3d scene: transforms, meshes, camera
 
 ## transforms
 
 3d entities use `LocalTransform3d` and `WorldTransform3d` instead of the 2d `Transform`.
-rotation is a quaternion — no gimbal lock.
+rotation is a quaternion; no gimbal lock.
 
 ```rust
 use lunar::prelude::*;
@@ -15,12 +15,12 @@ let transform = LocalTransform3d::from_xyz(0.0, 2.0, -5.0)
 ```
 
 `LocalTransform3d` fields:
-- `translation: Vec3` — position in parent space (or world space if no parent)
-- `rotation: Quat` — orientation as a quaternion
-- `scale: Vec3` — per-axis scale
+- `translation: Vec3`: position in parent space (or world space if no parent)
+- `rotation: Quat`: orientation as a quaternion
+- `scale: Vec3`: per-axis scale
 
 `WorldTransform3d` is computed by the transform propagation system each tick.
-do not write to it directly — write `LocalTransform3d` and the system propagates.
+do not write to it directly, write `LocalTransform3d` and the system propagates.
 
 useful `Quat` constructors:
 ```rust
@@ -114,8 +114,8 @@ fn setup(mut commands: Commands) {
 ```
 
 `Projection` variants:
-- `Perspective { fov_y, near, far }` — standard 3d perspective
-- `Orthographic { height, near, far }` — isometric/top-down views
+- `Perspective { fov_y, near, far }`: standard 3d perspective
+- `Orthographic { height, near, far }`: isometric/top-down views
 
 moving the camera each tick:
 
@@ -148,9 +148,9 @@ fn camera_movement(
 ## visibility and render layers
 
 `Visibility` controls whether an entity is submitted to the renderer:
-- `Visibility::Visible` — always render
-- `Visibility::Hidden` — never render
-- `Visibility::Inherited` — follow parent (default)
+- `Visibility::Visible`: always render
+- `Visibility::Hidden`: never render
+- `Visibility::Inherited`: follow parent (default)
 
 `RenderLayers` is a bitmask that pairs entities to cameras. the default layer
 (`RenderLayers::DEFAULT`) is layer 0. cameras and meshes on different layers don't see each other.

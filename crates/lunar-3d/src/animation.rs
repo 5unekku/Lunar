@@ -17,7 +17,7 @@ pub struct Keyframe<T: Copy> {
 /// animation track for one named joint.
 ///
 /// stores translation, rotation, and scale keyframes separately. any channel
-/// may be empty — if empty, that component of the transform is left unchanged.
+/// may be empty, if empty, that component of the transform is left unchanged.
 ///
 /// keyframes must be sorted by ascending time before the clip is used.
 #[derive(Debug, Clone)]
@@ -185,7 +185,7 @@ impl AnimationTarget {
 
 /// playback state for a skeletal animation. attach to the root entity of a skeleton.
 ///
-/// the clip is shared via `Arc` — multiple players can reference the same clip at no
+/// the clip is shared via `Arc`: multiple players can reference the same clip at no
 /// extra memory cost.
 ///
 /// # example
@@ -249,7 +249,7 @@ impl AnimationPlayer {
 
 /// advance all animation players by delta time, then write sampled transforms to joint entities.
 ///
-/// scratch is a sorted `Vec` (by entity) reused each frame — O(N log N) sort + O(log N) binary
+/// scratch is a sorted `Vec` (by entity) reused each frame: O(N log N) sort + O(log N) binary
 /// search per target. better cache behavior than a HashMap for typical animation counts.
 pub fn advance_animations(
 	time: Res<Time>,

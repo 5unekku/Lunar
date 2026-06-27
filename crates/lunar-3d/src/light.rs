@@ -9,7 +9,7 @@ use lunar_math::{Color, Vec3};
 ///
 /// # coefficient order
 ///
-/// `[L0, L1_x, L1_y, L1_z, L2_xy, L2_yz, L2_0, L2_xz, L2_x2y2]` — each as `[R, G, B]`.
+/// `[L0, L1_x, L1_y, L1_z, L2_xy, L2_yz, L2_0, L2_xz, L2_x2y2]`: each as `[R, G, B]`.
 /// coefficients must be pre-scaled by the Lambertian ZH × SH basis constants:
 /// - L0:  × (π × 0.282095)
 /// - L1:  × (2π/3 × 0.488603)
@@ -55,7 +55,7 @@ pub struct AmbientProbeGrid {
 
 impl AmbientProbeGrid {
 	/// look up the 9 L2 SH coefficients for a world position.
-	/// clamps to grid bounds — no extrapolation outside the grid.
+	/// clamps to grid bounds, no extrapolation outside the grid.
 	#[must_use]
 	pub fn sample(&self, pos: Vec3) -> [[f32; 3]; 9] {
 		let rel = pos - self.origin;
@@ -78,10 +78,10 @@ impl AmbientProbeGrid {
 	}
 }
 
-/// directional light — infinite distance, uniform direction across the scene.
+/// directional light: infinite distance, uniform direction across the scene.
 ///
 /// direction is taken from the entity's [`WorldTransform3d`](crate::transform::WorldTransform3d)
-/// forward vector. equivalent to a sun or moon — no falloff, no position.
+/// forward vector. equivalent to a sun or moon, no falloff, no position.
 #[derive(Debug, Clone, Copy, Component)]
 pub struct DirectionalLight {
 	pub color: Color,
@@ -100,11 +100,11 @@ impl Default for DirectionalLight {
 	}
 }
 
-/// point light — emits uniformly in all directions from the entity's world position.
+/// point light: emits uniformly in all directions from the entity's world position.
 ///
 /// # attenuation
 ///
-/// `radius` defines both the falloff range and the culling volume — the render
+/// `radius` defines both the falloff range and the culling volume; the render
 /// system skips any surface whose AABB does not intersect the light sphere. keep
 /// it as tight as possible to minimize lit surface count.
 ///
@@ -139,7 +139,7 @@ impl Default for PointLight {
 	}
 }
 
-/// spot light — cone of light from the entity's position in its forward direction.
+/// spot light: cone of light from the entity's position in its forward direction.
 ///
 /// `inner_angle` is the fully-lit cone (radians); `outer_angle` is where the light
 /// fades to zero. set them equal for a hard edge, or widen `outer_angle` for a soft penumbra.
@@ -148,9 +148,9 @@ pub struct SpotLight {
 	pub color: Color,
 	pub intensity: f32,
 	pub radius: f32,
-	/// inner cone half-angle in radians — fully lit inside this cone.
+	/// inner cone half-angle in radians: fully lit inside this cone.
 	pub inner_angle: f32,
-	/// outer cone half-angle in radians — no light outside this cone.
+	/// outer cone half-angle in radians: no light outside this cone.
 	pub outer_angle: f32,
 	pub casts_shadows: bool,
 }

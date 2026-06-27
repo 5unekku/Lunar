@@ -60,17 +60,17 @@
 //! - assets (textures, sounds, fonts) are accessed through typed `Handle`s from `lunar_assets`
 //! - game logic registers systems via the `App` builder from `lunar_core`
 //! - all game state lives in the ECS [`World`], never in global singletons
-//! - the ECS backend (bevy_ecs) is sealed behind this crate's prelude — game code never names it
+//! - the ECS backend (bevy_ecs) is sealed behind this crate's prelude: game code never names it
 
 #![warn(missing_docs)]
 
 // `__bevy_ecs` is the internal path the lunar-macros derives target. It
-// MUST keep this exact name — the derive macros emit `::lunar::__bevy_ecs::…`
+// MUST keep this exact name: the derive macros emit `::lunar::__bevy_ecs::…`
 // paths. Hidden from rustdoc; not part of the public API contract.
 #[doc(hidden)]
 pub use bevy_ecs as __bevy_ecs;
 
-// wrapped ECS derives — game code writes `#[derive(Component)]` etc. without
+// wrapped ECS derives: game code writes `#[derive(Component)]` etc. without
 // ever naming bevy_ecs in its Cargo.toml. The derives expand to impls routed
 // through `::lunar::__bevy_ecs::…`.
 pub use lunar_macros::{Component, Event, Message, Resource, texture};

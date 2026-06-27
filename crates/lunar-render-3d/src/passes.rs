@@ -1,11 +1,11 @@
-//! `RenderEngine3d` — scene + shadow pass recording.
+//! `RenderEngine3d`: scene + shadow pass recording.
 //!
 //! split out of `lib.rs`; methods stay on `RenderEngine3d` (one type, many
-//! `impl` blocks across sibling modules — all share the struct's private fields).
+//! `impl` blocks across sibling modules; all share the struct's private fields).
 
 use super::*;
 
-/// static pass labels indexed by cascade — avoids per-frame format! allocations
+/// static pass labels indexed by cascade: avoids per-frame format! allocations
 const SHADOW_CASCADE_LABELS: [&str; NUM_CASCADES as usize] = [
 	"[shadow] cascade-0",
 	"[shadow] cascade-1",
@@ -127,7 +127,7 @@ impl RenderEngine3d {
 		// the comparison stays per-frame on purpose: the bundle bakes `ENTITY_SLOT_START + i`
 		// (draw_scratch index), and those indices shift whenever culling reorders draw_scratch,
 		// so a static-set-only dirty flag would leave stale slot bindings. we only avoid the
-		// per-frame heap churn here — build into a reused scratch vec and swap instead of clone.
+		// per-frame heap churn here; build into a reused scratch vec and swap instead of clone.
 		{
 			self.static_list_scratch.clear();
 			for (i, entry) in self.draw_scratch.iter().enumerate() {
@@ -244,7 +244,7 @@ impl RenderEngine3d {
 							a: 1.0,
 						}),
 						// later scene passes (surface, terrain, water, particles)
-						// load this attachment — discarding would leave them with
+						// load this attachment; discarding would leave them with
 						// undefined contents per the WebGPU spec
 						store: wgpu::StoreOp::Store,
 					},
@@ -260,7 +260,7 @@ impl RenderEngine3d {
 							wgpu::LoadOp::Clear(1.0)
 						},
 						// scene passes after this one depth-test against these
-						// contents — must persist
+						// contents; must persist
 						store: wgpu::StoreOp::Store,
 					}),
 					stencil_ops: None,
@@ -278,12 +278,12 @@ impl RenderEngine3d {
 			pass.set_bind_group(0, &self.globals_bg, &[]);
 			pass.set_bind_group(1, &self.material_bg, &[]);
 			pass.set_bind_group(3, &self.lights_bg, &[]);
-			// group 4 fallback — sky/sun are unlit and never sample the lightmap, but pipeline requires it bound
+			// group 4 fallback: sky/sun are unlit and never sample the lightmap, but pipeline requires it bound
 			pass.set_bind_group(4, &self.lightmap_fallback_bg, &[]);
 			// group 5: clustered lights (same for entire pass)
 			pass.set_bind_group(5, &self.cluster_bg_render, &[]);
 
-			// sky pass — a configured panorama texture replaces the dome+sun and
+			// sky pass: a configured panorama texture replaces the dome+sun and
 			// draws after the opaque section instead (depth-tested at far plane,
 			// so early-z skips every pixel geometry already covered)
 			if !panorama_ready {
@@ -312,12 +312,12 @@ impl RenderEngine3d {
 				}
 			}
 
-			// static geometry via RenderBundle — near-zero CPU cost per frame
+			// static geometry via RenderBundle: near-zero CPU cost per frame
 			if let Some(ref bundle) = self.static_bundle {
 				pass.execute_bundles(std::iter::once(bundle));
 			}
 
-			// opaque PBR pass — execute_bundles resets all pass state per spec, so rebind everything
+			// opaque PBR pass: execute_bundles resets all pass state per spec, so rebind everything
 			pass.set_pipeline(&self.opaque_pipeline);
 			pass.set_bind_group(0, &self.globals_bg, &[]);
 			pass.set_bind_group(1, &self.material_bg, &[]);
@@ -328,7 +328,7 @@ impl RenderEngine3d {
 			if self.gpu_indirect_active() {
 				// phase 4: GPU cull wrote draw commands to indirect_buf.
 				// bind atlas once (all lightmaps packed into it), bind mega-VBO/IBO, one call.
-				// phase 5: render path doesn't use frustum_visible — GPU handles culling entirely.
+				// phase 5: render path doesn't use frustum_visible; GPU handles culling entirely.
 				let atlas_bg = self.atlas_bg.as_ref().unwrap_or(&self.lightmap_fallback_bg);
 				pass.set_bind_group(4, atlas_bg, &[]);
 				let mega_vbuf = self.mega_vbuf.as_ref().unwrap();
@@ -416,7 +416,7 @@ impl RenderEngine3d {
 				}
 			}
 
-			// panorama sky — fullscreen triangle at far depth (LessEqual, no
+			// panorama sky: fullscreen triangle at far depth (LessEqual, no
 			// write): after opaques so early-z rejects covered pixels, still in
 			// the main pass so msaa silhouettes resolve against real sky texels,
 			// and before transparents, which must blend over it
@@ -429,7 +429,7 @@ impl RenderEngine3d {
 				draw_calls += 1;
 			}
 
-			// transparent pass — back-to-front sorted, no depth write, alpha blend.
+			// transparent pass: back-to-front sorted, no depth write, alpha blend.
 			// transparents are few so no batching needed; entity_bg already set.
 			if !self.transparent_scratch.is_empty() {
 				pass.set_pipeline(&self.transparent_pipeline);
@@ -509,9 +509,9 @@ impl RenderEngine3d {
 			}
 		}
 
-		// ── terrain pass — geometry clipmap heightmap rendering ─────────
+		// ── terrain pass: geometry clipmap heightmap rendering ─────────
 		{
-			// snapshot only the cheap per-frame fields — NOT `Terrain::heightmap` (a Vec<u8>).
+			// snapshot only the cheap per-frame fields; NOT `Terrain::heightmap` (a Vec<u8>).
 			// the heightmap is read by reference solely on the rare GPU-rebuild path below,
 			// so a clean terrain costs zero heap copies per frame.
 			struct TerrainSnap {
@@ -666,7 +666,7 @@ impl RenderEngine3d {
 			}
 		}
 
-		// ── water pass — Gerstner wave displacement + refraction (mid+) ──
+		// ── water pass: Gerstner wave displacement + refraction (mid+) ──
 		if self.render_tier != RenderTier::LowGles {
 			let width = self.surface_config.width as f32;
 			let height = self.surface_config.height as f32;
@@ -762,7 +762,7 @@ impl RenderEngine3d {
 			}
 		}
 
-		// ── decal pass — box-projected over scene depth ───────────────────
+		// ── decal pass: box-projected over scene depth ───────────────────
 		{
 			let width = self.surface_config.width as f32;
 			let height = self.surface_config.height as f32;
@@ -967,7 +967,7 @@ impl RenderEngine3d {
 			}
 
 			// update CPU lifetime state (particles were simulated on GPU; mirror the aging here).
-			// this pass is required for slot reuse — it's what frees dead slots for the next spawn.
+			// this pass is required for slot reuse; it's what frees dead slots for the next spawn.
 			for cpu in &mut self.particle_cpu {
 				if cpu.alive {
 					cpu.lifetime -= delta;
@@ -980,7 +980,7 @@ impl RenderEngine3d {
 		}
 
 		// ── detail sprite pass ────────────────────────────────────────────
-		// gpu-driven billboarded ground cover — compute generates instances, render draws them.
+		// gpu-driven billboarded ground cover: compute generates instances, render draws them.
 		{
 			let mut detail_query = world.query::<(
 				bevy_ecs::entity::Entity,
@@ -1003,7 +1003,7 @@ impl RenderEngine3d {
 					let entity_key = entity.to_bits();
 					let density_id = dd.density_map.id();
 					let atlas_id = dd.texture.id();
-					// (id, uploaded yet?) — bind groups must rebuild when the resolved view flips
+					// (id, uploaded yet?): bind groups must rebuild when the resolved view flips
 					let density_key =
 						(density_id, self.surface_tex_cache.contains_key(&density_id));
 					let atlas_key = (atlas_id, self.surface_tex_cache.contains_key(&atlas_id));
@@ -1494,7 +1494,7 @@ impl RenderEngine3d {
 		// SAFETY: closures share a read-only &RenderEngine3d (no writes to self state
 		// in the parallel section). each closure writes to a disjoint CommandEncoder.
 		{
-			// rebuild at most 1 dirty cascade per frame (prioritise cascade 0 — nearest/highest detail).
+			// rebuild at most 1 dirty cascade per frame (prioritise cascade 0, nearest/highest detail).
 			// remaining dirty cascades stay dirty and are rebuilt on subsequent frames, spreading
 			// the spike across frames. a stale cascade 2 (far, low detail) is imperceptible for 1-2 frames.
 			let dirty_cascade: Option<usize> = (0..NUM_CASCADES as usize).find(|&c| {
@@ -1652,7 +1652,7 @@ impl RenderEngine3d {
 								}
 								i += 1;
 							}
-							// surface shader meshes write prepass depth too — the
+							// surface shader meshes write prepass depth too: the
 							// atmos sky pass and GTAO read this buffer, so missing
 							// them classifies their pixels as sky. masked (alpha
 							// tested) meshes are deferred to the textured variant

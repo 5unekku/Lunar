@@ -1,8 +1,8 @@
-//! first-person platform demo — minimal scene, pure Rust.
+//! first-person platform demo: minimal scene, pure Rust.
 //!
 //! controls:
-//!   WASD  — move       mouse — look
-//!   Escape — quit      F11   — fullscreen
+//!   WASD: move       mouse: look
+//!   Escape: quit      F11: fullscreen
 
 use lunar::prelude::*;
 

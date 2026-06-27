@@ -13,7 +13,7 @@ internal struct ComponentIdBuffer { private uint _first; }
 
 /// <summary>
 /// fluent builder for entity queries. component id arrays live inline in the struct
-/// (via <see cref="ComponentIdBuffer"/>) — zero heap allocation on the hot path.
+/// (via <see cref="ComponentIdBuffer"/>): zero heap allocation on the hot path.
 ///
 /// this is a <c>ref struct</c> because it holds a raw world pointer that must not
 /// outlive the callback. max 32 include or exclude components per query.

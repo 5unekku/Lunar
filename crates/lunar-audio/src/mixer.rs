@@ -5,7 +5,7 @@ use crossbeam_channel::Receiver;
 
 /// mixes active sources and fills output buffers on the audio callback thread.
 ///
-/// the mixer lives entirely inside the backend callback — game code submits
+/// the mixer lives entirely inside the backend callback, game code submits
 /// new sources via a channel and the mixer drains it each callback.
 pub struct Mixer {
     sources: Vec<Box<dyn AudioSource>>,
@@ -51,7 +51,7 @@ impl Mixer {
             }
         }
 
-        // soft clamp — avoids hard distortion on loud overlapping sources
+        // soft clamp: avoids hard distortion on loud overlapping sources
         for sample in output.iter_mut() {
             *sample = sample.clamp(-1.0, 1.0);
         }

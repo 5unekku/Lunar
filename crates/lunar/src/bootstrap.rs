@@ -4,7 +4,7 @@
 /// reroutes every `draw_indirect` through a validation compute pass and adds
 /// bind groups to every INDIRECT-usage buffer, but the engine's indirect
 /// commands come from its own gpu-cull shaders, never from untrusted data.
-/// dx12 (windows) keeps it — wgpu relies on that pass for correct
+/// dx12 (windows) keeps it; wgpu relies on that pass for correct
 /// `instance_index` / `vertex_index` builtins in indirect draws there.
 /// `WGPU_VALIDATION_INDIRECT_CALL=1` still re-enables it for debugging.
 pub(crate) fn engine_wgpu_instance() -> wgpu::Instance {
@@ -28,7 +28,7 @@ pub(crate) fn engine_wgpu_instance() -> wgpu::Instance {
 /// fullscreen: F11 or Alt+Enter by default. game code can rebind F11 via
 /// [`lunar_input::ActionMap`]. Alt+Enter is always active.
 ///
-/// set `config.target_aspect` to lock the window to a fixed aspect ratio —
+/// set `config.target_aspect` to lock the window to a fixed aspect ratio,
 /// the height snaps to maintain the ratio when the user resizes.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn bootstrap<Plugin: lunar_core::GamePlugin + Default + 'static>(
@@ -89,8 +89,8 @@ pub fn bootstrap<Plugin: lunar_core::GamePlugin + Default + 'static>(
 		// SAFETY: the handles point into `window`'s internal state and must stay
 		// valid for the whole lifetime of the surface. `window` is moved into
 		// `host` below; the explicit `drop(app)` after the loop tears the surface
-		// down (it lives in the `RenderEngine` app resource) while `host` — and
-		// thus `window` — is still alive, so the window outlives the surface.
+		// down (it lives in the `RenderEngine` app resource) while `host`, and
+		// thus `window`, is still alive, so the window outlives the surface.
 		instance
 			.create_surface_unsafe(
 				wgpu::SurfaceTargetUnsafe::from_display_and_window(&display_handle, &window_handle)
@@ -135,7 +135,7 @@ pub fn bootstrap<Plugin: lunar_core::GamePlugin + Default + 'static>(
 	});
 
 	// tear the surface down (lives in the RenderEngine app resource) before
-	// `host`/`window` drop at scope exit — wgpu requires the window to outlive
+	// `host`/`window` drop at scope exit: wgpu requires the window to outlive
 	// the surface created from its handles.
 	drop(app);
 

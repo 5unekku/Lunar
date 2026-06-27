@@ -18,8 +18,8 @@ commands.spawn((
 ```
 
 `ColliderShape` variants:
-- `Rect(width, height)` — axis-aligned box centered on the entity's position
-- `Circle(radius)` — circle centered on the entity's position
+- `Rect(width, height)`: axis-aligned box centered on the entity's position
+- `Circle(radius)`: circle centered on the entity's position
 
 ## overlap queries
 
@@ -60,7 +60,7 @@ fn shoot(collision_world: Res<CollisionWorld>) {
 ```
 
 `RayHit2d` fields:
-- `entity: Entity` — the hit entity
-- `distance: f32` — distance from origin along the ray
+- `entity: Entity`: the hit entity
+- `distance: f32`: distance from origin along the ray
 
 hits are returned in order of increasing distance.

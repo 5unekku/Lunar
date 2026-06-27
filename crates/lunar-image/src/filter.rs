@@ -329,7 +329,7 @@ mod tests {
 
 	#[test]
 	fn roundtrip_gradient() {
-		// horizontal gradient per plane — Sub/Paeth should shine, but roundtrip must hold
+		// horizontal gradient per plane: Sub/Paeth should shine, but roundtrip must hold
 		let (width, height, planes) = (17usize, 13usize, 4usize);
 		let mut planar = vec![0u8; width * height * planes];
 		for plane in 0..planes {

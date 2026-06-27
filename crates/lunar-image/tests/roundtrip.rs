@@ -110,7 +110,7 @@ fn roundtrip_gradient_uses_filter() {
 
 #[test]
 fn roundtrip_photo_like() {
-	// gradient plus deterministic noise — exercises the filter on high-entropy content
+	// gradient plus deterministic noise, exercises the filter on high-entropy content
 	let (width, height) = (96u32, 72u32);
 	let mut pixels = vec![0u8; (width * height * 4) as usize];
 	let mut state = 0x9e37_79b9u32;

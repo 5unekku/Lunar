@@ -1,6 +1,6 @@
 namespace Lunar;
 
-/// <summary>handle to a mesh in the engine registry. opaque — do not inspect the value.</summary>
+/// <summary>handle to a mesh in the engine registry. opaque: do not inspect the value.</summary>
 public readonly struct MeshHandle(ulong raw)
 {
     internal ulong Raw { get; } = raw;

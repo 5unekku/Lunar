@@ -1,6 +1,6 @@
 //! pixel processing utilities with SIMD acceleration where available.
 //!
-//! deinterleave/reinterleave are the hot path — they run on every encode/decode.
+//! deinterleave/reinterleave are the hot path, they run on every encode/decode.
 //! NEON uses vld4q_u8/vst4q_u8 which deinterleave 64 bytes in a single instruction.
 //! x86 falls back to scalar; LLVM auto-vectorises the inner loop well on AVX2 targets.
 
@@ -8,7 +8,7 @@
 ///
 /// zstd compresses each channel plane far better than interleaved data because
 /// each plane has coherent statistics. a solid-color sprite's alpha plane is
-/// all-255, a 4-byte run becomes a ~5-byte output from zstd — not possible
+/// all-255, a 4-byte run becomes a ~5-byte output from zstd; not possible
 /// when the 255s are scattered every 4 bytes through interleaved data.
 pub fn deinterleave_rgba(rgba: &[u8]) -> Vec<u8> {
 	assert_eq!(rgba.len() % 4, 0, "rgba length must be a multiple of 4");
@@ -128,7 +128,7 @@ fn reinterleave_scalar(planar: &[u8], out: &mut [u8], n: usize) {
 	}
 }
 
-/// neon deinterleave using vld4q_u8 — loads 64 bytes and splits into 4 x 16-byte
+/// neon deinterleave using vld4q_u8: loads 64 bytes and splits into 4 x 16-byte
 /// channel registers in a single instruction.
 ///
 /// # Safety
@@ -164,7 +164,7 @@ unsafe fn deinterleave_neon(rgba: &[u8], out: &mut [u8], n: usize) {
 	}
 }
 
-/// neon reinterleave using vst4q_u8 — interleaves 4 x 16-byte channel registers
+/// neon reinterleave using vst4q_u8: interleaves 4 x 16-byte channel registers
 /// into 64 bytes of RGBA in a single instruction.
 ///
 /// # Safety
@@ -231,7 +231,7 @@ pub fn rgba_to_bgra(buf: &mut [u8]) {
 	}
 }
 
-// 256-entry srgb→linear table, baked by build.rs — no first-call init cost.
+// 256-entry srgb→linear table, baked by build.rs, no first-call init cost.
 include!(concat!(env!("OUT_DIR"), "/srgb_lut.rs"));
 
 /// convert sRGB byte values to linear f32. output must be the same length as input.

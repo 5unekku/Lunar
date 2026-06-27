@@ -7,7 +7,7 @@
 //!
 //! assets are loaded through the [`AssetServer`], which returns [`Handle`]s immediately.
 //! the actual asset data loads asynchronously in the background.
-//! handles are generational — if an asset is unloaded and reloaded,
+//! handles are generational, if an asset is unloaded and reloaded,
 //! old handles become invalid, preventing use-after-free bugs.
 //!
 //! # example
@@ -91,7 +91,7 @@ pub enum LoadState {
 	Failed,
 }
 
-/// snapshot of loading progress — counts across all asset types.
+/// snapshot of loading progress: counts across all asset types.
 ///
 /// obtain via [`AssetServer::loading_stats`]. use this to drive a loading
 /// screen: show a progress bar from `loaded / total` while `loaded < total`.
@@ -145,7 +145,7 @@ pub struct LoadingState {
 ///
 /// * `T` - the asset type this handle refers to (e.g. [`Texture`], [`Sound`])
 ///
-/// `Handle<T>` is unconditionally `Copy`, `Clone`, `Debug`, etc. — it stores
+/// `Handle<T>` is unconditionally `Copy`, `Clone`, `Debug`, etc.: it stores
 /// only an id, a generation, and a `PhantomData<T>`. the trait impls are
 /// written by hand because `#[derive]` would spuriously bound `T: Clone`,
 /// `T: Debug`, etc., even though `T` is never instantiated inside the handle.
@@ -659,7 +659,7 @@ impl IoTaskPool {
 		}
 	}
 
-	/// submit a texture load task — checks bundled assets first, then falls back to fetch.
+	/// submit a texture load task, checks bundled assets first, then falls back to fetch.
 	fn load_texture(&self, path: String, id: u32, loader: Arc<dyn TextureLoaderTrait>) {
 		let send = self.texture_send.clone();
 		wasm_bindgen_futures::spawn_local(async move {
@@ -673,7 +673,7 @@ impl IoTaskPool {
 		});
 	}
 
-	/// submit a sound load task — checks bundled assets first, then falls back to fetch.
+	/// submit a sound load task, checks bundled assets first, then falls back to fetch.
 	fn load_sound(&self, path: String, id: u32, loader: Arc<dyn SoundLoaderTrait>) {
 		let send = self.sound_send.clone();
 		wasm_bindgen_futures::spawn_local(async move {
@@ -687,7 +687,7 @@ impl IoTaskPool {
 		});
 	}
 
-	/// submit a font load task — checks bundled assets first, then falls back to fetch.
+	/// submit a font load task, checks bundled assets first, then falls back to fetch.
 	fn load_font(&self, path: String, id: u32, loader: Arc<dyn FontLoaderTrait>) {
 		let send = self.font_send.clone();
 		wasm_bindgen_futures::spawn_local(async move {
@@ -770,7 +770,7 @@ impl TextureLoaderTrait for LiTextureLoader {
 	}
 }
 
-/// loader for `.bctex` files — BC-compressed textures from the compress-textures tool.
+/// loader for `.bctex` files: BC-compressed textures from the compress-textures tool.
 ///
 /// binary layout: magic `BCTX` (4 bytes), version u8, format u8, mip_count u16,
 /// width u32, height u32, then raw BC block data for base + each mip level.
@@ -937,11 +937,11 @@ impl<L: AssetLoader<Asset = Font> + Send + Sync> FontLoaderTrait for FontLoaderA
 	}
 }
 
-/// source for a texture load — either a file path or embedded bytes.
+/// source for a texture load: either a file path or embedded bytes.
 ///
 /// game code typically passes one of:
-/// - `"sprites/player"` — resolved from `assets/` and loaded asynchronously
-/// - `texture!("sprites/player")` — bytes baked in at compile time, decoded synchronously
+/// - `"sprites/player"`: resolved from `assets/` and loaded asynchronously
+/// - `texture!("sprites/player")`: bytes baked in at compile time, decoded synchronously
 pub enum TextureSource<'a> {
 	/// file path, resolved relative to `assets/`
 	Path(&'a str),
@@ -1079,7 +1079,7 @@ impl AssetServer {
 		});
 	}
 
-	/// resolve the texture loader for a path — custom loaders take priority over built-ins.
+	/// resolve the texture loader for a path, custom loaders take priority over built-ins.
 	fn resolve_texture_loader(&self, path: &str) -> Arc<dyn TextureLoaderTrait> {
 		let ext = Path::new(path)
 			.extension()
@@ -1094,7 +1094,7 @@ impl AssetServer {
 		texture_loader_for(path)
 	}
 
-	/// resolve the sound loader for a path — custom loaders take priority over built-ins.
+	/// resolve the sound loader for a path, custom loaders take priority over built-ins.
 	fn resolve_sound_loader(&self, path: &str) -> Arc<dyn SoundLoaderTrait> {
 		let ext = Path::new(path)
 			.extension()
@@ -1109,7 +1109,7 @@ impl AssetServer {
 		sound_loader_for(path)
 	}
 
-	/// resolve the font loader for a path — custom loaders take priority over built-ins.
+	/// resolve the font loader for a path, custom loaders take priority over built-ins.
 	fn resolve_font_loader(&self, path: &str) -> Arc<dyn FontLoaderTrait> {
 		let ext = Path::new(path)
 			.extension()
@@ -1134,7 +1134,7 @@ impl AssetServer {
 	/// use [`is_texture_ready`](Self::is_texture_ready) to check when it's usable.
 	///
 	/// # embedded loading
-	/// bytes are decoded immediately — the handle is ready on the same frame.
+	/// bytes are decoded immediately; the handle is ready on the same frame.
 	pub fn load_texture<'a>(&mut self, source: impl Into<TextureSource<'a>>) -> Handle<Texture> {
 		match source.into() {
 			TextureSource::Path(path) => {
@@ -1271,7 +1271,7 @@ impl AssetServer {
 	///
 	/// the render system calls this once per frame to discover newly loaded
 	/// textures and upload them to the GPU. callers other than the render
-	/// system should generally not call this — it clears the pending list.
+	/// system should generally not call this, it clears the pending list.
 	pub fn drain_new_texture_ids(&mut self) -> Vec<u32> {
 		std::mem::take(&mut self.pending_texture_ids)
 	}
@@ -1440,7 +1440,7 @@ impl AssetServer {
 
 	/// block the calling thread until all pending asset loads complete.
 	///
-	/// intended for tests and one-shot init code only — not available on WASM
+	/// intended for tests and one-shot init code only, not available on WASM
 	/// (no threads to block). in a running game, prefer polling [`loading_count`](Self::loading_count).
 	#[cfg(not(target_arch = "wasm32"))]
 	pub fn wait_for_all(&self) {
@@ -1501,7 +1501,7 @@ impl AssetServer {
 	/// process completed load results from io threads.
 	/// call this once per frame from the asset plugin's system.
 	pub fn update(&mut self) {
-		// drain texture results — auto-generate mips if config is set
+		// drain texture results: auto-generate mips if config is set
 		let gen_mips = self.mip_config.generate_mipmaps;
 		for result in self.io_pool.drain_texture_results() {
 			match result.data {
@@ -1563,16 +1563,16 @@ impl Default for AssetServer {
 ///
 /// `mips` carries pre-generated mip levels (index 0 = half-res, 1 = quarter-res, etc.).
 /// when non-empty, the renderer creates the GPU texture with a full mip chain and uploads
-/// all levels — enabling the GPU sampler to pick the appropriate mip based on screen
+/// all levels, enabling the GPU sampler to pick the appropriate mip based on screen
 /// coverage (trilinear filtering). call `generate_mipmaps()` to populate this field.
 /// pixel compression format for a [`Texture`].
 ///
 /// `None` means raw RGBA8 data. Compressed formats store pre-compressed block
-/// data in `pixels`/`mips` — the renderer uploads it directly without CPU decode.
+/// data in `pixels`/`mips`; the renderer uploads it directly without CPU decode.
 /// produce compressed textures offline with a build tool; the runtime only reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TextureCompression {
-	/// raw RGBA8 (or sRGB) data — the default.
+	/// raw RGBA8 (or sRGB) data: the default.
 	#[default]
 	None,
 	/// BC1 / DXT1: 0.5 bytes/block-texel, RGB no alpha, 8:1 compression for albedo.
@@ -1837,7 +1837,7 @@ fn process_asset_loads(
 /// `vram_budget_bytes` is a soft limit on GPU texture memory. when the total size of
 /// uploaded textures (all mip levels) would exceed the budget, the asset system
 /// stops generating full mip chains for new textures and uploads base mip only.
-/// existing textures are not evicted — eviction requires explicit calls to the
+/// existing textures are not evicted; eviction requires explicit calls to the
 /// asset server's eviction API.
 ///
 /// set `generate_mipmaps = false` to disable mip generation entirely (e.g. for UI
@@ -1894,7 +1894,7 @@ impl TextureVramUsage {
 
 /// event emitted when a watched asset file changes.
 ///
-/// only emitted on native targets — not available on WASM.
+/// only emitted on native targets, not available on WASM.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone)]
 pub struct AssetChangedEvent {
@@ -1913,7 +1913,7 @@ pub enum AssetType {
 
 /// watches an asset directory for file changes and republishes them to the ECS.
 ///
-/// only available on native targets — `notify` does not support WASM.
+/// only available on native targets, `notify` does not support WASM.
 /// file-change paths are delivered each frame as [`AssetChanged`] messages
 /// (read them with a `MessageReader<AssetChanged>`); changes are also logged.
 #[cfg(not(target_arch = "wasm32"))]
@@ -2012,7 +2012,7 @@ pub fn dispatch_asset_changes(
 	}
 }
 
-/// asset watcher plugin — registers [`AssetWatcher`] and emits [`AssetChanged`].
+/// asset watcher plugin: registers [`AssetWatcher`] and emits [`AssetChanged`].
 ///
 /// only available on native targets. add this plugin during development to get
 /// file-change events for assets in the `assets/` directory.
@@ -2101,7 +2101,7 @@ mod handle_tests {
 	fn asset_store_generation_increments_on_reuse() {
 		let mut store = AssetStore::<TestAsset>::new();
 		let h1 = store.allocate_slot("a".into());
-		// nested allocate_slot with a different path reuses slot — not directly testable
+		// nested allocate_slot with a different path reuses slot, not directly testable
 		// but we can verify basic generation tracking works
 		assert_eq!(h1.generation(), 0);
 	}

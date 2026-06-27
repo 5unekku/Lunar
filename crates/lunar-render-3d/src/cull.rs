@@ -1,7 +1,7 @@
-//! `RenderEngine3d` — frustum/hzb culling and per-frame draw-list assembly.
+//! `RenderEngine3d`: frustum/hzb culling and per-frame draw-list assembly.
 //!
 //! split out of `lib.rs`; methods stay on `RenderEngine3d` (one type, many
-//! `impl` blocks across sibling modules — all share the struct's private fields).
+//! `impl` blocks across sibling modules: all share the struct's private fields).
 
 use super::*;
 
@@ -22,7 +22,7 @@ impl RenderEngine3d {
 		// high tier: 1-frame pipelined GPU compute cull.
 		//   frame N: read previous frame's staging result (no stall), dispatch this frame's compute.
 		//   frame N+1: read frame N's result.
-		//   first frame: no prior result — fall through to CPU cull as bootstrap.
+		//   first frame: no prior result: fall through to CPU cull as bootstrap.
 		// mid/low tier: CPU test over contiguous CullSoa arrays.
 		self.frustum_visible.clear();
 		if self.gpu_cull_enabled {
@@ -57,7 +57,7 @@ impl RenderEngine3d {
 				self.lod_staging_pending = false;
 			}
 
-			// read previous frame's staging result — non-blocking, uses AtomicBool set by map_async callback
+			// read previous frame's staging result: non-blocking, uses AtomicBool set by map_async callback
 			if self.cull_staging_pending && entity_count > 0 {
 				let _ = self.device.poll(wgpu::PollType::Poll); // fire any completed callbacks
 				if self.cull_staging_ready.load(Ordering::Acquire) {
@@ -82,7 +82,7 @@ impl RenderEngine3d {
 					self.cull_staging_ready.store(false, Ordering::Release);
 					self.cull_staging_pending = false;
 				} else {
-					// gpu not done yet — use stale gpu_cull_flags from last frame, no stall
+					// gpu not done yet: use stale gpu_cull_flags from last frame, no stall
 					let soa = world.resource::<CullSoa>();
 					for (i, &entity) in soa.entities.iter().enumerate() {
 						if i < self.gpu_cull_flags.len() && self.gpu_cull_flags[i] != 0 {
@@ -266,7 +266,7 @@ impl RenderEngine3d {
 					(entity_count * 4) as u64,
 				);
 				self.queue.submit([cull_enc.finish()]);
-				// register map_async for next frame — callback fires when GPU finishes, no CPU stall
+				// register map_async for next frame: callback fires when GPU finishes, no CPU stall
 				let ready = self.cull_staging_ready.clone();
 				ready.store(false, Ordering::Release);
 				staging_buf.slice(0..(entity_count * 4) as u64).map_async(
@@ -298,7 +298,7 @@ impl RenderEngine3d {
 			}
 		} else {
 			// mid/low tier CPU cull: SIMD frustum test (8 boxes/iter on AVX2) over the
-			// CullSoa axis slices, writing 1/0 into a reused scratch buffer — no per-frame
+			// CullSoa axis slices, writing 1/0 into a reused scratch buffer: no per-frame
 			// allocation (the old rayon `.collect()` heap-allocated a Vec every frame).
 			let frustum = *world.resource::<Frustum>();
 			let soa = world.resource::<CullSoa>();
@@ -367,7 +367,7 @@ impl RenderEngine3d {
 		// ── HZB occlusion cull (high tier, 1-frame pipelined) ────────────
 		// applies previous frame's occlusion result to frustum_visible, then
 		// dispatches this frame's occlusion compute for next frame's use.
-		// no CPU stall — the previous frame's compute completed while we were
+		// no CPU stall: the previous frame's compute completed while we were
 		// building the draw list.
 		if self.hzb_enabled && self.hzb_texture.is_some() {
 			let entity_count = {
@@ -377,7 +377,7 @@ impl RenderEngine3d {
 			if entity_count > 0 {
 				self.ensure_hzb_cull_buffers(entity_count);
 
-				// read previous frame's occlusion result — non-blocking
+				// read previous frame's occlusion result: non-blocking
 				if self.hzb_staging_pending {
 					let _ = self.device.poll(wgpu::PollType::Poll);
 					if self.hzb_staging_ready.load(Ordering::Acquire) {
@@ -629,7 +629,7 @@ impl RenderEngine3d {
 						let render_wt = prev_wt
 							.map(|prev| prev.0.lerp(wt, interp_alpha))
 							.unwrap_or(*wt);
-						// SIMD distance² (Vec3A) — this runs per visible renderable, hot path
+						// SIMD distance² (Vec3A): this runs per visible renderable, hot path
 						let dist_sq = (Vec3A::from(render_wt.translation) - Vec3A::from(cam_pos))
 							.length_squared();
 
@@ -652,7 +652,7 @@ impl RenderEngine3d {
 							return; // skip mesh draw
 						}
 
-						// normal mesh draw — GPU LOD index (1-frame pipelined) or CPU dist fallback
+						// normal mesh draw: GPU LOD index (1-frame pipelined) or CPU dist fallback
 						let mesh_id = if let Some(&gpu_lod) = self.gpu_lod_indices.get(&entity) {
 							lod.and_then(|l| {
 								if gpu_lod == 0 {
@@ -701,7 +701,7 @@ impl RenderEngine3d {
 				}
 			}
 			if !(all_known && count == self.static_entity_slots.len()) {
-				// set changed (add / despawn / component removal) — full rebuild
+				// set changed (add / despawn / component removal): full rebuild
 				self.static_entities_scratch.clear();
 				for (e, _) in q.iter(world) {
 					self.static_entities_scratch.insert(e);

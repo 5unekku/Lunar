@@ -1,11 +1,11 @@
-// point light shadow pass — renders scene from each cube face.
+// point light shadow pass: renders scene from each cube face.
 // writes linear depth (dist / light_radius) so the main shader can compare
 // `dist / radius - bias` against stored values without a non-linear transform.
 
 struct PointShadowGlobals {
     light_vp:     mat4x4<f32>,  // 64 bytes
     light_pos:    vec3<f32>,    // 12 bytes (offset 64)
-    light_radius: f32,           //  4 bytes (offset 76) — total: 80 bytes
+    light_radius: f32,           //  4 bytes (offset 76): total: 80 bytes
 }
 @group(0) @binding(0) var<uniform> shadow_globals: PointShadowGlobals;
 

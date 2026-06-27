@@ -114,7 +114,7 @@ impl Bvh {
 			return node_idx;
 		}
 
-		// split along longest axis at the median; a full sort is unnecessary —
+		// split along longest axis at the median; a full sort is unnecessary;
 		// partitioning around the median element is enough for a balanced tree
 		let extent = max - min;
 		let axis = if extent.x >= extent.y && extent.x >= extent.z {

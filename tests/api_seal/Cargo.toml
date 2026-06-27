@@ -7,7 +7,7 @@ publish = false
 # IMPORTANT: this crate exists to verify the lunar API seal. It MUST depend
 # on `lunar` ONLY. If a future change makes any other crate (bevy_ecs, sdl3,
 # wgpu, etc.) appear here as a direct dependency, that's a regression in the
-# abstraction boundary — fix the engine, not this Cargo.toml.
+# abstraction boundary; fix the engine, not this Cargo.toml.
 [dependencies]
 lunar = { path = "../../crates/lunar", package = "lunar-engine" }
 

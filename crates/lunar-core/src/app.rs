@@ -24,7 +24,7 @@ pub struct TickRateConfig {
 
 /// timing parameters for the game loop, passed to [`App::run`].
 ///
-/// the one typed representation of loop timing — render-side configs
+/// the one typed representation of loop timing: render-side configs
 /// (`RenderConfig`, `RenderConfig3d`) expose a `loop_config()` that produces this,
 /// so authoring stays in one place and `run` takes a single self-documenting value.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -50,7 +50,7 @@ impl Default for LoopConfig {
 #[derive(Resource)]
 pub struct Time {
 	/// fixed logic delta in seconds (scaled by time_scale).
-	/// always exactly 1/tick_hz — use this for all game logic and physics.
+	/// always exactly 1/tick_hz: use this for all game logic and physics.
 	delta_seconds: f32,
 	/// fixed logic delta in seconds (unscaled).
 	raw_delta_seconds: f32,
@@ -90,14 +90,14 @@ impl Time {
 	}
 
 	/// get raw delta time in seconds (unscaled)
-	/// unscaled fixed tick delta — same value as `delta_seconds / time_scale`
+	/// unscaled fixed tick delta: same value as `delta_seconds / time_scale`
 	#[must_use]
 	pub const fn raw_delta_seconds(&self) -> f32 {
 		self.raw_delta_seconds
 	}
 
 	/// wall-clock seconds since the last render frame.
-	/// use only for rendering/animation interpolation — NOT for game logic.
+	/// use only for rendering/animation interpolation: NOT for game logic.
 	#[must_use]
 	pub const fn real_delta_seconds(&self) -> f32 {
 		self.real_delta_seconds
@@ -126,7 +126,7 @@ impl Time {
 		self.frame_count
 	}
 
-	/// set delta directly — for unit tests only
+	/// set delta directly: for unit tests only
 	pub fn set_delta_seconds(&mut self, delta: f32) {
 		self.delta_seconds = delta;
 		self.raw_delta_seconds = delta;
@@ -135,7 +135,7 @@ impl Time {
 	/// advance by one logic tick using the fixed delta from the tick rate.
 	///
 	/// `fixed_delta` must be `tick_rate.delta_seconds()`. never pass wall-clock
-	/// time here — the whole point is that this is always exactly 1/tick_hz.
+	/// time here: the whole point is that this is always exactly 1/tick_hz.
 	pub fn advance(&mut self, fixed_delta: f32) {
 		self.raw_delta_seconds = fixed_delta;
 		self.delta_seconds = fixed_delta * self.scale;
@@ -143,7 +143,7 @@ impl Time {
 		self.frame_count += 1;
 	}
 
-	/// update the wall-clock render delta — called once per render frame, not per tick.
+	/// update the wall-clock render delta: called once per render frame, not per tick.
 	pub fn set_real_delta(&mut self, real_delta: f32) {
 		self.real_delta_seconds = real_delta;
 	}
@@ -155,7 +155,7 @@ impl Time {
 		self.interp_alpha
 	}
 
-	/// set the interpolation alpha — called by the game loop once per render frame.
+	/// set the interpolation alpha: called by the game loop once per render frame.
 	pub fn set_interp_alpha(&mut self, alpha: f32) {
 		self.interp_alpha = alpha;
 	}
@@ -213,7 +213,7 @@ impl App {
 	}
 
 	/// add one or more systems to the default Update stage.
-	/// accepts a single system or a tuple — use `(a, b, c).chain()` to
+	/// accepts a single system or a tuple: use `(a, b, c).chain()` to
 	/// enforce ordering when systems share `ResMut` borrows.
 	pub fn add_system<M>(
 		&mut self,
@@ -278,7 +278,7 @@ impl App {
 		// name-keyed topological build: each round drains every plugin whose
 		// declared dependencies are already built and defers the rest. plugins
 		// registered during build() are absorbed before the next round. the loop
-		// ends once a full round builds nothing new — any leftovers have missing
+		// ends once a full round builds nothing new: any leftovers have missing
 		// or circular dependencies. `built` accumulates across calls.
 		let mut built = std::mem::take(&mut self.built_plugins);
 		let mut pending = std::mem::take(&mut self.pending_plugins);
@@ -413,7 +413,7 @@ impl App {
 	/// runs the same fixed-timestep accumulator as [`App::run`]: 0-5 logic ticks at
 	/// the [`TickRateConfig`] interval (Hz60 when the resource is absent), then
 	/// exactly one render. unlike [`App::tick`], game speed stays correct whatever
-	/// the host frame rate — a 120hz display gets interpolated frames, not 2× speed.
+	/// the host frame rate: a 120hz display gets interpolated frames, not 2× speed.
 	///
 	/// `real_delta_seconds` is wall-clock time since the previous call, clamped to
 	/// 0.25s so a suspended tab resumes smoothly instead of bursting ticks.

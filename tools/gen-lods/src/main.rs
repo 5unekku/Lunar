@@ -144,7 +144,7 @@ fn process_mesh(path: &Path, thresholds: &[f32; 5]) {
 	for (level, &ratio) in RATIOS.iter().enumerate() {
 		let target_count = ((source.indices.len() as f32 * ratio) as usize).max(3) / 3 * 3;
 
-		// simplify using meshopt — position is at offset 0, stride = VERTEX_STRIDE
+		// simplify using meshopt: position is at offset 0, stride = VERTEX_STRIDE
 		let adapter = meshopt::VertexDataAdapter::new(&source.vertex_bytes, VERTEX_STRIDE, 0)
 			.expect("vertex data adapter");
 		let simplified = meshopt::simplify(

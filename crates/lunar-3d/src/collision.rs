@@ -1,7 +1,7 @@
-//! 3d collision detection — AABB and sphere shapes, overlap queries.
+//! 3d collision detection: AABB and sphere shapes, overlap queries.
 //!
 //! no physics simulation (no rigid bodies, velocity integration, gravity).
-//! this module answers the question "what overlaps what" — game logic decides
+//! this module answers the question "what overlaps what", game logic decides
 //! what to do about it.
 //!
 //! # usage
@@ -41,13 +41,13 @@ pub enum ColliderShape3d {
 
 /// component that makes an entity participate in 3d collision detection.
 ///
-/// pair with `WorldTransform3d` — the collision world uses world-space position.
+/// pair with `WorldTransform3d`: the collision world uses world-space position.
 #[derive(Debug, Clone, Component)]
 pub struct Collider3d {
 	pub shape: ColliderShape3d,
-	/// bitmask — which collision layers this collider belongs to.
+	/// bitmask: which collision layers this collider belongs to.
 	pub layer: u32,
-	/// bitmask — which layers this collider checks against.
+	/// bitmask: which layers this collider checks against.
 	pub mask: u32,
 }
 
@@ -187,7 +187,7 @@ pub struct ColliderEntryRef<'a> {
 	_phantom: std::marker::PhantomData<&'a ()>,
 }
 
-/// resource rebuilt every physics tick — holds the current frame's collider snapshot.
+/// resource rebuilt every physics tick: holds the current frame's collider snapshot.
 ///
 /// query this from any system in the Update stage or later.
 ///
@@ -290,7 +290,7 @@ impl CollisionWorld3d {
 		})
 	}
 
-	/// entries in the X range `[qmin_x, qmax_x]` — sweep-and-prune pre-filter for physics queries.
+	/// entries in the X range `[qmin_x, qmax_x]`: sweep-and-prune pre-filter for physics queries.
 	pub fn query_aabb_entries(
 		&self,
 		qmin_x: f32,
@@ -314,7 +314,7 @@ impl CollisionWorld3d {
 	///
 	/// uses a sweep-and-prune broad phase: entries are sorted by `min_x`, so the
 	/// inner loop breaks as soon as the next entry's left edge exceeds the current
-	/// entry's right edge — skipping all remaining pairs along X.
+	/// entry's right edge: skipping all remaining pairs along X.
 	pub fn all_overlaps(&self) -> impl Iterator<Item = (Entity, Entity)> + '_ {
 		(0..self.entries.len()).flat_map(move |i| {
 			let max_x_i = self.entries[i].max_x;
@@ -383,7 +383,7 @@ pub struct RayHit3d {
 
 /// cast a ray and return the nearest mesh hit within `max_dist`, or `None`.
 ///
-/// `mask` filters by [`Collider3d`] layer bitmask — pass `u32::MAX` to hit everything.
+/// `mask` filters by [`Collider3d`] layer bitmask: pass `u32::MAX` to hit everything.
 ///
 /// # usage
 ///
@@ -441,7 +441,7 @@ pub fn raycast_3d(
 				)
 			})
 			.unwrap_or_else(|| {
-				// no mesh data — use AABB hit point
+				// no mesh data, use AABB hit point
 				let point = ray.at(aabb_t);
 				let normal = aabb_normal(point, Vec3::from(center), Vec3::from(half_extents));
 				RayHit3d {
@@ -509,7 +509,7 @@ fn aabb_normal(point: Vec3, center: Vec3, half_extents: Vec3) -> Vec3 {
 	}
 }
 
-/// Möller–Trumbore intersection.
+/// Möller-Trumbore intersection.
 /// returns `(t, model-space normal)` or `None` if no hit.
 fn moller_trumbore(
 	origin: Vec3,

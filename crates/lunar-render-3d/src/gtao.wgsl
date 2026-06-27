@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// reimplementation of XeGTAO (Intel, 2021) — https://github.com/GameTechDev/XeGTAO
+// reimplementation of XeGTAO (Intel, 2021): https://github.com/GameTechDev/XeGTAO
 // original: MIT License, Copyright (c) 2021 Intel Corporation
 //
 // ground truth ambient occlusion (GTAO-style)

@@ -1,7 +1,7 @@
 # assets
 
 all assets (textures, fonts, sounds) go through `AssetServer`. game code gets back
-a `Handle<T>` immediately — the data loads in the background.
+a `Handle<T>` immediately, the data loads in the background.
 
 ## loading
 
@@ -48,18 +48,18 @@ fn loading_screen(
         return;
     }
 
-    // stats.fraction() is 0.0..=1.0 — use to draw a progress bar
+    // stats.fraction() is 0.0..=1.0, use to draw a progress bar
     let progress = stats.fraction();
     println!("loading: {:.0}%", progress * 100.0);
 }
 ```
 
 `LoadingStats` fields:
-- `total: u32` — assets registered (loading + loaded + failed)
-- `loaded: u32` — successfully loaded
-- `failed: u32` — failed to load
-- `.fraction()` — `loaded / total` as f32; returns 1.0 if total == 0
-- `.is_done()` — true when `loaded + failed >= total`
+- `total: u32`: assets registered (loading + loaded + failed)
+- `loaded: u32`: successfully loaded
+- `failed: u32`: failed to load
+- `.fraction()`: `loaded / total` as f32; returns 1.0 if total == 0
+- `.is_done()`: true when `loaded + failed >= total`
 
 ## accessing asset data
 
@@ -86,9 +86,9 @@ fn play_on_ready(
 ## handles
 
 `Handle<T>` is:
-- `Copy` and `Clone` — free to duplicate, pass around, store in components
-- generational — if an asset is reloaded, the old handle becomes invalid
-- typed — `Handle<Texture>` and `Handle<Sound>` are distinct types
+- `Copy` and `Clone`: free to duplicate, pass around, store in components
+- generational: if an asset is reloaded, the old handle becomes invalid
+- typed: `Handle<Texture>` and `Handle<Sound>` are distinct types
 
 handles do not prevent the asset from being unloaded. the engine manages
 asset lifetimes internally.

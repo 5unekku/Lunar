@@ -26,7 +26,7 @@ impl GamePlugin for MyGame {
 
 ## sprites
 
-spawn an entity with a `Transform` and `Sprite` — the renderer picks it up automatically:
+spawn an entity with a `Transform` and `Sprite`; the renderer picks it up automatically:
 
 ```rust
 fn setup(mut commands: Commands, mut assets: ResMut<AssetServer>) {
@@ -93,7 +93,7 @@ layers control draw order. higher = in front. the built-in constants:
 | `layers::UI` | 300 | HUD, menus, dialogue |
 | `layers::POST_PROCESS` | 1000 | fullscreen overlays (flash, fade) |
 
-any integer is valid — use values between constants for fine-grained ordering.
+any integer is valid. use values between constants for fine-grained ordering.
 
 ## camera
 
@@ -113,11 +113,11 @@ fn scroll_camera(mut camera: ResMut<Camera>, input: Res<InputState>) {
 ```
 
 `Camera` fields:
-- `position: Vec2` — world position of the camera center
-- `zoom: f32` — 1.0 = 1:1, 2.0 = 2x zoom in
-- `rotation: f32` — radians
-- `viewport: Option<(u32, u32)>` — override render size (none = full window)
-- `layer_parallax: HashMap<i32, Vec2>` — per-layer world offset for parallax scrolling
+- `position: Vec2`: world position of the camera center
+- `zoom: f32`: 1.0 = 1:1, 2.0 = 2x zoom in
+- `rotation: f32`: radians
+- `viewport: Option<(u32, u32)>`: override render size (none = full window)
+- `layer_parallax: HashMap<i32, Vec2>`: per-layer world offset for parallax scrolling
 
 ### camera follow
 

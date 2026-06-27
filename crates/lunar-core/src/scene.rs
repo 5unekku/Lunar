@@ -6,13 +6,13 @@
 //! # scene lifecycle
 //!
 //! 1. register scenes with [`SceneManager::register_scene`]
-//! 2. switch to a scene with [`SceneManager::switch_to`] — triggers [`Scene::on_exit`] then [`Scene::on_enter`]
-//! 3. push an overlay with [`SceneManager::push_overlay`] — stacks on top without unloading current
-//! 4. pop an overlay with [`SceneManager::pop_overlay`] — removes top overlay
+//! 2. switch to a scene with [`SceneManager::switch_to`]: triggers [`Scene::on_exit`] then [`Scene::on_enter`]
+//! 3. push an overlay with [`SceneManager::push_overlay`]: stacks on top without unloading current
+//! 4. pop an overlay with [`SceneManager::pop_overlay`]: removes top overlay
 
 use bevy_ecs::prelude::*;
 
-/// scene trait — implement to define a game scene.
+/// scene trait: implement to define a game scene.
 ///
 /// scenes represent distinct game states like menus, gameplay, or cutscenes.
 /// unlike zones, scenes can be stacked as overlays.

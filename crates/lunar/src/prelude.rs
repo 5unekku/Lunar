@@ -1,4 +1,4 @@
-//! prelude module — re-exports the most common types for game development.
+//! prelude module: re-exports the most common types for game development.
 //!
 //! Game code should be able to write `use lunar::prelude::*;` and have
 //! everything it needs without further imports.
@@ -32,7 +32,7 @@ pub use bevy_ecs::system::{
 pub use bevy_ecs::entity::Entity;
 pub use bevy_ecs::world::{EntityMut, EntityRef, EntityWorldMut, FromWorld, World};
 
-// ECS markers — these names cover BOTH the trait (used as a bound, e.g. `T: Component`)
+// ECS markers: these names cover BOTH the trait (used as a bound, e.g. `T: Component`)
 // AND the derive macro (used in `#[derive(Component)]`). bevy_ecs re-exports its
 // derive macro at `bevy_ecs::component::Component` alongside the trait, which
 // would shadow ours and emit `::bevy_ecs::…` paths. So we route deliberately:
@@ -42,7 +42,7 @@ pub use bevy_ecs::world::{EntityMut, EntityRef, EntityWorldMut, FromWorld, World
 //
 // Net effect: `#[derive(Component)]` uses our wrapper; `T: Component` still
 // resolves via the bevy_ecs trait (re-exported from a path that doesn't bring
-// the macro into scope — see crate root).
+// the macro into scope: see crate root).
 pub use crate::{Component, Event, Message, Resource};
 
 // ECS query filters
@@ -65,15 +65,15 @@ pub use lunar_core::{
 	App, GamePlugin, LoopConfig, TickRate, TickRateConfig, Time, UpdateStage, WindowSettings,
 };
 
-// lunar-2d types — only available when the 2d feature is enabled.
-// `propagate_transforms` is a Plugin2d-owned system, not surfaced here — reach it
+// lunar-2d types: only available when the 2d feature is enabled.
+// `propagate_transforms` is a Plugin2d-owned system, not surfaced here, reach it
 // via `lunar_2d::propagate_transforms` if you order it by hand.
 #[cfg(feature = "2d")]
 pub use lunar_2d::{
 	Collider, Collider2dBundle, ColliderShape, CollisionWorld, Plugin2d, SpriteAnimation,
 };
 
-// 3D — only when the 3d feature is enabled. each crate exposes a curated `prelude`
+// 3D: only when the 3d feature is enabled. each crate exposes a curated `prelude`
 // of common, game-facing types; advanced types stay reachable at the crate root
 // (`lunar::lunar_3d::IrradianceSH`, etc.).
 #[cfg(feature = "3d")]
@@ -85,7 +85,7 @@ pub use lunar_lightmap::prelude::*;
 #[cfg(feature = "3d")]
 pub use lunar_render_3d::prelude::*;
 
-// Bundle derive — needed for game code that defines its own bundles
+// Bundle derive: needed for game code that defines its own bundles
 #[cfg(feature = "3d")]
 pub use bevy_ecs::bundle::Bundle;
 
@@ -103,14 +103,14 @@ pub use lunar_input::{
 	ActionMap, GamepadAxis, GamepadButton, InputBinding, InputState, KeyCode, MouseButton,
 };
 
-// lunar-assets types — Texture/Font/Sound are needed as type parameters for
+// lunar-assets types: Texture/Font/Sound are needed as type parameters for
 // Handle<T> when game code stores asset handles in its own resources.
 pub use lunar_assets::{
 	AssetServer, AudioFormat, Font, Handle, LoadingState, LoadingStats, Sound, Texture,
 	TextureSource,
 };
 
-// texture! macro — embeds and converts image assets at compile time
+// texture! macro: embeds and converts image assets at compile time
 pub use crate::texture;
 
 // lunar marker traits

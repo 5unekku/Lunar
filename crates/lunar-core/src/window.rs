@@ -114,7 +114,7 @@ pub fn resolutions_for_aspect(target_aspect: f32, tolerance: f32) -> Vec<Display
 /// the engine handles all window lifecycle internally (SDL3, wgpu surface).
 /// game code reads this resource to get the current window dimensions and
 /// fullscreen state. to toggle fullscreen, write `is_fullscreen = true`
-/// (or use Alt+Enter / F11 — both active by default).
+/// (or use Alt+Enter / F11, both active by default).
 ///
 /// # example
 ///

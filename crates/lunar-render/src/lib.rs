@@ -11,15 +11,15 @@
 //!
 //! game code does not touch the GPU directly. two paths feed the renderer:
 //!
-//! 1. **components** (preferred) — spawn entities with [`Sprite`] or [`Text`]
+//! 1. **components** (preferred): spawn entities with [`Sprite`] or [`Text`]
 //!    alongside a [`Transform`]. built-in systems
 //!    enqueue them automatically every frame.
-//! 2. **immediate mode** (HUD / debug / one-shots) — call `draw_sprite`,
+//! 2. **immediate mode** (HUD / debug / one-shots): call `draw_sprite`,
 //!    `draw_rect`, `draw_line`, `draw_text` on [`RenderQueue`] from inside a
 //!    system. useful when the thing you're drawing isn't a persistent entity.
 //!
 //! [`DrawCommand`] / [`DrawKind`] / [`RenderQueue::push`] are internal plumbing
-//! and not part of the public contract — they're hidden from rustdoc.
+//! and not part of the public contract; they're hidden from rustdoc.
 //!
 //! # example: component-driven
 //!
@@ -91,7 +91,7 @@ pub struct SpriteParams {
 
 /// opaque identifier for an offscreen render target created by [`RenderEngine::create_render_target`].
 ///
-/// store this alongside the returned [`Handle<Texture>`] — the handle is used
+/// store this alongside the returned [`Handle<Texture>`]; the handle is used
 /// to draw the target as a sprite; this id is used to direct a camera at the target.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Resource)]
 pub struct RenderTargetId(pub u32);
@@ -294,7 +294,7 @@ impl Camera {
 		let cos = self.rotation.cos();
 		let sin = self.rotation.sin();
 
-		// unapply projection transform — input is viewport-space (0..vw, 0..vh)
+		// unapply projection transform: input is viewport-space (0..vw, 0..vh)
 		let nx = screen.x / vw_f - 0.5;
 		let ny = screen.y / vh_f - 0.5;
 		let world_dx = nx * vw_f / zoom;
@@ -327,7 +327,7 @@ impl Camera {
 		let rx = dx * cos - dy * sin;
 		let ry = dx * sin + dy * cos;
 
-		// apply ortho projection — output is viewport-space (0..vw, 0..vh)
+		// apply ortho projection: output is viewport-space (0..vw, 0..vh)
 		let sx = rx * zoom / vw_f;
 		let sy = -ry * zoom / vh_f;
 
@@ -367,7 +367,7 @@ pub struct RenderConfig {
 	pub vsync: bool,
 	/// target frame cap (0 = uncapped/vsync-limited)
 	pub frame_cap: u32,
-	/// fixed logic tick rate — independent of render frame rate.
+	/// fixed logic tick rate, independent of render frame rate.
 	/// `time.delta_seconds()` in game systems always equals `1 / tick_hz`.
 	pub tick_rate: lunar_core::TickRate,
 	/// window title bar text.
@@ -409,7 +409,7 @@ impl RenderConfig {
 
 /// initial vertex capacity per frame (64k vertices = ~10k sprites with packed color).
 /// the buffer doubles automatically the frame after an overflow is detected,
-/// so this is a tunable starting point — never a ceiling.
+/// so this is a tunable starting point, never a ceiling.
 /// vertex format: [pos.x, pos.y, u, v] (16 bytes) + [`color_u32`] (4 bytes) = 20 bytes per vertex
 const INITIAL_VERTEX_CAPACITY: usize = 65536;
 
@@ -425,7 +425,7 @@ const VERTEX_STRIDE: usize = 20;
 
 /// render engine resource, owns all GPU rendering state.
 ///
-/// managed by the engine — game code reads it via `Res<RenderEngine>` when it
+/// managed by the engine; game code reads it via `Res<RenderEngine>` when it
 /// needs direct GPU access for custom draw calls or render target operations.
 #[cfg_attr(not(target_arch = "wasm32"), derive(Resource))]
 pub struct RenderEngine {
@@ -438,15 +438,15 @@ pub struct RenderEngine {
 	render_config: RenderConfig,
 	sprite_pipeline: wgpu::RenderPipeline,
 	uniform_buf: wgpu::Buffer,
-	// group 0: view-global (projection uniform) — set once per layer change
+	// group 0: view-global (projection uniform): set once per layer change
 	globals_bg: wgpu::BindGroup,
-	// group 1: material (texture + sampler) — set per texture batch
+	// group 1: material (texture + sampler): set per texture batch
 	material_bgl: wgpu::BindGroupLayout,
 	sampler: wgpu::Sampler,
 	textures: HashMap<u32, GpuTexture>,
 	// keyed by texture id; contains only texture + sampler bindings (no uniform)
 	material_bgs: HashMap<u32, wgpu::BindGroup>,
-	/// persistent vertex buffers — double-buffered to prevent GPU read/write conflicts
+	/// persistent vertex buffers, double-buffered to prevent GPU read/write conflicts
 	vertex_bufs: [wgpu::Buffer; VERTEX_BUFFER_COUNT],
 	/// current vertex capacity (number of vertices, not bytes). doubles when
 	/// a frame overflows. starts at [`INITIAL_VERTEX_CAPACITY`].
@@ -465,16 +465,16 @@ pub struct RenderEngine {
 	/// vulkan pipeline cache for faster startup on subsequent launches
 	#[cfg(not(target_arch = "wasm32"))]
 	pipeline_cache: Option<wgpu::PipelineCache>,
-	/// persistent scratch — reused each frame to sort draw commands by (layer, texture).
+	/// persistent scratch: reused each frame to sort draw commands by (layer, texture).
 	/// avoids a per-frame Vec allocation proportional to the draw list size.
 	sorted_indices: Vec<usize>,
-	/// persistent scratch — reused each frame for text glyph quad layout results.
+	/// persistent scratch: reused each frame for text glyph quad layout results.
 	/// keyed by command index. avoids a per-frame HashMap + inner Vec allocation.
 	text_quads: HashMap<usize, Vec<text::TextGlyphQuad>>,
-	/// LRU layout cache — avoids re-shaping text whose content hasn't changed.
+	/// LRU layout cache: avoids re-shaping text whose content hasn't changed.
 	/// capped at 256 entries; evicts least-recently-used on overflow.
 	text_layout_cache: text::TextLayoutCache,
-	/// texture views for render target output — keyed by RenderTargetId.0.
+	/// texture views for render target output: keyed by RenderTargetId.0.
 	/// stored separately from `textures` to avoid borrow conflicts in render().
 	render_target_views: HashMap<u32, wgpu::TextureView>,
 	/// counter for generating unique render target IDs (high range, no collision with asset IDs).
@@ -565,7 +565,7 @@ impl RenderEngine {
                 compatible_surface: Some(&surface),
             })
             .await
-            .expect("no WebGPU adapter found — in Firefox enable dom.webgpu.enabled in about:config, Chrome 113+ required");
+            .expect("no WebGPU adapter found. in Firefox enable dom.webgpu.enabled in about:config, Chrome 113+ required");
 
 		let (device, queue) = adapter
 			.request_device(&wgpu::DeviceDescriptor {
@@ -673,7 +673,7 @@ impl RenderEngine {
 			..Default::default()
 		});
 
-		// group 0: view-global (projection uniform only) — set once per layer
+		// group 0: view-global (projection uniform only): set once per layer
 		let globals_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("[globals] bgl"),
 			entries: &[wgpu::BindGroupLayoutEntry {
@@ -688,7 +688,7 @@ impl RenderEngine {
 			}],
 		});
 
-		// group 1: material (texture + sampler) — switched per texture batch
+		// group 1: material (texture + sampler): switched per texture batch
 		let material_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("[material] bgl"),
 			entries: &[
@@ -861,7 +861,7 @@ impl RenderEngine {
 			frame_cap_str
 		);
 
-		// persistent vertex buffers — double-buffered to prevent GPU read/write conflicts
+		// persistent vertex buffers, double-buffered to prevent GPU read/write conflicts
 		// uses COPY_DST for queue.write_buffer (no MAP_WRITE needed)
 		let vertex_bufs: [wgpu::Buffer; VERTEX_BUFFER_COUNT] = std::array::from_fn(|i| {
 			device.create_buffer(&wgpu::BufferDescriptor {
@@ -1346,7 +1346,7 @@ impl RenderEngine {
 	}
 
 	/// render all draw commands for this frame.
-	/// sprites are batched by texture — one draw call per unique texture.
+	/// sprites are batched by texture: one draw call per unique texture.
 	/// rects (no texture) are drawn in a single additional draw call.
 	#[allow(clippy::too_many_lines)]
 	pub fn render(
@@ -1361,7 +1361,7 @@ impl RenderEngine {
 			self.overflow_flag = false;
 		}
 
-		// per-frame stats — written to RenderInfo before returning so the
+		// per-frame stats: written to RenderInfo before returning so the
 		// debug overlay (and any game HUD that reads RenderInfo) shows real
 		// values instead of the zero-defaults.
 		let mut sprite_count: u32 = 0;
@@ -1383,7 +1383,7 @@ impl RenderEngine {
 			None
 		};
 
-		// get the output view — owned. wgpu::TextureView is a cheap Arc handle, so
+		// get the output view, owned. wgpu::TextureView is a cheap Arc handle, so
 		// cloning the cached render-target view sidesteps the borrow checker without
 		// any unsafe pointer juggling.
 		let view: wgpu::TextureView = if let Some(id) = rt_tex_id {
@@ -1411,7 +1411,7 @@ impl RenderEngine {
 			1.0
 		};
 		if self.glyph_atlas.set_scale(text_scale) {
-			// UV coords changed — cached quads reference stale positions in the atlas
+			// UV coords changed: cached quads reference stale positions in the atlas
 			self.text_layout_cache.clear();
 		}
 
@@ -1519,11 +1519,11 @@ impl RenderEngine {
 			}
 		}
 
-		// track current layer for parallax — updated as we iterate sorted commands
+		// track current layer for parallax: updated as we iterate sorted commands
 		let mut current_layer: Option<i32> = None;
 
-		// sort by (layer, texture_id) — same-texture commands are contiguous, no HashMap needed.
-		// reuse the persistent Vec — clear() retains capacity from previous frames.
+		// sort by (layer, texture_id): same-texture commands are contiguous, no HashMap needed.
+		// reuse the persistent Vec; clear() retains capacity from previous frames.
 		self.sorted_indices.clear();
 		self.sorted_indices.extend(0..commands.len());
 		self.sorted_indices
@@ -1565,7 +1565,7 @@ impl RenderEngine {
 			// reset persistent vertex buffer offset for this frame
 			self.vertex_offset = 0;
 
-			// single pass in sorted order — sprites and rects interleave correctly by layer.
+			// single pass in sorted order: sprites and rects interleave correctly by layer.
 			// sort gives (layer, tex_id) where rects use u32::MAX, so within a layer sprites
 			// always precede rects, and lower layers are fully drawn before higher ones.
 			let mut current_tex: Option<u32> = None;
@@ -1976,7 +1976,7 @@ pub struct RenderQueue {
 	target: Option<u32>,
 }
 
-/// internal — a single draw command produced by the engine's enqueue helpers.
+/// internal: a single draw command produced by the engine's enqueue helpers.
 ///
 /// hidden from the public API: game code uses the [`Sprite`] / [`Text`]
 /// components or the immediate-mode helpers on [`RenderQueue`]
@@ -1989,7 +1989,7 @@ pub struct DrawCommand {
 	pub kind: DrawKind,
 }
 
-/// internal — primitive variant for a [`DrawCommand`].
+/// internal: primitive variant for a [`DrawCommand`].
 ///
 /// hidden from the public API; see [`DrawCommand`].
 #[doc(hidden)]
@@ -2069,15 +2069,15 @@ fn draw_sort_key(command: &DrawCommand) -> (i32, i64) {
 /// built-in layer constants for common rendering needs.
 /// lower values are drawn first (behind), higher values are drawn last (in front).
 pub mod layers {
-	/// background layer — static backgrounds, parallax layers
+	/// background layer: static backgrounds, parallax layers
 	pub const BACKGROUND: i32 = 0;
-	/// game layer — game objects, characters, projectiles
+	/// game layer: game objects, characters, projectiles
 	pub const GAME: i32 = 100;
-	/// foreground layer — effects, overlays, weather
+	/// foreground layer: effects, overlays, weather
 	pub const FOREGROUND: i32 = 200;
-	/// UI layer — HUD, menus, dialogue boxes
+	/// UI layer: HUD, menus, dialogue boxes
 	pub const UI: i32 = 300;
-	/// post-process layer — screen-space fullscreen overlays (flash, tint, fade).
+	/// post-process layer: screen-space fullscreen overlays (flash, tint, fade).
 	/// drawn after UI in screen space; ignores camera position and zoom.
 	pub const POST_PROCESS: i32 = 1000;
 }
@@ -2086,7 +2086,7 @@ pub mod layers {
 ///
 /// any entity carrying a [`Transform`] and a `Sprite`
 /// is drawn automatically each frame. game code spawns the entity and the
-/// engine's render system enqueues the draw — no manual `RenderQueue` calls.
+/// engine's render system enqueues the draw; no manual `RenderQueue` calls.
 ///
 /// # example
 ///
@@ -2268,14 +2268,14 @@ impl RenderQueue {
 		self.target
 	}
 
-	/// internal — enqueue a raw draw command. game code should prefer the
+	/// internal: enqueue a raw draw command. game code should prefer the
 	/// [`Sprite`] / [`Text`] components or the `draw_*` helpers below.
 	#[doc(hidden)]
 	pub fn push(&mut self, command: DrawCommand) {
 		self.commands.push(command);
 	}
 
-	/// internal — drain target for the renderer.
+	/// internal: drain target for the renderer.
 	#[doc(hidden)]
 	#[must_use]
 	pub fn commands(&self) -> &[DrawCommand] {
@@ -2424,7 +2424,7 @@ impl RenderQueue {
 	}
 
 	/// clear the screen with the given color.
-	/// this is a convenience that draws a full-screen rect — the render engine's
+	/// this is a convenience that draws a full-screen rect; the render engine's
 	/// default clear color is not affected.
 	pub fn clear_color(&mut self, color: Color) {
 		self.push(DrawCommand {
@@ -3139,7 +3139,7 @@ fn upload_new_textures_system(mut assets: ResMut<AssetServer>, mut render: ResMu
 	}
 }
 
-/// WASM version — accesses the render engine from thread-local storage.
+/// WASM version: accesses the render engine from thread-local storage.
 #[cfg(target_arch = "wasm32")]
 #[allow(clippy::needless_pass_by_value)]
 fn wasm_upload_new_textures_system(mut assets: ResMut<AssetServer>) {
@@ -3248,7 +3248,7 @@ fn auto_sprite_system(
 		let origin = sprite
 			.origin
 			.map_or_else(|| final_size * 0.5, |o| o * transform.scale);
-		// y-sort encodes world Y * 100 as i32 — sub-pixel precision, ~21M world units range
+		// y-sort encodes world Y * 100 as i32: sub-pixel precision, ~21M world units range
 		let sort_key = y_sort.map(|_| (transform.translation.y * 100.0) as i32);
 		queue.push(DrawCommand {
 			kind: DrawKind::Sprite {
@@ -3301,7 +3301,7 @@ fn render_system(
 	queue.clear();
 }
 
-/// debug overlay system — draws FPS, frame time, sprite count, and entity count.
+/// debug overlay system: draws FPS, frame time, sprite count, and entity count.
 #[allow(clippy::needless_pass_by_value)]
 fn debug_overlay_system(
 	mut overlay: ResMut<DebugOverlay>,

@@ -10,7 +10,7 @@ use crossbeam_channel::{Sender, unbounded};
 use cubeb::{ChannelLayout, SampleFormat, StereoFrame, StreamParamsBuilder};
 
 // libcubeb is internally thread-safe. Context and Stream hold raw C pointers
-// that cubeb-rs leaves non-Send to force explicit acknowledgement — we provide it.
+// that cubeb-rs leaves non-Send to force explicit acknowledgement; we provide it.
 struct CubebHandle {
     _context: cubeb::Context,
     _stream: cubeb::Stream<StereoFrame<f32>>,
@@ -18,7 +18,7 @@ struct CubebHandle {
 // SAFETY: libcubeb uses a dedicated OS audio thread internally and synchronises
 // all access to the context and stream handle itself. moving them across Rust
 // threads is safe as long as we never call their methods concurrently, which
-// we don't — _handle is permanently idle after construction.
+// we don't; _handle is permanently idle after construction.
 unsafe impl Send for CubebHandle {}
 unsafe impl Sync for CubebHandle {}
 
@@ -45,7 +45,7 @@ impl CubebBackend {
         let mut flat: Vec<f32> = Vec::new();
 
         let mut builder = cubeb::StreamBuilder::<StereoFrame<f32>>::new();
-        // 512 frames ≈ 10 ms at 48000 Hz — low latency without underruns
+        // 512 frames ≈ 10 ms at 48000 Hz: low latency without underruns
         builder
             .name("lunar")
             .default_output(&params)
@@ -78,7 +78,7 @@ impl CubebBackend {
 
 impl AudioBackend for CubebBackend {
     fn submit(&self, source: Box<dyn AudioSource>) {
-        // ignore send errors — stream may have closed during shutdown
+        // ignore send errors, stream may have closed during shutdown
         let _ = self.sender.send(source);
     }
 }

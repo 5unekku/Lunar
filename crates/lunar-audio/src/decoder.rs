@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn resample_interpolates_a_ramp() {
-        // left channel ramps 0,1,2,3 — downsampling by 2 should land between samples
+        // left channel ramps 0,1,2,3, downsampling by 2 should land between samples
         let input: Vec<f32> = (0..8).flat_map(|i| [i as f32, 0.0]).collect();
         let out = resample_stereo(&input, 48_000, 24_000);
         assert_eq!(out.len(), 4 * 2);

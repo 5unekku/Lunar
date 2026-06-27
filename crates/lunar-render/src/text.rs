@@ -235,7 +235,7 @@ impl GlyphAtlas {
 			self.row_height = 0;
 		}
 		if self.cursor_y + gh > self.height {
-			log::warn!("glyph atlas full — glyph dropped. increase atlas dimensions.");
+			log::warn!("glyph atlas full. glyph dropped. increase atlas dimensions.");
 			self.entries.insert(cache_key, None);
 			return;
 		}
@@ -405,7 +405,7 @@ pub fn measure_text(atlas: &mut GlyphAtlas, font_id: u32, text: &str, font_size:
 
 /// layout wrapped text into an existing flat vec (cleared first). reuses the vec's allocation.
 ///
-/// unlike `layout_text_wrapped`, all runs are flattened into a single `out` vec — use this
+/// unlike `layout_text_wrapped`, all runs are flattened into a single `out` vec: use this
 /// in the hot path to avoid per-frame inner-vec allocations.
 #[allow(clippy::too_many_arguments)]
 pub fn layout_text_wrapped_into(

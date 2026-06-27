@@ -40,7 +40,7 @@ fn toggle_fullscreen(input: Res<InputState>, mut window: ResMut<WindowSettings>)
 }
 ```
 
-alt+enter and F11 are handled by default in the bootstrap loop — you don't need
+alt+enter and F11 are handled by default in the bootstrap loop: you don't need
 to implement them unless you want custom behavior.
 
 ## creating the window

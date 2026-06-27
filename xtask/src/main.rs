@@ -1,4 +1,4 @@
-//! cargo xtask — build/dist/run task runner.
+//! cargo xtask: build/dist/run task runner.
 //!
 //! usage:
 //!   cargo xtask build [--release]            build C# plugin + Rust binary

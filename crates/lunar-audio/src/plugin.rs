@@ -18,7 +18,7 @@ use lunar_core::{App, GamePlugin};
 struct SyncBackend(PlatformBackend);
 unsafe impl Sync for SyncBackend {}
 
-/// game-facing audio API — available as a [`Resource`] after [`AudioPlugin`] builds.
+/// game-facing audio API: available as a [`Resource`] after [`AudioPlugin`] builds.
 ///
 /// call [`play`] to decode and start a sound, or [`play_source`] to submit a custom
 /// [`AudioSource`] (tracker, procedural synth, etc.) directly.
@@ -34,12 +34,12 @@ impl AudioPlayer {
     ///
     /// the first play of a sound decodes synchronously on the caller's thread
     /// and caches the PCM on the asset; repeat plays are an Arc clone. fine for
-    /// short SFX — for streaming music, decode off-thread and use
+    /// short SFX: for streaming music, decode off-thread and use
     /// [`play_source`] instead.
     pub fn play(&self, sound: &Sound, options: PlaybackOptions) {
         match DecodedSource::from_sound(sound, options) {
             Ok(source) => self.backend.0.submit(Box::new(source)),
-            Err(error) => log::error!("lunar-audio: decode failed — {error}"),
+            Err(error) => log::error!("lunar-audio: decode failed: {error}"),
         }
     }
 
@@ -67,7 +67,7 @@ impl GamePlugin for AudioPlugin {
                 log::info!("AudioPlugin: {} backend initialized", backend_name());
             }
             Err(error) => {
-                log::error!("AudioPlugin: backend init failed — {error}; audio disabled");
+                log::error!("AudioPlugin: backend init failed: {error}; audio disabled");
             }
         }
     }

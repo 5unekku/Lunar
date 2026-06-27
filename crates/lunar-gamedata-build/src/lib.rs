@@ -148,7 +148,7 @@ pub fn compile_toml(source: &str) -> Result<Vec<u8>, String> {
 		tables.insert(table_name.clone(), DataTable { records, index });
 	}
 
-	// string_index is #[serde(skip)] — the runtime rebuilds it on load
+	// string_index is #[serde(skip)]: the runtime rebuilds it on load
 	let game_data = GameData {
 		strings,
 		tables,
@@ -202,7 +202,7 @@ pub fn compile_toml_file(path: &str) -> Result<Vec<u8>, String> {
 /// compile a RON scene source string into the compact binary format.
 ///
 /// the resulting blob can be embedded via `include_bytes!` and loaded at runtime
-/// using [`SceneDefinition::from_binary`] — zero runtime parsing cost.
+/// using [`SceneDefinition::from_binary`], zero runtime parsing cost.
 ///
 /// # build.rs example
 ///

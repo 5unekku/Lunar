@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// FXAA algorithm by Timothy Lottes (NVIDIA, 2009/2012) — https://developer.download.nvidia.com/assets/gamedev/files/sdk/11/FXAA_WhitePaper.pdf
+// FXAA algorithm by Timothy Lottes (NVIDIA, 2009/2012): https://developer.download.nvidia.com/assets/gamedev/files/sdk/11/FXAA_WhitePaper.pdf
 //
 // FXAA 3.11-style fast approximate anti-aliasing post-process.
 //
@@ -10,13 +10,13 @@
 //
 // algorithm: Lottes 2009/2012, simplified variant
 //   1. compute luma at center and 4 cardinal neighbors
-//   2. if local contrast below threshold — skip, output center sample
+//   2. if local contrast below threshold, skip, output center sample
 //   3. detect dominant edge axis (horizontal vs vertical)
 //   4. subpixel blend: shift sample by (luma gradient / total span) × 0.5 texel
 //   5. output blended color
 
 struct FxaaParams {
-    rcp_frame: vec2<f32>,   // (1/width, 1/height) — texel size in UV space
+    rcp_frame: vec2<f32>,   // (1/width, 1/height): texel size in UV space
     _pad0:     f32,
     _pad1:     f32,
 }
@@ -69,7 +69,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     let lMax = max(lM, max(max(lN, lS), max(lE, lW)));
     let lRange = lMax - lMin;
 
-    // skip pixels below contrast threshold — 1/16 absolute + 1/8 relative
+    // skip pixels below contrast threshold, 1/16 absolute + 1/8 relative
     if lRange < max(0.0625, lMax * 0.125) {
         return vec4<f32>(m, 1.0);
     }
@@ -97,7 +97,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     let sub_pixel = clamp(abs(lum_avg - lM) / lRange, 0.0, 1.0);
     let sub_blend = sub_pixel * sub_pixel * 0.75;
 
-    // blend direction — towards the brighter neighbor
+    // blend direction: towards the brighter neighbor
     let blend_dir = select(-step, step, lum_p > lum_n) * sub_blend * 0.5;
 
     let blended = textureSample(ldr_tex, smp, uv + blend_dir).rgb;

@@ -99,7 +99,7 @@ within a stage, systems run in parallel by default. to enforce ordering
 when two systems share mutable access to the same resource, chain them:
 
 ```rust
-// a runs before b — use when they'd otherwise conflict on ResMut
+// a runs before b, use when they'd otherwise conflict on ResMut
 app.add_ordered_systems((system_a, system_b));
 
 // same but in a specific stage

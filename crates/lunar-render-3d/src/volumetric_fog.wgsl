@@ -1,11 +1,11 @@
-// volumetric fog — half-resolution ray-marched sun scattering.
+// volumetric fog: half-resolution ray-marched sun scattering.
 //
 // per Bart Wronski SIGGRAPH 2014 "Volumetric Fog: Unified, Compute Shader Based
 // Solution to Atmospheric Scattering": march N steps along the view ray from
 // camera to scene depth, accumulate directional + ambient in-scattering.
 // output: rgba16float (in-scatter rgb, 1-transmittance) blended in composite.
 //
-// depth read via textureLoad — no sampler required for the depth texture.
+// depth read via textureLoad: no sampler required for the depth texture.
 
 struct Globals {
     view_proj:    mat4x4<f32>,

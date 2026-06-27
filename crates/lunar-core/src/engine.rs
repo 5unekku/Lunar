@@ -141,7 +141,7 @@ impl Engine {
 	}
 
 	/// run only the logic stages: Input(0), Physics(1), Update(2).
-	/// does not run Render or PostUpdate — those are handled once per display
+	/// does not run Render or PostUpdate: those are handled once per display
 	/// frame via run_render_and_post, decoupled from the tick count.
 	pub fn run_logic_tick(&mut self) {
 		for i in 0..3usize {
@@ -150,7 +150,7 @@ impl Engine {
 		}
 	}
 
-	/// run Render(3) then PostUpdate(4) — called exactly once per display frame
+	/// run Render(3) then PostUpdate(4): called exactly once per display frame
 	/// regardless of how many logic ticks fired (including zero).
 	pub fn run_render_and_post(&mut self) {
 		self.stage_schedules[3].run(&mut self.world);

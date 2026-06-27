@@ -15,13 +15,13 @@ fn setup(mut commands: Commands) {
 ```
 
 for more realistic ambient (sky lighting, bounced light), use `IrradianceSH`
-instead — it replaces the flat `AmbientLight` ambient term with a directional
+instead: it replaces the flat `AmbientLight` ambient term with a directional
 spherical harmonic probe evaluated per-surface-normal. see `lunar::lunar_3d::IrradianceSH`.
 
 ## directional light
 
 infinite distance, uniform across the scene. models a sun or moon.
-direction comes from the entity's `WorldTransform3d` forward vector — only
+direction comes from the entity's `WorldTransform3d` forward vector: only
 rotation matters, position is irrelevant.
 
 ```rust
@@ -47,7 +47,7 @@ fn setup(mut commands: Commands) {
 ## point light
 
 emits in all directions from the entity's world position. attenuates to zero at `radius`.
-keep `radius` as tight as possible — the renderer only shades surfaces within the sphere.
+keep `radius` as tight as possible: the renderer only shades surfaces within the sphere.
 
 ```rust
 commands.spawn(PointLightBundle {
@@ -96,7 +96,7 @@ commands.spawn((
 ```
 
 shadow quality (cascade count, resolution) is controlled via `QualitySettings`
-(see `3d/quality.md`). enabling shadows on many point lights is expensive —
+(see `3d/quality.md`). enabling shadows on many point lights is expensive;
 prefer one or two shadow-casting lights with the rest shadow-free.
 
 ## lightmaps (baked static lighting)

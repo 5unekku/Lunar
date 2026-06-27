@@ -26,7 +26,7 @@ public static class PluginHost
     }
 
     /// <summary>
-    /// unload the current plugin context and load a new version — the core of hot reload.
+    /// unload the current plugin context and load a new version: the core of hot reload.
     /// the old <see cref="AssemblyLoadContext"/> is collected so its NativeAOT-style
     /// static state is cleaned up before the new version runs.
     /// </summary>
@@ -62,7 +62,7 @@ public static class PluginHost
         var assembly = _context.LoadFromAssemblyPath(pluginPath);
 
         // the source generator emits LunarGeneratedHost.ManagedInit(nint) in every
-        // plugin assembly — this is the managed-safe entry point for the CoreCLR path
+        // plugin assembly: this is the managed-safe entry point for the CoreCLR path
         var type = assembly.GetType("LunarGeneratedHost")
             ?? throw new InvalidOperationException(
                 $"LunarGeneratedHost not found in {pluginPath}; " +

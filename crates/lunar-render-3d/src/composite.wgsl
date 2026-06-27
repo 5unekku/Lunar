@@ -19,7 +19,7 @@ struct CompositeParams {
     //   bit 5 = SSR
     //   bit 6 = volumetric fog
     //   bit 7 = contact shadows
-    //   bit 8 = tonemap off (clamp instead of ACES — classic raw-color look)
+    //   bit 8 = tonemap off (clamp instead of ACES: classic raw-color look)
     flags: u32,
     _pad: f32,
     // colour quantization (all neutral when color_bits == 0):

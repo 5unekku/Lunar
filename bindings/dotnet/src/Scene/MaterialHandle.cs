@@ -1,6 +1,6 @@
 namespace Lunar;
 
-/// <summary>handle to a material in the engine registry. opaque — do not inspect the value.</summary>
+/// <summary>handle to a material in the engine registry. opaque: do not inspect the value.</summary>
 public readonly struct MaterialHandle(ulong raw)
 {
     internal ulong Raw { get; } = raw;

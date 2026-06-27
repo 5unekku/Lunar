@@ -5,7 +5,7 @@ namespace PlatformDemoCs;
 
 /// <summary>
 /// first-person movement controller. mirrors the Rust fps_controller system from platform_demo.
-/// yaw/pitch state is kept as instance fields — the GCHandle keeps this object alive across frames.
+/// yaw/pitch state is kept as instance fields: the GCHandle keeps this object alive across frames.
 /// </summary>
 sealed class FpsController : ISystem
 {
@@ -53,7 +53,7 @@ sealed class FpsController : ISystem
         if (!world.GetTransform3d(camera, out Transform3d transform)) return;
 
         // move input: WASD + left stick
-        // forward = direction camera faces (ignores pitch — ground-plane movement only)
+        // forward = direction camera faces (ignores pitch: ground-plane movement only)
         var forward = new Vector3(-MathF.Sin(_yaw), 0f, -MathF.Cos(_yaw));
         var right   = new Vector3(-forward.Z, 0f, forward.X);
 

@@ -18,16 +18,16 @@ use std::time::{Duration, Instant};
 /// logic tick rate. only these four values are valid.
 ///
 /// choose the highest rate the target hardware can sustain at full load.
-/// 30hz is a last-resort for potato hardware — prefer 60hz as the minimum.
+/// 30hz is a last-resort for potato hardware, prefer 60hz as the minimum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TickRate {
-	/// 30hz — emergency low-end mode only
+	/// 30hz: emergency low-end mode only
 	Hz30,
-	/// 60hz — standard minimum
+	/// 60hz: standard minimum
 	Hz60,
-	/// 120hz — for competitive or highly responsive games
+	/// 120hz: for competitive or highly responsive games
 	Hz120,
-	/// 240hz — for games that need sub-frame input precision
+	/// 240hz: for games that need sub-frame input precision
 	Hz240,
 }
 
@@ -43,7 +43,7 @@ impl TickRate {
 		}
 	}
 
-	/// fixed delta in seconds — what `Time::delta_seconds()` returns each tick
+	/// fixed delta in seconds: what `Time::delta_seconds()` returns each tick
 	#[must_use]
 	pub const fn delta_seconds(&self) -> f32 {
 		match self {
@@ -55,7 +55,7 @@ impl TickRate {
 	}
 }
 
-/// game loop state — manages the fixed-step accumulator and frame rate limiting.
+/// game loop state: manages the fixed-step accumulator and frame rate limiting.
 ///
 /// call [`GameLoop::tick`] each render frame to get:
 /// - how many logic ticks to run (0-5)
@@ -65,7 +65,7 @@ impl TickRate {
 pub struct GameLoop {
 	/// target frame cap (0 = uncapped / vsync-limited)
 	frame_cap: u32,
-	/// logic tick rate — independent of frame cap
+	/// logic tick rate: independent of frame cap
 	tick_rate: TickRate,
 	/// accumulator for fixed timestep
 	accumulator: Duration,
@@ -170,7 +170,7 @@ impl GameLoop {
 	///
 	/// uses a hybrid sleep + spin-wait: sleep for all but the last 1ms,
 	/// then spin-wait for precision. no-op when frame_cap is 0 (vsync-limited).
-	/// no-op on wasm — the browser drives frame timing via requestAnimationFrame.
+	/// no-op on wasm: the browser drives frame timing via requestAnimationFrame.
 	pub fn apply_frame_cap(&self) {
 		#[cfg(target_arch = "wasm32")]
 		return;

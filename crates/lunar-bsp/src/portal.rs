@@ -12,7 +12,7 @@
 //!
 //! # portal design
 //!
-//! portals are two-sided — area_a and area_b are symmetric. opening or closing a portal
+//! portals are two-sided: area_a and area_b are symmetric. opening or closing a portal
 //! is done by removing/adding a [`PortalOpen`] component (missing = closed = culls both
 //! sides). multiple portals can connect the same pair of areas (e.g. two windows).
 
@@ -49,7 +49,7 @@ pub struct Portal {
 	pub half_extents: Vec3,
 }
 
-/// marker component — this portal is currently open (visibility passes through).
+/// marker component: this portal is currently open (visibility passes through).
 ///
 /// remove this component to close the portal (e.g. a door closes; the room behind it
 /// becomes invisible and its entities are culled from the draw list).
@@ -145,7 +145,7 @@ pub fn cull_portals(
 	visible.active = true;
 	visible.area_ids.insert(cam_area);
 
-	// gather open portals once — the BFS below scans this flat list per area
+	// gather open portals once: the BFS below scans this flat list per area
 	// instead of re-walking the ECS query, and the SIMD conversion happens once
 	// per portal instead of once per (area, portal) pair
 	use lunar_math::Vec3A;

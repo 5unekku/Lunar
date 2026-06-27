@@ -23,21 +23,21 @@ small, friendly public API.
 
 ## non-goals
 
-- **Visual editor** — a downstream project that will consume `lunar`, not part of this repo.
+- **Visual editor**: a downstream project that will consume `lunar`, not part of this repo.
 
 ## architecture
 
-- **rendering decoupled from game logic** — the engine renders `Sprite` / `Text` (2D) and
+- **rendering decoupled from game logic**: the engine renders `Sprite` / `Text` (2D) and
   `Mesh3d` / light / camera components (3D) automatically; immediate-mode helpers cover
   HUD and debug overlays
-- **engine owns all memory** — game code holds typed `Handle<T>` references; the engine
+- **engine owns all memory**: game code holds typed `Handle<T>` references; the engine
   evicts CPU-side mesh/texture data after GPU upload
-- **fixed tick rate decoupled from frame cap** — logic ticks at a fixed 30 / 60 / 120 / 240 Hz
+- **fixed tick rate decoupled from frame cap**: logic ticks at a fixed 30 / 60 / 120 / 240 Hz
   (accumulator-based, capped at 5 ticks/frame); rendering runs uncapped or at a chosen
   frame cap, with a render interpolation alpha for smooth sub-tick motion
-- **parallel by default** — non-conflicting ECS systems run concurrently on a thread pool
+- **parallel by default**: non-conflicting ECS systems run concurrently on a thread pool
   (single-threaded fallback on WASM)
-- **bevy_ecs under the hood** — sealed behind `lunar::prelude` so game code never names it
+- **bevy_ecs under the hood**: sealed behind `lunar::prelude` so game code never names it
 
 ## crates
 
@@ -47,7 +47,7 @@ Game code depends only on `lunar`. The rest are internal or opt-in.
 
 | crate | purpose |
 |-------|---------|
-| `lunar` | public API facade — the one crate game code depends on |
+| `lunar` | public API facade: the one crate game code depends on |
 | `lunar-core` | game loop, scheduler, plugin system, time, scene, hierarchy, save/load, pooling |
 | `lunar-math` | math types (`Vec2/3/4`, `Mat2/3/4`, `Quat`, `Transform`, `Color`, `Rect`) |
 | `lunar-input` | keyboard, mouse, gamepad, action maps (internal) |
@@ -113,10 +113,10 @@ go run scripts/build_all.go --target x86_64-unknown-linux-musl
 
 ## targets
 
-- Linux (glibc and musl) — x86_64, aarch64, i686, armv7
-- Windows 10 / 11 — x86_64, i686 (gnu), aarch64 (gnullvm)
-- macOS — x86_64, aarch64
-- Web — WebGPU + WASM
+- Linux (glibc and musl): x86_64, aarch64, i686, armv7
+- Windows 10 / 11: x86_64, i686 (gnu), aarch64 (gnullvm)
+- macOS: x86_64, aarch64
+- Web: WebGPU + WASM
 
 ## minimal game
 
@@ -180,7 +180,7 @@ fn spawn_label(mut commands: Commands, mut assets: ResMut<AssetServer>) {
 }
 ```
 
-Immediate-mode helpers cover HUD overlays and debug primitives — useful when the thing
+Immediate-mode helpers cover HUD overlays and debug primitives: useful when the thing
 you're drawing isn't a persistent entity:
 
 ```rust
@@ -189,22 +189,22 @@ fn hud_background(mut queue: ResMut<RenderQueue>) {
 }
 ```
 
-Internals (`DrawCommand`, `DrawKind`, `RenderQueue::push`) are hidden — game code never
+Internals (`DrawCommand`, `DrawKind`, `RenderQueue::push`) are hidden: game code never
 constructs them.
 
 ### scalable fidelity (a simpler look costs less)
 
-The renderer is built around opt-in complexity — a simpler look automatically runs lighter
+The renderer is built around opt-in complexity: a simpler look automatically runs lighter
 and ships smaller. Three orthogonal layers, lowest to highest priority:
 
-- **`RenderTier`** — auto-detected hardware capability (GLES / compute / indirect).
-- **`QualitySettings`** — the *player's* slider (Minimum→Ultra, MSAA, shadow res, render scale).
-- **`DevRenderProfile`** — the *developer's* ceiling. `classic()` (no runtime lighting, no
-  post — lightmapped style), `standard()` (shadows + bloom), or `full()` (modern PBR).
+- **`RenderTier`**: auto-detected hardware capability (GLES / compute / indirect).
+- **`QualitySettings`**: the *player's* slider (Minimum→Ultra, MSAA, shadow res, render scale).
+- **`DevRenderProfile`**: the *developer's* ceiling. `classic()` (no runtime lighting, no
+  post: lightmapped style), `standard()` (shadows + bloom), or `full()` (modern PBR).
 
 `DevRenderProfile` also exposes composable **visual style options** (`VisualStyle`). Every
 option is off by default (a default profile renders exactly as before) and every one is a
-genuine cost reduction — never an added pass on top:
+genuine cost reduction: never an added pass on top:
 
 ```rust
 use lunar::lunar_render_3d::{DevRenderProfile, VisualStyle, LightingModel, DitherMode};
@@ -230,7 +230,7 @@ fn build(&mut self, app: &mut App) {
 | `with_vertex_snap(grid)` | quantizes clip-space XY onto a grid | two vertex ops |
 | `with_affine_textures(true)` | screen-linear UV on the textured/unlit path | free (swaps an interpolant) |
 
-Binary size scales the same way, at compile time, through Cargo features — you link only
+Binary size scales the same way, at compile time, through Cargo features: you link only
 what you use:
 
 - **2D-only game** (`lunar`'s default feature): the entire 3D renderer (`lunar-render-3d`,
@@ -279,7 +279,7 @@ impl GamePlugin for MyPlugin {
 
 ```
 lunar/
-├── crates/              # the engine — one crate per subsystem (see table above)
+├── crates/              # the engine: one crate per subsystem (see table above)
 ├── examples/            # platform_demo, shooter_example
 ├── tools/               # offline pipeline: texture compression, LOD gen, PVS bake, asset gen
 ├── scripts/             # build_all.go (multiarch), run_wasm.go (wasm dev server)

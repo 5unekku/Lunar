@@ -16,7 +16,7 @@ use lunar_math::Color;
 /// ```
 #[derive(Debug, Clone, Resource)]
 pub struct Fog {
-	/// color blended into fragment output. alpha is ignored — fog always blends at full strength
+	/// color blended into fragment output. alpha is ignored, fog always blends at full strength
 	/// as determined by the falloff factor.
 	pub color: Color,
 	pub falloff: FogFalloff,
