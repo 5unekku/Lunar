@@ -1184,7 +1184,7 @@ impl RenderEngine3d {
 		let bytes_per_pixel = 4u32;
 		let unpadded_bytes_per_row = width * bytes_per_pixel;
 		let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-		let padded_bytes_per_row = (unpadded_bytes_per_row + align - 1) / align * align;
+		let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(align) * align;
 		let staging_size = u64::from(padded_bytes_per_row) * u64::from(height);
 
 		let staging = self.device.create_buffer(&wgpu::BufferDescriptor {

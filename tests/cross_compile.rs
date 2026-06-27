@@ -49,15 +49,23 @@ fn check_target(target: &str, label: &str) {
 
 	println!("checking {label} ({target})...");
 
+	let mut args = vec![
+		"check",
+		"--target",
+		target,
+		"--workspace",
+		"--exclude",
+		"lunar-game",
+	];
+	// lunar-dotnet-host (hostfxr) and lunar-plugin-loader (libloading) wrap
+	// native-only dynamic-loading facilities that do not exist on bare wasm, and
+	// the wasm runtime path does not use them. exclude them from the wasm check.
+	if target.starts_with("wasm32") {
+		args.extend(["--exclude", "lunar-dotnet-host", "--exclude", "lunar-plugin-loader"]);
+	}
+
 	let output = std::process::Command::new("cargo")
-		.args([
-			"check",
-			"--target",
-			target,
-			"--workspace",
-			"--exclude",
-			"lunar-game",
-		])
+		.args(&args)
 		.output()
 		.expect("failed to run cargo check");
 
