@@ -220,13 +220,19 @@ measurable win.
   external data, selectable against the opposite "single fully-static musl
   binary" path. support both; the engine's range (lowest lows to highest
   highs) wants both, and neither is forced.
-- the real cost is not size (splitting adds little) but API stability: a
-  mod-facing surface must not break casually, which collides with the
-  project's "breaking changes are always fine" policy (see
-  feedback_breaking_api). a moddable release therefore needs ONE designated
-  stable ABI/API, explicitly versioned, separate from the freely-breaking
-  internal API. flag this conflict; do not silently assume the breaking
-  policy still holds at the mod boundary.
+- the costs are two, and size is the smaller one. first, a runtime cost: a
+  dynamic engine/module boundary forfeits the cross-boundary LTO and inlining
+  the single static binary gets, and adds indirect-call overhead at the seam.
+  per the runtime-over-everything principle this means the single static
+  binary stays the default for max performance, and the split layout is an
+  opt-in choice a dev makes when moddability is worth that cost (quantify the
+  cost where a bench can show it). second, API stability: a mod-facing
+  surface must not break casually, which collides with the project's
+  "breaking changes are always fine" policy (see feedback_breaking_api). a
+  moddable release therefore needs ONE designated stable ABI/API, explicitly
+  versioned, separate from the freely-breaking internal API. flag this
+  conflict; do not silently assume the breaking policy holds at the mod
+  boundary.
 
 ### shippable debug symbols without binary bloat
 
