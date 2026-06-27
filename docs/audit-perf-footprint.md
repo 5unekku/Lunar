@@ -214,29 +214,38 @@ the `3d` feature. so a 2d or headless game already drops all of that with no new
 flag. the only universal win not already gated was env_logger's regex, applied
 above. adding an empty preset would be ceremony with nothing to bundle.
 
-### verification notes (honest state)
+### verification notes (gate is green)
 
-my changes are verified clean: release + release-min build and link, clippy is
-green on the touched crates (lunar-math, lunar-engine and their tree), and no
-new test failure is introduced.
+final state: `cargo clippy --workspace --all-targets -- -D warnings` passes,
+and `cargo test --workspace --no-fail-fast` is all green (51 test-result lines,
+0 failures). the audit's size/perf changes (env_logger, release-min, mul_add)
+are verified: release + release-min build and link, and introduce no failure.
 
-separately, `cargo test --workspace` and full-workspace clippy do NOT pass on
-the local toolchain today, due to THREE pre-existing issues unrelated to this
-audit (all reproduced on the base state with my changes stashed, all in crates
-this audit did not touch):
-1. `lunar-3d` lib tests SIGABRT under the dev profile: a cranelift codegen ICE
-   (rustc_codegen_cranelift issue 171) on the unpinned local nightly
-   (2026-06-08). the dev profile forces `codegen-backend = "cranelift"`.
-2. `lunar-3d` `transform::tests::local_transform3d_layout` and
-   `world_transform3d_layout` fail under LLVM: assert size 12, actual 16 (Vec3
-   12 bytes vs Vec3A 16-byte SIMD padding). either a stale test expectation
-   after a deliberate move to Vec3A, or a real layout regression; needs the
-   maintainer's intent to resolve.
-3. `lunar-dotnet-host` clippy: 3 `missing_safety_doc` errors on `pub unsafe fn`s
-   lacking `# Safety` doc sections; the local nightly clippy enforces it under
-   -D warnings.
-these block a clean workspace verification gate but are not caused by, and do
-not affect, the audit's changes.
+getting there required fixing SEVEN pre-existing issues unrelated to the audit
+(all reproduced on the base state with the audit changes stashed; all surfaced
+because the cranelift crash had been aborting the whole test process early and
+masking everything downstream). these were toolchain-drift and platform issues
+on the unpinned local nightly (2026-06-08), now fixed:
+1. `lunar-3d` lib tests SIGABRT under dev: cranelift cannot codegen the avx2
+   intrinsic `llvm.x86.avx.cmp.ps.256` (issue 171) used by the SoA cull. FIX:
+   `[profile.dev.package.lunar-3d] codegen-backend = "llvm"` (targeted; the rest
+   of the workspace keeps cranelift). note: pinning a nightly would NOT fix this,
+   the intrinsic is unimplemented in cranelift, not regressed.
+2. `transform3d_layout` tests asserted offset 12 but `Quat`'s 16-byte alignment
+   pads the 12-byte `Vec3` up to 16. FIX: assert
+   `size_of::<Vec3>().next_multiple_of(align_of::<Quat>())` (robust on SIMD and
+   scalar builds). Vec3A/16 layout is intended.
+3. `lunar-dotnet-host` clippy: a lowercase `# safety` heading (clippy needs
+   `# Safety`) + 2 collapsible-if lints. FIXED.
+4. `bindings/c/src/lib.rs`: 35 `pub unsafe extern "C"` fns missing `# Safety`
+   docs + 1 redundant import. FIXED (accurate per-fn safety contracts added).
+5. `lunar-render-3d/src/config.rs:1187`: `manual_div_ceil` lint. FIXED
+   (`.div_ceil(align) * align`).
+6. `cross_compile_web` test: it cross-checks the whole workspace on wasm, but
+   `lunar-dotnet-host` (hostfxr) and `lunar-plugin-loader` (libloading) cannot
+   compile on bare wasm. FIX: exclude both native-only crates from the wasm leg.
+7. `lunar-dotnet-host` module doctest called the renamed `get_fn` and mistyped
+   args. FIXED to match the real `get_fn_ptr(&Path, ...) -> *const c_void` api.
 
 ## stretch-goal recommendations
 ```
