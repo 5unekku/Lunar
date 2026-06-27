@@ -153,6 +153,33 @@ unavoidable until upstreams converge): bitflags 1+2, foldhash 0.1+0.2,
 hashbrown 0.15+0.16+0.17, png 0.17+0.18, rustc-hash 1+2, ttf-parser 0.20+0.21,
 winnow 0.7+1.0.
 
+### wasm bundle size (lunar-web, the web entry)
+
+measured the `lunar-web` bin (`src/web.rs`), the actual web entry point, built
+`--no-default-features` (no coreclr; .NET cannot run on bare wasm anyway).
+NOTE: the `--example` path (and `scripts/run_wasm.go`) cannot build for wasm
+because examples compile lunar-game's dev-dependency `lunar-plugin-loader`
+(libloading), which does not exist on wasm. the bin is the correct wasm
+yardstick. (`run_wasm.go` building examples is a latent bug, see findings.)
+
+| stage | bytes | human |
+|-------|-------|-------|
+| raw `lunar-web.wasm` | 4,469,119 | 4.26 MiB |
+| after wasm-bindgen | 3,263,382 | 3.11 MiB |
+| after `wasm-opt -O3` | 3,042,542 | 2.90 MiB |
+| gzip -9 (served) | 1,076,035 | 1.03 MiB |
+| **brotli -q11 (served)** | **782,134** | **764 KiB** |
+
+verdict: the served bundle is ~764 KiB (brotli) / ~1.03 MiB (gzip), comfortably
+inside the single-digit-MB web target. the compressed number is what a user
+downloads, and it is the number that matters; the pipeline currently never
+reports it (run_wasm.go runs wasm-opt but never gzips), so a dev would
+mistakenly think the bundle is 2.9 MiB. RECOMMENDATION: have run_wasm.go report
+the gzip/brotli size, and serve the wasm pre-compressed. note wasm-opt needs
+`--enable-nontrapping-float-to-int` (plus simd/bulk-memory) or it rejects the
+rustc output; run_wasm.go's current `-O3 --enable-simd --enable-bulk-memory`
+would fail on this binary, another latent run_wasm.go bug.
+
 ### tooling
 
 - cargo-bloat: 0.12.1
