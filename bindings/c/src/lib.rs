@@ -31,7 +31,6 @@ use bevy_ecs::{
     ptr::OwningPtr,
     world::EntityRef,
 };
-use glam;
 use lunar_3d::{
     Camera3d, Camera3dBundle, LocalTransform3d, Material3d, MaterialData, Mesh3d, Mesh3dBundle,
     MeshData, MeshRegistry, Projection, ShadingModel, WorldTransform3d, primitives,
@@ -245,6 +244,10 @@ pub fn dispatch_systems(world: &mut World, schedule: LunarSchedule) {
 // ─── entity management ────────────────────────────────────────────────────────
 
 /// spawn an empty entity and return its index.
+///
+/// # Safety
+/// `world` must be the non-null world pointer handed to the current system
+/// callback (a live `bevy_ecs::World`) and not aliased mutably elsewhere.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_spawn(world: *mut LunarWorld) -> LunarEntity {
     let world = unsafe { world_from_ffi(world) };
@@ -252,6 +255,10 @@ pub unsafe extern "C" fn lunar_spawn(world: *mut LunarWorld) -> LunarEntity {
 }
 
 /// despawn an entity by index. no-op if not found.
+///
+/// # Safety
+/// `world` must be the non-null world pointer handed to the current system
+/// callback (a live `bevy_ecs::World`) and not aliased mutably elsewhere.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_despawn(world: *mut LunarWorld, entity: LunarEntity) {
     let world = unsafe { world_from_ffi(world) };
@@ -260,6 +267,10 @@ pub unsafe extern "C" fn lunar_despawn(world: *mut LunarWorld, entity: LunarEnti
 }
 
 /// return true if the entity is alive in this world.
+///
+/// # Safety
+/// `world` must be the non-null world pointer handed to the current system
+/// callback (a live `bevy_ecs::World`) and not aliased mutably elsewhere.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_alive(world: *mut LunarWorld, entity: LunarEntity) -> bool {
     let world = unsafe { world_from_ffi(world) };
@@ -274,6 +285,11 @@ pub unsafe extern "C" fn lunar_alive(world: *mut LunarWorld, entity: LunarEntity
 /// `name` is a null-terminated UTF-8 string that is copied by the engine.
 /// `size` and `alignment` must satisfy `Layout::from_size_align`.
 /// returns [`LUNAR_INVALID_COMPONENT_ID`] on invalid layout.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback. `name` must be a non-null pointer to a null-terminated string
+/// that stays valid for the duration of the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_component_register(
     world:     *mut LunarWorld,
@@ -315,6 +331,11 @@ pub unsafe extern "C" fn lunar_component_register(
 /// built-in names: `"LocalTransform3d"`, `"WorldTransform3d"`,
 /// `"LocalTransform2d"`, `"WorldTransform2d"`.
 /// returns [`LUNAR_INVALID_COMPONENT_ID`] if not found.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback. `name` must be a non-null pointer to a null-terminated string
+/// that stays valid for the duration of the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_component_id(
     world: *mut LunarWorld,
@@ -354,6 +375,12 @@ pub unsafe extern "C" fn lunar_component_id(
 ///
 /// `size` must match the size the component was registered with.
 /// no-op if the entity or component id is unknown.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback. `data` must be a non-null pointer to a value whose size and
+/// alignment match the layout `component_id` was registered with; the engine
+/// copies those bytes into its own storage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_component_insert(
     world:        *mut LunarWorld,
@@ -385,6 +412,10 @@ pub unsafe extern "C" fn lunar_component_insert(
 }
 
 /// remove a component from an entity. no-op if not present.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and not aliased mutably elsewhere.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_component_remove(
     world:        *mut LunarWorld,
@@ -402,6 +433,10 @@ pub unsafe extern "C" fn lunar_component_remove(
 }
 
 /// return true if the entity has the component.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and not aliased mutably elsewhere.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_component_has(
     world:        *mut LunarWorld,
@@ -424,6 +459,11 @@ pub unsafe extern "C" fn lunar_component_has(
 ///
 /// the pointer is only valid until the current system callback returns.
 /// for `LocalTransform3d` / `WorldTransform3d`, prefer the typed accessors.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback. the returned pointer borrows engine-owned storage and must not
+/// be read after the current system callback returns.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_component_get(
     world:        *mut LunarWorld,
@@ -446,6 +486,11 @@ pub unsafe extern "C" fn lunar_component_get(
 /// return a mutable pointer to the component, or null if not present.
 ///
 /// the pointer is only valid until the current system callback returns.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback. the returned pointer borrows engine-owned storage mutably and
+/// must not be used after the current system callback returns.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_component_get_mut(
     world:        *mut LunarWorld,
@@ -469,6 +514,11 @@ pub unsafe extern "C" fn lunar_component_get_mut(
 
 /// read `LocalTransform3d` into a portable `LunarTransform3d` (handles SIMD alignment).
 /// returns false if the entity or component is missing.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback. `out` must be a non-null, writable pointer to a `LunarTransform3d`;
+/// it is only written when the function returns true.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_get_transform3d(
     world:  *mut LunarWorld,
@@ -489,6 +539,11 @@ pub unsafe extern "C" fn lunar_get_transform3d(
 
 /// write a portable `LunarTransform3d` into `LocalTransform3d` (handles SIMD alignment).
 /// returns false if the entity or component is missing.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback. `value` must be a non-null pointer to an initialized
+/// `LunarTransform3d` that stays valid for the duration of the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_set_transform3d(
     world:  *mut LunarWorld,
@@ -508,6 +563,11 @@ pub unsafe extern "C" fn lunar_set_transform3d(
 
 /// read `LocalTransform` (2D) into a portable `LunarTransform2d`.
 /// returns false if the entity or component is missing.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback. `out` must be a non-null, writable pointer to a `LunarTransform2d`;
+/// it is only written when the function returns true.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_get_transform2d(
     world:  *mut LunarWorld,
@@ -528,6 +588,11 @@ pub unsafe extern "C" fn lunar_get_transform2d(
 
 /// write a portable `LunarTransform2d` into `LocalTransform` (2D).
 /// returns false if the entity or component is missing.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback. `value` must be a non-null pointer to an initialized
+/// `LunarTransform2d` that stays valid for the duration of the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_set_transform2d(
     world:  *mut LunarWorld,
@@ -552,6 +617,12 @@ pub unsafe extern "C" fn lunar_set_transform2d(
 /// `callback` is called once per matching entity with `user_data` passed through.
 /// the world pointer passed to the callback is the same one this function received
 /// and can be used to call any `lunar_*` API.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback. `include` must point to `include_count` readable `LunarComponentId`
+/// values and `exclude` to `exclude_count` of them (either may be null when its
+/// count is 0). `callback` (when non-null) is invoked once per match.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_query_foreach(
     world:         *mut LunarWorld,
@@ -600,6 +671,11 @@ pub unsafe extern "C" fn lunar_query_foreach(
 /// `schedule` must be one of the `LUNAR_SCHEDULE_*` constants.
 /// `user_data` is passed through to each call; the engine does not touch it.
 /// returns [`LUNAR_INVALID_SYSTEM_ID`] on error.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback. `callback` and `user_data` are stored and invoked on every later
+/// dispatch, so both must stay valid until the system is unregistered.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_system_register(
     world:     *mut LunarWorld,
@@ -622,6 +698,10 @@ pub unsafe extern "C" fn lunar_system_register(
 }
 
 /// unregister a system by id. no-op if not found.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and not aliased mutably elsewhere.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_system_unregister(world: *mut LunarWorld, id: LunarSystemId) {
     let world = unsafe { world_from_ffi(world) };
@@ -635,6 +715,10 @@ pub unsafe extern "C" fn lunar_system_unregister(world: *mut LunarWorld, id: Lun
 // ─── time ────────────────────────────────────────────────────────────────────
 
 /// seconds elapsed since the previous frame.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and contain a [`lunar_core::Time`] resource.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_delta_seconds(world: *mut LunarWorld) -> f32 {
     let world = unsafe { world_from_ffi(world) };
@@ -642,6 +726,10 @@ pub unsafe extern "C" fn lunar_delta_seconds(world: *mut LunarWorld) -> f32 {
 }
 
 /// total seconds elapsed since the engine started.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and contain a [`lunar_core::Time`] resource.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_elapsed_seconds(world: *mut LunarWorld) -> f32 {
     let world = unsafe { world_from_ffi(world) };
@@ -702,6 +790,10 @@ fn gamepad_axis_from_u32(value: u32) -> Option<GamepadAxis> {
 
 /// return true if the key is currently held down.
 /// `key` must be a `LUNAR_KEY_*` constant.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and contain an [`InputState`] resource.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_input_key_held(world: *mut LunarWorld, key: u32) -> bool {
     let world = unsafe { world_from_ffi(world) };
@@ -711,6 +803,10 @@ pub unsafe extern "C" fn lunar_input_key_held(world: *mut LunarWorld, key: u32) 
 
 /// return true if the key was pressed this frame (edge-triggered).
 /// `key` must be a `LUNAR_KEY_*` constant.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and contain an [`InputState`] resource.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_input_key_just_pressed(world: *mut LunarWorld, key: u32) -> bool {
     let world = unsafe { world_from_ffi(world) };
@@ -719,6 +815,11 @@ pub unsafe extern "C" fn lunar_input_key_just_pressed(world: *mut LunarWorld, ke
 }
 
 /// write the mouse movement delta for this frame into `*out_dx` and `*out_dy`.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and contain an [`InputState`] resource. `out_dx` and `out_dy`
+/// must both be non-null, writable `f32` pointers.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_input_mouse_delta(
     world:  *mut LunarWorld,
@@ -732,6 +833,10 @@ pub unsafe extern "C" fn lunar_input_mouse_delta(
 
 /// return the current value of a gamepad axis (0.0 if gamepad not connected).
 /// `axis` must be a `LUNAR_GAMEPAD_AXIS_*` constant.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and contain an [`InputState`] resource.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_input_gamepad_axis(
     world:         *mut LunarWorld,
@@ -746,6 +851,10 @@ pub unsafe extern "C" fn lunar_input_gamepad_axis(
 }
 
 /// return the entity index set by [`set_main_camera_entity`], or [`LUNAR_NULL_ENTITY`] if unset.
+///
+/// # Safety
+/// `_world` is ignored and never dereferenced; only a global atomic is read,
+/// so any pointer value (including null) is accepted.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_get_main_camera(_world: *mut LunarWorld) -> LunarEntity {
     MAIN_CAMERA_ENTITY.load(Ordering::Relaxed)
@@ -767,6 +876,10 @@ fn unpack_handle<T: Asset>(raw: u64) -> Handle<T> {
 }
 
 /// lock or unlock the cursor. mirrored into [`WindowSettings::cursor_locked`].
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and not aliased mutably elsewhere.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_set_cursor_locked(world: *mut LunarWorld, locked: bool) {
     let world = unsafe { world_from_ffi(world) };
@@ -780,6 +893,10 @@ pub unsafe extern "C" fn lunar_set_cursor_locked(world: *mut LunarWorld, locked:
 /// `sky_r/g/b`: skydome color (linear 0..1).
 /// `sun_r/g/b`: sun disc color (linear 0..1).
 /// `show_sun` : whether to draw the sun disc.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and not aliased mutably elsewhere.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_set_sky(
     world: *mut LunarWorld,
@@ -799,6 +916,10 @@ pub unsafe extern "C" fn lunar_set_sky(
 /// insert or replace [`QualitySettings`].
 ///
 /// all other fields are taken from [`QualitySettings::minimum()`] as a base.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and not aliased mutably elsewhere.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_set_quality(
     world:           *mut LunarWorld,
@@ -827,6 +948,10 @@ pub unsafe extern "C" fn lunar_set_quality(
 ///
 /// `half_x` and `half_z` are the half-extents of the flat quad along X and Z.
 /// returns [`LUNAR_NULL_HANDLE`] if [`MeshRegistry`] is not available.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and not aliased mutably elsewhere.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_mesh_quad(
     world: *mut LunarWorld,
@@ -841,6 +966,10 @@ pub unsafe extern "C" fn lunar_mesh_quad(
 /// add a box mesh to the registry and return a packed handle.
 ///
 /// `hx`, `hy`, `hz` are the half-extents along each axis.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and not aliased mutably elsewhere.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_mesh_box(
     world: *mut LunarWorld,
@@ -854,6 +983,10 @@ pub unsafe extern "C" fn lunar_mesh_box(
 /// add a UV sphere mesh to the registry and return a packed handle.
 ///
 /// `sectors` and `stacks` control tessellation (minimum 3).
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and not aliased mutably elsewhere.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_mesh_sphere(
     world: *mut LunarWorld,
@@ -869,6 +1002,10 @@ pub unsafe extern "C" fn lunar_mesh_sphere(
 /// add a cylinder mesh to the registry and return a packed handle.
 ///
 /// `caps` controls whether the top and bottom disc faces are included.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and not aliased mutably elsewhere.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_mesh_cylinder(
     world: *mut LunarWorld,
@@ -886,6 +1023,10 @@ pub unsafe extern "C" fn lunar_mesh_cylinder(
 ///
 /// `shading`: 0 = Unlit, 1 = Phong, 2 = Pbr.
 /// returns [`LUNAR_NULL_HANDLE`] if [`MeshRegistry`] is not available.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and not aliased mutably elsewhere.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_material_create(
     world: *mut LunarWorld,
@@ -910,6 +1051,11 @@ pub unsafe extern "C" fn lunar_material_create(
 ///
 /// handles must come from `lunar_mesh_*` and `lunar_material_create`.
 /// returns the entity index, or [`LUNAR_NULL_ENTITY`] on failure.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback. `mesh_raw` and `mat_raw` must be packed handles previously
+/// returned by `lunar_mesh_*` and `lunar_material_create` respectively.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_spawn_mesh(
     world:      *mut LunarWorld,
@@ -931,6 +1077,10 @@ pub unsafe extern "C" fn lunar_spawn_mesh(
 /// spawn a perspective camera entity at `(x, y, z)`.
 ///
 /// `fov_y` is in radians. returns the entity index.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and not aliased mutably elsewhere.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_spawn_camera(
     world: *mut LunarWorld,
@@ -950,6 +1100,10 @@ pub unsafe extern "C" fn lunar_spawn_camera(
 
 /// set the active camera to `entity`. equivalent to calling
 /// [`set_main_camera_entity`] from Rust.
+///
+/// # Safety
+/// `_world` is ignored and never dereferenced; only a global atomic is
+/// written, so any pointer value (including null) is accepted.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_set_active_camera(_world: *mut LunarWorld, entity: LunarEntity) {
     set_main_camera_entity(entity);
@@ -961,6 +1115,10 @@ pub unsafe extern "C" fn lunar_set_active_camera(_world: *mut LunarWorld, entity
 ///
 /// during a reload, [`FfiRegistry::is_reload`] is set to true by the loader
 /// so that C# `Init` can skip one-time scene setup and only re-register systems.
+///
+/// # Safety
+/// `world` must be the non-null live world pointer from the current system
+/// callback and contain an [`FfiRegistry`] resource.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_is_reload(world: *mut LunarWorld) -> bool {
     let world = unsafe { world_from_ffi(world) };
