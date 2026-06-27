@@ -27,7 +27,10 @@ ships as a written recommendation for the user to greenlight.
 - native cross-arch verification (32-bit, arm) is explicitly deferred this
   pass. it was in the original ask but the refined goal is perf + size; arch
   portability is noted only where a size lever is free across targets, and
-  flagged as a separate follow-up rather than silently dropped.
+  flagged as a separate follow-up rather than silently dropped. note the
+  build matrix already exists (`build_all.go`: linux gnu+musl, windows gnu,
+  macos; x86_64/i686/aarch64/armv7), so this is verification-of-running, not
+  build enablement.
 
 ## guiding principle: runtime over compile time
 
@@ -57,31 +60,50 @@ per-frame cost lives there), and the audit stops at diminishing returns
 rather than forcing a full read of all 50k LOC. The report states which
 crates got a deep read vs. a skim so coverage is honest.
 
+Already-applied perf levers to credit (not re-litigate): the dist CPU
+baseline (`x86-64-v2` on x86_64, `neon+vfp4` on armv7, opt-out via
+`--no-cpu-baseline`) already lets LLVM vectorize aggressively, plus the
+landed NEON/SSE2 cull, FSR3, SIMD SoA cull, and baked tables. the audit
+treats these as the floor and looks for what is left above them.
+
 Output: a ranked gap list (impact x effort), each entry carrying evidence
 and a proposed fix. Known-good areas are explicitly called out as "already
 optimal, do not touch" so the report is honest about diminishing returns.
+Where a gap's runtime impact can't be proven by static reading alone, it is
+labelled "needs profiling" rather than asserted, and the report points at
+the existing benches (e.g. tools/navmesh-bench) or headless GPU tests that
+could confirm it.
 
 ## part B: binary-size / bloat audit (report + measurement)
 
-1. measure the right artifact: a player downloads the **distributable**, not
-   `target/release/lunar`. the real footprint is the binary + plugin host lib
-   + statically-linked SDL3 + (if CoreCLR) the shipped .NET runtime + default
-   assets. measure what `dist/` / `scripts/build_all.go` actually produces,
-   and report the Rust-binary number only as one line item inside that total.
-2. baseline: build `lunar` in release, measure the stripped size. run
-   `cargo bloat` (crate + symbol attribution) and `cargo tree` for the dep
-   graph. capture real numbers, not estimates.
-3. the .NET runtime is likely the single largest payload for a C#-scripted
-   game. CoreCLR (the dev default) ships the whole runtime; NativeAOT links a
-   trimmed native image. measure both shipping models' total footprint; this
-   is probably *the* deciding size lever, not just one feature gate among
-   many. recommend NativeAOT for release distributables if the numbers
-   confirm it.
-4. wasm bundle size: for web targets the `.wasm` is the dominant size
-   metric, so it is measured alongside the native binary. build the
-   `lunar-web` target, measure the raw and (where the toolchain supports it)
-   `wasm-opt` + gzip/brotli sizes, and attribute bloat the same way. this
-   ties size work back to the original web-accessibility goal.
+1. measure the right artifact and the right yardstick. what `build_all.go`
+   ships is an **example binary**, not the `lunar` engine bin, and it copies
+   only the binary (no runtime/assets bundled). the right "simple game"
+   yardstick is therefore a representative example: `platform_demo` (pure
+   rust, the size floor) measured against `platform_demo_cs` (C#-scripted),
+   which directly exposes the .NET-runtime delta. note that the true player
+   footprint also includes whatever the binary loads at runtime (.NET
+   runtime if CoreCLR, default assets) even though dist does not yet bundle
+   them: flag that unbundled tail as both a caveat and a finding.
+2. baseline: build the yardstick example(s) in release, measure stripped
+   size, run `cargo bloat` (crate + symbol attribution) and `cargo tree` for
+   the dep graph. capture real numbers, not estimates. also compare
+   gnu-dynamic vs musl-static for the same example, since musl statically
+   links libc and changes the size story.
+3. the .NET runtime is the prime size suspect for a C#-scripted game.
+   NativeAOT is already the default `LoaderBackend` (trimmed native image);
+   CoreCLR is feature-gated (`default = ["coreclr"]` for dev hot reload) and
+   ships the whole runtime. measure both shipping models' total footprint via
+   platform_demo_cs; this is probably *the* deciding size lever, not one
+   feature gate among many. confirm NativeAOT as the release recommendation
+   if the numbers bear it out.
+4. wasm bundle size: for web targets the served `.wasm` is the dominant size
+   metric. the pipeline (`run_wasm.go`) already runs wasm-bindgen + `wasm-opt
+   -O3` but never measures compressed size, yet servers ship wasm gzip/brotli
+   encoded, so the compressed number is what a user actually downloads.
+   measure raw, `wasm-opt`, and gzip/brotli sizes; `-Oz`/`-Os` is an untested
+   size-vs-speed lever to evaluate (same tradeoff caveat as the native size
+   profile).
 5. dep-surface map of the 543 crates: mandatory vs feature-gated vs
    removable; duplicate versions; the fat deps (sdl3, lunar-dotnet-host /
    CoreCLR, zstd, wgpu backends, cubeb audio).
