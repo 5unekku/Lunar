@@ -4,8 +4,11 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <!-- PublishAot is set by xtask dist (release only); debug builds stay as managed .dll -->
+    <!-- AOT only for Release (xtask dist); debug builds stay a managed .dll.
+         set here (not as a global -p: property) so it does NOT propagate to the
+         netstandard2.0 source-generator analyzer, which cannot AOT (NETSDK1207). -->
     <IsAotCompatible>true</IsAotCompatible>
+    <PublishAot Condition="'$(Configuration)' == 'Release'">true</PublishAot>
     <OutputType>Library</OutputType>
     <!-- output name must match what the Rust host passes to PluginLoader::load -->
     <AssemblyName>lunar_scripts</AssemblyName>

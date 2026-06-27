@@ -88,11 +88,13 @@ fn build_release(root: &Path) -> Result<(), String> {
     // 1. game plugin as NativeAOT .so (no bootstrapper needed)
     let plugin_dir  = root.join("examples/platform_demo_cs/plugin");
     let publish_dir = plugin_dir.join("publish");
+    // PublishAot is set inside Plugin.csproj (Release-only) rather than as a
+    // global -p: property, so it does not propagate to the netstandard2.0
+    // source-generator analyzer project (which cannot AOT: NETSDK1207).
     cmd("dotnet", &[
         "publish",
         "-r", dotnet_rid(),
         "-c", "Release",
-        "-p:PublishAot=true",
         "-o", publish_dir.to_str().unwrap(),
     ], &plugin_dir)?;
 
@@ -129,11 +131,13 @@ fn dist_single() -> Result<(), String> {
 
     let plugin_dir  = root.join("examples/platform_demo_cs/plugin");
     let publish_dir = plugin_dir.join("publish");
+    // PublishAot is set inside Plugin.csproj (Release-only) rather than as a
+    // global -p: property, so it does not propagate to the netstandard2.0
+    // source-generator analyzer project (which cannot AOT: NETSDK1207).
     cmd("dotnet", &[
         "publish",
         "-r", dotnet_rid(),
         "-c", "Release",
-        "-p:PublishAot=true",
         "-o", publish_dir.to_str().unwrap(),
     ], &plugin_dir)?;
 
