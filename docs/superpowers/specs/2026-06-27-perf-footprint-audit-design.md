@@ -8,10 +8,13 @@ Two deliverables on the Lunar engine (~50k Rust LOC, 25 crates, 543 deps in the 
 
 1. a performance gap audit against the bar "a simple game should run on a potato"
    (half-life 2 / portal 2 / quake / doom class hardware).
-2. a binary-size / bloat audit with a concrete footprint target: a simple,
-   NES-styled game (no fancy rendering) should be negligible in size. under
-   100 MB is the ceiling for simple games, smaller is better, but never at a
-   cost to the game or the developer.
+2. a binary-size / bloat audit with concrete, per-target footprint goals: a
+   simple, NES-styled game (no fancy rendering) should be negligible in size,
+   smaller is always better, but never at a cost to the game or the
+   developer. native ceiling for simple games is 100 MB. the wasm/web ceiling
+   is much tighter: 100 MB is meaningless on the web (users abandon a
+   multi-MB download), so the web target is single-digit MB compressed,
+   tracked separately from native, not under the same 100 MB number.
 
 Action scope: report + low-risk wins. Apply only safe, measurable
 size/perf changes (size-optimized profile, feature gates). Anything riskier
@@ -136,7 +139,8 @@ no existing bench are labelled "needs profiling" rather than asserted.
    no-shadows/no-clustered-lighting game carries dead shader text. measure
    what gating these embeds actually saves.
 7. footprint target doc: what an empty/simple Lunar game floors at today
-   vs. the sub-100-MB goal (native and wasm), and which levers close the gap.
+   vs. the per-target goals (native sub-100-MB, wasm single-digit-MB
+   compressed), and which levers close each gap.
    the *real, existing* levers are: feature-stripping (incl. embedded
    shaders), the size profile, NativeAOT over CoreCLR, and the asset
    compression/baking pipeline that already exists (`compress-textures`,
