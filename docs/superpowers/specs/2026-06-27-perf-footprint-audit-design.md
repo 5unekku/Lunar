@@ -53,6 +53,13 @@ file:line evidence (not speculation):
   shape, allocations inside the per-tick loop.
 - lunar-math, lunar-image, lunar-atlas, lunar-bsp, lunar-lightmap:
   algorithmic hot spots, unnecessary precision/work.
+- the GPU API floor (accessibility crux for old hardware): "runs on a
+  potato" is as much about the minimum graphics backend as CPU work.
+  wgpu is `default-features = false`, so which backends are enabled decides
+  the oldest GPU that can run at all. determine the enabled backends and
+  whether a GLES/GL fallback exists for pre-Vulkan hardware (the era that
+  ran HL2/Quake). this is a portability finding, and it constrains the size
+  analysis: see the size↔accessibility tension in part B.
 
 Prioritization: this is time-boxed, not exhaustive. Crates are read in
 descending order of hot-path weight (render-3d, 3d, render first, since the
@@ -111,7 +118,12 @@ no existing bench are labelled "needs profiling" rather than asserted.
    profile).
 5. dep-surface map of the 543 crates: mandatory vs feature-gated vs
    removable; duplicate versions; the fat deps (sdl3, lunar-dotnet-host /
-   CoreCLR, zstd, wgpu backends, cubeb audio).
+   CoreCLR, zstd, wgpu backends, cubeb audio). size<->accessibility tension:
+   wgpu backends are a tempting size cut, but the GL/GLES backend is exactly
+   what lets old/potato GPUs run the game (see part A's GPU API floor). any
+   backend-drop recommendation must state the hardware it gives up, and the
+   default must keep the broad-compatibility backend even if a size build
+   can opt out.
 6. feature-gating analysis: can a "simple game" build drop .NET hosting,
    unused audio backends, unused wgpu backends, and 2d-only or 3d-only?
    what does each drop save? concrete embedded-asset target: render-3d
