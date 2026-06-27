@@ -81,11 +81,13 @@ no existing bench are labelled "needs profiling" rather than asserted.
    ships is an **example binary**, not the `lunar` engine bin, and it copies
    only the binary (no runtime/assets bundled). the right "simple game"
    yardstick is therefore a representative example: `platform_demo` (pure
-   rust, the size floor) measured against `platform_demo_cs` (C#-scripted),
-   which directly exposes the .NET-runtime delta. note that the true player
-   footprint also includes whatever the binary loads at runtime (.NET
-   runtime if CoreCLR, default assets) even though dist does not yet bundle
-   them: flag that unbundled tail as both a caveat and a finding.
+   rust, the size floor) measured against `platform_demo_cs` (C#-scripted).
+   caution: the C# delta does NOT show up in the Rust example binary, because
+   the .NET runtime and managed assemblies are loaded at runtime, not linked
+   in. measuring binary-only would wrongly conclude C# adds nothing. the
+   delta lives in the runtime/managed payload shipped alongside the binary,
+   which dist does not yet bundle: count that whole tail (runtime + managed
+   dlls + default assets) and flag the missing bundling step as a finding.
 2. baseline: build the yardstick example(s) in release, measure stripped
    size, run `cargo bloat` (crate + symbol attribution) and `cargo tree` for
    the dep graph. capture real numbers, not estimates. also compare
@@ -99,8 +101,10 @@ no existing bench are labelled "needs profiling" rather than asserted.
    feature gate among many. confirm NativeAOT as the release recommendation
    if the numbers bear it out.
 4. wasm bundle size: for web targets the served `.wasm` is the dominant size
-   metric. the pipeline (`run_wasm.go`) already runs wasm-bindgen + `wasm-opt
-   -O3` but never measures compressed size, yet servers ship wasm gzip/brotli
+   metric. `run_wasm.go` also builds `--example <name>`, so measure the same
+   `platform_demo` yardstick on wasm as on native for an apples-to-apples
+   floor. the pipeline already runs wasm-bindgen + `wasm-opt -O3` but never
+   measures compressed size, yet servers ship wasm gzip/brotli
    encoded, so the compressed number is what a user actually downloads.
    measure raw, `wasm-opt`, and gzip/brotli sizes; `-Oz`/`-Os` is an untested
    size-vs-speed lever to evaluate (same tradeoff caveat as the native size
