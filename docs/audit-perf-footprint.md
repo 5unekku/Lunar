@@ -127,7 +127,11 @@ removable / gateable findings:
   `regex` feature (or gating logging behind the size-min preset) drops the three
   regex crates. this is a concrete low-risk size win, applied in Part C.
 - **naga 1.5 MiB comes from wgpu** (mandatory at runtime to translate WGSL).
-  RECOMMENDATION (complex, not a Part C safe win): precompile shaders offline,
+  VERDICT: not worth pursuing. 1.5 MiB of ~11.6 MiB, in exchange for an entire
+  per-backend offline shader pipeline that does not help wasm and gives up the
+  ergonomics of runtime WGSL, is a bad trade. keep runtime WGSL. the path is
+  documented below only for completeness, NOT recommended.
+  path (for the record, not endorsed): precompile shaders offline,
   one blob per backend, and feed them through wgpu's passthrough path
   (`create_shader_module_passthrough`, gated by features like
   `SPIRV_SHADER_PASSTHROUGH`), then build wgpu without its WGSL front-end so
