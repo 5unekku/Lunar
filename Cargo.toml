@@ -45,7 +45,10 @@ wgpu = { version = "29.0.3", default-features = false }
 raw-window-handle = "0.6"
 sdl3 = { version = "0.18", features = ["build-from-source-static"] }
 log = "0.4"
-env_logger = "0.11"
+# default-features off drops the `regex` feature (pulls regex/aho-corasick,
+# ~580 KiB of .text) used only for regex log-filter patterns. RUST_LOG
+# module+level filtering still works; color + humantime timestamps kept.
+env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
 pollster = "0.4"
 bytemuck = "1"
 rayon    = "1"
@@ -114,6 +117,14 @@ lto           = "fat"    # whole-program LTO: cross-crate inlining + dead code e
 codegen-units = 1        # single codegen unit: best optimisation, slowest compile
 panic         = "abort"  # no unwind tables: smaller binary, no overhead
 strip         = "symbols"  # strip debug symbols, keep minimal export table
+
+# size-first variant of release: same lto/panic/strip, opt-level swapped to size.
+# opt-in only (cargo build --profile release-min); the default release stays
+# opt-level 3 for max runtime speed. opt-level z can cost runtime speed, so this
+# is the developer's explicit size-over-speed choice, never the default.
+[profile.release-min]
+inherits  = "release"
+opt-level = "z"
 
 # faster debug iteration: cranelift skips LLVM's expensive passes for workspace
 # crates so incremental rebuilds are near-instant. external deps keep LLVM at -O3

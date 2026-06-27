@@ -321,8 +321,9 @@ impl Rect {
 	pub fn inflate(&mut self, dx: f32, dy: f32) {
 		self.x -= dx;
 		self.y -= dy;
-		self.w = dx.mul_add(2.0, self.w);
-		self.h = dy.mul_add(2.0, self.h);
+		// no mul_add: baseline x86-64 lacks fma, so mul_add lowers to a slow libm call
+		self.w += dx * 2.0;
+		self.h += dy * 2.0;
 	}
 
 	/// constrain this rect to lie fully within another rect.
