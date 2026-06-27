@@ -126,9 +126,23 @@ removable / gateable findings:
   small game does not need regex-based log filtering. disabling env_logger's
   `regex` feature (or gating logging behind the size-min preset) drops the three
   regex crates. this is a concrete low-risk size win, applied in Part C.
-- **naga 1.5 MiB comes from wgpu** (mandatory at runtime to translate WGSL). the
-  only way to drop it is precompiling shaders to SPIR-V/native and using a
-  naga-less wgpu build. big payoff but complex and risky; RECOMMENDATION only.
+- **naga 1.5 MiB comes from wgpu** (mandatory at runtime to translate WGSL).
+  RECOMMENDATION (complex, not a Part C safe win): precompile shaders offline,
+  one blob per backend, and feed them through wgpu's passthrough path
+  (`create_shader_module_passthrough`, gated by features like
+  `SPIRV_SHADER_PASSTHROUGH`), then build wgpu without its WGSL front-end so
+  naga's parser is not linked. concrete per-backend ingestion (correcting the
+  common "vulkan/dx natively eat HLSL" shorthand): vulkan eats SPIR-V (not HLSL
+  directly; HLSL or WGSL -> SPIR-V offline via DXC or naga-cli), dx12 eats DXIL
+  (HLSL -> DXIL via DXC), metal eats MSL/metallib (SPIR-V -> MSL via
+  SPIRV-Cross, the "targeted offline step"), GLES eats GLSL. authoring in one
+  language (HLSL or WGSL) and cross-compiling to all targets at build time is a
+  coherent hub. CAVEATS to verify before committing: (1) naga is a hard dep of
+  wgpu-core, so dropping the WGSL front-end shrinks but may not fully remove
+  naga's 1.5 MiB, measure the real saving; (2) the GLES LowGles fallback tier
+  needs GLSL variants; (3) wasm/WebGPU ingests WGSL (the browser compiles it),
+  so this saves nothing on the wasm bundle and only helps native; (4) shipping
+  per-backend blobs adds a little asset weight, far less than 1.5 MiB of code.
 
 duplicate dep versions (minor transitive bloat, a few KiB each, mostly
 unavoidable until upstreams converge): bitflags 1+2, foldhash 0.1+0.2,
