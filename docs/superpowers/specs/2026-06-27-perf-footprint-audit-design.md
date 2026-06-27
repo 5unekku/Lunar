@@ -203,10 +203,59 @@ practical risks (expected, not blockers):
 - everything riskier (removing a dep outright, algorithmic rewrites from
   part A) stays a recommendation in the report.
 
+## stretch goals (opt-in directions, not required for the core deliverable)
+
+these are explored and written up as recommendations only; implementation is
+out of scope for this pass unless a piece turns out to be a trivial,
+measurable win.
+
+### split release layout for moddability
+
+- partly exists already: the plugin loader (native via `libloading` +
+  NativeAOT/CoreCLR, the C ABI in `bindings/c`, plus C# scripting) and
+  data-driven content (scene format, `.li`, RON) already let modders load
+  native/managed plugins and swap data without recompiling.
+- the new part is making a split layout a first-class *release* option:
+  engine-as-shared-lib + thin launcher + game logic as loadable module(s) +
+  external data, selectable against the opposite "single fully-static musl
+  binary" path. support both; the engine's range (lowest lows to highest
+  highs) wants both, and neither is forced.
+- the real cost is not size (splitting adds little) but API stability: a
+  mod-facing surface must not break casually, which collides with the
+  project's "breaking changes are always fine" policy (see
+  feedback_breaking_api). a moddable release therefore needs ONE designated
+  stable ABI/API, explicitly versioned, separate from the freely-breaking
+  internal API. flag this conflict; do not silently assume the breaking
+  policy still holds at the mod boundary.
+
+### shippable debug symbols without binary bloat
+
+- correct the premise: debug symbols do not meaningfully ease decompilation
+  of optimized code (that is governed by opt-level/inlining, not symbol
+  names). what they buy is real stack traces, profiling, and modding tooling.
+- the bloat worry is solvable: replace today's `strip = "symbols"` with
+  `split-debuginfo` so symbols ship as an OPTIONAL sidecar (`.pdb` on
+  windows, separate `.debug`/`.dwp` on linux/macos, source maps for wasm).
+  the shipped binary stays the same small size; the sidecar is a separate,
+  on-demand download. measure the sidecar size so the user's open "how much
+  does it bloat" question is answered with a real number, not a guess. note
+  this is a different release config from part C's `size-min` (which strips
+  hard for the smallest possible artifact): one optimizes for minimum size,
+  the other for debuggability/moddability. they are alternative release
+  presets, not a single profile trying to do both.
+- moddability ranking, honestly: a stable plugin/scripting API + data-driven
+  content (strongest) > sidecar symbols for debuggability (useful) >
+  "intentionally decompile-friendly" (weakest, since the engine is already
+  open-source under MPL-2.0, so a decompile only exposes the dev's own game
+  logic). recommend the first two; treat decompile-friendliness as the
+  lowest-value lever.
+
 ## output artifact
 
-- committed report at `docs/audit-perf-footprint.md` covering parts A and B
-  plus the part-C results with before/after numbers.
+- committed report at `docs/audit-perf-footprint.md` covering parts A and B,
+  the part-C results with before/after numbers, and the stretch-goal
+  recommendations (split release layout, sidecar symbols) as written-up
+  options rather than applied changes.
 - the low-risk code changes (profile, feature gates) committed separately
   with measurements.
 
