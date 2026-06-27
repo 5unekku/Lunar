@@ -5,7 +5,7 @@ This software is licensed under the Mozilla Public License 2.0 (MPL-2.0).
 A copy of the license is available in the LICENSE-MPL file in this repository.
 
 -------------------------------------------------------------------------------
-Additional Permission — Compiled Applications (MPL-2.0 Section 7)
+Additional Permission: Compiled Applications (MPL-2.0 Section 7)
 -------------------------------------------------------------------------------
 
 As an additional permission under MPL-2.0 Section 7, you may distribute a
@@ -38,7 +38,7 @@ This software depends on third-party libraries. Their licenses are reproduced
 in full in the LICENSE-MIT file included in this repository, or available from
 the sources listed below.
 
-  bevy_ecs     — MIT OR Apache-2.0   https://github.com/bevyengine/bevy
-  wgpu         — MIT OR Apache-2.0   https://github.com/gfx-rs/wgpu
-  glam         — MIT OR Apache-2.0   https://github.com/bitshifter/glam-rs
-  SDL3         — zlib                https://github.com/libsdl-org/SDL
+  bevy_ecs    : MIT OR Apache-2.0   https://github.com/bevyengine/bevy
+  wgpu        : MIT OR Apache-2.0   https://github.com/gfx-rs/wgpu
+  glam        : MIT OR Apache-2.0   https://github.com/bitshifter/glam-rs
+  SDL3        : zlib                https://github.com/libsdl-org/SDL

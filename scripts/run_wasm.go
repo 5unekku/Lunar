@@ -83,7 +83,7 @@ func main() {
 		fmt.Println("sidecar: jolt_sidecar.{js,wasm} included")
 	}
 
-	// build the module init block — load the jolt sidecar first when present so
+	// build the module init block: load the jolt sidecar first when present so
 	// window.__jolt is ready before the main wasm initializes.
 	var moduleScript string
 	if hasSidecar {
@@ -96,7 +96,7 @@ await init();`, name)
 await init();`, name)
 	}
 
-	// minimal index.html — canvas fits the viewport while preserving aspect ratio.
+	// minimal index.html: canvas fits the viewport while preserving aspect ratio.
 	// JS sets the canvas buffer size to match its CSS-rendered size so there is
 	// no extra browser-level scaling. ResizeObserver keeps it in sync on resize.
 	html := fmt.Sprintf(`<!DOCTYPE html>
@@ -189,7 +189,7 @@ func repoRoot() string {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			log.Fatal("could not find Cargo.toml — run from anywhere inside the repo")
+			log.Fatal("could not find Cargo.toml: run from anywhere inside the repo")
 		}
 		dir = parent
 	}
@@ -213,7 +213,7 @@ func listTargets(root string) {
 			names = append(names, val)
 		}
 	}
-	// only [[example]] name entries, not [package] name — filter by checking
+	// only [[example]] name entries, not [package] name: filter by checking
 	// that each name has a matching examples/<name> directory
 	fmt.Println("available targets:")
 	found := false
@@ -224,7 +224,7 @@ func listTargets(root string) {
 		}
 	}
 	if !found {
-		fmt.Println("  (none found — run from the repo root)")
+		fmt.Println("  (none found: run from the repo root)")
 	}
 	fmt.Println("\nusage: go run scripts/run_wasm.go <example_name>")
 }

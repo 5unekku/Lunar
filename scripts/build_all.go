@@ -27,13 +27,13 @@ var allTargets = []target{
 	{"i686-unknown-linux-gnu", "zigbuild", "", ""},
 	{"armv7-unknown-linux-gnueabihf", "zigbuild", "", ""},
 
-	// ── linux (musl — fully static) ──────────────────────────────────────
+	// ── linux (musl: fully static) ──────────────────────────────────────
 	{"x86_64-unknown-linux-musl", "zigbuild", "", ""},
 	{"aarch64-unknown-linux-musl", "zigbuild", "", ""},
 	{"i686-unknown-linux-musl", "zigbuild", "", ""},
 	{"armv7-unknown-linux-musleabihf", "zigbuild", "", ""},
 
-	// ── windows (gnu — no MSVC SDK required) ─────────────────────────────
+	// ── windows (gnu: no MSVC SDK required) ─────────────────────────────
 	{"x86_64-pc-windows-gnu", "zigbuild", ".exe", ""},
 	{"i686-pc-windows-gnu", "zigbuild", ".exe", ""},
 	// aarch64 uses gnullvm (LLVM-mingw) since there is no aarch64-pc-windows-gnu
@@ -95,7 +95,7 @@ func main() {
 			}
 		}
 		if len(targets) == 0 {
-			fmt.Fprintf(os.Stderr, "unknown target %q — valid targets:\n", only)
+			fmt.Fprintf(os.Stderr, "unknown target %q: valid targets:\n", only)
 			for _, t := range allTargets {
 				fmt.Fprintf(os.Stderr, "  %s\n", t.triple)
 			}
@@ -155,7 +155,7 @@ func main() {
 			}
 			if t.ext == ".exe" {
 				// cross-compiling for windows: tell the windres wrapper which COFF
-				// architecture to use — llvm-windres defaults to x64, so i686 and
+				// architecture to use: llvm-windres defaults to x64, so i686 and
 				// aarch64 objects get the wrong machine type without this
 				cmd.Env = append(cmd.Env, "WINDRES_TARGET="+windresTarget(t.triple))
 			} else if t.sdk != "" {
@@ -258,7 +258,7 @@ func checkTools(targets []target) {
 			cmd.Stdout = nil
 			cmd.Stderr = nil
 			if cmd.Run() != nil {
-				fmt.Printf("warning: cargo-%s not found — targets using it will fail\n", tool)
+				fmt.Printf("warning: cargo-%s not found: targets using it will fail\n", tool)
 				fmt.Printf("  install: cargo install cargo-%s\n", tool)
 			}
 		}
@@ -293,7 +293,7 @@ func repoRoot() string {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			fmt.Fprintln(os.Stderr, "could not find Cargo.toml — run from inside the repo")
+			fmt.Fprintln(os.Stderr, "could not find Cargo.toml: run from inside the repo")
 			os.Exit(1)
 		}
 		dir = parent
@@ -314,7 +314,7 @@ func copyFile(src, dst string) error {
 // The wrapper reads $WINDRES_TARGET so each triple gets the correct COFF machine type.
 func patchWindowsToolchains() {
 	if _, err := exec.LookPath("llvm-windres"); err != nil {
-		fmt.Println("warning: llvm-windres not found — Windows builds may fail on .rc files")
+		fmt.Println("warning: llvm-windres not found: Windows builds may fail on .rc files")
 		return
 	}
 	home, _ := os.UserHomeDir()

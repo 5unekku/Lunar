@@ -2,7 +2,7 @@
 """generate a single-file api reference for the lunar engine, suitable for ai context.
 
 covers all surface-tier crates (lunar, lunar-plugin-*, lunar-pathfinding-rt),
-scoped to each crate's prelude — the types a game dev actually calls.
+scoped to each crate's prelude: the types a game dev actually calls.
 
 usage:
   python rustdoc_to_md.py <project_root> <output_file> [--force]
@@ -97,7 +97,7 @@ def rewrite_crate_refs(line: str) -> str:
 	# strip rustdoc intra-crate links first so crate:: paths don't leak
 	if "crate::" in line:
 		line = _INTRA_LINK_RE.sub(r'\1', line)
-		# any remaining bare crate:: (e.g. in inline code) — drop the prefix
+		# any remaining bare crate:: (e.g. in inline code): drop the prefix
 		line = line.replace("crate::", "")
 	for old, new in IMPORT_REWRITES:
 		if old in line:
@@ -277,7 +277,7 @@ def render_items_by_kind(
 			name = item.get("name") or "(anonymous)"
 			lines.append("")
 			lines.append("#" * (heading_level + 1) + f" {name}")
-			# strip headings from item docs — they'd nest at wrong levels
+			# strip headings from item docs: they'd nest at wrong levels
 			render_docs(lines, item.get("docs"), strip_headings=True)
 
 
@@ -299,7 +299,7 @@ def render_surface_items(
 	heading_level: int,
 	allowed_names: set[str] | None = None,
 ) -> None:
-	"""render a crate's surface api — prelude if present, else top-level public items."""
+	"""render a crate's surface api: prelude if present, else top-level public items."""
 	root_children = items[str(root_id)]["inner"]["module"].get("items", [])
 	prelude_id = find_child_module(items, root_id, "prelude")
 	if prelude_id is not None:
@@ -371,7 +371,7 @@ def build_doc(crate_data: list[tuple[str, dict]]) -> str:
 		# offset by 1 so '# quick start' → '## quick start'
 		render_docs(lines, facade_items[str(facade_root_id)].get("docs"), heading_offset=1)
 
-	# core api — one ### subsection per dep crate, filtered to prelude names
+	# core api: one ### subsection per dep crate, filtered to prelude names
 	lines.append("")
 	lines.append("## core api")
 	lines.append("")

@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <!-- source generators must NOT include C# 8+ runtime features beyond what netstandard2.0 provides -->
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
-    <!-- don't output a binary that gets referenced — this is a build tool only -->
+    <!-- don't output a binary that gets referenced: this is a build tool only -->
     <IncludeBuildOutput>false</IncludeBuildOutput>
   </PropertyGroup>
   <ItemGroup>
