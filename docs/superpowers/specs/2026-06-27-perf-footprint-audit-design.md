@@ -109,12 +109,22 @@ could confirm it.
    CoreCLR, zstd, wgpu backends, cubeb audio).
 6. feature-gating analysis: can a "simple game" build drop .NET hosting,
    unused audio backends, unused wgpu backends, and 2d-only or 3d-only?
-   what does each drop save?
+   what does each drop save? concrete embedded-asset target: render-3d
+   `include_str!`s ~28 WGSL shaders (shadow, cluster, hzb, point_shadow,
+   panorama_sky, etc.) straight into the binary, so a 2d-only or
+   no-shadows/no-clustered-lighting game carries dead shader text. measure
+   what gating these embeds actually saves.
 7. footprint target doc: what an empty/simple Lunar game floors at today
-   vs. the sub-100-MB goal (native and wasm), and which levers (feature
-   strip, size profile, procedural assets in the kkrieger spirit) close the
-   gap. NES-game reference points included for philosophy, not as a literal
-   40 KB target.
+   vs. the sub-100-MB goal (native and wasm), and which levers close the gap.
+   the *real, existing* levers are: feature-stripping (incl. embedded
+   shaders), the size profile, NativeAOT over CoreCLR, and the asset
+   compression/baking pipeline that already exists (`compress-textures`,
+   `gen-lods`, `bake-pvs`, the `.li`/zstd image format). be honest that Lunar
+   has compression/baking, NOT kkrieger-style runtime procedural generation
+   (`gen_assets` is a placeholder that writes flat-color sprites). kkrieger
+   and NES are cited as philosophy and a possible future direction
+   (procedural/runtime-generated content as a size lever), not as a current
+   capability or a literal 40 KB target.
 
 practical risks (expected, not blockers):
 - a `release` build with `lto = "fat"` + `codegen-units = 1` is slow
