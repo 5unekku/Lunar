@@ -63,7 +63,7 @@ file:line evidence (not speculation):
   the oldest GPU that can run at all. determine the enabled backends and
   whether a GLES/GL fallback exists for pre-Vulkan hardware (the era that
   ran HL2/Quake). this is a portability finding, and it constrains the size
-  analysis: see the size↔accessibility tension in part B.
+  analysis: see the size/accessibility tension in part B.
 
 Prioritization: this is time-boxed, not exhaustive. Crates are read in
 descending order of hot-path weight (render-3d, 3d, render first, since the
@@ -122,7 +122,7 @@ no existing bench are labelled "needs profiling" rather than asserted.
    profile).
 5. dep-surface map of the 543 crates: mandatory vs feature-gated vs
    removable; duplicate versions; the fat deps (sdl3, lunar-dotnet-host /
-   CoreCLR, zstd, wgpu backends, cubeb audio). size<->accessibility tension:
+   CoreCLR, zstd, wgpu backends, cubeb audio). size/accessibility tension:
    wgpu backends are a tempting size cut, but the GL/GLES backend is exactly
    what lets old/potato GPUs run the game (see part A's GPU API floor). any
    backend-drop recommendation must state the hardware it gives up, and the
