@@ -103,6 +103,19 @@ target. the native size story is therefore not the binary, it is whatever a
 game adds on top (the .NET runtime for C# scripting, assets); see the .NET and
 footprint sections below.
 
+### musl-static vs gnu-dynamic
+
+| build | bytes | human | notes |
+|-------|-------|-------|-------|
+| gnu (dynamic, release) | 11,328,360 | 10.8 MiB | needs system glibc |
+| musl (static, build_all.go) | 9,906,880 | 9.45 MiB | fully self-contained, no libc dependency |
+
+surprising and useful: the fully-static musl build is ~1.4 MiB SMALLER than the
+gnu dynamic build, not larger. musl's lean libc plus dropping glibc's dynamic
+overhead more than offsets statically bundling libc. so for distribution, the
+musl target is the better default: one portable file, no glibc-version
+dependency, smaller. RECOMMENDATION: ship musl-static as the linux release.
+
 ### dependency surface (cargo bloat + cargo tree)
 
 `.text` section is 8.8 MiB (unstripped file 15.4 MiB, stripped ship 11.6 MiB).
