@@ -101,8 +101,39 @@ binary but is a hardware-support regression, NOT a free size win. do not strip
 a pure-rust simple game is ~11.6 MiB, already far under the 100 MB native
 target. the native size story is therefore not the binary, it is whatever a
 game adds on top (the .NET runtime for C# scripting, assets); see the .NET and
-footprint sections below. `cargo bloat` crate attribution is captured in the
-dep-surface task (B.1).
+footprint sections below.
+
+### dependency surface (cargo bloat + cargo tree)
+
+`.text` section is 8.8 MiB (unstripped file 15.4 MiB, stripped ship 11.6 MiB).
+top crate attribution (`CARGO_PROFILE_RELEASE_STRIP=false cargo bloat --release
+--example platform_demo --crates`):
+
+| crate | .text size | nature |
+|-------|-----------|--------|
+| [Unknown] (generics/monomorphization) | 1.9 MiB | shrinks with opt-level z (see Part C) |
+| naga | 1.5 MiB | wgpu's runtime WGSL translator, mandatory unless shaders are precompiled |
+| std | 1.1 MiB | mandatory |
+| sdl3_sys | 900 KiB | windowing/input, mandatory |
+| wgpu_core + wgpu_hal + wgpu + wgpu_types | ~1.2 MiB | gpu abstraction, mandatory |
+| bevy_ecs | 446 KiB | ecs, mandatory |
+| lunar_render_3d | 350 KiB | engine |
+| regex_automata + regex_syntax + aho_corasick | ~580 KiB | from env_logger, GATEABLE (see below) |
+
+removable / gateable findings:
+- **regex ~580 KiB comes from `env_logger` -> `env_filter` -> `regex`** (`cargo
+  tree -i regex-automata`). env_logger pulls regex for log-filter matching. a
+  small game does not need regex-based log filtering. disabling env_logger's
+  `regex` feature (or gating logging behind the size-min preset) drops the three
+  regex crates. this is a concrete low-risk size win, applied in Part C.
+- **naga 1.5 MiB comes from wgpu** (mandatory at runtime to translate WGSL). the
+  only way to drop it is precompiling shaders to SPIR-V/native and using a
+  naga-less wgpu build. big payoff but complex and risky; RECOMMENDATION only.
+
+duplicate dep versions (minor transitive bloat, a few KiB each, mostly
+unavoidable until upstreams converge): bitflags 1+2, foldhash 0.1+0.2,
+hashbrown 0.15+0.16+0.17, png 0.17+0.18, rustc-hash 1+2, ttf-parser 0.20+0.21,
+winnow 0.7+1.0.
 
 ### tooling
 
