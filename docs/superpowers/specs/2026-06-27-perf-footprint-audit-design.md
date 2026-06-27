@@ -24,6 +24,10 @@ ships as a written recommendation for the user to greenlight.
 - no aggressive dep removal or refactors this session
 - no regressions to the high end (the engine must still reach "the prettiest
   games"); size wins must be opt-in, not forced on every build
+- native cross-arch verification (32-bit, arm) is explicitly deferred this
+  pass. it was in the original ask but the refined goal is perf + size; arch
+  portability is noted only where a size lever is free across targets, and
+  flagged as a separate follow-up rather than silently dropped.
 
 ## guiding principle: runtime over compile time
 
@@ -59,21 +63,32 @@ optimal, do not touch" so the report is honest about diminishing returns.
 
 ## part B: binary-size / bloat audit (report + measurement)
 
-1. baseline: build `lunar` in release, measure the stripped size. run
+1. measure the right artifact: a player downloads the **distributable**, not
+   `target/release/lunar`. the real footprint is the binary + plugin host lib
+   + statically-linked SDL3 + (if CoreCLR) the shipped .NET runtime + default
+   assets. measure what `dist/` / `scripts/build_all.go` actually produces,
+   and report the Rust-binary number only as one line item inside that total.
+2. baseline: build `lunar` in release, measure the stripped size. run
    `cargo bloat` (crate + symbol attribution) and `cargo tree` for the dep
    graph. capture real numbers, not estimates.
-2. wasm bundle size: for web targets the `.wasm` is the dominant size
+3. the .NET runtime is likely the single largest payload for a C#-scripted
+   game. CoreCLR (the dev default) ships the whole runtime; NativeAOT links a
+   trimmed native image. measure both shipping models' total footprint; this
+   is probably *the* deciding size lever, not just one feature gate among
+   many. recommend NativeAOT for release distributables if the numbers
+   confirm it.
+4. wasm bundle size: for web targets the `.wasm` is the dominant size
    metric, so it is measured alongside the native binary. build the
    `lunar-web` target, measure the raw and (where the toolchain supports it)
    `wasm-opt` + gzip/brotli sizes, and attribute bloat the same way. this
    ties size work back to the original web-accessibility goal.
-3. dep-surface map of the 543 crates: mandatory vs feature-gated vs
+5. dep-surface map of the 543 crates: mandatory vs feature-gated vs
    removable; duplicate versions; the fat deps (sdl3, lunar-dotnet-host /
    CoreCLR, zstd, wgpu backends, cubeb audio).
-4. feature-gating analysis: can a "simple game" build drop .NET hosting,
+6. feature-gating analysis: can a "simple game" build drop .NET hosting,
    unused audio backends, unused wgpu backends, and 2d-only or 3d-only?
    what does each drop save?
-5. footprint target doc: what an empty/simple Lunar game floors at today
+7. footprint target doc: what an empty/simple Lunar game floors at today
    vs. the sub-100-MB goal (native and wasm), and which levers (feature
    strip, size profile, procedural assets in the kkrieger spirit) close the
    gap. NES-game reference points included for philosophy, not as a literal
@@ -94,7 +109,13 @@ practical risks (expected, not blockers):
 - add a size-optimized release profile (e.g. `[profile.release-min]` with
   opt-level `z`/`s`, lto fat, panic abort, strip) and measure before/after.
   validate a clean build links before trusting the delta (see cubeb-sys
-  risk above).
+  risk above). IMPORTANT: opt-level `z`/`s` can cost runtime speed, which
+  collides with "never at a cost to the game." so this profile is an opt-in
+  dev choice, not the default; the report records the measured runtime cost
+  (via existing benches where available) next to the size saving so a dev
+  decides with eyes open. the default release profile stays speed-optimized
+  (opt-level 3). if `s`/`z` shows negligible runtime loss for real savings,
+  say so; if it tanks a hot path, recommend against it.
 - add or tighten feature flags so a small game can compile out .NET, extra
   audio backends, and unused wgpu backends. each gate measured, native and
   where relevant wasm.
@@ -111,7 +132,8 @@ practical risks (expected, not blockers):
 ## success criteria
 
 - every perf gap and every size claim is backed by a real measurement or a
-  file:line, never a guess.
+  file:line, never a guess. each measurement records the exact command,
+  rustc/toolchain version, and target triple so the numbers reproduce.
 - a documented, reproducible path to a meaningfully smaller "simple game"
   binary (native and wasm), achieved without harming the high end or
   burdening the developer.
