@@ -103,6 +103,32 @@ target. the native size story is therefore not the binary, it is whatever a
 game adds on top (the .NET runtime for C# scripting, assets); see the .NET and
 footprint sections below.
 
+### .NET shipping models (CoreCLR vs NativeAOT)
+
+architectural finding (confirmed in code): `NativeAOT` is the default
+`LoaderBackend`; `coreclr` is a feature gate enabled only for dev hot reload
+(`cargo xtask run/build`). `cargo xtask dist` is NativeAOT-only by design
+(`dotnet publish -p:PublishAot=true`), with `--single` (.so embedded) vs
+`--modular` (separate binary + .so).
+
+exact local dist numbers could NOT be measured: `cargo xtask dist --single`
+fails with `NETSDK1207: Ahead-of-time compilation is not supported for the
+target framework` on `bindings/dotnet-gen/Lunar.SourceGen.csproj`. that is a
+source-generator/analyzer project (must target netstandard2.0, which cannot
+AOT), and the dist publish pulls it into the AOT set. this is a pre-existing
+bug in the .NET dist path, separate from this audit's domain, and is left as a
+FINDING for the maintainer: exclude the analyzer project from the AOT publish
+(it is a build-time-only dependency, never shipped).
+
+footprint conclusion (from the architecture + known .NET sizing, exact numbers
+pending the dist fix): NativeAOT produces a trimmed self-contained native image
+(low tens of MiB, no runtime alongside), while CoreCLR self-contained ships the
+whole .NET runtime (70+ MiB) or, framework-dependent, requires a system .NET
+install. for a "simple game under 100 MB", NativeAOT is the clear release
+choice and is already the default; CoreCLR stays dev-only. a pure-rust game
+(no C# scripting) pays none of this: the 11.6 MiB native / 764 KiB wasm numbers
+above already are the whole game.
+
 ### musl-static vs gnu-dynamic
 
 | build | bytes | human | notes |
