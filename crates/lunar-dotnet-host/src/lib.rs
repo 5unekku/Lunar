@@ -167,7 +167,7 @@ impl DotnetRuntime {
     /// - `type_name`: `"Namespace.Class, AssemblyName"` (assembly-qualified type name)
     /// - `method_name`: name of the `[UnmanagedCallersOnly]` static method
     ///
-    /// # safety
+    /// # Safety
     ///
     /// the caller must cast the returned pointer to the correct function type
     /// matching the C# method's parameter and return types.

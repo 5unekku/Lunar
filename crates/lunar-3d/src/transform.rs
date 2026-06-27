@@ -146,9 +146,11 @@ mod tests {
 	fn local_transform3d_layout() {
 		// translation must be first, rotation directly after, scale after rotation
 		assert_eq!(offset_of!(LocalTransform3d, translation), 0);
+		// rotation follows translation, but Quat's alignment (16 on SIMD builds)
+		// pads the 12-byte Vec3 up to the next aligned offset.
 		assert_eq!(
 			offset_of!(LocalTransform3d, rotation),
-			offset_of!(LocalTransform3d, translation) + size_of::<lunar_math::Vec3>()
+			size_of::<lunar_math::Vec3>().next_multiple_of(align_of::<lunar_math::Quat>())
 		);
 		assert_eq!(
 			offset_of!(LocalTransform3d, scale),
@@ -161,9 +163,11 @@ mod tests {
 	#[test]
 	fn world_transform3d_layout() {
 		assert_eq!(offset_of!(WorldTransform3d, translation), 0);
+		// rotation follows translation, but Quat's alignment (16 on SIMD builds)
+		// pads the 12-byte Vec3 up to the next aligned offset.
 		assert_eq!(
 			offset_of!(WorldTransform3d, rotation),
-			offset_of!(WorldTransform3d, translation) + size_of::<lunar_math::Vec3>()
+			size_of::<lunar_math::Vec3>().next_multiple_of(align_of::<lunar_math::Quat>())
 		);
 		assert_eq!(
 			offset_of!(WorldTransform3d, scale),

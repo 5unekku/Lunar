@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 
 pub(crate) fn find_hostfxr() -> Option<PathBuf> {
     // 1. DOTNET_ROOT env var: fastest path, set by installers and containers
-    if let Ok(root) = std::env::var("DOTNET_ROOT") {
-        if let Some(p) = latest_in(Path::new(&root)) {
-            return Some(p);
-        }
+    if let Ok(root) = std::env::var("DOTNET_ROOT")
+        && let Some(p) = latest_in(Path::new(&root))
+    {
+        return Some(p);
     }
 
     // 2. well-known system locations
@@ -18,10 +18,10 @@ pub(crate) fn find_hostfxr() -> Option<PathBuf> {
     }
 
     // 3. ask the dotnet CLI (slowest path, spawns a process)
-    if let Some(root) = root_from_cli() {
-        if let Some(p) = latest_in(&root) {
-            return Some(p);
-        }
+    if let Some(root) = root_from_cli()
+        && let Some(p) = latest_in(&root)
+    {
+        return Some(p);
     }
 
     None
