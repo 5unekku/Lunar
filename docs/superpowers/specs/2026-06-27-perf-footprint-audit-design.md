@@ -48,7 +48,11 @@ file:line evidence (not speculation):
 
 - lunar-render-3d, lunar-render: per-frame heap allocations, redundant GPU
   submissions, CPU/GPU sync points, anything that would stall an iGPU or
-  low-end discrete card.
+  low-end discrete card. include frame pacing / present timing: on low-end
+  hardware perceived smoothness hinges on one-present-per-vsync and steady
+  pacing (this engine already hit a double-render-per-vsync stutter bug), so
+  the audit checks the present/schedule path for pacing regressions, not just
+  raw throughput.
 - lunar-3d, lunar-core, lunar-2d: ECS query patterns, culling, schedule
   shape, allocations inside the per-tick loop.
 - lunar-math, lunar-image, lunar-atlas, lunar-bsp, lunar-lightmap:
@@ -177,6 +181,11 @@ practical risks (expected, not blockers):
   note wgpu is already `default-features = false`, so backend gating may
   largely exist: confirm before claiming a win. each gate measured, native
   and where relevant wasm.
+- keep the developer cost near zero: bundle the size gates behind one
+  preset (e.g. a single `size-min` feature or profile that flips the whole
+  set) rather than 20 individual flags a dev must learn and combine. "not at
+  a cost to the developer" means a small game is one switch away, not a
+  research project.
 - everything riskier (removing a dep outright, algorithmic rewrites from
   part A) stays a recommendation in the report.
 
