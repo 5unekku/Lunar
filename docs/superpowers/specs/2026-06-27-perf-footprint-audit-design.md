@@ -69,10 +69,11 @@ treats these as the floor and looks for what is left above them.
 Output: a ranked gap list (impact x effort), each entry carrying evidence
 and a proposed fix. Known-good areas are explicitly called out as "already
 optimal, do not touch" so the report is honest about diminishing returns.
-Where a gap's runtime impact can't be proven by static reading alone, it is
-labelled "needs profiling" rather than asserted, and the report points at
-the existing benches (e.g. tools/navmesh-bench) or headless GPU tests that
-could confirm it.
+Where a gap's runtime impact can't be proven by static reading alone, the
+audit *runs* the existing benches (e.g. tools/navmesh-bench) or headless GPU
+tests that already cover that hot path to ground the impact with numbers,
+since running them is cheap and the action scope allows it. only gaps with
+no existing bench are labelled "needs profiling" rather than asserted.
 
 ## part B: binary-size / bloat audit (report + measurement)
 
@@ -131,6 +132,10 @@ practical risks (expected, not blockers):
   (minutes); the baseline build is budgeted for, not treated as a surprise.
 - `cargo bloat` / `wasm-opt` may not be installed; the plan installs them or
   falls back to `cargo tree` + raw `size`/`ls` attribution.
+- `cargo bloat` needs symbols, but `[profile.release]` sets `strip =
+  "symbols"`; attribution runs against a temporarily un-stripped build (or a
+  dedicated profile) so the final shipped size and the bloat breakdown are
+  measured from the right artifacts.
 - a new custom profile name spins up a fresh `target/<name>/` dir and can
   retrigger the cmake/cubeb-sys profile-dir interaction the existing
   Cargo.toml comment documents; part C validates a clean build before
@@ -139,18 +144,23 @@ practical risks (expected, not blockers):
 ## part C: low-risk implementation (safe wins only)
 
 - add a size-optimized release profile (e.g. `[profile.release-min]` with
-  opt-level `z`/`s`, lto fat, panic abort, strip) and measure before/after.
-  validate a clean build links before trusting the delta (see cubeb-sys
-  risk above). IMPORTANT: opt-level `z`/`s` can cost runtime speed, which
+  `inherits = "release"` then overriding opt-level to `z`/`s`; lto fat, panic
+  abort, strip carry over from release) and measure before/after. without
+  `inherits` a custom profile silently loses release's panic/strip/lto, so
+  the size delta would be measured against the wrong baseline. validate a
+  clean build links before trusting the delta (see cubeb-sys risk above). IMPORTANT: opt-level `z`/`s` can cost runtime speed, which
   collides with "never at a cost to the game." so this profile is an opt-in
   dev choice, not the default; the report records the measured runtime cost
   (via existing benches where available) next to the size saving so a dev
   decides with eyes open. the default release profile stays speed-optimized
   (opt-level 3). if `s`/`z` shows negligible runtime loss for real savings,
   say so; if it tanks a hot path, recommend against it.
-- add or tighten feature flags so a small game can compile out .NET, extra
-  audio backends, and unused wgpu backends. each gate measured, native and
-  where relevant wasm.
+- add or tighten feature flags for whatever part B's dep/feature analysis
+  actually finds compiled-in-but-unused (candidates: .NET hosting, extra
+  audio backends, wgpu backends, embedded 3d shaders for 2d-only builds).
+  note wgpu is already `default-features = false`, so backend gating may
+  largely exist: confirm before claiming a win. each gate measured, native
+  and where relevant wasm.
 - everything riskier (removing a dep outright, algorithmic rewrites from
   part A) stays a recommendation in the report.
 
