@@ -57,7 +57,11 @@ file:line evidence (not speculation):
   the audit checks the present/schedule path for pacing regressions, not just
   raw throughput.
 - lunar-3d, lunar-core, lunar-2d: ECS query patterns, culling, schedule
-  shape, allocations inside the per-tick loop.
+  shape, allocations inside the per-tick loop. include low-core-count
+  scaling: with bevy_ecs multi-threaded + rayon, a 2-core potato can lose to
+  thread-pool overhead and oversubscription; check that the engine sizes its
+  pool sanely and degrades gracefully toward single-threaded rather than
+  assuming many cores.
 - lunar-math, lunar-image, lunar-atlas, lunar-bsp, lunar-lightmap:
   algorithmic hot spots, unnecessary precision/work.
 - the GPU API floor (accessibility crux for old hardware): "runs on a
