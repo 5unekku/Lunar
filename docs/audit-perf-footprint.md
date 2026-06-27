@@ -314,4 +314,48 @@ on the unpinned local nightly (2026-06-08), now fixed:
    args. FIXED to match the real `get_fn_ptr(&Path, ...) -> *const c_void` api.
 
 ## stretch-goal recommendations
-```
+
+### split release layout for moddability
+
+partly exists already: the plugin loader (native `libloading` + NativeAOT/
+CoreCLR, the C ABI in `bindings/c`, C# scripting) and data-driven content
+(scene format, `.li`, RON) already let modders load plugins and swap data
+without recompiling. notably `cargo xtask dist --single` (.so embedded) vs
+`--modular` (separate binary + .so) is already a single-vs-split axis on the
+.NET side.
+
+the new piece would be a first-class general split-release option (engine
+shared-lib + thin launcher + loadable game modules + external data), selectable
+against the opposite "single fully-static musl binary" path. support both.
+
+two costs, size is the smaller one. (1) runtime: a dynamic engine/module
+boundary forfeits the cross-boundary LTO/inlining the static binary gets and
+adds indirect-call overhead, so per the runtime-over-everything principle the
+single static binary stays the perf default and split is opt-in. (2) API
+stability: a mod-facing surface needs ONE designated, versioned, stable ABI,
+which conflicts with the project's "breaking changes are always fine" policy;
+flag that conflict explicitly rather than assuming the breaking policy holds at
+the mod boundary.
+
+### shippable debug symbols without binary bloat
+
+correcting the premise: debug symbols do not meaningfully ease decompilation of
+optimized code (that is governed by opt-level/inlining, not symbol names); what
+they buy is real stack traces, profiling, and modding tooling. the "symbols
+bloat the binary" worry is solvable with `split-debuginfo`: symbols ship as an
+OPTIONAL sidecar, the shipped binary stays the same size.
+
+measurement (answers the open "how much do they bloat" question): a
+`strip=none` release build is 13.1 MiB vs the 11.3 MiB stripped ship, so the
+symbol table alone adds ~1.8 MiB inline (the release profile is `debug=0`, so
+full DWARF would add more). that ~1.8 MiB is what `split-debuginfo` moves to an
+optional sidecar, leaving the shipped binary at ~11.3 MiB. caveat: `-C
+split-debuginfo=packed` did NOT cleanly externalize a `.dwp` under this fat-LTO
+config in testing (info stayed inline), so the exact flag/toolchain combo needs
+tuning before relying on it. bottom line: symbols cost ~1.8 MiB+ if inline, ~0
+to the shipped binary if externalized to a sidecar.
+
+moddability levers ranked: a stable plugin/scripting API + data-driven content
+(strongest) > sidecar symbols for debuggability (useful) > "decompile-friendly"
+(weakest; the engine is already open-source under MPL-2.0, so a decompile only
+exposes the dev's own game logic). recommend the first two.
