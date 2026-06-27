@@ -215,11 +215,14 @@ measurable win.
   NativeAOT/CoreCLR, the C ABI in `bindings/c`, plus C# scripting) and
   data-driven content (scene format, `.li`, RON) already let modders load
   native/managed plugins and swap data without recompiling.
-- the new part is making a split layout a first-class *release* option:
-  engine-as-shared-lib + thin launcher + game logic as loadable module(s) +
-  external data, selectable against the opposite "single fully-static musl
-  binary" path. support both; the engine's range (lowest lows to highest
-  highs) wants both, and neither is forced.
+- this is more built than it first looks: `cargo xtask dist` already offers
+  `--single` (the .so embedded in the binary) vs `--modular` (separate binary
+  + .so), which IS a single-vs-split release axis on the .NET side. the new
+  part is extending that split-layout idea to a first-class, general release
+  option: engine-as-shared-lib + thin launcher + game logic as loadable
+  module(s) + external data, selectable against the opposite "single
+  fully-static musl binary" path. audit what `--modular` already separates
+  before designing anything new; support both, neither forced.
 - the costs are two, and size is the smaller one. first, a runtime cost: a
   dynamic engine/module boundary forfeits the cross-boundary LTO and inlining
   the single static binary gets, and adds indirect-call overhead at the seam.
