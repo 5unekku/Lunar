@@ -90,7 +90,13 @@ name = "platform_demo_cs"
 path = "examples/platform_demo_cs/main.rs"
 
 [dev-dependencies]
-lunar-ffi           = { path = "bindings/c" }
+lunar-ffi = { path = "bindings/c" }
+
+# plugin-loader is libloading-based and cannot compile on bare wasm. it is only
+# used by the platform_demo_cs example (C# scripting, which does not run on wasm
+# anyway), so gate it off wasm. this lets the pure-rust examples build for wasm
+# via run_wasm.go without dragging in a native-only dev-dep.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 lunar-plugin-loader = { path = "crates/lunar-plugin-loader" }
 
 [dependencies]

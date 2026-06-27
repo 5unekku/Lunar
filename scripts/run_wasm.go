@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"log"
@@ -56,10 +58,16 @@ func main() {
 	}
 
 	// wasm-opt shrinks and speeds up the bindgen output; soft-skip when absent
+	bound := filepath.Join(tmpDir, name+"_bg.wasm")
 	if _, err := exec.LookPath("wasm-opt"); err == nil {
-		bound := filepath.Join(tmpDir, name+"_bg.wasm")
 		fmt.Println("running wasm-opt -O3...")
-		opt := exec.Command("wasm-opt", "-O3", "--enable-simd", "--enable-bulk-memory", "-o", bound, bound)
+		// rustc emits trunc_sat (nontrapping-float-to-int) and simd; without
+		// these flags wasm-opt rejects the module ("all used features should be
+		// allowed"). keep this feature set in sync with what rustc produces.
+		opt := exec.Command("wasm-opt", "-O3",
+			"--enable-simd", "--enable-bulk-memory",
+			"--enable-nontrapping-float-to-int", "--enable-mutable-globals", "--enable-sign-ext",
+			"-o", bound, bound)
 		opt.Stdout = os.Stdout
 		opt.Stderr = os.Stderr
 		if err := opt.Run(); err != nil {
@@ -68,6 +76,7 @@ func main() {
 	} else {
 		fmt.Println("wasm-opt not found, skipping (install binaryen for smaller/faster wasm)")
 	}
+	reportWasmSize(bound)
 
 	// copy jolt physics sidecar if it has been built (optional, only needed for
 	// physics examples). sidecar dist lives in the sibling jolt repo.
@@ -232,6 +241,23 @@ func listTargets(root string) {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// reportWasmSize prints the raw and gzipped size of the wasm module. servers
+// serve wasm gzip- or brotli-encoded, so the compressed number is what a user
+// actually downloads and the one worth watching, not the raw size.
+func reportWasmSize(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var buf bytes.Buffer
+	gz, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	_, _ = gz.Write(data)
+	_ = gz.Close()
+	const mib = 1024.0 * 1024.0
+	fmt.Printf("wasm size: %.2f MiB raw, %.2f MiB gzipped (served)\n",
+		float64(len(data))/mib, float64(buf.Len())/mib)
 }
 
 func copyFile(src, dst string) error {
