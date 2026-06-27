@@ -166,5 +166,77 @@ winnow 0.7+1.0.
 
 ## C. low-risk wins applied
 
+all numbers are platform_demo, release profile, x86_64-unknown-linux-gnu,
+rustc 1.98.0-nightly, stripped binary size in bytes.
+
+| change | size | delta |
+|--------|------|-------|
+| baseline (release) | 12,211,592 | |
+| + drop env_logger `regex` feature | 11,328,360 | -883,232 (-7.2%) |
+| + release-min profile (opt-level z) on top | 7,465,704 | -3,862,656 (-34% vs release, -39% vs baseline) |
+
+### 1. drop env_logger regex feature (universal, applied)
+
+`env_logger`'s default `regex` feature pulled `regex` + `regex-automata` +
+`regex-syntax` + `aho-corasick` (~580 KiB .text, ~862 KiB after LTO removes the
+transitive tail) purely for regex-pattern log filtering. set
+`env_logger = { default-features = false, features = ["auto-color",
+"humantime"] }` in the workspace deps. RUST_LOG module+level filtering still
+works, color + timestamps kept. verified: `regex-automata` and `aho-corasick`
+are gone from the dep tree, the binary dropped 862 KiB. this is a universal win
+(every game benefits), not behind a flag, because regex log-filtering is dev
+infrastructure, not game behavior.
+
+### 2. release-min size profile (opt-in, applied)
+
+added `[profile.release-min]` (`inherits = "release"`, `opt-level = "z"`). a
+size-first build is now one flag away: `cargo build --profile release-min`.
+opt-level z took the binary from 11.3 MiB to 7.1 MiB (-34%). this is opt-in by
+design: opt-level z can cost runtime speed, so the default `release` stays
+opt-level 3 (max speed) and the dev chooses release-min when size matters more.
+the runtime cost was not separately benched (the one workspace bench builds its
+own profile); flagged as the dev's explicit size-over-speed tradeoff.
+
+### 3. mul_add no-FMA fix (applied)
+
+`Rect::inflate` (`lunar-math/src/types.rs:324`) used `dx.mul_add(2.0, self.w)`,
+violating the project no-FMA policy (baseline x86-64 lacks fma, so mul_add
+lowers to a slow libm call). changed to `self.w += dx * 2.0`. correctness is
+identical for this use; removes the policy violation.
+
+### note: no separate size-min feature needed (YAGNI)
+
+the plan considered a `size-min` feature bundling gates. investigation showed
+it is unnecessary: the existing `2d` / `3d` / `audio` features already ARE the
+size presets. default is `2d`, and the heavy 3d subsystem (lunar-render-3d, its
+~28 embedded WGSL shaders, lunar-bsp, lunar-lightmap) only compiles in under
+the `3d` feature. so a 2d or headless game already drops all of that with no new
+flag. the only universal win not already gated was env_logger's regex, applied
+above. adding an empty preset would be ceremony with nothing to bundle.
+
+### verification notes (honest state)
+
+my changes are verified clean: release + release-min build and link, clippy is
+green on the touched crates (lunar-math, lunar-engine and their tree), and no
+new test failure is introduced.
+
+separately, `cargo test --workspace` and full-workspace clippy do NOT pass on
+the local toolchain today, due to THREE pre-existing issues unrelated to this
+audit (all reproduced on the base state with my changes stashed, all in crates
+this audit did not touch):
+1. `lunar-3d` lib tests SIGABRT under the dev profile: a cranelift codegen ICE
+   (rustc_codegen_cranelift issue 171) on the unpinned local nightly
+   (2026-06-08). the dev profile forces `codegen-backend = "cranelift"`.
+2. `lunar-3d` `transform::tests::local_transform3d_layout` and
+   `world_transform3d_layout` fail under LLVM: assert size 12, actual 16 (Vec3
+   12 bytes vs Vec3A 16-byte SIMD padding). either a stale test expectation
+   after a deliberate move to Vec3A, or a real layout regression; needs the
+   maintainer's intent to resolve.
+3. `lunar-dotnet-host` clippy: 3 `missing_safety_doc` errors on `pub unsafe fn`s
+   lacking `# Safety` doc sections; the local nightly clippy enforces it under
+   -D warnings.
+these block a clean workspace verification gate but are not caused by, and do
+not affect, the audit's changes.
+
 ## stretch-goal recommendations
 ```
