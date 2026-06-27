@@ -139,39 +139,49 @@ pub fn propagate_transforms_3d(world: &mut World) {
 		// no hierarchy: world transform == local transform (T/R/S copied straight
 		// through, no matrix build or decompose), and Inherited visibility (no parent)
 		// resolves to visible. each entry is independent ⇒ parallelizable.
+		// parallelize only on a multi-core machine with enough entities; below
+		// that the rayon fork/join (and oversubscription on a potato) costs more
+		// than the trivial per-entry T/R/S copy. wasm always runs serial.
 		#[cfg(not(target_arch = "wasm32"))]
-		{
-			use rayon::prelude::*;
-			let snapshot = &scratch.snapshot;
-			scratch
-				.world_ts
-				.par_iter_mut()
-				.zip(scratch.computed_vis.par_iter_mut())
-				.enumerate()
-				.for_each(|(i, (world_ts, computed_vis))| {
-					if let Some(local) = snapshot[i].1 {
-						*world_ts = WorldTransform3d {
-							translation: local.translation,
-							rotation: local.rotation,
-							scale: local.scale,
-						};
-					}
-					if let Some(vis) = snapshot[i].2 {
-						*computed_vis = !matches!(vis, Visibility::Hidden);
-					}
-				});
-		}
+		let parallel = lunar_core::is_multicore() && n >= 2048;
 		#[cfg(target_arch = "wasm32")]
-		for i in 0..n {
-			if let Some(local) = scratch.snapshot[i].1 {
-				scratch.world_ts[i] = WorldTransform3d {
-					translation: local.translation,
-					rotation: local.rotation,
-					scale: local.scale,
-				};
+		let parallel = false;
+
+		if parallel {
+			#[cfg(not(target_arch = "wasm32"))]
+			{
+				use rayon::prelude::*;
+				let snapshot = &scratch.snapshot;
+				scratch
+					.world_ts
+					.par_iter_mut()
+					.zip(scratch.computed_vis.par_iter_mut())
+					.enumerate()
+					.for_each(|(i, (world_ts, computed_vis))| {
+						if let Some(local) = snapshot[i].1 {
+							*world_ts = WorldTransform3d {
+								translation: local.translation,
+								rotation: local.rotation,
+								scale: local.scale,
+							};
+						}
+						if let Some(vis) = snapshot[i].2 {
+							*computed_vis = !matches!(vis, Visibility::Hidden);
+						}
+					});
 			}
-			if let Some(vis) = scratch.snapshot[i].2 {
-				scratch.computed_vis[i] = !matches!(vis, Visibility::Hidden);
+		} else {
+			for i in 0..n {
+				if let Some(local) = scratch.snapshot[i].1 {
+					scratch.world_ts[i] = WorldTransform3d {
+						translation: local.translation,
+						rotation: local.rotation,
+						scale: local.scale,
+					};
+				}
+				if let Some(vis) = scratch.snapshot[i].2 {
+					scratch.computed_vis[i] = !matches!(vis, Visibility::Hidden);
+				}
 			}
 		}
 	} else {

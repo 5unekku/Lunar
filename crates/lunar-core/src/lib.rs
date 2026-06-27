@@ -47,6 +47,27 @@ mod state;
 mod window;
 mod world_manifest;
 
+/// whether this machine has enough cores (> 2) to benefit from the engine's
+/// parallel paths. cached on first call. low-core (<= 2) machines and wasm run
+/// serial: the fork/join and executor-sync overhead loses to running straight
+/// through on a potato. both the schedule executor and the per-frame rayon
+/// kernels consult this so they make the same decision.
+#[must_use]
+pub fn is_multicore() -> bool {
+	use std::sync::OnceLock;
+	static MULTICORE: OnceLock<bool> = OnceLock::new();
+	*MULTICORE.get_or_init(|| {
+		#[cfg(target_arch = "wasm32")]
+		{
+			false
+		}
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			std::thread::available_parallelism().map(|c| c.get() > 2).unwrap_or(false)
+		}
+	})
+}
+
 /// app builder and time resource
 pub use app::{App, GamePlugin, LoopConfig, TickRateConfig, Time};
 /// command registry for console commands

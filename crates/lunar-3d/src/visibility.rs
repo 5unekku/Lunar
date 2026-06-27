@@ -462,24 +462,39 @@ pub fn build_cull_soa(
 		half_z,
 		..
 	} = soa;
-	center_x
-		.par_iter_mut()
-		.zip(center_y.par_iter_mut())
-		.zip(center_z.par_iter_mut())
-		.zip(half_x.par_iter_mut())
-		.zip(half_y.par_iter_mut())
-		.zip(half_z.par_iter_mut())
-		.enumerate()
-		.for_each(|(i, (((((cx, cy), cz), hx), hy), hz))| {
+	// parallelize only on a multi-core machine with enough boxes; on a potato
+	// (<= 2 cores) or a small scene the rayon fork/join loses to a straight loop.
+	if lunar_core::is_multicore() && n >= 1024 {
+		center_x
+			.par_iter_mut()
+			.zip(center_y.par_iter_mut())
+			.zip(center_z.par_iter_mut())
+			.zip(half_x.par_iter_mut())
+			.zip(half_y.par_iter_mut())
+			.zip(half_z.par_iter_mut())
+			.enumerate()
+			.for_each(|(i, (((((cx, cy), cz), hx), hy), hz))| {
+				let (_, aabb, world) = &items[i];
+				let (c, h) = world_space_aabb(aabb, world);
+				*cx = c.x;
+				*cy = c.y;
+				*cz = c.z;
+				*hx = h.x;
+				*hy = h.y;
+				*hz = h.z;
+			});
+	} else {
+		for i in 0..n {
 			let (_, aabb, world) = &items[i];
 			let (c, h) = world_space_aabb(aabb, world);
-			*cx = c.x;
-			*cy = c.y;
-			*cz = c.z;
-			*hx = h.x;
-			*hy = h.y;
-			*hz = h.z;
-		});
+			center_x[i] = c.x;
+			center_y[i] = c.y;
+			center_z[i] = c.z;
+			half_x[i] = h.x;
+			half_y[i] = h.y;
+			half_z[i] = h.z;
+		}
+	}
 }
 
 /// wasm build: single-threaded fallback (no rayon on wasm).

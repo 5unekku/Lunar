@@ -44,21 +44,21 @@ pub struct Engine {
 impl Engine {
 	/// create a new empty engine
 	///
-	/// stage schedules use `ExecutorKind::MultiThreaded` on native targets:
-	/// systems that do not share mutable component/resource access run in parallel
-	/// on a thread pool. on WASM the executor falls back to single-threaded.
+	/// stage schedules use `ExecutorKind::MultiThreaded` on native machines with
+	/// more than 2 cores: systems that do not share mutable component/resource
+	/// access run in parallel on a thread pool. on WASM, and on low-core (<= 2)
+	/// machines, the executor falls back to single-threaded, because there the
+	/// per-frame executor sync plus rayon oversubscription loses to running serial.
 	#[must_use]
 	pub fn new() -> Self {
 		use crate::schedule::UpdateStage;
-		let parallel = {
-			#[cfg(target_arch = "wasm32")]
-			{
-				ExecutorKind::SingleThreaded
-			}
-			#[cfg(not(target_arch = "wasm32"))]
-			{
-				ExecutorKind::MultiThreaded
-			}
+		// degrade to single-threaded on wasm and on a potato (<= 2 cores): there
+		// the multithreaded executor's fixed per-frame cost has no parallelism to
+		// win it back. see crate::is_multicore.
+		let parallel = if crate::is_multicore() {
+			ExecutorKind::MultiThreaded
+		} else {
+			ExecutorKind::SingleThreaded
 		};
 		let mut startup = Schedule::new(Startup);
 		startup.set_executor_kind(ExecutorKind::SingleThreaded);
