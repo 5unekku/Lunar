@@ -12,10 +12,11 @@
 //! use std::path::Path;
 //!
 //! let runtime = DotnetRuntime::load(Path::new("MyPlugin.runtimeconfig.json")).unwrap();
-//! let fp: unsafe extern "C" fn() = unsafe {
-//!     runtime.get_fn("MyPlugin.dll", "MyPlugin.Entry, MyPlugin", "Run").unwrap()
+//! let raw = unsafe {
+//!     runtime.get_fn_ptr(Path::new("MyPlugin.dll"), "MyPlugin.Entry, MyPlugin", "Run").unwrap()
 //! };
-//! unsafe { fp() };
+//! let entry: unsafe extern "C" fn() = unsafe { std::mem::transmute(raw) };
+//! unsafe { entry() };
 //! ```
 
 mod find;
