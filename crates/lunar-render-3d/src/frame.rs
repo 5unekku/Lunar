@@ -35,7 +35,12 @@ impl RenderEngine3d {
 		// read the two render-config resources once per frame instead of the ~20 separate
 		// resource lookups that follow. both are small and Clone (no heap allocation), so a
 		// single copy is far cheaper than re-hashing the resource id for every field read.
-		let dev_profile = world.get_resource::<DevRenderProfile>().cloned();
+		// a missing DevRenderProfile means "use the documented default" (classic: the cheapest
+		// profile, post effects off), NOT "turn every effect on". the per-field `unwrap_or(true)`
+		// fallbacks below would otherwise enable SSAO/SSR/bloom with no setup and crush lit
+		// geometry to black (SSAO multiplies HDR by an unwritten AO buffer). resolving to default
+		// here makes those fallbacks dead and keeps lighting correct for profile-less games.
+		let dev_profile = Some(world.get_resource::<DevRenderProfile>().cloned().unwrap_or_default());
 		let quality = world.get_resource::<QualitySettings>().cloned();
 
 		// apply render scale and MSAA changes before computing viewport

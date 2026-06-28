@@ -57,7 +57,7 @@ fn spawn_probe_scene(mut commands: Commands, mut registry: ResMut<MeshRegistry>)
 	// disable temporal/post AA so the composite pass writes the headless target directly,
 	// giving a clean read of the tonemap output (STAA's temporal accumulation otherwise
 	// confounds single-frame shader experiments).
-	commands.insert_resource(lunar::lunar_render_3d::DevRenderProfile::classic());
+	// no DevRenderProfile inserted on purpose: the engine must light pbr scenes by default.
 	let scene = probe_scene();
 	SceneLoader3d::spawn_scene(&mut commands, &mut registry, &scene, None);
 }
