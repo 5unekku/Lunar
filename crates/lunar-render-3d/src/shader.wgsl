@@ -402,6 +402,13 @@ fn point_shadow_layer_uv(dir: vec3<f32>, shadow_index: u32) -> vec3<f32> {
     return vec3<f32>(u, v, f32(layer));
 }
 
+// camera exposure for lit (PBR) surfaces. the directional term normalizes a reference
+// 80000-lux sun to irradiance 1.0; after the lambert /pi term and ACES (which crushes
+// darks) typical lit surfaces land far too dark. this scales lit radiance into the
+// tonemapper's usable range. unlit content (sky dome, sun disc, Unlit materials) returns
+// before this is applied, so it is unaffected.
+const LIT_EXPOSURE: f32 = 16.0;
+
 // ── fragment shader ────────────────────────────────────────────────────────
 
 @fragment
@@ -550,5 +557,5 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     } else {
         hdr = ambient + dir_lo + point_lo;
     }
-    return vec4<f32>(hdr, alpha);
+    return vec4<f32>(hdr * LIT_EXPOSURE, alpha);
 }
