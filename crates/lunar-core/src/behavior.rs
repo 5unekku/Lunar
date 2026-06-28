@@ -553,7 +553,7 @@ mod tests {
 			}]
 		}
 		fn get_field(&self, name: &str) -> Option<FieldValue> {
-			(name == "speed").then(|| FieldValue::Float(self.speed))
+			(name == "speed").then_some(FieldValue::Float(self.speed))
 		}
 		fn set_field(&mut self, name: &str, value: FieldValue) {
 			if name == "speed"
