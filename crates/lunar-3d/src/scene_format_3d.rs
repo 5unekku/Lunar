@@ -92,6 +92,60 @@ pub struct EntityDefinition3d {
     /// custom tags
     #[serde(default)]
     pub tags: Vec<String>,
+    /// per-entity behaviors attached to this entity (id + exported field overrides)
+    #[serde(default)]
+    pub behaviors: Vec<BehaviorRef>,
+}
+
+/// a behavior attached to an entity in the scene file: a registry id plus the
+/// exported field values to apply when the behavior is instantiated.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BehaviorRef {
+    /// stable behavior id, matched against the `BehaviorRegistry`
+    pub id: String,
+    /// exported field overrides as (name, value) pairs
+    #[serde(default)]
+    pub fields: Vec<(String, FieldValueRon)>,
+}
+
+/// scene-format mirror of `lunar_core::behavior::FieldValue`. lives here so the
+/// scene format does not depend on lunar-core's runtime field type; `From` conversions
+/// bridge the two at the loader boundary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum FieldValueRon {
+    Float(f32),
+    Int(i64),
+    Bool(bool),
+    Vec3([f32; 3]),
+    Color([f32; 4]),
+    Text(String),
+}
+
+impl From<FieldValueRon> for lunar_core::behavior::FieldValue {
+    fn from(value: FieldValueRon) -> Self {
+        match value {
+            FieldValueRon::Float(v) => Self::Float(v),
+            FieldValueRon::Int(v) => Self::Int(v),
+            FieldValueRon::Bool(v) => Self::Bool(v),
+            FieldValueRon::Vec3(v) => Self::Vec3(v),
+            FieldValueRon::Color(v) => Self::Color(v),
+            FieldValueRon::Text(v) => Self::Text(v),
+        }
+    }
+}
+
+impl From<lunar_core::behavior::FieldValue> for FieldValueRon {
+    fn from(value: lunar_core::behavior::FieldValue) -> Self {
+        use lunar_core::behavior::FieldValue;
+        match value {
+            FieldValue::Float(v) => Self::Float(v),
+            FieldValue::Int(v) => Self::Int(v),
+            FieldValue::Bool(v) => Self::Bool(v),
+            FieldValue::Vec3(v) => Self::Vec3(v),
+            FieldValue::Color(v) => Self::Color(v),
+            FieldValue::Text(v) => Self::Text(v),
+        }
+    }
 }
 
 /// reference to a mesh.
@@ -137,6 +191,7 @@ impl Default for EntityDefinition3d {
             spot_light: None,
             sub_scene: None,
             tags: Vec::new(),
+            behaviors: Vec::new(),
         }
     }
 }
@@ -335,6 +390,24 @@ impl SceneLoader3d {
 
             if !def.tags.is_empty() {
                 spawn.insert(SceneTags3d(def.tags.clone()));
+            }
+
+            if !def.behaviors.is_empty() {
+                // attach data-only pending refs; the BehaviorPlugin's instantiation
+                // system resolves them against the registry (Commands has no Res access).
+                let pending = def
+                    .behaviors
+                    .iter()
+                    .map(|reference| lunar_core::behavior::BehaviorRefData {
+                        id: reference.id.clone(),
+                        fields: reference
+                            .fields
+                            .iter()
+                            .map(|(name, value)| (name.clone(), value.clone().into()))
+                            .collect(),
+                    })
+                    .collect();
+                spawn.insert(lunar_core::behavior::PendingBehaviors(pending));
             }
 
             if let Some(ref sub) = def.sub_scene {
@@ -556,6 +629,106 @@ fn parse_hex_color(hex: &str) -> Option<Color> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_round_trips_behaviors() {
+        let mut def = EntityDefinition3d {
+            id: Some("npc".into()),
+            ..Default::default()
+        };
+        def.behaviors = vec![BehaviorRef {
+            id: "Patrol".into(),
+            fields: vec![("speed".into(), FieldValueRon::Float(2.5))],
+        }];
+        let scene = SceneDefinition3d {
+            name: "s".into(),
+            entities: vec![def],
+        };
+        let ron = scene.to_ron().unwrap();
+        let back = SceneDefinition3d::from_ron(&ron).unwrap();
+        assert_eq!(back.entities[0].behaviors[0].id, "Patrol");
+        assert_eq!(back.entities[0].behaviors[0].fields[0].0, "speed");
+        assert_eq!(
+            back.entities[0].behaviors[0].fields[0].1,
+            FieldValueRon::Float(2.5)
+        );
+    }
+
+    #[test]
+    fn loader_attaches_behaviors_from_registry() {
+        use bevy_ecs::system::RunSystemOnce;
+        use bevy_ecs::world::CommandQueue;
+        use lunar_core::behavior::{
+            Behavior, BehaviorRegistry, Behaviors, ExportedFields, FieldSchema, FieldValue,
+            PendingBehaviors, instantiate_pending_behaviors,
+        };
+
+        // a stub behavior the registry can produce
+        struct Patrol {
+            speed: f32,
+        }
+        impl ExportedFields for Patrol {
+            fn fields(&self) -> Vec<FieldSchema> {
+                Vec::new()
+            }
+            fn get_field(&self, _name: &str) -> Option<FieldValue> {
+                None
+            }
+            fn set_field(&mut self, name: &str, value: FieldValue) {
+                if name == "speed"
+                    && let FieldValue::Float(f) = value
+                {
+                    self.speed = f;
+                }
+            }
+        }
+        impl Behavior for Patrol {}
+
+        let mut world = World::new();
+        let mut registry = BehaviorRegistry::default();
+        registry.register("Patrol", || Box::new(Patrol { speed: 0.0 }));
+        world.insert_resource(registry);
+        world.insert_resource(MeshRegistry::default());
+
+        let mut def = EntityDefinition3d {
+            id: Some("npc".into()),
+            ..Default::default()
+        };
+        def.behaviors = vec![BehaviorRef {
+            id: "Patrol".into(),
+            fields: vec![("speed".into(), FieldValueRon::Float(3.0))],
+        }];
+        let scene = SceneDefinition3d {
+            name: "s".into(),
+            entities: vec![def],
+        };
+
+        // run spawn_scene through a command queue, then apply
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            let mut mesh_registry = MeshRegistry::default();
+            SceneLoader3d::spawn_scene(&mut commands, &mut mesh_registry, &scene, None);
+        }
+        queue.apply(&mut world);
+
+        // pending refs are attached, no live behaviors yet
+        let pending_count = world
+            .query::<&PendingBehaviors>()
+            .iter(&world)
+            .count();
+        assert_eq!(pending_count, 1);
+
+        // run the instantiation system so refs resolve against the registry
+        world
+            .run_system_once(instantiate_pending_behaviors)
+            .unwrap();
+
+        let mut query = world.query::<&Behaviors>();
+        let behaviors = query.iter(&world).next().expect("behaviors attached");
+        assert_eq!(behaviors.len(), 1);
+        assert_eq!(behaviors.ids().collect::<Vec<_>>(), vec!["Patrol"]);
+    }
 
     #[test]
     fn parse_empty_scene() {
