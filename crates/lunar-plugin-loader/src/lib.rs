@@ -32,6 +32,9 @@ use std::{
 use bevy_ecs::{prelude::Resource, world::World};
 use lunar_ffi::{LunarWorld, LunarSchedule};
 use lunar_core::{App, GamePlugin};
+use lunar_core::behavior::{
+    BehaviorRegistry, reinstantiate_behaviors, snapshot_behavior_fields,
+};
 
 // ── error type ────────────────────────────────────────────────────────────────
 
@@ -396,6 +399,66 @@ fn dispatch_ffi_update_hot(world: &mut World) {
     }
 
     lunar_ffi::dispatch_systems(world, LunarSchedule::Update);
+}
+
+// ── rust behavior dylib loader ──────────────────────────────────────────────────
+
+/// the registration entry point a rust behavior `cdylib` must export. it receives
+/// the live `BehaviorRegistry` and registers its behavior ids + factories into it.
+///
+/// ABI CAVEAT: `BehaviorRegistry` is not `repr(C)` and a cdylib statically links its
+/// own copy of `lunar-core`, so passing a `&mut BehaviorRegistry` across this boundary
+/// is fragile (rust has no stable ABI). it works only when both sides are built from
+/// the exact same `lunar-core` with the same toolchain and profile, and even then is
+/// not guaranteed. the production-safe design routes registration through a C-ABI shim
+/// (mirroring the C# `lunar_behavior_register` FFI). see the
+/// `behavior_dylib_reload` integration test header. TODO: replace with that shim.
+pub type RegisterBehaviorsFn = unsafe extern "C" fn(*mut BehaviorRegistry);
+
+/// loads and hot-reloads a rust behavior `cdylib`. like the NativeAOT C# path, old
+/// libraries are kept alive (each reload loads a fresh versioned copy) so code the
+/// running behaviors may still reference is never unmapped.
+#[derive(Resource, Default)]
+pub struct BehaviorDylibLoader {
+    libs: Vec<libloading::Library>,
+}
+
+impl BehaviorDylibLoader {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// load a behavior dylib and register its behaviors into the world's
+    /// `BehaviorRegistry` (inserted if absent).
+    pub fn load(&mut self, world: &mut World, path: &Path) -> Result<(), LoadError> {
+        world.get_resource_or_insert_with(BehaviorRegistry::default);
+        log::info!("behavior-dylib: loading {}", path.display());
+        // SAFETY: loading arbitrary code; the dylib must export the registration ABI
+        let lib = unsafe { libloading::Library::new(path) }.map_err(LoadError::DlOpen)?;
+        {
+            let register: libloading::Symbol<RegisterBehaviorsFn> =
+                unsafe { lib.get(b"lunar_register_behaviors\0") }.map_err(LoadError::MissingSymbol)?;
+            let registry_ptr =
+                world.resource_mut::<BehaviorRegistry>().into_inner() as *mut BehaviorRegistry;
+            unsafe { register(registry_ptr) };
+        }
+        self.libs.push(lib);
+        log::info!("behavior-dylib: loaded ok");
+        Ok(())
+    }
+
+    /// reload a behavior dylib, preserving exported field values across the swap:
+    /// snapshot live field values, load the new dylib (overwriting factories),
+    /// then re-create every behavior from the new factories and restore the values.
+    pub fn reload(&mut self, world: &mut World, path: &Path) -> Result<(), LoadError> {
+        let snapshot = snapshot_behavior_fields(world);
+        // load a versioned copy so dlopen returns a fresh mapping (same trick as C#)
+        let versioned = versioned_plugin_copy(path, self.libs.len())?;
+        self.load(world, &versioned)?;
+        reinstantiate_behaviors(world, snapshot);
+        log::info!("behavior-dylib: reload done");
+        Ok(())
+    }
 }
 
 // ── headless helper ───────────────────────────────────────────────────────────

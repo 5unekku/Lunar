@@ -279,6 +279,99 @@ pub fn instantiate_pending_behaviors(
 	}
 }
 
+/// snapshot of one behavior's id, exported field values, and started flag.
+/// used by hot reload to preserve tunable state across a dylib/assembly swap.
+pub struct BehaviorFieldSnapshot {
+	pub id: String,
+	pub fields: Vec<(String, FieldValue)>,
+	pub started: bool,
+}
+
+/// all behavior snapshots for one entity.
+pub struct EntityBehaviorSnapshot {
+	pub entity: Entity,
+	pub behaviors: Vec<BehaviorFieldSnapshot>,
+}
+
+/// capture every live behavior's exported field values, keyed by entity + id. call
+/// this before a hot reload so the new instances can be restored to the same state.
+pub fn snapshot_behavior_fields(world: &mut World) -> Vec<EntityBehaviorSnapshot> {
+	let mut entities: Vec<Entity> = Vec::new();
+	{
+		let mut query = world.query_filtered::<Entity, bevy_ecs::prelude::With<Behaviors>>();
+		for entity in query.iter(world) {
+			entities.push(entity);
+		}
+	}
+	let mut out = Vec::new();
+	for entity in entities {
+		let Some(behaviors) = world.entity(entity).get::<Behaviors>() else {
+			continue;
+		};
+		let mut snapshots = Vec::new();
+		for attached in behaviors.items() {
+			let fields = attached
+				.behavior
+				.fields()
+				.into_iter()
+				.filter_map(|schema| {
+					attached
+						.behavior
+						.get_field(&schema.name)
+						.map(|value| (schema.name, value))
+				})
+				.collect();
+			snapshots.push(BehaviorFieldSnapshot {
+				id: attached.id.clone(),
+				fields,
+				started: attached.started,
+			});
+		}
+		out.push(EntityBehaviorSnapshot {
+			entity,
+			behaviors: snapshots,
+		});
+	}
+	out
+}
+
+/// re-create behaviors from the (freshly re-registered) `BehaviorRegistry` and restore
+/// the snapshotted field values. the entity-to-id mapping survives via the snapshot, so
+/// identity is preserved across the reload. behaviors whose id is no longer registered
+/// are dropped with a warning.
+pub fn reinstantiate_behaviors(world: &mut World, snapshot: Vec<EntityBehaviorSnapshot>) {
+	if !world.contains_resource::<BehaviorRegistry>() {
+		log::warn!("reinstantiate_behaviors: no BehaviorRegistry resource, skipping");
+		return;
+	}
+	world.resource_scope(|world, registry: bevy_ecs::world::Mut<BehaviorRegistry>| {
+		for entity_snapshot in snapshot {
+			let mut behaviors = Behaviors::default();
+			for snapshot in entity_snapshot.behaviors {
+				match registry.create(&snapshot.id) {
+					Some(mut behavior) => {
+						for (name, value) in snapshot.fields {
+							behavior.set_field(&name, value);
+						}
+						behaviors.push(AttachedBehavior {
+							id: snapshot.id,
+							behavior,
+							started: snapshot.started,
+						});
+					}
+					None => log::warn!(
+						"reinstantiate_behaviors: id '{}' no longer registered, dropping",
+						snapshot.id
+					),
+				}
+			}
+			if let Ok(mut entity_mut) = world.get_entity_mut(entity_snapshot.entity) {
+				entity_mut.insert(behaviors);
+			}
+		}
+	});
+}
+
 fn dispatch_update_system(world: &mut World) {
 	dispatch_behaviors(world, BehaviorStage::Update);
 }
@@ -447,6 +540,64 @@ mod tests {
 		app.world_mut().entity_mut(entity).insert(behaviors);
 		despawn_with_behaviors(app.world_mut(), entity);
 		assert!(app.world_mut().get_resource::<DestroyLog>().unwrap().0);
+	}
+
+	struct Tunable {
+		speed: f32,
+	}
+	impl ExportedFields for Tunable {
+		fn fields(&self) -> Vec<FieldSchema> {
+			vec![FieldSchema {
+				name: "speed".into(),
+				kind: FieldKind::Float,
+			}]
+		}
+		fn get_field(&self, name: &str) -> Option<FieldValue> {
+			(name == "speed").then(|| FieldValue::Float(self.speed))
+		}
+		fn set_field(&mut self, name: &str, value: FieldValue) {
+			if name == "speed"
+				&& let FieldValue::Float(v) = value
+			{
+				self.speed = v;
+			}
+		}
+	}
+	impl Behavior for Tunable {}
+
+	#[test]
+	fn hot_reload_preserves_exported_fields() {
+		let mut world = World::new();
+		// v1 factory defaults speed to 0
+		let mut registry = BehaviorRegistry::default();
+		registry.register("Tunable", || Box::new(Tunable { speed: 0.0 }));
+		world.insert_resource(registry);
+
+		let entity = world.spawn_empty().id();
+		let mut behaviors = Behaviors::default();
+		behaviors.push(AttachedBehavior {
+			id: "Tunable".into(),
+			behavior: Box::new(Tunable { speed: 7.5 }),
+			started: true,
+		});
+		world.entity_mut(entity).insert(behaviors);
+
+		// snapshot, then re-register a fresh factory (the "reloaded" version)
+		let snapshot = snapshot_behavior_fields(&mut world);
+		world
+			.resource_mut::<BehaviorRegistry>()
+			.register("Tunable", || Box::new(Tunable { speed: 0.0 }));
+		reinstantiate_behaviors(&mut world, snapshot);
+
+		let behaviors = world.entity(entity).get::<Behaviors>().unwrap();
+		assert_eq!(behaviors.len(), 1);
+		let attached = &behaviors.items()[0];
+		assert!(attached.started, "started flag preserved");
+		assert_eq!(
+			attached.behavior.get_field("speed"),
+			Some(FieldValue::Float(7.5)),
+			"exported field value preserved across reload"
+		);
 	}
 
 	#[test]

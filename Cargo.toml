@@ -20,6 +20,7 @@ members = [
 		"crates/lunar-audio",
 		"bindings/c",
 		"crates/lunar-plugin-loader",
+		"crates/lunar-plugin-loader/fixture",
 	"crates/lunar-dotnet-host",
 		"xtask",
 		"tests/api_seal",
