@@ -18,3 +18,8 @@ quote = "1"
 proc-macro2 = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "webp"] }
 lunar-image = { path = "../lunar-image", version = "1.0.0" }
+
+[dev-dependencies]
+# the behavior derive emits paths to ::lunar_core::behavior, so the derive test
+# needs lunar-core in scope. game behavior crates likewise depend on lunar-core.
+lunar-core = { path = "../lunar-core", version = "1.0.0" }

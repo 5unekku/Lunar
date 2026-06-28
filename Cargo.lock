@@ -2300,6 +2300,7 @@ name = "lunar-macros"
 version = "1.0.0"
 dependencies = [
  "image",
+ "lunar-core",
  "lunar-image",
  "proc-macro2",
  "quote",

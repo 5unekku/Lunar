@@ -20,7 +20,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{DeriveInput, parse_macro_input};
+use syn::{Data, DeriveInput, Fields, parse_macro_input};
 
 // ── texture! ──────────────────────────────────────────────────────────────────
 
@@ -231,6 +231,165 @@ fn convert_to_li(
 	std::fs::write(dest, mi)
 		.map_err(|e| syn::Error::new(span, format!("failed to write cache: {e}")))?;
 	Ok(())
+}
+
+/// the field kinds the behavior derive understands, mapped from rust types.
+#[derive(Clone, Copy)]
+enum ExportKind {
+	Float,
+	IntI32,
+	IntI64,
+	Bool,
+	Vec3,
+	Color,
+	Text,
+}
+
+/// map a rust field type (rendered to a string) to an exported field kind.
+fn export_kind_for(type_text: &str) -> Option<ExportKind> {
+	// strip whitespace so `[f32 ; 3]` and `[f32;3]` both match
+	let normalized: String = type_text.chars().filter(|c| !c.is_whitespace()).collect();
+	match normalized.as_str() {
+		"f32" | "f64" => Some(ExportKind::Float),
+		"i32" | "u32" => Some(ExportKind::IntI32),
+		"i64" | "u64" | "usize" | "isize" => Some(ExportKind::IntI64),
+		"bool" => Some(ExportKind::Bool),
+		"[f32;3]" => Some(ExportKind::Vec3),
+		"[f32;4]" => Some(ExportKind::Color),
+		"String" => Some(ExportKind::Text),
+		_ => None,
+	}
+}
+
+/// Derive `ExportedFields` (the field surface of `Behavior`) from `#[export]`-tagged
+/// struct fields. an author writes `#[derive(Behavior)]` plus a separate
+/// `impl Behavior for T {}` (overriding only the lifecycle hooks they need).
+///
+/// supported field types: `f32`/`f64` (Float), `i32`/`u32` (Int), `i64`/`u64`/
+/// `usize`/`isize` (Int), `bool` (Bool), `[f32; 3]` (Vec3), `[f32; 4]` (Color),
+/// `String` (Text). fields without `#[export]` are ignored.
+///
+/// generated paths target `::lunar_core::behavior`, so a behavior crate depends on
+/// `lunar-core`.
+#[proc_macro_derive(Behavior, attributes(export))]
+pub fn derive_behavior(input: TokenStream) -> TokenStream {
+	let input = parse_macro_input!(input as DeriveInput);
+	let name = &input.ident;
+	let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
+
+	let Data::Struct(data) = &input.data else {
+		return syn::Error::new_spanned(&input, "derive(Behavior) only supports structs")
+			.to_compile_error()
+			.into();
+	};
+	let Fields::Named(named) = &data.fields else {
+		return syn::Error::new_spanned(&input, "derive(Behavior) needs named fields")
+			.to_compile_error()
+			.into();
+	};
+
+	let mut schema_entries = Vec::new();
+	let mut get_arms = Vec::new();
+	let mut set_arms = Vec::new();
+
+	for field in &named.named {
+		let has_export = field.attrs.iter().any(|attr| attr.path().is_ident("export"));
+		if !has_export {
+			continue;
+		}
+		let field_ident = field.ident.as_ref().unwrap();
+		let field_name = field_ident.to_string();
+		let field_type = &field.ty;
+		let type_text = quote!(#field_type).to_string();
+		let Some(kind) = export_kind_for(&type_text) else {
+			return syn::Error::new_spanned(
+				&field.ty,
+				"derive(Behavior): unsupported #[export] field type (use f32, i32, i64, bool, [f32;3], [f32;4], or String)",
+			)
+			.to_compile_error()
+			.into();
+		};
+
+		let kind_tokens = match kind {
+			ExportKind::Float => quote!(::lunar_core::behavior::FieldKind::Float),
+			ExportKind::IntI32 | ExportKind::IntI64 => {
+				quote!(::lunar_core::behavior::FieldKind::Int)
+			}
+			ExportKind::Bool => quote!(::lunar_core::behavior::FieldKind::Bool),
+			ExportKind::Vec3 => quote!(::lunar_core::behavior::FieldKind::Vec3),
+			ExportKind::Color => quote!(::lunar_core::behavior::FieldKind::Color),
+			ExportKind::Text => quote!(::lunar_core::behavior::FieldKind::Text),
+		};
+		schema_entries.push(quote! {
+			::lunar_core::behavior::FieldSchema {
+				name: #field_name.to_string(),
+				kind: #kind_tokens,
+			}
+		});
+
+		let get_expr = match kind {
+			ExportKind::Float => {
+				quote!(::lunar_core::behavior::FieldValue::Float(self.#field_ident as f32))
+			}
+			ExportKind::IntI32 | ExportKind::IntI64 => {
+				quote!(::lunar_core::behavior::FieldValue::Int(self.#field_ident as i64))
+			}
+			ExportKind::Bool => quote!(::lunar_core::behavior::FieldValue::Bool(self.#field_ident)),
+			ExportKind::Vec3 => quote!(::lunar_core::behavior::FieldValue::Vec3(self.#field_ident)),
+			ExportKind::Color => {
+				quote!(::lunar_core::behavior::FieldValue::Color(self.#field_ident))
+			}
+			ExportKind::Text => {
+				quote!(::lunar_core::behavior::FieldValue::Text(self.#field_ident.clone()))
+			}
+		};
+		get_arms.push(quote!(#field_name => Some(#get_expr),));
+
+		let set_body = match kind {
+			ExportKind::Float => quote! {
+				if let ::lunar_core::behavior::FieldValue::Float(v) = value { self.#field_ident = v as _; }
+			},
+			ExportKind::IntI32 | ExportKind::IntI64 => quote! {
+				if let ::lunar_core::behavior::FieldValue::Int(v) = value { self.#field_ident = v as _; }
+			},
+			ExportKind::Bool => quote! {
+				if let ::lunar_core::behavior::FieldValue::Bool(v) = value { self.#field_ident = v; }
+			},
+			ExportKind::Vec3 => quote! {
+				if let ::lunar_core::behavior::FieldValue::Vec3(v) = value { self.#field_ident = v; }
+			},
+			ExportKind::Color => quote! {
+				if let ::lunar_core::behavior::FieldValue::Color(v) = value { self.#field_ident = v; }
+			},
+			ExportKind::Text => quote! {
+				if let ::lunar_core::behavior::FieldValue::Text(v) = value { self.#field_ident = v; }
+			},
+		};
+		set_arms.push(quote!(#field_name => { #set_body },));
+	}
+
+	quote! {
+		impl #impl_generics ::lunar_core::behavior::ExportedFields
+			for #name #type_generics #where_clause
+		{
+			fn fields(&self) -> ::std::vec::Vec<::lunar_core::behavior::FieldSchema> {
+				::std::vec![ #(#schema_entries),* ]
+			}
+			fn get_field(&self, name: &str) -> ::std::option::Option<::lunar_core::behavior::FieldValue> {
+				match name {
+					#(#get_arms)*
+					_ => ::std::option::Option::None,
+				}
+			}
+			fn set_field(&mut self, name: &str, value: ::lunar_core::behavior::FieldValue) {
+				match name {
+					#(#set_arms)*
+					_ => {}
+				}
+			}
+		}
+	}
+	.into()
 }
 
 /// Derive `Component` for a type. Generates an `impl` of bevy_ecs's
