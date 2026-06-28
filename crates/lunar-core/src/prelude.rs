@@ -26,6 +26,10 @@ pub use lunar_math::{Color, Mat2, Mat3, Mat4, Rect, Transform, Vec2, Vec3, Vec4}
 
 // lunar-core types
 pub use crate::app::{App, GamePlugin, LoopConfig, Time};
+pub use crate::behavior::{
+	AttachedBehavior, Behavior, BehaviorContext, BehaviorPlugin, BehaviorRegistry, BehaviorStage,
+	Behaviors, ExportedFields, FieldKind, FieldSchema, FieldValue,
+};
 pub use crate::engine::Engine;
 pub use crate::error::{EngineError, EngineResult, ErrorEvent, ErrorSource};
 pub use crate::game_loop::{GameLoop, TickRate};

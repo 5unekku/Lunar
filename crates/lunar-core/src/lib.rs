@@ -33,6 +33,7 @@ pub use bevy_ecs;
 pub use lunar_math;
 
 mod app;
+pub mod behavior;
 mod command;
 mod engine;
 mod error;
