@@ -79,6 +79,10 @@ name = "lunar-web"
 path = "src/web.rs"
 
 [[example]]
+name = "headless_probe"
+path = "examples/headless_probe/main.rs"
+
+[[example]]
 name = "platform_demo"
 path = "examples/platform_demo/main.rs"
 
@@ -92,6 +96,8 @@ path = "examples/platform_demo_cs/main.rs"
 
 [dev-dependencies]
 lunar-ffi = { path = "bindings/c" }
+# used by the headless_probe example to build a wgpu instance for off-screen rendering.
+wgpu = { workspace = true }
 
 # plugin-loader is libloading-based and cannot compile on bare wasm. it is only
 # used by the platform_demo_cs example (C# scripting, which does not run on wasm
