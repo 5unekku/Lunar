@@ -140,6 +140,9 @@ impl PluginLoader {
         let version = libs.len();
 
         log::info!("hot reload: loading nativeaot version {version}");
+        // snapshot per-entity behavior field values so they survive the swap. the new
+        // plugin Init re-registers behavior factories; reinstantiate restores state.
+        let behavior_snapshot = snapshot_behavior_fields(world);
         lunar_ffi::clear_schedule(world, LunarSchedule::Update);
         lunar_ffi::clear_schedule(world, LunarSchedule::FixedUpdate);
         lunar_ffi::clear_schedule(world, LunarSchedule::Shutdown);
@@ -157,6 +160,11 @@ impl PluginLoader {
         }
         libs.push(lib);
 
+        // re-create behaviors from the freshly re-registered factories with restored fields.
+        // nativeaot keeps old libraries mapped, so dropping the old managed instances here
+        // is safe (their runtime is still alive).
+        reinstantiate_behaviors(world, behavior_snapshot);
+
         lunar_ffi::set_is_reload(world, false);
         log::info!("hot reload: done (nativeaot version {version})");
         Ok(())
@@ -172,6 +180,9 @@ impl PluginLoader {
         let host_reload = *host_reload;
 
         log::info!("hot reload: reloading via CoreCLR");
+        // snapshot behavior field values before the assembly swap (the live managed
+        // instances are still valid here), restore after re-registration below.
+        let behavior_snapshot = snapshot_behavior_fields(world);
         lunar_ffi::clear_schedule(world, LunarSchedule::Update);
         lunar_ffi::clear_schedule(world, LunarSchedule::FixedUpdate);
         lunar_ffi::clear_schedule(world, LunarSchedule::Shutdown);
@@ -180,6 +191,15 @@ impl PluginLoader {
         let path_cstr = path_to_cstr(path)?;
         let world_ptr = world as *mut World as isize;
         unsafe { host_reload(world_ptr, path_cstr.as_ptr()) };
+
+        // re-create behaviors from the reloaded plugin's factories with restored fields.
+        // CAVEAT: host_reload has already unloaded the old AssemblyLoadContext, so the
+        // old CsBehavior boxes dropped inside reinstantiate hold GCHandles into a gone
+        // ALC. for fully clean teardown the old managed handles should be freed before
+        // the ALC unload (inside PluginHost.Reload, keyed by the snapshot). TODO: thread
+        // the pre-unload handle disposal through the managed host. covered safely on the
+        // nativeaot path where old libraries stay mapped.
+        reinstantiate_behaviors(world, behavior_snapshot);
 
         lunar_ffi::set_is_reload(world, false);
         log::info!("hot reload: done (coreclr)");
