@@ -163,6 +163,89 @@ internal static unsafe partial class LunarNative
     [LibraryImport("lunar_ffi", EntryPoint = "lunar_is_reload")]
     [return: MarshalAs(UnmanagedType.U1)]
     internal static partial bool LunarIsReload(LunarWorld* world);
+
+    // ── per-entity behaviors ───────────────────────────────────────────────────
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_behavior_register")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool LunarBehaviorRegister(
+        LunarWorld* world, byte* id,
+        delegate* unmanaged[Cdecl]<byte*, ulong> factory,
+        delegate* unmanaged[Cdecl]<ulong, LunarWorld*, uint, uint, void> lifecycle,
+        delegate* unmanaged[Cdecl]<ulong, uint> fieldCount,
+        delegate* unmanaged[Cdecl]<ulong, uint, LunarFieldSchema*, byte> fieldSchema,
+        delegate* unmanaged[Cdecl]<ulong, byte*, LunarFieldValue*, byte> getField,
+        delegate* unmanaged[Cdecl]<ulong, byte*, LunarFieldValue*, byte> setField,
+        delegate* unmanaged[Cdecl]<ulong, void> dropInstance);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_behavior_attach")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool LunarBehaviorAttach(LunarWorld* world, uint entity, byte* id);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_behavior_detach")]
+    internal static partial uint LunarBehaviorDetach(LunarWorld* world, uint entity, byte* id);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_behavior_count")]
+    internal static partial uint LunarBehaviorCount(LunarWorld* world, uint entity);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_behavior_field_count")]
+    internal static partial uint LunarBehaviorFieldCount(
+        LunarWorld* world, uint entity, uint behaviorIndex);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_behavior_field_schema")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool LunarBehaviorFieldSchema(
+        LunarWorld* world, uint entity, uint behaviorIndex, uint fieldIndex,
+        LunarFieldSchema* outSchema);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_behavior_get_field")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool LunarBehaviorGetField(
+        LunarWorld* world, uint entity, uint behaviorIndex, byte* name,
+        LunarFieldValue* outValue);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_behavior_set_field")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool LunarBehaviorSetField(
+        LunarWorld* world, uint entity, uint behaviorIndex, byte* name,
+        LunarFieldValue* value);
+
+    // ── behavior event channels ────────────────────────────────────────────────
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_event_emit")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool LunarEventEmit(
+        LunarWorld* world, byte* channel, byte* payload, nuint len);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_event_count")]
+    internal static partial uint LunarEventCount(LunarWorld* world, byte* channel);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_event_get")]
+    internal static partial nint LunarEventGet(
+        LunarWorld* world, byte* channel, uint index, byte* outBuffer, nuint capacity);
+
+    [LibraryImport("lunar_ffi", EntryPoint = "lunar_event_clear")]
+    internal static partial void LunarEventClear(LunarWorld* world, byte* channel);
+}
+
+/// <summary>tagged-union behavior field value, matching the FFI LunarFieldValue.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct LunarFieldValue
+{
+    public uint Kind;
+    public float FloatValue;
+    public long IntValue;
+    public byte BoolValue;
+    public fixed float Vec[4];
+    public byte* Text;
+}
+
+/// <summary>exported-field schema entry, matching the FFI LunarFieldSchema.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct LunarFieldSchema
+{
+    public fixed byte Name[64];
+    public uint Kind;
 }
 
 /// <summary>

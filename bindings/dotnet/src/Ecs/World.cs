@@ -171,6 +171,90 @@ public unsafe ref struct World
     public void UnregisterSystem(uint id) =>
         LunarHandles.UnregisterSystem(_handle, id);
 
+    // ── per-entity behaviors ──────────────────────────────────────────────────
+
+    static byte[] Utf8(string value)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(value);
+        var terminated = new byte[bytes.Length + 1];
+        Array.Copy(bytes, terminated, bytes.Length);
+        return terminated;
+    }
+
+    /// <summary>register a behavior type under a stable id so it can be attached or
+    /// loaded from a scene. call once (e.g. from your plugin's Init).</summary>
+    public void RegisterBehavior<T>(string id) where T : IBehavior, new() =>
+        BehaviorRuntime.Register(_handle, id, static () => new T());
+
+    /// <summary>attach a registered behavior to an entity at runtime.</summary>
+    public bool AttachBehavior(Entity entity, string id)
+    {
+        fixed (byte* idPtr = Utf8(id))
+            return LunarNative.LunarBehaviorAttach(_handle, entity.Id, idPtr);
+    }
+
+    /// <summary>detach every behavior with the given id from an entity, firing
+    /// OnDestroy for each. returns the number removed.</summary>
+    public uint DetachBehavior(Entity entity, string id)
+    {
+        fixed (byte* idPtr = Utf8(id))
+            return LunarNative.LunarBehaviorDetach(_handle, entity.Id, idPtr);
+    }
+
+    /// <summary>number of behaviors attached to an entity.</summary>
+    public uint BehaviorCount(Entity entity) =>
+        LunarNative.LunarBehaviorCount(_handle, entity.Id);
+
+    /// <summary>number of exported fields on the behavior at <paramref name="behaviorIndex"/>.</summary>
+    public uint BehaviorFieldCount(Entity entity, uint behaviorIndex) =>
+        LunarNative.LunarBehaviorFieldCount(_handle, entity.Id, behaviorIndex);
+
+    /// <summary>read the schema of one exported field on a behavior.</summary>
+    public bool TryGetBehaviorFieldSchema(
+        Entity entity, uint behaviorIndex, uint fieldIndex, out string name, out FieldKind kind)
+    {
+        LunarFieldSchema schema = default;
+        if (!LunarNative.LunarBehaviorFieldSchema(
+                _handle, entity.Id, behaviorIndex, fieldIndex, &schema))
+        {
+            name = "";
+            kind = FieldKind.Float;
+            return false;
+        }
+        name = Marshal.PtrToStringUTF8((nint)schema.Name) ?? "";
+        kind = (FieldKind)schema.Kind;
+        return true;
+    }
+
+    /// <summary>read an exported field value by name from a behavior.</summary>
+    public bool TryGetBehaviorField(
+        Entity entity, uint behaviorIndex, string name, out FieldValue value)
+    {
+        LunarFieldValue native = default;
+        fixed (byte* namePtr = Utf8(name))
+        {
+            if (!LunarNative.LunarBehaviorGetField(
+                    _handle, entity.Id, behaviorIndex, namePtr, &native))
+            {
+                value = FieldValue.OfFloat(0);
+                return false;
+            }
+        }
+        value = BehaviorRuntime.FromNative(&native);
+        return true;
+    }
+
+    /// <summary>write an exported field value by name on a behavior.</summary>
+    public bool SetBehaviorField(
+        Entity entity, uint behaviorIndex, string name, in FieldValue value)
+    {
+        LunarFieldValue native = default;
+        BehaviorRuntime.ToNative(value, &native);
+        fixed (byte* namePtr = Utf8(name))
+            return LunarNative.LunarBehaviorSetField(
+                _handle, entity.Id, behaviorIndex, namePtr, &native);
+    }
+
     // ── scene setup ───────────────────────────────────────────────────────────
 
     /// <summary>lock or release the cursor.</summary>
