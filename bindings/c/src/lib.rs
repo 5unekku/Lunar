@@ -54,6 +54,20 @@ unsafe fn world_from_ffi<'a>(world: *mut LunarWorld) -> &'a mut World {
     unsafe { &mut *(world as *mut World) }
 }
 
+/// resolve a bare u32 entity index to the entity currently occupying that slot.
+///
+/// C handles carry no generation, so this resolves to the slot's CURRENT
+/// occupant: a live entity in a reused slot stays reachable (a placeholder
+/// built with `Entity::from_raw_u32` would carry generation FIRST and fail
+/// every lookup after the first reuse). the flip side is that a stale handle
+/// held across a despawn aliases whatever entity reuses the slot, which is
+/// the standard contract for index-based script handles.
+#[inline]
+fn entity_from_index(world: &World, index: LunarEntity) -> Option<Entity> {
+    let index = bevy_ecs::entity::EntityIndex::from_raw_u32(index)?;
+    Some(world.entities().resolve_from_index(index))
+}
+
 // ─── C integer handle types ───────────────────────────────────────────────────
 
 /// entity identifier: index into the world's entity table.
@@ -262,7 +276,7 @@ pub unsafe extern "C" fn lunar_spawn(world: *mut LunarWorld) -> LunarEntity {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_despawn(world: *mut LunarWorld, entity: LunarEntity) {
     let world = unsafe { world_from_ffi(world) };
-    let Some(e) = Entity::from_raw_u32(entity) else { return };
+    let Some(e) = entity_from_index(world, entity) else { return };
     world.despawn(e);
 }
 
@@ -274,7 +288,7 @@ pub unsafe extern "C" fn lunar_despawn(world: *mut LunarWorld, entity: LunarEnti
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_alive(world: *mut LunarWorld, entity: LunarEntity) -> bool {
     let world = unsafe { world_from_ffi(world) };
-    let Some(e) = Entity::from_raw_u32(entity) else { return false };
+    let Some(e) = entity_from_index(world, entity) else { return false };
     world.get_entity(e).is_ok()
 }
 
@@ -387,7 +401,7 @@ pub unsafe extern "C" fn lunar_component_insert(
     entity:       LunarEntity,
     component_id: LunarComponentId,
     data:         *const c_void,
-    _size:        usize,
+    size:         usize,
 ) {
     let world = unsafe { world_from_ffi(world) };
 
@@ -402,7 +416,16 @@ pub unsafe extern "C" fn lunar_component_insert(
         }
     };
 
-    let Some(entity) = Entity::from_raw_u32(entity) else { return };
+    // reject a size mismatch instead of trusting the caller: insert_by_id copies
+    // layout.size() bytes from `data`, so a short caller buffer would be read out
+    // of bounds (and an oversized one silently truncated).
+    let expected = world.components().get_info(comp_id).map(|info| info.layout().size());
+    if expected != Some(size) {
+        log::warn!("ffi: lunar_component_insert: size {size} != registered {expected:?} for component id {component_id}");
+        return;
+    }
+
+    let Some(entity) = entity_from_index(world, entity) else { return };
     let Ok(mut entity_mut) = world.get_entity_mut(entity) else { return };
 
     // SAFETY: data is a valid pointer to a value matching the component layout.
@@ -427,7 +450,7 @@ pub unsafe extern "C" fn lunar_component_remove(
         let reg = world.resource::<FfiRegistry>();
         match reg.component_ids.get(&component_id).copied() { Some(id) => id, None => return }
     };
-    let Some(entity) = Entity::from_raw_u32(entity) else { return };
+    let Some(entity) = entity_from_index(world, entity) else { return };
     let Ok(mut entity_mut) = world.get_entity_mut(entity) else { return };
     entity_mut.remove_by_id(comp_id);
 }
@@ -448,7 +471,7 @@ pub unsafe extern "C" fn lunar_component_has(
         let reg = world.resource::<FfiRegistry>();
         match reg.component_ids.get(&component_id).copied() { Some(id) => id, None => return false }
     };
-    let Some(entity) = Entity::from_raw_u32(entity) else { return false };
+    let Some(entity) = entity_from_index(world, entity) else { return false };
     match world.get_entity(entity) {
         Ok(entity_ref) => entity_ref.contains_id(comp_id),
         Err(_) => false,
@@ -475,7 +498,7 @@ pub unsafe extern "C" fn lunar_component_get(
         let reg = world.resource::<FfiRegistry>();
         match reg.component_ids.get(&component_id).copied() { Some(id) => id, None => return null() }
     };
-    let Some(entity) = Entity::from_raw_u32(entity) else { return null() };
+    let Some(entity) = entity_from_index(world, entity) else { return null() };
     let Ok(entity_ref) = world.get_entity(entity) else { return null() };
     match entity_ref.get_by_id(comp_id) {
         Ok(ptr) => ptr.as_ptr() as *const c_void,
@@ -502,7 +525,7 @@ pub unsafe extern "C" fn lunar_component_get_mut(
         let reg = world.resource::<FfiRegistry>();
         match reg.component_ids.get(&component_id).copied() { Some(id) => id, None => return null_mut() }
     };
-    let Some(entity) = Entity::from_raw_u32(entity) else { return null_mut() };
+    let Some(entity) = entity_from_index(world, entity) else { return null_mut() };
     let Ok(mut entity_mut) = world.get_entity_mut(entity) else { return null_mut() };
     match entity_mut.get_mut_by_id(comp_id) {
         Ok(mut_untyped) => mut_untyped.into_inner().as_ptr() as *mut c_void,
@@ -526,7 +549,7 @@ pub unsafe extern "C" fn lunar_get_transform3d(
     out:    *mut LunarTransform3d,
 ) -> bool {
     let world = unsafe { world_from_ffi(world) };
-    let Some(entity) = Entity::from_raw_u32(entity) else { return false };
+    let Some(entity) = entity_from_index(world, entity) else { return false };
     let Ok(entity_ref) = world.get_entity(entity) else { return false };
     let Some(t) = entity_ref.get::<LocalTransform3d>() else { return false };
     unsafe {
@@ -551,7 +574,7 @@ pub unsafe extern "C" fn lunar_set_transform3d(
     value:  *const LunarTransform3d,
 ) -> bool {
     let world = unsafe { world_from_ffi(world) };
-    let Some(entity) = Entity::from_raw_u32(entity) else { return false };
+    let Some(entity) = entity_from_index(world, entity) else { return false };
     let Ok(mut entity_mut) = world.get_entity_mut(entity) else { return false };
     let Some(mut t) = entity_mut.get_mut::<LocalTransform3d>() else { return false };
     let v = unsafe { &*value };
@@ -575,7 +598,7 @@ pub unsafe extern "C" fn lunar_get_transform2d(
     out:    *mut LunarTransform2d,
 ) -> bool {
     let world = unsafe { world_from_ffi(world) };
-    let Some(entity) = Entity::from_raw_u32(entity) else { return false };
+    let Some(entity) = entity_from_index(world, entity) else { return false };
     let Ok(entity_ref) = world.get_entity(entity) else { return false };
     let Some(t) = entity_ref.get::<LocalTransform>() else { return false };
     unsafe {
@@ -600,7 +623,7 @@ pub unsafe extern "C" fn lunar_set_transform2d(
     value:  *const LunarTransform2d,
 ) -> bool {
     let world = unsafe { world_from_ffi(world) };
-    let Some(entity) = Entity::from_raw_u32(entity) else { return false };
+    let Some(entity) = entity_from_index(world, entity) else { return false };
     let Ok(mut entity_mut) = world.get_entity_mut(entity) else { return false };
     let Some(mut t) = entity_mut.get_mut::<LocalTransform>() else { return false };
     let v = unsafe { &*value };
@@ -1466,7 +1489,7 @@ pub unsafe extern "C" fn lunar_behavior_attach(
     }
     let id_string = unsafe { CStr::from_ptr(id) }.to_string_lossy().into_owned();
     let world = unsafe { world_from_ffi(world) };
-    let Some(entity) = Entity::from_raw_u32(entity) else {
+    let Some(entity) = entity_from_index(world, entity) else {
         return false;
     };
     let Some(behavior) = world
@@ -1508,7 +1531,7 @@ pub unsafe extern "C" fn lunar_behavior_detach(
     }
     let id_string = unsafe { CStr::from_ptr(id) }.to_string_lossy().into_owned();
     let world = unsafe { world_from_ffi(world) };
-    let Some(entity) = Entity::from_raw_u32(entity) else {
+    let Some(entity) = entity_from_index(world, entity) else {
         return 0;
     };
     let Some(mut items) = world
@@ -1544,7 +1567,7 @@ pub unsafe extern "C" fn lunar_behavior_detach(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_behavior_count(world: *mut LunarWorld, entity: LunarEntity) -> u32 {
     let world = unsafe { world_from_ffi(world) };
-    let Some(entity) = Entity::from_raw_u32(entity) else {
+    let Some(entity) = entity_from_index(world, entity) else {
         return 0;
     };
     world
@@ -1565,7 +1588,7 @@ pub unsafe extern "C" fn lunar_behavior_field_count(
     behavior_index: u32,
 ) -> u32 {
     let world = unsafe { world_from_ffi(world) };
-    let Some(entity) = Entity::from_raw_u32(entity) else {
+    let Some(entity) = entity_from_index(world, entity) else {
         return 0;
     };
     let Some(behaviors) = world
@@ -1597,7 +1620,7 @@ pub unsafe extern "C" fn lunar_behavior_field_schema(
         return false;
     }
     let world = unsafe { world_from_ffi(world) };
-    let Some(entity) = Entity::from_raw_u32(entity) else {
+    let Some(entity) = entity_from_index(world, entity) else {
         return false;
     };
     let Some(behaviors) = world
@@ -1637,7 +1660,7 @@ pub unsafe extern "C" fn lunar_behavior_get_field(
     }
     let field_name = unsafe { CStr::from_ptr(name) }.to_string_lossy().into_owned();
     let world = unsafe { world_from_ffi(world) };
-    let Some(entity) = Entity::from_raw_u32(entity) else {
+    let Some(entity) = entity_from_index(world, entity) else {
         return false;
     };
     let Some(behaviors) = world
@@ -1677,7 +1700,7 @@ pub unsafe extern "C" fn lunar_behavior_set_field(
         return false;
     };
     let world = unsafe { world_from_ffi(world) };
-    let Some(entity) = Entity::from_raw_u32(entity) else {
+    let Some(entity) = entity_from_index(world, entity) else {
         return false;
     };
     let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
