@@ -1348,6 +1348,74 @@ struct DetailSpriteEntry {
 	atlas_key: (u32, bool),
 }
 
+/// cached query states for the per-frame world reads.
+///
+/// `World::query` builds a fresh `QueryState` on every call, re-matching every
+/// archetype in the world (and allocating the matched-archetype list). these
+/// persist across frames so only archetypes created since the last frame are
+/// matched, inside `iter`'s incremental update. built lazily on the first
+/// rendered frame (the constructors have no world).
+pub(crate) struct FrameQueries {
+	pub(crate) dir_lights: QueryState<(&'static DirectionalLight, &'static WorldTransform3d)>,
+	pub(crate) point_lights: QueryState<(&'static PointLight, &'static WorldTransform3d)>,
+	pub(crate) surface_shaders: QueryState<(
+		&'static Mesh3d,
+		&'static SurfaceShader,
+		&'static WorldTransform3d,
+		&'static ComputedVisibility,
+	)>,
+	pub(crate) cullables: QueryState<(
+		Entity,
+		&'static Mesh3d,
+		&'static Material3d,
+		&'static WorldTransform3d,
+		&'static ComputedVisibility,
+		Option<&'static Aabb3d>,
+		Option<&'static MeshLod>,
+		Option<&'static MeshImpostor>,
+		Option<&'static Area>,
+		Option<&'static Lightmap>,
+		Option<&'static DirectionalLightmap>,
+		Option<&'static PrevWorldTransform3d>,
+	)>,
+	pub(crate) static_meshes: QueryState<(Entity, &'static StaticMesh)>,
+	pub(crate) terrains: QueryState<(Entity, &'static Terrain, &'static WorldTransform3d)>,
+	pub(crate) waters: QueryState<(&'static Water, &'static Mesh3d, &'static WorldTransform3d)>,
+	pub(crate) decals: QueryState<(&'static Decal, &'static WorldTransform3d)>,
+	pub(crate) emitters: QueryState<(&'static ParticleEmitter, &'static WorldTransform3d)>,
+	pub(crate) detail_densities: QueryState<(
+		Entity,
+		&'static DetailDensity,
+		&'static WorldTransform3d,
+		&'static ComputedVisibility,
+	)>,
+	pub(crate) shadow_casters: QueryState<(Entity, &'static ComputedVisibility, &'static ShadowCaster)>,
+	pub(crate) planar_reflectors: QueryState<(
+		&'static PlanarReflector,
+		&'static WorldTransform3d,
+		&'static ComputedVisibility,
+	)>,
+}
+
+impl FrameQueries {
+	pub(crate) fn new(world: &mut World) -> Self {
+		Self {
+			dir_lights: world.query(),
+			point_lights: world.query(),
+			surface_shaders: world.query(),
+			cullables: world.query(),
+			static_meshes: world.query(),
+			terrains: world.query(),
+			waters: world.query(),
+			decals: world.query(),
+			emitters: world.query(),
+			detail_densities: world.query(),
+			shadow_casters: world.query(),
+			planar_reflectors: world.query(),
+		}
+	}
+}
+
 /// the 3d rendering engine. owns the wgpu device, queue, and surface.
 ///
 /// inserted as a resource by [`RenderPlugin3d`]. game code should not
@@ -1355,6 +1423,8 @@ struct DetailSpriteEntry {
 #[derive(Resource)]
 #[allow(dead_code)]
 pub struct RenderEngine3d {
+	/// cached per-frame query states; `None` until the first rendered frame.
+	pub(crate) queries: Option<FrameQueries>,
 	device: wgpu::Device,
 	queue: wgpu::Queue,
 	/// window swapchain surface. `None` in headless mode, where final output

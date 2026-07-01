@@ -526,7 +526,7 @@ impl RenderEngine3d {
 			}
 			let mut terrain_snaps: Vec<TerrainSnap> = Vec::new();
 			{
-				let mut terrain_query = world.query::<(Entity, &Terrain, &WorldTransform3d)>();
+				let terrain_query = &mut self.queries.as_mut().unwrap().terrains;
 				for (entity, terrain, wt) in terrain_query.iter(world) {
 					terrain_snaps.push(TerrainSnap {
 						entity,
@@ -670,7 +670,7 @@ impl RenderEngine3d {
 		if self.render_tier != RenderTier::LowGles {
 			let width = self.surface_config.width as f32;
 			let height = self.surface_config.height as f32;
-			let mut water_query = world.query::<(&Water, &Mesh3d, &WorldTransform3d)>();
+			let water_query = &mut self.queries.as_mut().unwrap().waters;
 			let water_entities: Vec<(Water, u32, WorldTransform3d)> = water_query
 				.iter(world)
 				.map(|(w, m, t)| (*w, m.0.id(), *t))
@@ -770,7 +770,7 @@ impl RenderEngine3d {
 			let inv_vp_cols = inv_vp.to_cols_array();
 			let vp_cols = view_proj.to_cols_array();
 
-			let mut decal_query = world.query::<(&Decal, &WorldTransform3d)>();
+			let decal_query = &mut self.queries.as_mut().unwrap().decals;
 			let decals: Vec<(Decal, WorldTransform3d)> =
 				decal_query.iter(world).map(|(d, wt)| (*d, *wt)).collect();
 
@@ -822,7 +822,7 @@ impl RenderEngine3d {
 
 			// gather emitters from ECS and manage CPU-side spawn (reused scratch)
 			self.particle_spawn_scratch.clear();
-			let mut emitter_query = world.query::<(&ParticleEmitter, &WorldTransform3d)>();
+			let emitter_query = &mut self.queries.as_mut().unwrap().emitters;
 			for (emitter, wt) in emitter_query.iter(world) {
 				if !emitter.active {
 					continue;
@@ -982,12 +982,7 @@ impl RenderEngine3d {
 		// ── detail sprite pass ────────────────────────────────────────────
 		// gpu-driven billboarded ground cover: compute generates instances, render draws them.
 		{
-			let mut detail_query = world.query::<(
-				bevy_ecs::entity::Entity,
-				&DetailDensity,
-				&WorldTransform3d,
-				&ComputedVisibility,
-			)>();
+			let detail_query = &mut self.queries.as_mut().unwrap().detail_densities;
 			let detail_entities: Vec<(bevy_ecs::entity::Entity, DetailDensity, f32)> = detail_query
 				.iter(world)
 				.filter(|(_, _, _, vis)| vis.0)
@@ -1230,7 +1225,7 @@ impl RenderEngine3d {
 		// reused scratch: visible shadow-caster entity set, then the (mesh_id, draw index) list
 		self.shadow_entities_scratch.clear();
 		{
-			let mut q = world.query::<(Entity, &ComputedVisibility, &ShadowCaster)>();
+			let q = &mut self.queries.as_mut().unwrap().shadow_casters;
 			for (e, vis, _) in q.iter(world) {
 				if vis.0 {
 					self.shadow_entities_scratch.insert(e);

@@ -577,20 +577,7 @@ impl RenderEngine3d {
 			self.draw_scratch.reserve(64);
 		}
 		{
-			let mut q = world.query::<(
-				Entity,
-				&Mesh3d,
-				&Material3d,
-				&WorldTransform3d,
-				&ComputedVisibility,
-				Option<&Aabb3d>,
-				Option<&MeshLod>,
-				Option<&MeshImpostor>,
-				Option<&Area>,
-				Option<&Lightmap>,
-				Option<&DirectionalLightmap>,
-				Option<&PrevWorldTransform3d>,
-			)>();
+			let q = &mut self.queries.as_mut().unwrap().cullables;
 			q.iter(world)
 				.filter(|(entity, _, _, _, vis, aabb, _, _, area, _, _, _)| {
 					if !vis.0 {
@@ -687,7 +674,7 @@ impl RenderEngine3d {
 
 		// collect static entities and assign stable slot ids (reuses static_entities_scratch)
 		{
-			let mut q = world.query::<(Entity, &StaticMesh)>();
+			let q = &mut self.queries.as_mut().unwrap().static_meshes;
 			// fast unchanged-set check: one pass over StaticMesh. if every entity already owns a
 			// slot and the counts match, the set is identical to last frame (subset of equal size
 			// ⇒ equal set), so skip the hashset rebuild + retain + max-scan + slot assignment.

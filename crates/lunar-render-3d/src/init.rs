@@ -3750,6 +3750,7 @@ impl RenderEngine3d {
 			impostor_scratch: Vec::new(),
 			uniform_staging,
 			point_light_scratch: Vec::new(),
+			queries: None,
 			bsp_visible_scratch: HashSet::default(),
 			bsp_visible_active: false,
 			portal_visible_scratch: HashSet::default(),

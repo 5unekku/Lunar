@@ -1112,8 +1112,7 @@ impl RenderEngine3d {
 		{
 			let mut reflector: Option<(f32, u32)> = None; // (plane_y, resolution_divisor)
 			{
-				let mut rq =
-					world.query::<(&PlanarReflector, &WorldTransform3d, &ComputedVisibility)>();
+				let rq = &mut self.queries.as_mut().unwrap().planar_reflectors;
 				for (refl, wt, vis) in rq.iter(world) {
 					if !vis.0 {
 						continue;

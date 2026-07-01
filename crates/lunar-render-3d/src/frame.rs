@@ -11,6 +11,12 @@ impl RenderEngine3d {
 	// iterator adapters, so the range-loop/counter lints are intentionally allowed.
 	#[allow(clippy::needless_range_loop, clippy::explicit_counter_loop)]
 	pub(crate) fn render_frame(&mut self, world: &mut World) -> u32 {
+		// build the cached query states on the first frame; every later frame
+		// reuses them (only new archetypes get matched, inside iter).
+		if self.queries.is_none() {
+			self.queries = Some(FrameQueries::new(world));
+		}
+
 		// ── gather camera: copy immediately so world borrows end here ────
 		let cam_entity = {
 			let active = world.resource::<ActiveCamera3d>();
@@ -243,7 +249,7 @@ impl RenderEngine3d {
 		let mut dir_enabled: u32 = 0;
 		let mut dir_casts_shadows = false;
 		{
-			let mut dq = world.query::<(&DirectionalLight, &WorldTransform3d)>();
+			let dq = &mut self.queries.as_mut().unwrap().dir_lights;
 			if let Some((dl, wt)) = dq.iter(world).next() {
 				dir_color = dl.color;
 				dir_illuminance = dl.illuminance;
@@ -257,7 +263,7 @@ impl RenderEngine3d {
 		self.point_light_scratch.clear();
 		{
 			let cam_pos_a = Vec3A::from(cam_pos);
-			let mut pq = world.query::<(&PointLight, &WorldTransform3d)>();
+			let pq = &mut self.queries.as_mut().unwrap().point_lights;
 			pq.iter(world).for_each(|(pl, wt)| {
 				// decorate with distance² (computed once, SIMD Vec3A) so the sort never recomputes it
 				let dist_sq = (Vec3A::from(wt.translation) - cam_pos_a).length_squared();
@@ -377,12 +383,7 @@ impl RenderEngine3d {
 		self.surface_scratch.clear();
 		{
 			let elapsed = world.resource::<lunar_core::Time>().elapsed_seconds();
-			let mut sq = world.query::<(
-				&Mesh3d,
-				&SurfaceShader,
-				&WorldTransform3d,
-				&ComputedVisibility,
-			)>();
+			let sq = &mut self.queries.as_mut().unwrap().surface_shaders;
 			let surface_slot_base = ENTITY_SLOT_START + self.draw_scratch.len();
 			let mut surface_idx = 0usize;
 			for (mesh, surf, wt, vis) in sq.iter(world) {
