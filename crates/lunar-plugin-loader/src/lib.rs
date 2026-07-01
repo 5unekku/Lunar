@@ -229,10 +229,13 @@ fn mtime(path: &Path) -> Option<SystemTime> {
 /// copy `src` to a per-version temp path so each reload is a distinct shared object.
 /// linux dlopen returns the same handle for the same path; a distinct path forces a
 /// fresh mapping and a separate NativeAOT runtime instance, avoiding the dlclose bug.
+/// the directory is keyed by pid: version counters are per-process, so two engine
+/// processes (editor + game) reloading the same plugin would otherwise overwrite each
+/// other's still-mapped `.so` in place (SIGBUS in the other process).
 fn versioned_plugin_copy(src: &Path, version: usize) -> Result<PathBuf, LoadError> {
     let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("plugin");
     let ext  = src.extension().and_then(|s| s.to_str()).unwrap_or("so");
-    let dir  = std::env::temp_dir().join("lunar_cs_hot");
+    let dir  = std::env::temp_dir().join(format!("lunar_cs_hot_{}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(LoadError::Copy)?;
     let dest = dir.join(format!("{stem}_v{version}.{ext}"));
     std::fs::copy(src, &dest).map_err(LoadError::Copy)?;
