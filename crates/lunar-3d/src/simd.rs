@@ -68,7 +68,10 @@ pub fn cull_aabbs_soa(
 	out: &mut [u8],
 ) {
 	let n = out.len();
-	debug_assert!(
+	// hard assert, not debug_assert: the kernels below read the slices through raw
+	// pointers sized by `out.len()`, so a short slice in a release build would be an
+	// out-of-bounds read. one branch per call is free next to the per-box work.
+	assert!(
 		center_x.len() >= n
 			&& center_y.len() >= n
 			&& center_z.len() >= n
