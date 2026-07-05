@@ -65,6 +65,11 @@ pub struct SurfaceStage {
 	/// sample this stage's texture with nearest-neighbor filtering instead of
 	/// bilinear. crisp texels for low-res pixel art (retro sprites, hud quads).
 	pub nearest: bool,
+	/// opt this draw out of the classic depth-cued light path. ui overlays
+	/// (automap lines, palette tints) want their authored vertex colors kept
+	/// verbatim instead of collapsed to a distance-boosted grey. no effect
+	/// unless the global classic_light constant is active.
+	pub unlit: bool,
 }
 
 impl Default for SurfaceStage {
@@ -77,6 +82,7 @@ impl Default for SurfaceStage {
 			alpha_gen: AlphaGen::Identity,
 			alpha_test: false,
 			nearest: false,
+			unlit: false,
 		}
 	}
 }

@@ -427,7 +427,7 @@ impl RenderEngine3d {
 						alpha,
 						use_lm_uv,
 						enabled: 1,
-						flags: stage.alpha_test as u32 | (stage.nearest as u32) << 1,
+						flags: stage.alpha_test as u32 | (stage.nearest as u32) << 1 | (stage.unlit as u32) << 2,
 					};
 					tex_ids[si] = stage.texture.id();
 				}

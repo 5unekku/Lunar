@@ -1,3 +1,7 @@
+cargo-features = ["codegen-backend"]
+
+# codegen-backend profile keys below are nightly-only
+
 [workspace]
 members = [
 		"crates/lunar-core",

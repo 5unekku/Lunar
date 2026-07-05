@@ -146,8 +146,11 @@ fn fs_surface(in: VertOut) -> @location(0) vec4<f32> {
     // clamp), index clamped to [0, 31]; 0 is full bright, 31 near black.
     // the colormap scales palette bytes directly and this whole pipeline is
     // gamma space (non-srgb textures + swapchain), so multiply as-is.
+    // stage 0 unlit flag (bit 2) opts ui overlays out of depth-cued light so
+    // their authored vertex colors survive verbatim.
+    let unlit = (surface_params.stages[0].flags & 4u) != 0u;
     var vert_color = in.color;
-    if globals.classic_light > 0.0 {
+    if globals.classic_light > 0.0 && !unlit {
         let dist = max(distance(in.world_pos, globals.cam_pos), 0.001);
         let boost = min(globals.classic_light / dist, 23.5);
         let index = clamp(60.0 - 63.75 * in.color.r - boost, 0.0, 31.0);
