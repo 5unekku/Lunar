@@ -1376,21 +1376,26 @@ impl RenderEngine3d {
 		// reproduced, minus the swim and world-depth interaction of camera-anchored
 		// quads. classic-light off so authored overlay colors pass through verbatim.
 		{
-			// fixed virtual overlay screen: doom's 320x200 hud space at the game's
-			// pixel scale (PIXEL = 0.581/200), STRETCHED to fill the viewport on any
-			// aspect ratio (vanilla-doom fullscreen hud). tying this to the camera
-			// fov/aspect left the hud filling the width only near 16:9 and floating
-			// narrow on other displays.
-			const OVERLAY_HALF_W: f32 = 160.0 * 0.581 / 200.0;
-			const OVERLAY_HALF_H: f32 = 100.0 * 0.581 / 200.0;
-			let ortho = Mat4::orthographic_rh(
-				-OVERLAY_HALF_W,
-				OVERLAY_HALF_W,
-				-OVERLAY_HALF_H,
-				OVERLAY_HALF_H,
-				-10.0,
-				10.0,
-			);
+							// overlay screen: doom's 320x200 hud space at the game's pixel scale
+				// (PIXEL = 0.581/200), aspect-preserving so hud art and the weapon sprite
+				// keep square doom pixels on any window (no stretch). the height always
+				// maps the full 200-row screen; the visible horizontal range widens with
+				// the viewport aspect. the status bar is stretched to fill that width
+				// game-side, its readouts scaled to match, so the bar spans edge to edge
+				// while nothing distorts.
+				const PIXEL: f32 = 0.581 / 200.0;
+				let overlay_half_h = 100.0 * PIXEL;
+				let overlay_aspect =
+					self.surface_config.width as f32 / self.surface_config.height.max(1) as f32;
+				let overlay_half_w = overlay_half_h * overlay_aspect;
+				let ortho = Mat4::orthographic_rh(
+					-overlay_half_w,
+					overlay_half_w,
+					-overlay_half_h,
+					overlay_half_h,
+					-10.0,
+					10.0,
+				);
 			let mut overlay_data = globals_data;
 			overlay_data[..16].copy_from_slice(&ortho.to_cols_array());
 			overlay_data[24] = 0.0;
