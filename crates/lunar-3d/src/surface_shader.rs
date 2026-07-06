@@ -45,6 +45,15 @@ pub struct SurfaceShader {
 	pub stages: Vec<SurfaceStage>,
 }
 
+/// marker: draw this surface entity as a screen-space 2d overlay instead of in
+/// the world. overlay surfaces are rendered in a dedicated pass with an
+/// orthographic projection (their transform is read in a fixed virtual-screen
+/// space, not world space) and an independent depth buffer, so they never
+/// interact with world geometry: a true flat hud/menu layer on top of the 3d
+/// scene. sort within the overlay by the transform's z (nearer wins).
+#[derive(Debug, Clone, Copy, Default, Component)]
+pub struct Overlay;
+
 /// one rendering stage in a surface shader.
 #[derive(Debug, Clone)]
 pub struct SurfaceStage {

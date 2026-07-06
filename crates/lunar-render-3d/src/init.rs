@@ -351,6 +351,23 @@ impl RenderEngine3d {
 			}],
 		});
 
+		// overlay variant of the globals buffer: same layout, carries an
+		// orthographic screen-space view-proj for the 2d overlay pass
+		let globals_overlay_buf = device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("[globals] overlay view-proj"),
+			size: GLOBALS_SIZE,
+			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+			mapped_at_creation: false,
+		});
+		let globals_overlay_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+			label: Some("[globals] overlay bg"),
+			layout: &globals_bgl,
+			entries: &[wgpu::BindGroupEntry {
+				binding: 0,
+				resource: globals_overlay_buf.as_entire_binding(),
+			}],
+		});
+
 		// ── material storage buffer (group 1) ─────────────────────────────
 
 		let entity_capacity = INITIAL_ENTITY_CAPACITY;
@@ -1288,6 +1305,42 @@ impl RenderEngine3d {
 			cache: pipeline_cache_ref,
 			multiview_mask: None,
 		});
+
+		// 2d overlay pipeline: same shader + layout as the surface pass, but
+		// single-sampled with no depth test/write, drawn straight into the
+		// resolved hdr target. gives a flat screen-space hud that never interacts
+		// with world depth; ordering within the overlay is painter's (by z).
+		let surface_overlay_pipeline =
+			device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+				label: Some("[surface] overlay pipeline"),
+				layout: Some(&surface_pipeline_layout),
+				vertex: wgpu::VertexState {
+					module: &surface_shader_module,
+					entry_point: Some("vs_surface"),
+					buffers: vertex_buffers,
+					compilation_options: wgpu::PipelineCompilationOptions::default(),
+				},
+				fragment: Some(wgpu::FragmentState {
+					module: &surface_shader_module,
+					entry_point: Some("fs_surface"),
+					targets: &[Some(wgpu::ColorTargetState {
+						format: hdr_format,
+						blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+						write_mask: wgpu::ColorWrites::ALL,
+					})],
+					compilation_options: wgpu::PipelineCompilationOptions::default(),
+				}),
+				primitive: wgpu::PrimitiveState {
+					topology: wgpu::PrimitiveTopology::TriangleList,
+					front_face: wgpu::FrontFace::Ccw,
+					cull_mode: Some(wgpu::Face::Back),
+					..Default::default()
+				},
+				depth_stencil: None,
+				multisample: wgpu::MultisampleState::default(),
+				cache: pipeline_cache_ref,
+				multiview_mask: None,
+			});
 
 		// masked surface z-prepass: depth-only alpha-tested variant so sprite /
 		// grate cutouts don't stamp full-quad depth over the scene behind them
@@ -3496,6 +3549,8 @@ impl RenderEngine3d {
 			depth_view,
 			globals_buf,
 			globals_bg,
+			globals_overlay_buf,
+			globals_overlay_bg,
 			globals_bgl,
 			material_bgl,
 			material_buf,
@@ -3555,6 +3610,8 @@ impl RenderEngine3d {
 			surface_tex_cache: HashMap::default(),
 			surface_bg_cache: HashMap::default(),
 			surface_scratch: Vec::new(),
+			surface_overlay_scratch: Vec::new(),
+			surface_overlay_pipeline,
 			mesh_gpu: HashMap::default(),
 			dome_mesh,
 			sun_mesh,

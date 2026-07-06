@@ -1190,6 +1190,49 @@ impl RenderEngine3d {
 			}
 		}
 
+		// ── 2d overlay pass: flat screen-space hud composited on the scene ──
+		// Overlay-tagged surfaces, drawn with the orthographic globals into the
+		// resolved hdr target, single-sampled and depth-less. no world interaction;
+		// ordering is painter's by the entity's z (far first, nearer wins).
+		if !self.surface_overlay_scratch.is_empty() {
+			self.surface_overlay_scratch
+				.sort_by(|a, b| a.4.partial_cmp(&b.4).unwrap_or(std::cmp::Ordering::Equal));
+			let mut ov_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+				label: Some("[surface] overlay pass"),
+				color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+					view: &self.hdr_view,
+					resolve_target: None,
+					ops: wgpu::Operations {
+						load: wgpu::LoadOp::Load,
+						store: wgpu::StoreOp::Store,
+					},
+					depth_slice: None,
+				})],
+				depth_stencil_attachment: None,
+				timestamp_writes: None,
+				occlusion_query_set: None,
+				multiview_mask: None,
+			});
+			ov_pass.set_pipeline(&self.surface_overlay_pipeline);
+			ov_pass.set_bind_group(0, &self.globals_overlay_bg, &[]);
+			ov_pass.set_bind_group(1, &self.entity_bg, &[]);
+			let draw_base_slot = ENTITY_SLOT_START + self.draw_scratch.len();
+			for &(mesh_id, slot, tex_ids, _, _z) in &self.surface_overlay_scratch {
+				let Some(bg) = self.surface_bg_cache.get(&tex_ids) else {
+					continue;
+				};
+				let surf_offset = ((slot - draw_base_slot) as u64 * UNIFORM_STRIDE) as u32;
+				let Some(gpu) = self.mesh_gpu.get(&mesh_id) else {
+					continue;
+				};
+				ov_pass.set_bind_group(2, bg, &[surf_offset]);
+				ov_pass.set_vertex_buffer(0, gpu.vbuf.slice(..));
+				ov_pass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+				ov_pass.draw_indexed(0..gpu.index_count, 0, slot as u32..slot as u32 + 1);
+				draw_calls += 1;
+			}
+		}
+
 		draw_calls
 	}
 	/// records all shadow passes: point-light cube shadows, then the directional

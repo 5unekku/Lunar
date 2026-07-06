@@ -50,7 +50,8 @@ use lunar_3d::primitives::{quad_mesh, sphere_mesh};
 use lunar_3d::{
 	Aabb3d, ActiveCamera3d, ActiveViewports, AmbientLight, Camera3d, ComputedVisibility, CullSoa,
 	Decal, DetailDensity, DirectionalLight, Frustum, IndexBuffer, IrradianceSH, Material3d, Mesh3d,
-	MeshData, MeshImpostor, MeshLod, MeshRegistry, ParticleEmitter, PlanarReflector, PointLight,
+	MeshData, MeshImpostor, MeshLod, MeshRegistry, Overlay, ParticleEmitter, PlanarReflector,
+	PointLight,
 	PrevWorldTransform3d, Projection, ShadowCaster, StaticMesh, SurfaceShader, Terrain, Vertex3d,
 	ViewportAspect, ViewportRect, Water, WorldTransform3d,
 };
@@ -1363,6 +1364,7 @@ pub(crate) struct FrameQueries {
 		&'static SurfaceShader,
 		&'static WorldTransform3d,
 		&'static ComputedVisibility,
+		bevy_ecs::query::Has<Overlay>,
 	)>,
 	pub(crate) cullables: QueryState<(
 		Entity,
@@ -1448,6 +1450,11 @@ pub struct RenderEngine3d {
 	depth_view: wgpu::TextureView,
 	// some when msaa_samples > 1; render target for color pass, resolved to swapchain
 	msaa_color_view: Option<wgpu::TextureView>,
+
+	// group 0 variant for the 2d overlay pass: same layout as globals_buf but
+	// carries an orthographic screen-space view-proj instead of the camera's
+	globals_overlay_buf: wgpu::Buffer,
+	globals_overlay_bg: wgpu::BindGroup,
 
 	// group 0: view-global (camera view-proj + time)
 	globals_buf: wgpu::Buffer,
@@ -1535,6 +1542,12 @@ pub struct RenderEngine3d {
 	surface_nearest_sampler: wgpu::Sampler,
 	// (mesh_id, instance_slot, [tex_id; 4], packed stages × 4)
 	surface_scratch: Vec<(u32, usize, [u32; 4], [SurfaceStagePacked; 4])>,
+	// same tuple plus the entity's view-z, for entities tagged Overlay: drawn in
+	// the 2d overlay pass, painter-sorted by z (no depth buffer there)
+	surface_overlay_scratch: Vec<(u32, usize, [u32; 4], [SurfaceStagePacked; 4], f32)>,
+	// dedicated overlay pipeline: single-sampled, no depth, alpha-blended into
+	// the resolved hdr target so the 2d hud composites over the whole scene
+	surface_overlay_pipeline: wgpu::RenderPipeline,
 
 	mesh_gpu: HashMap<u32, GpuMesh>,
 	dome_mesh: GpuMesh,

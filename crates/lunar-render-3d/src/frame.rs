@@ -381,12 +381,13 @@ impl RenderEngine3d {
 			}
 		}
 		self.surface_scratch.clear();
+		self.surface_overlay_scratch.clear();
 		{
 			let elapsed = world.resource::<lunar_core::Time>().elapsed_seconds();
 			let sq = &mut self.queries.as_mut().unwrap().surface_shaders;
 			let surface_slot_base = ENTITY_SLOT_START + self.draw_scratch.len();
 			let mut surface_idx = 0usize;
-			for (mesh, surf, wt, vis) in sq.iter(world) {
+			for (mesh, surf, wt, vis, is_overlay) in sq.iter(world) {
 				if surface_idx >= 512 {
 					break;
 				}
@@ -450,7 +451,12 @@ impl RenderEngine3d {
 				}
 				// upload transform to entity instances buffer
 				Self::pack_mesh_uniforms(&mut self.uniform_staging, slot, wt.to_matrix());
-				self.surface_scratch.push((mesh.0.id(), slot, tex_ids, packed));
+				if is_overlay {
+					self.surface_overlay_scratch
+						.push((mesh.0.id(), slot, tex_ids, packed, wt.translation.z));
+				} else {
+					self.surface_scratch.push((mesh.0.id(), slot, tex_ids, packed));
+				}
 				surface_idx += 1;
 			}
 		}
@@ -466,7 +472,10 @@ impl RenderEngine3d {
 		}
 
 		// ── grow buffers if needed ────────────────────────────────────────
-		let needed = ENTITY_SLOT_START + self.draw_scratch.len() + self.surface_scratch.len();
+		let needed = ENTITY_SLOT_START
+			+ self.draw_scratch.len()
+			+ self.surface_scratch.len()
+			+ self.surface_overlay_scratch.len();
 		if needed > self.entity_capacity {
 			self.entity_capacity = needed.next_power_of_two().max(INITIAL_ENTITY_CAPACITY);
 			self.entity_buf = Self::make_entity_buf(&self.device, self.entity_capacity);
@@ -1125,12 +1134,24 @@ impl RenderEngine3d {
 			// and uploaded in one write_buffer after the loop (entities get
 			// contiguous local slots 0.., capped at the buffer's 512 by the gather)
 			self.surface_params_staging.clear();
-			self.surface_params_staging
-				.resize(self.surface_scratch.len() * stride, 0);
+			self.surface_params_staging.resize(
+				(self.surface_scratch.len() + self.surface_overlay_scratch.len()) * stride,
+				0,
+			);
+			// both world-surface and overlay entities share the same contiguous
+			// slot range starting here; index params by (slot - base), not by list
+			// position, since the two lists interleave those slots
+			let draw_base_slot = ENTITY_SLOT_START + self.draw_scratch.len();
 			let asset_server = world.resource::<lunar_assets::AssetServer>();
-			for (local_slot, &(_, _, tex_ids, packed_stages)) in
-				self.surface_scratch.iter().enumerate()
-			{
+			for (slot, tex_ids, packed_stages) in self
+				.surface_scratch
+				.iter()
+				.map(|&(_, s, t, p)| (s, t, p))
+				.chain(
+					self.surface_overlay_scratch
+						.iter()
+						.map(|&(_, s, t, p, _z)| (s, t, p)),
+				) {
 				// upload any new textures
 				for &tid in &tex_ids {
 					if tid != u32::MAX
@@ -1225,7 +1246,7 @@ impl RenderEngine3d {
 					}
 				}
 				// pack stage params into this entity's staging slot
-				let slot_offset = local_slot * stride;
+				let slot_offset = (slot - draw_base_slot) * stride;
 				self.surface_params_staging[slot_offset..slot_offset + 128]
 					.copy_from_slice(bytemuck::cast_slice(&packed_stages));
 				// create/update BG if texture combination changed
@@ -1349,6 +1370,31 @@ impl RenderEngine3d {
 			.write_buffer(&self.globals_buf, 0, bytemuck::cast_slice(&globals_data));
 
 		// ── sort transparent draws back-to-front ──────────────────────────
+		// overlay globals: orthographic screen-space view-proj so Overlay-tagged
+		// surfaces render flat over the scene. the virtual half-height matches the
+		// perspective scale at the classic hud distance so existing hud placement is
+		// reproduced, minus the swim and world-depth interaction of camera-anchored
+		// quads. classic-light off so authored overlay colors pass through verbatim.
+		{
+			let fov_y = match camera.projection {
+				Projection::Perspective { fov_y, .. } => fov_y,
+				Projection::Orthographic { .. } => std::f32::consts::FRAC_PI_3,
+			};
+			const OVERLAY_REF_DIST: f32 = 0.4;
+			let half_h = OVERLAY_REF_DIST * (fov_y * 0.5).tan();
+			let half_w = half_h * aspect;
+			let ortho =
+				Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, -10.0, 10.0);
+			let mut overlay_data = globals_data;
+			overlay_data[..16].copy_from_slice(&ortho.to_cols_array());
+			overlay_data[24] = 0.0;
+			self.queue.write_buffer(
+				&self.globals_overlay_buf,
+				0,
+				bytemuck::cast_slice(&overlay_data),
+			);
+		}
+
 		let cam_fwd = cam_wt.forward();
 		self.transparent_scratch.clear();
 		for i in 0..self.draw_scratch.len() {
