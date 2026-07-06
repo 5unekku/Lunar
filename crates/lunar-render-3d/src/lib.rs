@@ -2114,7 +2114,15 @@ impl GamePlugin for RenderPlugin3d {
 			app.insert_resource(tier);
 		}
 
-		app.add_system_to_stage(UpdateStage::Render, render_3d_system);
+		// render must run after transform propagation: both are exclusive-world
+		// systems in the multithreaded Render stage, so without this edge the
+		// renderer can win the race and read a just-spawned entity's default
+		// (origin) WorldTransform3d before propagate_transforms_3d fills it in,
+		// flashing freshly-spawned overlay quads at screen center for one frame.
+		app.add_system_to_stage(
+			UpdateStage::Render,
+			render_3d_system.after(lunar_3d::propagate_transforms_3d),
+		);
 		log::info!("RenderPlugin3d: 3d render system registered");
 	}
 }
