@@ -70,6 +70,10 @@ pub struct SurfaceStage {
 	/// verbatim instead of collapsed to a distance-boosted grey. no effect
 	/// unless the global classic_light constant is active.
 	pub unlit: bool,
+	/// per-stage brightness multiplier (0.0..=1.0), re-read every frame so it
+	/// can animate without rebuilding geometry: doom's flickering/strobing/
+	/// glowing sector lights drive this. 1.0 = the authored color unchanged.
+	pub modulate: f32,
 }
 
 impl Default for SurfaceStage {
@@ -83,6 +87,7 @@ impl Default for SurfaceStage {
 			alpha_test: false,
 			nearest: false,
 			unlit: false,
+			modulate: 1.0,
 		}
 	}
 }

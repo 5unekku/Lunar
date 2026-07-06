@@ -158,6 +158,12 @@ fn fs_surface(in: VertOut) -> @location(0) vec4<f32> {
         vert_color = vec4<f32>(bright, bright, bright, in.color.a);
     }
 
+    // per-stage brightness (flags bits 8..15): doom's animated sector lights
+    // dim/brighten a draw each frame without touching its geometry. the default
+    // packs 255 → 1.0, so untouched stages render unchanged.
+    let modulate = f32((surface_params.stages[0].flags >> 8u) & 0xFFu) / 255.0;
+    vert_color = vec4<f32>(vert_color.rgb * modulate, vert_color.a);
+
     var acc = vec4<f32>(0.0, 0.0, 0.0, 1.0);
     for (var s = 0u; s < 4u; s++) {
         let stage = surface_params.stages[s];

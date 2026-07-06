@@ -427,7 +427,12 @@ impl RenderEngine3d {
 						alpha,
 						use_lm_uv,
 						enabled: 1,
-						flags: stage.alpha_test as u32 | (stage.nearest as u32) << 1 | (stage.unlit as u32) << 2,
+						// per-stage brightness rides bits 8..15 (0 reads as full); low bits
+						// stay alpha_test/nearest/unlit
+						flags: stage.alpha_test as u32
+							| (stage.nearest as u32) << 1
+							| (stage.unlit as u32) << 2
+							| ((stage.modulate.clamp(0.0, 1.0) * 255.0) as u32) << 8,
 					};
 					tex_ids[si] = stage.texture.id();
 				}
