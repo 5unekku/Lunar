@@ -1376,15 +1376,21 @@ impl RenderEngine3d {
 		// reproduced, minus the swim and world-depth interaction of camera-anchored
 		// quads. classic-light off so authored overlay colors pass through verbatim.
 		{
-			let fov_y = match camera.projection {
-				Projection::Perspective { fov_y, .. } => fov_y,
-				Projection::Orthographic { .. } => std::f32::consts::FRAC_PI_3,
-			};
-			const OVERLAY_REF_DIST: f32 = 0.4;
-			let half_h = OVERLAY_REF_DIST * (fov_y * 0.5).tan();
-			let half_w = half_h * aspect;
-			let ortho =
-				Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, -10.0, 10.0);
+			// fixed virtual overlay screen: doom's 320x200 hud space at the game's
+			// pixel scale (PIXEL = 0.581/200), STRETCHED to fill the viewport on any
+			// aspect ratio (vanilla-doom fullscreen hud). tying this to the camera
+			// fov/aspect left the hud filling the width only near 16:9 and floating
+			// narrow on other displays.
+			const OVERLAY_HALF_W: f32 = 160.0 * 0.581 / 200.0;
+			const OVERLAY_HALF_H: f32 = 100.0 * 0.581 / 200.0;
+			let ortho = Mat4::orthographic_rh(
+				-OVERLAY_HALF_W,
+				OVERLAY_HALF_W,
+				-OVERLAY_HALF_H,
+				OVERLAY_HALF_H,
+				-10.0,
+				10.0,
+			);
 			let mut overlay_data = globals_data;
 			overlay_data[..16].copy_from_slice(&ortho.to_cols_array());
 			overlay_data[24] = 0.0;
