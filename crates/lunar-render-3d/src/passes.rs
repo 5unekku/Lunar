@@ -514,21 +514,11 @@ impl RenderEngine3d {
 			// snapshot only the cheap per-frame fields; NOT `Terrain::heightmap` (a Vec<u8>).
 			// the heightmap is read by reference solely on the rare GPU-rebuild path below,
 			// so a clean terrain costs zero heap copies per frame.
-			struct TerrainSnap {
-				entity: Entity,
-				translation: Vec3,
-				dirty: bool,
-				world_size: f32,
-				clipmap_rings: u32,
-				ring_resolution: u32,
-				height_scale: f32,
-				tint: lunar_math::Color,
-			}
-			let mut terrain_snaps: Vec<TerrainSnap> = Vec::new();
+			self.terrain_snap_scratch.clear();
 			{
 				let terrain_query = &mut self.queries.as_mut().unwrap().terrains;
 				for (entity, terrain, wt) in terrain_query.iter(world) {
-					terrain_snaps.push(TerrainSnap {
+					self.terrain_snap_scratch.push(TerrainSnap {
 						entity,
 						translation: wt.translation,
 						dirty: terrain.dirty,
@@ -541,7 +531,7 @@ impl RenderEngine3d {
 				}
 			}
 
-			for snap in &terrain_snaps {
+			for snap in &self.terrain_snap_scratch {
 				let entity = snap.entity;
 				// lazy-init GPU resources on first encounter or if the component is dirty.
 				// only here do we touch the full Terrain (incl. heightmap), by reference.
@@ -670,13 +660,15 @@ impl RenderEngine3d {
 		if self.render_tier != RenderTier::LowGles {
 			let width = self.surface_config.width as f32;
 			let height = self.surface_config.height as f32;
-			let water_query = &mut self.queries.as_mut().unwrap().waters;
-			let water_entities: Vec<(Water, u32, WorldTransform3d)> = water_query
-				.iter(world)
-				.map(|(w, m, t)| (*w, m.0.id(), *t))
-				.collect();
+			self.water_scratch.clear();
+			{
+				let water_query = &mut self.queries.as_mut().unwrap().waters;
+				for (w, m, t) in water_query.iter(world) {
+					self.water_scratch.push((*w, m.0.id(), *t));
+				}
+			}
 
-			for (water_comp, mesh_id, wt) in &water_entities {
+			for (water_comp, mesh_id, wt) in &self.water_scratch {
 				let Some(gpu_mesh) = self.mesh_gpu.get(mesh_id) else {
 					continue;
 				};
@@ -770,11 +762,15 @@ impl RenderEngine3d {
 			let inv_vp_cols = inv_vp.to_cols_array();
 			let vp_cols = view_proj.to_cols_array();
 
-			let decal_query = &mut self.queries.as_mut().unwrap().decals;
-			let decals: Vec<(Decal, WorldTransform3d)> =
-				decal_query.iter(world).map(|(d, wt)| (*d, *wt)).collect();
+			self.decal_scratch.clear();
+			{
+				let decal_query = &mut self.queries.as_mut().unwrap().decals;
+				for (d, wt) in decal_query.iter(world) {
+					self.decal_scratch.push((*d, *wt));
+				}
+			}
 
-			for (decal, wt) in &decals {
+			for (decal, wt) in &self.decal_scratch {
 				let decal_world_mat = wt.to_matrix();
 				let decal_inv_world = decal_world_mat.inverse();
 				let decal_world_cols = decal_world_mat.to_cols_array();
@@ -982,19 +978,22 @@ impl RenderEngine3d {
 		// ── detail sprite pass ────────────────────────────────────────────
 		// gpu-driven billboarded ground cover: compute generates instances, render draws them.
 		{
-			let detail_query = &mut self.queries.as_mut().unwrap().detail_densities;
-			let detail_entities: Vec<(bevy_ecs::entity::Entity, DetailDensity, f32)> = detail_query
-				.iter(world)
-				.filter(|(_, _, _, vis)| vis.0)
-				.map(|(e, dd, wt, _)| (e, dd.clone(), wt.translation.y))
-				.collect();
+			self.detail_scratch.clear();
+			{
+				let detail_query = &mut self.queries.as_mut().unwrap().detail_densities;
+				for (e, dd, wt, vis) in detail_query.iter(world) {
+					if vis.0 {
+						self.detail_scratch.push((e, dd.clone(), wt.translation.y));
+					}
+				}
+			}
 
-			if !detail_entities.is_empty() {
+			if !self.detail_scratch.is_empty() {
 				self.ensure_detail_sprite_resources();
 				const MAX_SPRITES: u32 = 4096;
 				const INSTANCE_STRIDE: u64 = 32; // SpriteInstance = 8 × f32 = 32 bytes
 
-				for (entity, dd, _base_y) in &detail_entities {
+				for (entity, dd, _base_y) in &self.detail_scratch {
 					let entity_key = entity.to_bits();
 					let density_id = dd.density_map.id();
 					let atlas_id = dd.texture.id();
@@ -1312,7 +1311,7 @@ impl RenderEngine3d {
 			}
 			// ── phase A: compute face view-projections, upload per-face globals, ─
 			// and collect the depth-array layers that need re-recording this frame.
-			let mut render_layers: Vec<usize> = Vec::new();
+			self.point_shadow_layer_scratch.clear();
 			let mut pt_shadow_idx = 0usize;
 			for &(light_pos, _, _, light_radius, casts, _) in self.point_light_scratch.iter() {
 				if !casts || pt_shadow_idx >= MAX_POINT_SHADOW_LIGHTS {
@@ -1355,7 +1354,7 @@ impl RenderEngine3d {
 						slot_offset,
 						&slot_data[..80],
 					);
-					render_layers.push(layer);
+					self.point_shadow_layer_scratch.push(layer);
 					self.point_shadow_dirty[pt_shadow_idx][face] = false;
 				}
 				pt_shadow_idx += 1;
@@ -1375,7 +1374,8 @@ impl RenderEngine3d {
 				let face_views = &self.point_shadow_face_views;
 				let mesh_gpu = &self.mesh_gpu;
 				let draw_ref = &self.draw_scratch;
-				let cmds: Vec<wgpu::CommandBuffer> = render_layers
+				let cmds: Vec<wgpu::CommandBuffer> = self
+					.point_shadow_layer_scratch
 					.par_iter()
 					.map(|&layer| {
 						let mut enc =
@@ -1446,7 +1446,7 @@ impl RenderEngine3d {
 			}
 			// WASM: sequential recording on the main encoder
 			#[cfg(target_arch = "wasm32")]
-			for &layer in &render_layers {
+			for &layer in &self.point_shadow_layer_scratch {
 				let mut pt_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 					label: Some("[point shadow] face pass"),
 					color_attachments: &[],

@@ -418,6 +418,19 @@ struct TerrainGpu {
 	hmap_sampler: wgpu::Sampler,
 }
 
+/// cheap per-frame snapshot of a Terrain entity's fields (never the heightmap);
+/// filled into `terrain_snap_scratch` by the terrain pass in `record_scene_passes`.
+struct TerrainSnap {
+	entity: Entity,
+	translation: Vec3,
+	dirty: bool,
+	world_size: f32,
+	clipmap_rings: u32,
+	ring_resolution: u32,
+	height_scale: f32,
+	tint: Color,
+}
+
 // ── render tier ────────────────────────────────────────────────────────────
 
 /// detected rendering capability tier.
@@ -1809,6 +1822,7 @@ pub struct RenderEngine3d {
 	atlas_bg: Option<wgpu::BindGroup>,
 	atlas_lm_uvs: HashMap<u32, [f32; 4]>,
 	atlas_lm_ids: Vec<u32>, // sorted list of lm_ids in current atlas (change detection)
+	atlas_ids_scratch: Vec<u32>, // per-frame sorted lm_tex_cache keys, diffed against atlas_lm_ids
 
 	// mega vertex/index buffers (phase 4): all meshes packed into one buffer.
 	// enables one multi_draw_indexed_indirect_count call for all visible geometry.
@@ -1843,6 +1857,12 @@ pub struct RenderEngine3d {
 	draw_sorted_scratch: Vec<(Entity, u32, u32, Color, f32, f32, Mat4, f32, u32, u32, u32)>,
 	uniform_staging: Vec<u8>,
 	point_light_scratch: Vec<(Vec3, Color, f32, f32, bool, f32)>, // (pos, color, intensity, radius, casts_shadows, dist_sq)
+	// feature-pass scratch buffers: cleared + refilled each frame, never reallocated in steady state
+	terrain_snap_scratch: Vec<TerrainSnap>,
+	water_scratch: Vec<(Water, u32, WorldTransform3d)>, // (water, mesh_id, transform)
+	decal_scratch: Vec<(Decal, WorldTransform3d)>,
+	detail_scratch: Vec<(Entity, DetailDensity, f32)>, // (entity, density, base_y)
+	point_shadow_layer_scratch: Vec<usize>, // dirty depth-array layers to re-record this frame
 	// BSP PVS visible-area set, rebuilt each frame; `active` mirrors the old Option::Some
 	bsp_visible_scratch: HashSet<u32>,
 	bsp_visible_active: bool,

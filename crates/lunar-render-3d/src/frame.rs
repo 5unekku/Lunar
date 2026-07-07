@@ -754,14 +754,18 @@ impl RenderEngine3d {
 		// rebuild when the set of lm_ids in lm_tex_cache changes.
 		// direction textures are not atlased; dir lightmap effects are disabled in indirect path.
 		if self.has_indirect && !self.lm_tex_cache.is_empty() {
-			let mut current_ids: Vec<u32> = self.lm_tex_cache.keys().copied().collect();
-			current_ids.sort_unstable();
-			if current_ids != self.atlas_lm_ids {
+			// scratch-built sorted key list; steady state (no new lightmaps) allocates nothing
+			// and early-outs on the comparison below
+			self.atlas_ids_scratch.clear();
+			self.atlas_ids_scratch
+				.extend(self.lm_tex_cache.keys().copied());
+			self.atlas_ids_scratch.sort_unstable();
+			if self.atlas_ids_scratch != self.atlas_lm_ids {
 				// collect texture data for all lightmap ids
 				let asset_server = world.resource::<lunar_assets::AssetServer>();
 				// gather (lm_id, width, height, pixels-as-rgba8) for each
 				let mut entries: Vec<(u32, u32, u32, Vec<u8>)> = Vec::new();
-				for &lm_id in &current_ids {
+				for &lm_id in &self.atlas_ids_scratch {
 					if let Some(tex) = asset_server.get_texture_by_id(lm_id)
 						&& let lunar_assets::TextureCompression::None = tex.compression
 					{
@@ -867,7 +871,7 @@ impl RenderEngine3d {
 					self.atlas_view = Some(atlas_view);
 					self.atlas_bg = Some(atlas_bg);
 					self.atlas_lm_uvs = new_uvs;
-					self.atlas_lm_ids = current_ids;
+					self.atlas_lm_ids.clone_from(&self.atlas_ids_scratch);
 				}
 			}
 		}
@@ -1749,13 +1753,14 @@ impl RenderEngine3d {
 						}));
 				}
 				let bg = self.late_cull_bg.as_ref().unwrap();
-				let mut late_enc =
-					self.device
-						.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-							label: Some("[late cull indirect]"),
-						});
+				// recorded on the frame encoder instead of a dedicated encoder + submit.
+				// ordering stays intact: the write_buffers above land before any later
+				// submit, the shadow encoders submitted before the frame encoder never
+				// touch the cull buffers, and within the frame encoder this compute pass
+				// precedes every indirect_buf consumer (hzb prepass, scene passes). the
+				// pipelined early-cull readback lives in cull.rs and is untouched.
 				{
-					let mut cpass = late_enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+					let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
 						label: Some("[late cull indirect] pass"),
 						timestamp_writes: None,
 					});
@@ -1763,7 +1768,6 @@ impl RenderEngine3d {
 					cpass.set_bind_group(0, bg, &[]);
 					cpass.dispatch_workgroups((entity_count as u32).div_ceil(64), 1, 1);
 				}
-				self.queue.submit([late_enc.finish()]);
 			}
 		}
 
