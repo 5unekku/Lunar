@@ -129,20 +129,37 @@ pub enum BehaviorStage {
 	Destroy,
 }
 
+/// cached dispatch state: the query state plus a reusable entity scratch buffer.
+/// building a QueryState per tick allocates and rescans every archetype, so we
+/// build it once and keep it on the world. staleness is not possible: `Behaviors`
+/// is a lunar-core component whose id is fixed for the world's lifetime (hot
+/// reload swaps the boxed instances inside the component, never the component
+/// itself), and `iter()` self-updates for archetypes added since the last tick.
+/// the cache dies with the world.
+#[derive(Resource)]
+struct BehaviorDispatchCache {
+	query: bevy_ecs::query::QueryState<Entity, bevy_ecs::prelude::With<Behaviors>>,
+	entities: Vec<Entity>,
+}
+
 /// run a lifecycle stage for every entity that carries behaviors.
 /// takes each entity's behavior list out so hooks get exclusive `&mut World`,
 /// then restores it. on_ready fires once per behavior before its first update.
 pub fn dispatch_behaviors(world: &mut World, stage: BehaviorStage) {
-	// snapshot the entities to visit (cannot hold a query while mutating the world)
-	let mut entities: Vec<Entity> = Vec::new();
-	{
-		let mut query = world.query_filtered::<Entity, bevy_ecs::prelude::With<Behaviors>>();
-		for entity in query.iter(world) {
-			entities.push(entity);
-		}
-	}
+	// take the cache out of the world so hooks below can borrow it mutably;
+	// built lazily on the first dispatch, restored at the end
+	let mut cache = world
+		.remove_resource::<BehaviorDispatchCache>()
+		.unwrap_or_else(|| BehaviorDispatchCache {
+			query: world.query_filtered(),
+			entities: Vec::new(),
+		});
 
-	for entity in entities {
+	// snapshot the entities to visit (cannot hold a query while mutating the world)
+	cache.entities.clear();
+	cache.entities.extend(cache.query.iter(world));
+
+	for &entity in &cache.entities {
 		// take the behavior list out of the component so hooks get the whole world
 		let Some(mut items) = world
 			.entity_mut(entity)
@@ -180,6 +197,8 @@ pub fn dispatch_behaviors(world: &mut World, stage: BehaviorStage) {
 			*behaviors.items_mut() = items;
 		}
 	}
+
+	world.insert_resource(cache);
 }
 
 /// fire `on_destroy` for one entity's behaviors then despawn it. the runtime's
