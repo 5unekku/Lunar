@@ -155,7 +155,7 @@ pub type LunarQueryFn  = unsafe extern "C" fn(LunarEntity, *mut c_void);
 
 // ─── internal registry resource ──────────────────────────────────────────────
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct RegisteredSystem {
     callback:  LunarSystemFn,
     user_data: *mut c_void,
@@ -176,6 +176,8 @@ pub struct FfiRegistry {
     update_systems:      HashMap<LunarSystemId, RegisteredSystem>,
     fixed_update_systems:HashMap<LunarSystemId, RegisteredSystem>,
     shutdown_systems:    HashMap<LunarSystemId, RegisteredSystem>,
+    /// reusable snapshot buffer for [`dispatch_systems`] (kept to avoid a per-dispatch alloc)
+    dispatch_scratch:    Vec<RegisteredSystem>,
     /// true while a hot-reload is in progress so C# Init can skip scene setup.
     pub is_reload: bool,
 }
@@ -245,14 +247,23 @@ pub fn set_is_reload(world: &mut World, value: bool) {
 
 /// call all systems registered for `schedule`. invoke this from the engine game loop.
 pub fn dispatch_systems(world: &mut World, schedule: LunarSchedule) {
-    let systems: Vec<RegisteredSystem> = {
-        let reg = world.resource::<FfiRegistry>();
-        reg.systems(schedule).values().cloned().collect()
+    // callbacks get &mut World and may register/unregister systems mid-dispatch,
+    // so we can't iterate the live map. instead of cloning into a fresh Vec each
+    // call, take the registry's scratch buffer, copy the (Copy) entries into it,
+    // and hand it back afterwards: the snapshot semantics stay, the alloc goes.
+    let mut systems = {
+        let mut registry = world.resource_mut::<FfiRegistry>();
+        let mut scratch = std::mem::take(&mut registry.dispatch_scratch);
+        scratch.clear();
+        scratch.extend(registry.systems(schedule).values().copied());
+        scratch
     };
     let world_ptr = world as *mut World as *mut LunarWorld;
-    for sys in systems {
-        unsafe { (sys.callback)(world_ptr, sys.user_data) };
+    for system in &systems {
+        unsafe { (system.callback)(world_ptr, system.user_data) };
     }
+    systems.clear();
+    world.resource_mut::<FfiRegistry>().dispatch_scratch = systems;
 }
 
 // ─── entity management ────────────────────────────────────────────────────────
