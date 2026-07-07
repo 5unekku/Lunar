@@ -262,7 +262,12 @@ impl RenderEngine3d {
 				.and_then(|caps| caps.alpha_modes.first().copied())
 				.unwrap_or_default(),
 			view_formats: vec![],
-			desired_maximum_frame_latency: 2,
+			// 3, not 2: with only 2 frames in flight the cpu blocks on the swapchain
+			// acquire (get_current_texture) instead of pipelining ahead, so presents
+			// land irregularly and wayland compositors (e.g. kwin) demote the client
+			// to a fraction of refresh (a flat 45 on a 60hz panel). one more in-flight
+			// frame lets the cpu run ahead, presents stay regular, and vsync holds 60.
+			desired_maximum_frame_latency: 3,
 		};
 		if let Some(surface) = &surface {
 			surface.configure(&device, &surface_config);
