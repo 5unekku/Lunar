@@ -598,6 +598,18 @@ pub struct InputState {
 	mouse_buttons_held: [bool; MOUSE_BUTTON_COUNT],
 	mouse_buttons_just_pressed: [bool; MOUSE_BUTTON_COUNT],
 	mouse_buttons_just_released: [bool; MOUSE_BUTTON_COUNT],
+	// pending edge accumulator (keyboard + mouse). the event pump writes here once
+	// per display frame; `promote_pending` moves it into the visible sets above at
+	// the start of each logic tick. this decouples edge input from the render rate:
+	// every press is consumed by exactly one tick (never doubled when several ticks
+	// share a frame, never dropped when a frame runs zero ticks).
+	pending_keys_just_pressed: [bool; KEY_ARRAY_SIZE],
+	pending_keys_just_released: [bool; KEY_ARRAY_SIZE],
+	pending_keys_just_pressed_extra: HashMap<KeyCode, bool>,
+	pending_keys_just_released_extra: HashMap<KeyCode, bool>,
+	pending_mouse_delta: (f32, f32),
+	pending_mouse_buttons_just_pressed: [bool; MOUSE_BUTTON_COUNT],
+	pending_mouse_buttons_just_released: [bool; MOUSE_BUTTON_COUNT],
 	gamepads: Vec<GamepadState>,
 }
 
@@ -617,8 +629,36 @@ impl InputState {
 			mouse_buttons_held: [false; MOUSE_BUTTON_COUNT],
 			mouse_buttons_just_pressed: [false; MOUSE_BUTTON_COUNT],
 			mouse_buttons_just_released: [false; MOUSE_BUTTON_COUNT],
+			pending_keys_just_pressed: [false; KEY_ARRAY_SIZE],
+			pending_keys_just_released: [false; KEY_ARRAY_SIZE],
+			pending_keys_just_pressed_extra: HashMap::default(),
+			pending_keys_just_released_extra: HashMap::default(),
+			pending_mouse_delta: (0.0, 0.0),
+			pending_mouse_buttons_just_pressed: [false; MOUSE_BUTTON_COUNT],
+			pending_mouse_buttons_just_released: [false; MOUSE_BUTTON_COUNT],
 			gamepads: Vec::new(),
 		}
+	}
+
+	/// move one display frame's accumulated key/mouse edges into the visible sets
+	/// and reset the accumulator. called once at the start of every logic tick (the
+	/// Input stage) so edge input is consumed per tick, not per render frame.
+	pub fn promote_pending(&mut self) {
+		self.keys_just_pressed =
+			std::mem::replace(&mut self.pending_keys_just_pressed, [false; KEY_ARRAY_SIZE]);
+		self.keys_just_released =
+			std::mem::replace(&mut self.pending_keys_just_released, [false; KEY_ARRAY_SIZE]);
+		self.keys_just_pressed_extra = std::mem::take(&mut self.pending_keys_just_pressed_extra);
+		self.keys_just_released_extra = std::mem::take(&mut self.pending_keys_just_released_extra);
+		self.mouse_buttons_just_pressed = std::mem::replace(
+			&mut self.pending_mouse_buttons_just_pressed,
+			[false; MOUSE_BUTTON_COUNT],
+		);
+		self.mouse_buttons_just_released = std::mem::replace(
+			&mut self.pending_mouse_buttons_just_released,
+			[false; MOUSE_BUTTON_COUNT],
+		);
+		self.mouse_delta = std::mem::replace(&mut self.pending_mouse_delta, (0.0, 0.0));
 	}
 
 	/// check if a key is currently held down
@@ -690,15 +730,12 @@ impl InputState {
 		self.mouse_buttons_just_released[button as usize]
 	}
 
-	/// begin frame: clear `just_pressed/just_released` sets
+	/// begin frame: clear the per-frame gamepad edge sets. keyboard and mouse edges
+	/// are no longer cleared here; they ride the pending accumulator and are cycled
+	/// per logic tick by `promote_pending`, so they stay decoupled from the render
+	/// rate. (gamepad edges are still per-frame; a ponytail upgrade path if a pad
+	/// game needs tick-exact buttons.)
 	pub fn begin_frame(&mut self) {
-		self.keys_just_pressed = [false; KEY_ARRAY_SIZE];
-		self.keys_just_released = [false; KEY_ARRAY_SIZE];
-		self.keys_just_pressed_extra.clear();
-		self.keys_just_released_extra.clear();
-		self.mouse_buttons_just_pressed = [false; MOUSE_BUTTON_COUNT];
-		self.mouse_buttons_just_released = [false; MOUSE_BUTTON_COUNT];
-		self.mouse_delta = (0.0, 0.0);
 		for gamepad in &mut self.gamepads {
 			gamepad.begin_frame();
 		}
@@ -746,35 +783,36 @@ impl InputState {
 		}
 	}
 
-	/// press a key
+	/// press a key. the edge lands in the pending accumulator and becomes visible
+	/// on the next logic tick's `promote_pending`; `held` updates immediately.
 	pub fn press_key(&mut self, key: KeyCode) {
 		let index = key as usize;
 		if index < KEY_ARRAY_SIZE {
 			if !self.keys_held[index] {
-				self.keys_just_pressed[index] = true;
+				self.pending_keys_just_pressed[index] = true;
 			}
 			self.keys_held[index] = true;
 		} else {
 			let was_held = self.keys_held_extra.get(&key).copied().unwrap_or(false);
 			if !was_held {
-				self.keys_just_pressed_extra.insert(key, true);
+				self.pending_keys_just_pressed_extra.insert(key, true);
 			}
 			self.keys_held_extra.insert(key, true);
 		}
 	}
 
-	/// release a key
+	/// release a key. edge pends for the next tick; `held` updates immediately.
 	pub fn release_key(&mut self, key: KeyCode) {
 		let index = key as usize;
 		if index < KEY_ARRAY_SIZE {
 			if self.keys_held[index] {
-				self.keys_just_released[index] = true;
+				self.pending_keys_just_released[index] = true;
 			}
 			self.keys_held[index] = false;
 		} else {
 			let was_held = self.keys_held_extra.get(&key).copied().unwrap_or(false);
 			if was_held {
-				self.keys_just_released_extra.insert(key, true);
+				self.pending_keys_just_released_extra.insert(key, true);
 			}
 			self.keys_held_extra.insert(key, false);
 		}
@@ -787,25 +825,29 @@ impl InputState {
 		self.mouse_position = (x, y);
 	}
 
-	/// add to the mouse delta (for accumulating motion events)
+	/// add to the mouse delta (for accumulating motion events). accumulates into
+	/// the pending buffer so a tick sees the whole frame's motion exactly once.
 	pub fn add_mouse_delta(&mut self, delta_x: f32, delta_y: f32) {
-		self.mouse_delta = (self.mouse_delta.0 + delta_x, self.mouse_delta.1 + delta_y);
+		self.pending_mouse_delta = (
+			self.pending_mouse_delta.0 + delta_x,
+			self.pending_mouse_delta.1 + delta_y,
+		);
 	}
 
-	/// press a mouse button
+	/// press a mouse button. edge pends for the next tick; `held` is immediate.
 	pub const fn press_mouse_button(&mut self, button: MouseButton) {
 		let index = button as usize;
 		if !self.mouse_buttons_held[index] {
-			self.mouse_buttons_just_pressed[index] = true;
+			self.pending_mouse_buttons_just_pressed[index] = true;
 		}
 		self.mouse_buttons_held[index] = true;
 	}
 
-	/// release a mouse button
+	/// release a mouse button. edge pends for the next tick; `held` is immediate.
 	pub const fn release_mouse_button(&mut self, button: MouseButton) {
 		let index = button as usize;
 		if self.mouse_buttons_held[index] {
-			self.mouse_buttons_just_released[index] = true;
+			self.pending_mouse_buttons_just_released[index] = true;
 		}
 		self.mouse_buttons_held[index] = false;
 	}
@@ -838,6 +880,13 @@ fn drain_web_input_system(mut input: ResMut<InputState>) {
 	poll_gamepads(&mut input);
 }
 
+/// cycle the pending key/mouse edges into the visible sets, once per logic tick.
+/// runs in the Input stage so every later stage this tick sees the freshly
+/// promoted edges, and the next tick starts from an empty accumulator.
+fn promote_input_edges_system(mut input: ResMut<InputState>) {
+	input.promote_pending();
+}
+
 impl GamePlugin for InputPlugin {
 	fn name(&self) -> &'static str {
 		"InputPlugin"
@@ -846,8 +895,19 @@ impl GamePlugin for InputPlugin {
 	fn build(&mut self, app: &mut App) {
 		app.insert_resource(InputState::new());
 		app.insert_resource(ActionMap::new());
+		// promote must land after the web drain so a wasm frame's events are visible
+		// the same tick; on native the event pump fills the accumulator before the
+		// tick loop, so promote just needs to be in the Input stage.
 		#[cfg(target_arch = "wasm32")]
-		app.add_system_to_stage(lunar_core::UpdateStage::Input, drain_web_input_system);
+		{
+			app.add_system_to_stage(lunar_core::UpdateStage::Input, drain_web_input_system);
+			app.add_system_to_stage(
+				lunar_core::UpdateStage::Input,
+				promote_input_edges_system.after(drain_web_input_system),
+			);
+		}
+		#[cfg(not(target_arch = "wasm32"))]
+		app.add_system_to_stage(lunar_core::UpdateStage::Input, promote_input_edges_system);
 		log::info!("InputPlugin: input state and action map resources registered");
 	}
 }
@@ -1626,6 +1686,7 @@ mod tests {
 
 		actions.bind("jump", InputBinding::Key(KeyCode::Space));
 		input.press_key(KeyCode::Space);
+		input.promote_pending(); // edges become visible on the tick
 
 		assert!(actions.is_action_held(&input, "jump"));
 		assert!(actions.is_action_just_pressed(&input, "jump"));
@@ -1640,6 +1701,7 @@ mod tests {
 		actions.bind("fire", InputBinding::Key(KeyCode::F));
 
 		input.press_mouse_button(MouseButton::Left);
+		input.promote_pending(); // edges become visible on the tick
 		assert!(actions.is_action_held(&input, "fire"));
 		assert!(actions.is_action_just_pressed(&input, "fire"));
 	}
@@ -1730,10 +1792,16 @@ mod tests {
 
 		actions.bind("jump", InputBinding::Key(KeyCode::Space));
 		input.press_key(KeyCode::Space);
-		input.begin_frame();
+		input.promote_pending(); // tick 1: the press is visible, key held
+		assert!(actions.is_action_held(&input, "jump"));
+		assert!(actions.is_action_just_pressed(&input, "jump"));
+
 		input.release_key(KeyCode::Space);
+		input.promote_pending(); // tick 2: the release is visible, no longer held
 
 		assert!(!actions.is_action_held(&input, "jump"));
 		assert!(actions.is_action_just_released(&input, "jump"));
+		// the press edge did not survive into the second tick
+		assert!(!actions.is_action_just_pressed(&input, "jump"));
 	}
 }
