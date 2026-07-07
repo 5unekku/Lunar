@@ -384,7 +384,9 @@ impl App {
 				time.set_interp_alpha(alpha);
 			}
 
-			// run 0-5 logic ticks for this frame (fixed timestep accumulator)
+			// run every accumulated logic tick this frame (fixed timestep); the
+			// count is bounded by GameLoop's catch-up clamp, never dropped, so the
+			// sim stays frame-rate independent
 			for _ in 0..ticks {
 				if let Some(mut time) = self.engine.world_mut().get_resource_mut::<Time>() {
 					time.advance(fixed_delta);

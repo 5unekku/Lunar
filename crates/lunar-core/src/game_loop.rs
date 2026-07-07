@@ -133,18 +133,29 @@ impl GameLoop {
 	/// advance the loop by one render frame.
 	///
 	/// returns `(ticks, frame_delta)`:
-	/// - `ticks`: how many logic ticks to run this frame (0-5)
+	/// - `ticks`: how many logic ticks to run this frame (>= 0, bounded by the
+	///   catch-up clamp below)
 	/// - `frame_delta`: wall-clock seconds since last render frame
 	///
 	/// advance `Time` by `tick_rate.delta_seconds()` per tick, and by
 	/// `frame_delta` for `real_delta_seconds` (once per render frame).
+	///
+	/// every accumulated tick runs, so the simulation is frame-rate independent:
+	/// the same inputs advance the same logic at any render rate, and a frame
+	/// drop never deletes sim time (which would slow the game or diverge results).
 	pub fn tick(&mut self) -> (u32, f32) {
 		let now = Instant::now();
 		let delta = now - self.last_frame;
 		self.last_frame = now;
 		let frame_delta = delta.as_secs_f32();
 
-		self.accumulator += delta;
+		// clamp the time fed to the fixed-step accumulator. a long stall (level
+		// load, alt-tab, breakpoint) then triggers one bounded catch-up burst
+		// instead of a spiral of death, without dropping ticks mid-stream. this
+		// clamp is the ONLY bound on ticks: never cap the count itself, or dropped
+		// ticks would lose sim time and make game speed depend on frame rate.
+		const MAX_FRAME_TIME: Duration = Duration::from_millis(250);
+		self.accumulator += delta.min(MAX_FRAME_TIME);
 
 		let tick_interval = self.tick_rate.interval();
 		let mut ticks = 0u32;
@@ -153,7 +164,7 @@ impl GameLoop {
 			ticks += 1;
 		}
 
-		(ticks.min(5), frame_delta)
+		(ticks, frame_delta)
 	}
 
 	/// how far we are between the last tick and the next, in [0, 1].
