@@ -548,3 +548,19 @@ revisionist. Leave it as-is.
 - latency: SDL3's default device buffering (native) and the jitter-buffer
   depth (wasm32 `pump()`) are both unmeasured/untuned in this pass. Ship
   first, tune only if a real latency complaint shows up.
+- **CI comment goes stale**: `.github/workflows/ci.yml:58-59`, the
+  `build-cross` job's `ENGINE_CRATES` env comment, currently reads
+  `"every crate except the sdl3 windowing layer (lunar, lunar-render,
+  lunar-input) and lunar-audio (cubeb's nested cmake build does not
+  cross-compile cleanly)"`. After this change `lunar-audio` has no cubeb
+  dependency at all, so blaming cubeb is wrong. The exclusion itself
+  probably still needs to stay, `lunar-audio` now depends on `sdl3` too and
+  would join the other three crates' existing (already pre-this-change)
+  sdl3-related cross-compile exclusion from this job, for a real and more
+  consistent reason than before, but whether `lunar-audio` could actually
+  newly succeed in `build-cross` (an audio-only sdl3 dependency might not
+  hit whatever `raw-window-handle`-specific problem the windowing crates
+  do) is genuinely untested from here. Flag as: update the comment to name
+  `sdl3` instead of `cubeb`, and try actually adding `lunar-audio` to a
+  cross-compile attempt during implementation rather than assuming either
+  way.
