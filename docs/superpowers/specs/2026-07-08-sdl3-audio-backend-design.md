@@ -19,7 +19,13 @@ SDL3 for windowing/input/gamepad. The one gap, no ASIO, is irrelevant.
 Scope is a pure internal-crate swap: `lunar-audio` is not currently used by
 any example or game code in this repo, so there's no external API-compat
 risk beyond the crate's own public surface, which stays as close to
-unchanged as possible.
+unchanged as possible. Also checked the one sibling repo with any path
+coupling to this one: `~/Projects/Moonwalker`'s `moonwalker-lunar` crate
+depends on `lunar-core`/`lunar-assets` by path, proving cross-repo coupling
+does exist as a mechanism, but confirmed (grepping its Cargo.toml/Cargo.lock)
+it does not depend on `lunar-audio`. Moonwalker has its own, entirely
+separate `cpal`/`AudioBackend`-named audio stack in `moonwalker-engine`,
+coincidentally similar naming, no actual coupling.
 
 ## non-goals
 
