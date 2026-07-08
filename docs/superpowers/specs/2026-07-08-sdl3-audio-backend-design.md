@@ -83,12 +83,24 @@ impl sdl3::audio::AudioCallback<f32> for MixerCallback {
 ```
 
 - `sdl3::init()?.audio()?.open_playback_stream(&spec, MixerCallback { .. })`
-  opens the default playback device. `AudioSpec { format: F32LE, channels: 2,
-  freq: SAMPLE_RATE }`.
+  opens the default playback device. `AudioSpec`'s fields are
+  `Option<i32>`/`Option<AudioFormat>` (`None` = SDL's own device default), so
+  the actual spec is `AudioSpec { freq: Some(SAMPLE_RATE as i32), channels:
+  Some(2), format: Some(AudioFormat::F32LE) }`.
 - Calls its own, independent `sdl3::init()` rather than sharing
-  `bootstrap.rs`'s `Sdl` handle. SDL's subsystem init is refcounted (see
-  `subsystem!` macro in `sdl3-rs`), so a second `init()` from `lunar-audio`
-  just bumps a refcount already held by video/gamepad/mouse. Keeps
+  `bootstrap.rs`'s `Sdl` handle. **Verified in `sdl3-rs` source**
+  (`src/sdl3/sdl.rs`): `Sdl::new()` hard-errors if called a second time from
+  any thread other than the one that first called it (outside `cfg(test)`),
+  so this only works because `AudioPlugin::build()` runs synchronously
+  during `app.add_plugin(...)` in `bootstrap()`, the same thread that ran
+  the original `sdl3::init()` there. Given that, the two `Sdl` instances
+  share the same underlying `SDL_Init` refcount (`SDL_COUNT` static) and
+  `AudioSubsystem` its own separate refcount (`AUDIO_COUNT`), so the second
+  `init()` + `.audio()` just bumps counters, no double-init error. This is
+  same-thread-only: if `AudioPlugin` were ever built from a spawned thread
+  (e.g. some future async setup path) this would panic outside tests. Not a
+  concern today, `GamePlugin::build()` calls are synchronous by
+  construction, but worth flagging for whoever touches this later. Keeps
   `AudioPlugin` decoupled from `lunar-render`/`lunar-input`, no new
   cross-crate resource plumbing.
 - pipewire comes for free: it's SDL3's default linux audio driver.
@@ -128,9 +140,15 @@ Implementation (`sidecar_api.c`) is a thin wrapper over
 NULL)` (no C callback: NULL callback means SDL just pulls whatever's been
 queued via `SDL_PutAudioStreamData`, no pthread involved) plus
 `SDL_GetAudioStreamQueued`/`SDL_PauseAudioStreamDevice`/
-`SDL_ResumeAudioStreamDevice`. **Verified**: compiled and linked clean
-against emscripten's own SDL3 port (see build tooling section) in this
-session.
+`SDL_ResumeAudioStreamDevice`. **Verified this session**: `audio_init` /
+`audio_push` / `audio_queued_bytes` / `audio_shutdown` (the
+`SDL_OpenAudioDeviceStream`/`SDL_PutAudioStreamData`/`SDL_GetAudioStreamQueued`/
+`SDL_DestroyAudioStream` calls) compiled and linked clean against
+emscripten's own SDL3 port (see build tooling section). `audio_pause`/
+`audio_resume` were not smoke-tested, they're the same standard
+`SDL_PauseAudioStreamDevice`/`SDL_ResumeAudioStreamDevice` calls the `sdl3-rs`
+native binding already wraps, low risk, but flagging the gap rather than
+overclaiming.
 
 **Rust bridge** (`crates/lunar-audio/src/backend/sidecar.rs`, renamed from
 today's `web.rs` to match the physics module's naming):
@@ -307,9 +325,11 @@ before the main module.
 `crates/lunar-audio/Cargo.toml`:
 
 - drop `cubeb = "0.34"` and `cpal = { version = "0.15", ... }` entirely
-- non-wasm32 target block: add `sdl3 = { workspace = true }` (no
-  `raw-window-handle`/`build-from-source-static` features needed, just base
-  audio subsystem)
+- non-wasm32 target block: add `sdl3 = { workspace = true }`. Already
+  carries `build-from-source-static` from the workspace-level dependency
+  entry (`Cargo.toml:51`), no need to redeclare it. Doesn't need `lunar`'s
+  extra `raw-window-handle` feature (that's for windowing, irrelevant here),
+  just the base audio subsystem.
 - wasm32 target block: add `wasm-bindgen = "0.2"` (matches
   `lunar-plugin-physics-3d`'s wasm32 dep shape)
 - update `description` field: "audio system: AudioSource trait, mixer,
@@ -340,11 +360,17 @@ Doc comments in `lib.rs` (backend descriptions) and `plugin.rs`'s
   emscripten/SDL upgrade could shift behavior. Not a blocker: same
   experimental-but-works status as plenty of this project's other bleeding
   edge deps.
-- version drift: native SDL3 (via `sdl3-sys`/`sdl3-src`, pinned 3.4.12) and
-  the wasm sidecar's SDL3 (emscripten port pins 3.4.2) are different patch
-  builds. Not a problem: the two are entirely separate compiled artifacts
-  (native binary vs. wasm module), never linked together, both just need to
-  implement the same stable `SDL_AudioStream` API surface.
+- version drift: this workspace's `Cargo.lock` actually pins
+  `sdl3-sys 0.6.5+SDL-3.4.8` (checked directly, not the newer 3.4.12 that
+  happens to sit in this machine's shared cargo registry cache from some
+  other project) for native, while the wasm sidecar's emscripten port pins
+  SDL `3.4.2`. Two different patch builds, plus the system's pacman `sdl3`
+  package (3.4.12) is irrelevant either way since `sdl3-rs`'s
+  `build-from-source-static` feature compiles its own vendored source
+  rather than linking the system lib. Not a problem: the native binary and
+  the wasm module are entirely separate compiled artifacts, never linked
+  together, both just need to implement the same stable `SDL_AudioStream`
+  API surface.
 - sidecar wasm size: an unoptimized smoke build linked to ~690KB. Real
   build goes through the same `wasm-opt -O3` pass `run_wasm.go` already
   applies to the main module; expect it to shrink similarly. Not tuned
