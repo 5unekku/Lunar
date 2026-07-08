@@ -463,6 +463,15 @@ explicitly, that type is gone after this rewrite (renamed
 `Sdl3StreamHandle`, only exists in `native.rs` not wasm32), so this comment
 goes stale if not updated alongside `backend_name()`.
 
+**A third location, outside `lunar-audio` entirely**: `crates/lunar/src/lib.rs:50`
+(the `lunar-engine` facade crate) has a features table with
+`| `audio` | symphonia decoding, cubeb (native) / WebAudio (WASM) |`. Found
+by grepping the whole workspace for `AudioBackend`/`AudioPlugin`/`AudioPlayer`
+outside `crates/lunar-audio/`, this is the only other hit (`bindings/c` and
+`tests/api_seal` have none). Update this row to name SDL3 instead, since
+the scope claim ("no external API-compat risk beyond the crate's own public
+surface") is about the *code* surface, not prose describing it elsewhere.
+
 ## testing
 
 - native: no existing example currently exercises `lunar-audio`. Plan is a
