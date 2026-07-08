@@ -396,10 +396,21 @@ globally), not an `emsdk`-installer checkout, so there's no `EMSDK` var to
 require. If a future dev uses the emsdk installer instead, `emcmake` still
 works the same, just sourced from `emsdk_env.sh` first.
 
-`crates/lunar-audio/sidecar/dist/` is gitignored build output, lives
-in-repo (not a sibling repo like jolt's `dist`), since there's no external
-upstream C++ project to version separately, SDL3 is already an ordinary
-crates.io dependency for the native side.
+`crates/lunar-audio/sidecar/dist/` (and `sidecar/build/`, CMake's own build
+directory) need actually adding to `.gitignore`, they're not covered by
+anything already there. Checked the real `.gitignore`: it has `/dist/`
+(root-anchored, only matches a top-level `dist/`, not this nested one) and
+no generic `build/` pattern at all, only `**/target/` for rust and
+`**/bin/`/`**/obj/`/`**/publish/` for dotnet. Add:
+
+```
+crates/lunar-audio/sidecar/build/
+crates/lunar-audio/sidecar/dist/
+```
+
+Lives in-repo (not a sibling repo like jolt's `dist`), since there's no
+external upstream C++ project to version separately, SDL3 is already an
+ordinary crates.io dependency for the native side.
 
 **`scripts/run_wasm.go` change:** generalize the single `hasSidecar`
 bool/block (lines ~81-106) into a list of sidecar descriptors, so both the
