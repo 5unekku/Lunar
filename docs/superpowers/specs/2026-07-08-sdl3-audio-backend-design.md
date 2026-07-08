@@ -487,8 +487,7 @@ here after finding these one at a time in earlier review passes):
   a separate copy in a different doc file, both need updating.
 - `CONTRIBUTING.md:5`: `` **audio is minimal**: `lunar-audio` (cubeb native,
   cpal on wasm) lives here behind the off-by-default `audio` feature. ``
-  ([[project_rules]] memory: this file is the project's non-negotiable
-  rules doc, worth getting right).
+  (this is the project's non-negotiable rules doc, worth getting right).
 
 **Not touched**: `docs/superpowers/specs/2026-06-27-perf-footprint-audit-design.md`
 mentions `cubeb`/`cubeb-sys` several times, but it's a dated, already-DONE
