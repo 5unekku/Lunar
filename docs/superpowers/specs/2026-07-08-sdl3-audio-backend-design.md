@@ -445,7 +445,12 @@ before the main module.
 
 Doc comments in `lib.rs` (backend descriptions) and `plugin.rs`'s
 `backend_name()` (`"cubeb"` / `"cpal/webaudio"` → `"sdl3"` /
-`"sdl3 (emscripten sidecar)"`) get updated to match.
+`"sdl3 (emscripten sidecar)"`) get updated to match. Also `plugin.rs`'s
+`SyncBackend` comment (verified in the current file, line 11): `"it holds a
+Sender<Box<dyn AudioSource>> and CubebHandle"` names `CubebHandle`
+explicitly, that type is gone after this rewrite (renamed
+`Sdl3StreamHandle`, only exists in `native.rs` not wasm32), so this comment
+goes stale if not updated alongside `backend_name()`.
 
 ## testing
 
