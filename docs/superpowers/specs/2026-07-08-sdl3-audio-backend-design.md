@@ -243,6 +243,43 @@ not a leftover from copying the native shape.
 wasm module inits, exactly like `window.__jolt` today (see build tooling
 section for the `run_wasm.go` change).
 
+## `backend/mod.rs` changes
+
+Re-verified against the current file. This is the actual swap point, and
+needs more than the trait addition below:
+
+```rust
+//! platform audio backends: sdl3 native, sdl3-emscripten-sidecar on wasm32.
+
+#[cfg(not(target_arch = "wasm32"))]
+mod native;
+#[cfg(target_arch = "wasm32")]
+mod sidecar;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use native::Sdl3Backend as PlatformBackend;
+#[cfg(target_arch = "wasm32")]
+pub use sidecar::SidecarBackend as PlatformBackend;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn init() -> Result<PlatformBackend, String> {
+    native::Sdl3Backend::new().map_err(|e| e.to_string())
+}
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn init() -> Result<PlatformBackend, String> {
+    sidecar::SidecarBackend::new()
+}
+```
+
+Top-of-file doc comment (`"cubeb on native, cpal/webaudio on wasm32"`)
+updated to match. `native`'s `init()` body keeps the same
+`.map_err(|e| e.to_string())` shape unchanged: verified `sdl3::Error`
+implements `Display` (`sdl3-rs`'s `sdl.rs:19`, wraps a `String`), same as
+`cubeb::Error` today. `sidecar`'s `init()` body stays a direct call with no
+`map_err`, matching `CpalBackend::new() -> Result<Self, String>`'s existing
+signature today: `SidecarBackend::new()` should return `Result<Self, String>`
+too, not introduce a different error type.
+
 ## `AudioBackend` trait change
 
 One addition, no-op by default, so the public `AudioPlayer` API
@@ -299,9 +336,10 @@ project(audio_sidecar C)
 add_executable(audio_sidecar sidecar_api.c)
 set_target_properties(audio_sidecar PROPERTIES SUFFIX ".js")
 
-target_compile_options(audio_sidecar PRIVATE "-sUSE_SDL=3")
+target_compile_options(audio_sidecar PRIVATE "-sUSE_SDL=3" "-O3")
 target_link_options(audio_sidecar PRIVATE
     "-sUSE_SDL=3"
+    "-O3"
     "-sMODULARIZE=1"
     "-sEXPORT_NAME=createAudioSidecarModule"
     "-sEXPORTED_FUNCTIONS=_audio_init,_audio_push,_audio_queued_bytes,_audio_pause,_audio_resume,_audio_shutdown,_malloc,_free"
@@ -422,11 +460,24 @@ Doc comments in `lib.rs` (backend descriptions) and `plugin.rs`'s
   the wasm module are entirely separate compiled artifacts, never linked
   together, both just need to implement the same stable `SDL_AudioStream`
   API surface.
-- sidecar wasm size: an unoptimized smoke build linked to ~690KB. Real
-  build goes through the same `wasm-opt -O3` pass `run_wasm.go` already
-  applies to the main module; expect it to shrink similarly. Not tuned
-  further in this pass, matches "no aggressive size work beyond existing
-  levers" default for this project.
+- sidecar wasm size: **corrected after checking, this was wrong in an
+  earlier draft.** `run_wasm.go`'s `wasm-opt -O3` pass (lines 60-79) runs
+  only on the main module's `_bg.wasm`, and completes entirely *before* the
+  sidecar-copy block even starts (line 81). Sidecar `.wasm` files are
+  copied byte-for-byte from `sidecar/dist/`, `run_wasm.go` never touches
+  them. Any sidecar shrinking has to happen in `sidecar/build.sh`/
+  `CMakeLists.txt` itself. Turns out this is already partially covered:
+  `-DCMAKE_BUILD_TYPE=Release` (already in `build.sh`) injects
+  `CMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG` automatically, verified by diffing
+  against an explicit `-O0` build (819KB vs. 690KB for the smoke test, so
+  Release's implicit `-O3` was already doing real work, the 690KB figure
+  reported earlier in this doc was an *already-optimized* number, not a raw
+  one as previously stated). The explicit `-O3` in `target_compile_options`/
+  `target_link_options` is therefore redundant with `CMAKE_BUILD_TYPE`, kept
+  for explicitness so a reader doesn't have to know that CMake default to
+  see where the optimization comes from. If the sidecar ever needs to be
+  smaller, the lever is `-Oz` instead of `-O3` in the sidecar's own
+  `CMakeLists.txt`, not anything in `run_wasm.go`.
 - latency: SDL3's default device buffering (native) and the jitter-buffer
   depth (wasm32 `pump()`) are both unmeasured/untuned in this pass. Ship
   first, tune only if a real latency complaint shows up.
