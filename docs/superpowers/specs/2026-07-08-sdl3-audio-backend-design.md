@@ -92,9 +92,18 @@ impl sdl3::audio::AudioCallback<f32> for MixerCallback {
 
 pub struct Sdl3Backend {
     sender: Sender<Box<dyn AudioSource>>, // same crossbeam sender CubebBackend uses
-    _handle: Sdl3Handle, // owns Sdl/AudioSubsystem/AudioStreamWithCallback; unsafe
-                         // impl Send/Sync, same justification as today's CubebHandle
+    _stream: Sdl3StreamHandle, // unsafe impl Send/Sync, same justification as
+                               // today's CubebHandle/StreamHandle
 }
+
+// wraps just the returned AudioStreamWithCallback<MixerCallback>, nothing
+// else needed: traced the sdl3-rs Drop chain, AudioStreamOwner already
+// holds `audio_subsystem: Option<AudioSubsystem>` internally (audio.rs:1083),
+// and AudioSubsystem::new() "forgets" a cloned SdlDrop on first construction,
+// only reclaiming it when the last instance drops (the `subsystem!` macro in
+// sdl.rs). so the stream alone transitively keeps AudioSubsystem and the
+// overall SDL_Init alive, no need to separately store `Sdl`/`AudioSubsystem`.
+struct Sdl3StreamHandle(sdl3::audio::AudioStreamWithCallback<MixerCallback>);
 
 impl AudioBackend for Sdl3Backend {
     fn submit(&self, source: Box<dyn AudioSource>) {
