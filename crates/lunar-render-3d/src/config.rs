@@ -1178,6 +1178,34 @@ impl RenderEngine3d {
 	#[cfg(not(target_arch = "wasm32"))]
 	pub fn read_headless_rgba(&self) -> Option<(Vec<u8>, u32, u32)> {
 		let (texture, _view) = self.headless_target.as_ref()?;
+		self.readback_texture(texture)
+	}
+
+	/// (re)create the capture target when missing or stale (surface resized). it is
+	/// an owned COPY_SRC color texture at surface size, same format as the swapchain,
+	/// that the composite pass mirrors the final frame into for readback.
+	pub(crate) fn ensure_capture_target(&mut self) {
+		let (width, height) = (self.surface_config.width, self.surface_config.height);
+		let matches = self.capture_target.as_ref().is_some_and(|(texture, _)| {
+			let size = texture.size();
+			size.width == width && size.height == height
+		});
+		if !matches {
+			self.capture_target = Some(Self::make_headless_target(
+				&self.device,
+				width,
+				height,
+				self.surface_config.format,
+			));
+		}
+	}
+
+	/// copy a surface-sized COPY_SRC texture back to CPU as tightly-packed bytes in
+	/// the texture's own channel order. blocks until the gpu copy completes: for
+	/// one-shot capture/editor use, never a hot path. shared by headless readback
+	/// and the [`CaptureRequest`] path.
+	#[cfg(not(target_arch = "wasm32"))]
+	pub(crate) fn readback_texture(&self, texture: &wgpu::Texture) -> Option<(Vec<u8>, u32, u32)> {
 		let width = self.surface_config.width;
 		let height = self.surface_config.height;
 

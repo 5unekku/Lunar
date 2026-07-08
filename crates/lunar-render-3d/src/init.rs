@@ -3542,6 +3542,8 @@ impl RenderEngine3d {
 			queue,
 			surface,
 			headless_target,
+			capture_target: None,
+			capture_this_frame: false,
 			msaa_samples,
 			msaa_color_view,
 			surface_config,

@@ -17,6 +17,15 @@ impl RenderEngine3d {
 			self.queries = Some(FrameQueries::new(world));
 		}
 
+		// ── service a one-shot frame capture request ─────────────────────
+		// only PEEK here: the composite pass mirrors the final frame into the
+		// capture target and the post-present block reads it back and publishes a
+		// CapturedFrame, removing the request only once actually serviced. peeking
+		// (not removing) means an early-return frame (surface Outdated/Occluded, no
+		// camera) leaves the request in place to retry next frame instead of
+		// silently dropping it. wasm never runs 3d, so the readback is native-only.
+		self.capture_this_frame = world.get_resource::<CaptureRequest>().is_some();
+
 		// ── gather camera: copy immediately so world borrows end here ────
 		let cam_entity = {
 			let active = world.resource::<ActiveCamera3d>();
@@ -1967,6 +1976,34 @@ impl RenderEngine3d {
 			&& let Some(surface) = &self.surface
 		{
 			surface.configure(&self.device, &self.surface_config);
+		}
+
+		// ── publish a serviced frame capture ─────────────────────────────
+		// read the mirrored composite back and hand games a sampleable texture. the
+		// readback blocks briefly (one-shot at a transition, never a hot path). the
+		// swapchain format may be bgra, so swizzle to the rgba order create_texture
+		// and the surface-shader sampler expect.
+		#[cfg(not(target_arch = "wasm32"))]
+		if self.capture_this_frame {
+			self.capture_this_frame = false;
+			if let Some((texture, _)) = self.capture_target.as_ref()
+				&& let Some((mut bytes, width, height)) = self.readback_texture(texture)
+			{
+				if matches!(
+					self.surface_config.format,
+					wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+				) {
+					for pixel in bytes.chunks_exact_mut(4) {
+						pixel.swap(0, 2);
+					}
+				}
+				let handle = world
+					.resource_mut::<lunar_assets::AssetServer>()
+					.create_texture(width, height, bytes);
+				world.insert_resource(CapturedFrame(handle));
+				// serviced: drop the request now (peeked, not removed, at the top)
+				world.remove_resource::<CaptureRequest>();
+			}
 		}
 		#[cfg(not(target_arch = "wasm32"))]
 		self.staging_belt.recall();

@@ -633,6 +633,37 @@ impl RenderEngine3d {
 			pass.draw(0..3, 0..1);
 		}
 
+		// ── mirror the composited frame into the capture target ───────────────
+		// re-runs the same composite pass into an owned COPY_SRC texture so a
+		// CaptureRequest can read the on-screen frame back (the swapchain is not
+		// COPY_SRC). captures the composited image, before AA/upscale: doom-style
+		// games run those off, so this is the final frame; when they are on it is
+		// the pre-AA frame, which is the sensible "last frame" for a wipe/backdrop.
+		if self.capture_this_frame {
+			self.ensure_capture_target();
+			if let Some((_, capture_view)) = self.capture_target.as_ref() {
+				let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+					label: Some("[composite] capture mirror"),
+					color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+						view: capture_view,
+						resolve_target: None,
+						ops: wgpu::Operations {
+							load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+							store: wgpu::StoreOp::Store,
+						},
+						depth_slice: None,
+					})],
+					depth_stencil_attachment: None,
+					timestamp_writes: None,
+					occlusion_query_set: None,
+					multiview_mask: None,
+				});
+				pass.set_pipeline(&self.composite_pipeline);
+				pass.set_bind_group(0, &self.composite_bg, &[]);
+				pass.draw(0..3, 0..1);
+			}
+		}
+
 		// ── upscale pass: render resolution → display resolution ──────────────
 		// runs when render_scale < 1.0. mode selected from upscale_mode (resolved
 		// above to respect DevRenderProfile::forced_upscale_mode).

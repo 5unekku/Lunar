@@ -1431,6 +1431,23 @@ impl FrameQueries {
 	}
 }
 
+/// one-shot request to capture the next fully-composited frame. insert this
+/// resource anywhere; the renderer services it during its next frame, copies the
+/// final composited (post-tonemap, pre-AA/upscale) image into an asset texture,
+/// and publishes it as [`CapturedFrame`]. removed automatically once serviced.
+///
+/// use it for effects that need "the frame that was just on screen": screen
+/// wipes, pause backdrops, transition freezes. the capture blocks the render
+/// thread briefly, so it is a one-shot at a transition, not a per-frame path.
+#[derive(Resource)]
+pub struct CaptureRequest;
+
+/// the most recently captured frame, as a sampleable texture handle, published by
+/// the renderer in response to a [`CaptureRequest`]. read it the frame after the
+/// request; it stays until the next capture overwrites it.
+#[derive(Resource, Clone)]
+pub struct CapturedFrame(pub lunar_assets::Handle<lunar_assets::Texture>);
+
 /// the 3d rendering engine. owns the wgpu device, queue, and surface.
 ///
 /// inserted as a resource by [`RenderPlugin3d`]. game code should not
@@ -1448,6 +1465,12 @@ pub struct RenderEngine3d {
 	surface_config: wgpu::SurfaceConfiguration,
 	/// offscreen substitute for the swapchain in headless mode (COPY_SRC for readback)
 	headless_target: Option<(wgpu::Texture, wgpu::TextureView)>,
+	/// one-shot capture target: an owned COPY_SRC copy of the final composited
+	/// frame, lazily (re)created at surface size when a [`CaptureRequest`] lands.
+	capture_target: Option<(wgpu::Texture, wgpu::TextureView)>,
+	/// set for the single frame that services a [`CaptureRequest`]; drives the
+	/// extra composite-into-capture pass and the post-present readback + publish.
+	capture_this_frame: bool,
 	render_tier: RenderTier,
 	hdr_format: wgpu::TextureFormat,
 
@@ -2151,8 +2174,8 @@ impl GamePlugin for RenderPlugin3d {
 /// dev/profiling internals stay at the crate root (`lunar::lunar_render_3d::X`).
 pub mod prelude {
 	pub use crate::{
-		QualityPreset, QualitySettings, RenderConfig3d, RenderEngine3d, RenderInfo3d,
-		RenderPlugin3d, Sky, UpscaleMode,
+		CaptureRequest, CapturedFrame, QualityPreset, QualitySettings, RenderConfig3d,
+		RenderEngine3d, RenderInfo3d, RenderPlugin3d, Sky, UpscaleMode,
 	};
 	pub use crate::hooks::{ShadowCtx, ShadowProvider};
 }
