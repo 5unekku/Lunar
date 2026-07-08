@@ -454,23 +454,41 @@ before the main module.
 - update `description` field: "audio system: AudioSource trait, mixer,
   symphonia decoding, sdl3 native + emscripten-sidecar backends"
 
-Doc comments in `lib.rs` (backend descriptions) and `plugin.rs`'s
-`backend_name()` (`"cubeb"` / `"cpal/webaudio"` → `"sdl3"` /
-`"sdl3 (emscripten sidecar)"`) get updated to match. Also `plugin.rs`'s
-`SyncBackend` comment (verified in the current file, line 11): `"it holds a
-Sender<Box<dyn AudioSource>> and CubebHandle"` names `CubebHandle`
-explicitly, that type is gone after this rewrite (renamed
-`Sdl3StreamHandle`, only exists in `native.rs` not wasm32), so this comment
-goes stale if not updated alongside `backend_name()`.
+**Root `Cargo.toml` also needs a change**, not just `lunar-audio`'s: it has
+a `[profile.dev.package.cubeb-sys]` override (lines 163-169) with a detailed
+comment explaining a cmake/cubeb-sys profile-dir build quirk. Once `cubeb`
+is gone from the dependency graph entirely (nothing else in the workspace
+depends on it), this whole block is dead configuration, delete it.
 
-**A third location, outside `lunar-audio` entirely**: `crates/lunar/src/lib.rs:50`
-(the `lunar-engine` facade crate) has a features table with
-`| `audio` | symphonia decoding, cubeb (native) / WebAudio (WASM) |`. Found
-by grepping the whole workspace for `AudioBackend`/`AudioPlugin`/`AudioPlayer`
-outside `crates/lunar-audio/`, this is the only other hit (`bindings/c` and
-`tests/api_seal` have none). Update this row to name SDL3 instead, since
-the scope claim ("no external API-compat risk beyond the crate's own public
-surface") is about the *code* surface, not prose describing it elsewhere.
+**Every remaining stale-reference site**, found by grepping the whole repo
+for `cubeb`/`cpal` across `.rs`/`.toml`/`.md` (doing this exhaustively once
+here after finding these one at a time in earlier review passes):
+
+- `crates/lunar-audio/src/lib.rs`, `plugin.rs`, `backend/{mod,native,web}.rs`,
+  `Cargo.toml` — all rewritten wholesale by this design, already covered
+  above.
+- `crates/lunar-audio/src/plugin.rs`'s `SyncBackend` comment specifically
+  (verified in the current file, line 11): `"it holds a
+  Sender<Box<dyn AudioSource>> and CubebHandle"` names `CubebHandle`
+  explicitly, gone after this rewrite (renamed `Sdl3StreamHandle`, only
+  exists in `native.rs` not wasm32).
+- `crates/lunar/src/lib.rs:50` (the `lunar-engine` facade crate, outside
+  `lunar-audio` entirely): features table row
+  `` | `audio` | symphonia decoding, cubeb (native) / WebAudio (WASM) | ``.
+- `docs/audio.md:20`: `` `AudioPlugin` initializes the platform backend
+  (cubeb on native, WebAudio on WASM) ``.
+- `docs/01-setup.md:18`: same features-table row as `crates/lunar/src/lib.rs:50`,
+  a separate copy in a different doc file, both need updating.
+- `CONTRIBUTING.md:5`: `` **audio is minimal**: `lunar-audio` (cubeb native,
+  cpal on wasm) lives here behind the off-by-default `audio` feature. ``
+  ([[project_rules]] memory: this file is the project's non-negotiable
+  rules doc, worth getting right).
+
+**Not touched**: `docs/superpowers/specs/2026-06-27-perf-footprint-audit-design.md`
+mentions `cubeb`/`cubeb-sys` several times, but it's a dated, already-DONE
+historical audit record of what the codebase looked like on 2026-06-27, not
+living documentation. Editing it to reflect this later change would be
+revisionist. Leave it as-is.
 
 ## testing
 
