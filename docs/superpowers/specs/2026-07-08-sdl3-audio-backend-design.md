@@ -65,19 +65,40 @@ Going with **A**.
 ## native backend
 
 Replace `crates/lunar-audio/src/backend/native.rs`'s `CubebBackend` with an
-`Sdl3Backend`. Shape stays the same as cubeb's: open a device with a pull
-callback, mixer fills a flat interleaved f32 buffer each tick.
+`Sdl3Backend`, keeping the exact same struct split the real `CubebBackend`
+already has (verified against the current file): `Mixer` lives entirely
+inside the callback (owned by the audio thread), `Sender` lives on the
+outer backend struct (touched by `submit()` from the ECS thread), the two
+never share state except through the channel.
 
 ```rust
-struct MixerCallback { sender: /* existing crossbeam plumbing, unchanged */ }
+struct MixerCallback {
+    mixer: Mixer,
+    scratch: Vec<f32>, // resized lazily, mirrors cubeb's `flat` buffer
+}
 
 impl sdl3::audio::AudioCallback<f32> for MixerCallback {
     fn callback(&mut self, stream: &mut sdl3::audio::AudioStream, requested: i32) {
-        // requested is total interleaved samples (not frames); mixer.fill()
-        // already takes a flat &mut [f32], so this drops cubeb's StereoFrame
-        // conversion step entirely
-        mixer.fill(&mut scratch[..requested as usize]);
-        stream.put_data_f32(&scratch[..requested as usize]).ok();
+        // requested is total interleaved samples (not frames): confirmed in
+        // sdl3-rs's callback trampoline, `len / size_of::<Channel>()`.
+        // mixer.fill() already takes a flat &mut [f32], so this drops
+        // cubeb's StereoFrame conversion step entirely.
+        let needed = requested.max(0) as usize;
+        self.scratch.resize(needed, 0.0);
+        self.mixer.fill(&mut self.scratch);
+        stream.put_data_f32(&self.scratch).ok();
+    }
+}
+
+pub struct Sdl3Backend {
+    sender: Sender<Box<dyn AudioSource>>, // same crossbeam sender CubebBackend uses
+    _handle: Sdl3Handle, // owns Sdl/AudioSubsystem/AudioStreamWithCallback; unsafe
+                         // impl Send/Sync, same justification as today's CubebHandle
+}
+
+impl AudioBackend for Sdl3Backend {
+    fn submit(&self, source: Box<dyn AudioSource>) {
+        let _ = self.sender.send(source);
     }
 }
 ```
@@ -87,6 +108,12 @@ impl sdl3::audio::AudioCallback<f32> for MixerCallback {
   `Option<i32>`/`Option<AudioFormat>` (`None` = SDL's own device default), so
   the actual spec is `AudioSpec { freq: Some(SAMPLE_RATE as i32), channels:
   Some(2), format: Some(AudioFormat::F32LE) }`.
+- **Must call `.resume()` on the returned stream.** Caught directly from the
+  doc comment on `open_playback_stream_with_callback`: "The device begins
+  paused, so you must call `stream.resume()` to start playback." Missing
+  this is silent, no error, just no sound. This is the direct equivalent of
+  cubeb's explicit `stream.start()?` call in the current `native.rs`, easy
+  to drop by accident since SDL3's the one requiring an extra step here.
 - Calls its own, independent `sdl3::init()` rather than sharing
   `bootstrap.rs`'s `Sdl` handle. **Verified in `sdl3-rs` source**
   (`src/sdl3/sdl.rs`): `Sdl::new()` hard-errors if called a second time from
@@ -140,7 +167,11 @@ Implementation (`sidecar_api.c`) is a thin wrapper over
 NULL)` (no C callback: NULL callback means SDL just pulls whatever's been
 queued via `SDL_PutAudioStreamData`, no pthread involved) plus
 `SDL_GetAudioStreamQueued`/`SDL_PauseAudioStreamDevice`/
-`SDL_ResumeAudioStreamDevice`. **Verified this session**: `audio_init` /
+`SDL_ResumeAudioStreamDevice`. Same paused-by-default behavior as the
+native side: `audio_init` must call `SDL_ResumeAudioStreamDevice` right
+after opening the stream, or `audio_sidecar.wasm` opens a stream that never
+plays. Already present and working in the smoke-tested code below.
+**Verified this session**: `audio_init` /
 `audio_push` / `audio_queued_bytes` / `audio_shutdown` (the
 `SDL_OpenAudioDeviceStream`/`SDL_PutAudioStreamData`/`SDL_GetAudioStreamQueued`/
 `SDL_DestroyAudioStream` calls) compiled and linked clean against
@@ -179,24 +210,34 @@ extern "C" {
 }
 
 pub struct SidecarBackend {
+    sender: Sender<Box<dyn AudioSource>>,
+    mixer: Mixer,
     scratch: Vec<f32>,
     target_queued_bytes: u32, // jitter buffer depth, defaults to ~100ms:
                               // SAMPLE_RATE * channels * 4 bytes * 0.1
 }
 
 impl AudioBackend for SidecarBackend {
-    fn submit(&self, source: Box<dyn AudioSource>) { /* unchanged: crossbeam -> Mixer */ }
+    fn submit(&self, source: Box<dyn AudioSource>) {
+        let _ = self.sender.send(source);
+    }
 
     fn pump(&mut self) {
         let queued = audio_queued_bytes();
         if queued >= self.target_queued_bytes { return; }
         let want_floats = (self.target_queued_bytes - queued) as usize / 4;
         self.scratch.resize(want_floats, 0.0);
-        mixer.fill(&mut self.scratch);
+        self.mixer.fill(&mut self.scratch);
         audio_push(self.scratch.as_ptr() as u32, self.scratch.len() as i32);
     }
 }
 ```
+
+Still needs the `sender`/`Mixer` split even though wasm32 has no separate
+audio thread: `submit` takes `&self` (any system can call it via
+`Res<AudioPlayer>`, no exclusive access), `Mixer::fill()` takes `&mut self`.
+The channel is what bridges that gap, same reason `CubebBackend` needs it,
+not a leftover from copying the native shape.
 
 `window.__audioSidecar` is loaded by the HTML/JS harness before the main
 wasm module inits, exactly like `window.__jolt` today (see build tooling
@@ -226,6 +267,16 @@ fn pump_audio_backend(mut player: ResMut<AudioPlayer>) {
 Defined in `plugin.rs` alongside `AudioPlayer`, so it can reach the private
 `backend` field directly, no new public accessor needed. Free on native
 (empty call), does the jitter-buffer top-up on wasm32.
+
+**Registration must stay inside the `Ok(backend)` branch.** Verified in the
+current `plugin.rs`: `AudioPlugin::build()` only calls
+`app.insert_resource(AudioPlayer::new(backend))` when `backend::init()`
+succeeds, it logs and skips on `Err` (today's graceful degrade path when no
+audio device exists). `add_system(pump_audio_backend)` has to go inside that
+same `Ok` arm, a `ResMut<AudioPlayer>` system registered unconditionally
+would panic on missing resource the moment init fails. This is the one
+place the new per-frame system has to be threaded through existing control
+flow rather than just appended.
 
 ## build tooling
 
