@@ -166,29 +166,29 @@ repo), adjusted for a push/streaming API instead of a request/reply one.
 int      audio_init(int freq, int channels);   // 0 on failure
 void     audio_push(const float *data, int num_floats);
 uint32_t audio_queued_bytes(void);
-void     audio_pause(void);
-void     audio_resume(void);
 void     audio_shutdown(void);
 ```
+
+No `audio_pause`/`audio_resume` in v1: nothing in this design ever calls
+them (native's `AudioBackend` has no pause/resume either, `CubebBackend`
+just runs continuously), so they'd be speculative API surface. Cut per
+YAGNI, add back if a real pause/resume game-lifecycle hook shows up later.
 
 Implementation (`sidecar_api.c`) is a thin wrapper over
 `SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL,
 NULL)` (no C callback: NULL callback means SDL just pulls whatever's been
 queued via `SDL_PutAudioStreamData`, no pthread involved) plus
-`SDL_GetAudioStreamQueued`/`SDL_PauseAudioStreamDevice`/
-`SDL_ResumeAudioStreamDevice`. Same paused-by-default behavior as the
-native side: `audio_init` must call `SDL_ResumeAudioStreamDevice` right
-after opening the stream, or `audio_sidecar.wasm` opens a stream that never
+`SDL_GetAudioStreamQueued`/`SDL_DestroyAudioStream`. Same paused-by-default
+behavior as the native side: `audio_init` must call the raw
+`SDL_ResumeAudioStreamDevice` SDL call right after opening the stream (an
+internal detail of `audio_init`, not the same thing as the now-cut public
+`audio_resume` API), or `audio_sidecar.wasm` opens a stream that never
 plays. Already present and working in the smoke-tested code below.
-**Verified this session**: `audio_init` /
-`audio_push` / `audio_queued_bytes` / `audio_shutdown` (the
-`SDL_OpenAudioDeviceStream`/`SDL_PutAudioStreamData`/`SDL_GetAudioStreamQueued`/
-`SDL_DestroyAudioStream` calls) compiled and linked clean against
-emscripten's own SDL3 port (see build tooling section). `audio_pause`/
-`audio_resume` were not smoke-tested, they're the same standard
-`SDL_PauseAudioStreamDevice`/`SDL_ResumeAudioStreamDevice` calls the `sdl3-rs`
-native binding already wraps, low risk, but flagging the gap rather than
-overclaiming.
+**Verified this session**: `audio_init` / `audio_push` / `audio_queued_bytes`
+/ `audio_shutdown` (the `SDL_OpenAudioDeviceStream`/`SDL_PutAudioStreamData`/
+`SDL_GetAudioStreamQueued`/`SDL_DestroyAudioStream` calls) compiled and
+linked clean against emscripten's own SDL3 port (see build tooling
+section).
 
 **Rust bridge** (`crates/lunar-audio/src/backend/sidecar.rs`, renamed from
 today's `web.rs` to match the physics module's naming):
@@ -211,11 +211,15 @@ export function audio_push(ptr, num_floats) {
 export function audio_queued_bytes() {
     return window.__audioSidecar._audio_queued_bytes();
 }
+export function audio_shutdown() {
+    window.__audioSidecar._audio_shutdown();
+}
 "#)]
 extern "C" {
     fn audio_init(freq: i32, channels: i32) -> i32;
     fn audio_push(ptr: u32, num_floats: i32);
     fn audio_queued_bytes() -> u32;
+    fn audio_shutdown();
 }
 
 pub struct SidecarBackend {
@@ -224,6 +228,12 @@ pub struct SidecarBackend {
     scratch: Vec<f32>,
     target_queued_bytes: u32, // jitter buffer depth, defaults to ~100ms:
                               // SAMPLE_RATE * channels * 4 bytes * 0.1
+}
+
+impl Drop for SidecarBackend {
+    fn drop(&mut self) {
+        audio_shutdown();
+    }
 }
 
 impl AudioBackend for SidecarBackend {
@@ -351,7 +361,7 @@ target_link_options(audio_sidecar PRIVATE
     "-O3"
     "-sMODULARIZE=1"
     "-sEXPORT_NAME=createAudioSidecarModule"
-    "-sEXPORTED_FUNCTIONS=_audio_init,_audio_push,_audio_queued_bytes,_audio_pause,_audio_resume,_audio_shutdown,_malloc,_free"
+    "-sEXPORTED_FUNCTIONS=_audio_init,_audio_push,_audio_queued_bytes,_audio_shutdown,_malloc,_free"
     "-sEXPORTED_RUNTIME_METHODS=HEAPU8"
     "-sALLOW_MEMORY_GROWTH=1"
     "-sNO_EXIT_RUNTIME=1"
