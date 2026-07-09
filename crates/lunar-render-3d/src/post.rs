@@ -272,7 +272,7 @@ impl RenderEngine3d {
 			let width = self.render_w as f32;
 			let height = self.render_h as f32;
 			let inv_vp = view_proj.inverse();
-			let view_mat = Mat4::look_at_rh(cam_pos, cam_pos + cam_wt.forward(), cam_wt.up());
+			let view_mat = camera_rh::view::look_at_mat4(cam_pos, cam_pos + cam_wt.forward(), cam_wt.up());
 			let inv_vp_cols = inv_vp.to_cols_array();
 			let vp_cols = view_proj.to_cols_array();
 			let view_cols = view_mat.to_cols_array();
@@ -1201,10 +1201,10 @@ impl RenderEngine3d {
 				let refl_fwd = lunar_math::Vec3::new(cam_fwd.x, -cam_fwd.y, cam_fwd.z);
 				let refl_up = lunar_math::Vec3::new(cam_up.x, -cam_up.y, cam_up.z);
 				let refl_target = refl_cam_pos + refl_fwd;
-				let refl_view = Mat4::look_at_rh(refl_cam_pos, refl_target, refl_up);
+				let refl_view = camera_rh::view::look_at_mat4(refl_cam_pos, refl_target, refl_up);
 				let aspect = rw as f32 / rh as f32;
 				let proj_mat =
-					Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 500.0);
+					camera_rh::proj::directx::perspective(std::f32::consts::FRAC_PI_4, aspect, 0.1, 500.0);
 				let refl_vp = proj_mat * refl_view;
 
 				// write reflected globals to a dedicated buffer

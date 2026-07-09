@@ -58,7 +58,7 @@ use lunar_3d::{
 use lunar_bsp::{Area, BspLevel, VisibleAreas};
 use lunar_core::{App, GamePlugin, UpdateStage};
 use lunar_lightmap::{DirectionalLightmap, Lightmap};
-use lunar_math::{Color, Mat3, Mat4, Vec2, Vec3, Vec3A};
+use lunar_math::{glam::camera::rh as camera_rh, Color, Mat3, Mat4, Vec2, Vec3, Vec3A};
 
 // dev builds and wasm keep wgsl inline; native release uses pre-compiled spirv (build.rs)
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]

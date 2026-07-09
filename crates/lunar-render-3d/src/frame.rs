@@ -1401,7 +1401,7 @@ impl RenderEngine3d {
 				let overlay_aspect =
 					self.surface_config.width as f32 / self.surface_config.height.max(1) as f32;
 				let overlay_half_w = overlay_half_h * overlay_aspect;
-				let ortho = Mat4::orthographic_rh(
+				let ortho = camera_rh::proj::directx::orthographic(
 					-overlay_half_w,
 					overlay_half_w,
 					-overlay_half_h,
@@ -2095,7 +2095,7 @@ impl RenderEngine3d {
 		} else {
 			Vec3::Y
 		};
-		let light_view = Mat4::look_at_rh(centroid - light_dir_n * 100.0, centroid, light_up);
+		let light_view = camera_rh::view::look_at_mat4(centroid - light_dir_n * 100.0, centroid, light_up);
 
 		// AABB of corners in light view space
 		let (mut min_x, mut max_x) = (f32::MAX, f32::MIN);
@@ -2126,7 +2126,7 @@ impl RenderEngine3d {
 		let (min_x, max_x) = (cx - half_x, cx + half_x);
 		let (min_y, max_y) = (cy - half_y, cy + half_y);
 
-		let light_proj = Mat4::orthographic_rh(
+		let light_proj = camera_rh::proj::directx::orthographic(
 			min_x,
 			max_x,
 			min_y,

@@ -446,7 +446,7 @@ unsafe fn cull_neon(
 mod tests {
 	use super::*;
 	use crate::visibility::Frustum;
-	use lunar_math::{Mat4, Vec3A};
+	use lunar_math::{glam::camera::rh, Vec3A};
 
 	/// tiny deterministic LCG so tests don't pull a rng dependency.
 	struct Lcg(u64);
@@ -460,8 +460,8 @@ mod tests {
 
 	fn test_frustum() -> Frustum {
 		// a realistic reverse-z perspective × look-at view, so the planes are non-trivial.
-		let proj = Mat4::perspective_rh(60_f32.to_radians(), 16.0 / 9.0, 0.1, 500.0);
-		let view = Mat4::look_at_rh(
+		let proj = rh::proj::directx::perspective(60_f32.to_radians(), 16.0 / 9.0, 0.1, 500.0);
+		let view = rh::view::look_at_mat4(
 			lunar_math::Vec3::new(3.0, 4.0, 10.0),
 			lunar_math::Vec3::ZERO,
 			lunar_math::Vec3::Y,

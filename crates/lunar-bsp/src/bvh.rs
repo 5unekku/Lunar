@@ -213,7 +213,7 @@ impl GamePlugin for BvhPlugin {
 mod tests {
 	use super::*;
 	use bevy_ecs::system::RunSystemOnce;
-	use lunar_math::{Mat4, Quat};
+	use lunar_math::{glam::camera::rh, Quat};
 
 	fn spawn_row(world: &mut World, count: usize) -> Vec<Entity> {
 		// unit boxes spaced 3 apart along x, with some y/z scatter
@@ -255,7 +255,7 @@ mod tests {
 	fn query_returns_each_contained_entity_exactly_once() {
 		let mut world = World::new();
 		let mut spawned = spawn_row(&mut world, 37);
-		let all = Frustum::from_view_proj(Mat4::orthographic_rh(
+		let all = Frustum::from_view_proj(rh::proj::directx::orthographic(
 			-1000.0, 1000.0, -1000.0, 1000.0, -1000.0, 1000.0,
 		));
 		let mut visible = build_and_query(&mut world, all);
@@ -271,7 +271,7 @@ mod tests {
 		let spawned = spawn_row(&mut world, 37);
 		// boxes sit at x = 0, 3, 6, 9, 12, …; this frustum ends at x = 10, so
 		// exactly the first four (max x = 9.5) are inside
-		let narrow = Frustum::from_view_proj(Mat4::orthographic_rh(
+		let narrow = Frustum::from_view_proj(rh::proj::directx::orthographic(
 			-10.0, 10.0, -1000.0, 1000.0, -1000.0, 1000.0,
 		));
 		let mut visible = build_and_query(&mut world, narrow);

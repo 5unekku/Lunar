@@ -1,5 +1,5 @@
 use bevy_ecs::prelude::*;
-use lunar_math::{Mat4, Vec3};
+use lunar_math::{glam::camera::rh, Mat4, Vec3};
 
 use crate::transform::WorldTransform3d;
 
@@ -32,12 +32,12 @@ impl Projection {
 	pub fn matrix(self, aspect: f32) -> Mat4 {
 		match self {
 			Self::Perspective { fov_y, near, far } => {
-				Mat4::perspective_rh(fov_y, aspect, near, far)
+				rh::proj::directx::perspective(fov_y, aspect, near, far)
 			}
 			Self::Orthographic { width, near, far } => {
 				let half_w = width * 0.5;
 				let half_h = half_w / aspect;
-				Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, near, far)
+				rh::proj::directx::orthographic(-half_w, half_w, -half_h, half_h, near, far)
 			}
 		}
 	}
@@ -91,7 +91,7 @@ impl Camera3d {
 		let eye = transform.translation;
 		let target = eye + transform.forward();
 		let up = transform.up();
-		Mat4::look_at_rh(eye, target, up)
+		rh::view::look_at_mat4(eye, target, up)
 	}
 
 	/// build the view-projection matrix (VP) for the given aspect ratio.

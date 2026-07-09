@@ -1340,8 +1340,8 @@ impl RenderEngine3d {
 					}
 					let layer = pt_shadow_idx * 6 + face;
 					let (dir, up) = face_dirs[face];
-					let view = Mat4::look_at_rh(lp, lp + dir, up);
-					let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, near, far);
+					let view = camera_rh::view::look_at_mat4(lp, lp + dir, up);
+					let proj = camera_rh::proj::directx::perspective(std::f32::consts::FRAC_PI_2, 1.0, near, far);
 					let face_vp = proj * view;
 					// upload face VP + light pos + radius to the per-face slot
 					let slot_offset = (layer as u64) * UNIFORM_STRIDE;
