@@ -17,7 +17,8 @@ impl GamePlugin for MyGame {
 }
 ```
 
-`AudioPlugin` initializes the platform backend (cubeb on native, WebAudio on WASM)
+`AudioPlugin` initializes the platform backend (SDL3 on native, SDL3 via an
+emscripten sidecar module on WASM)
 and inserts the `AudioPlayer` resource. if backend initialization fails, it logs an
 error and continues without audio, the rest of your game still runs.
 

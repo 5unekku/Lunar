@@ -15,7 +15,7 @@ available features:
 |---------|----------------|
 | `2d` *(default)* | 2d sprite/text rendering, 2d collision |
 | `3d` | clustered-forward PBR renderer, BSP/PVS culling, lightmaps |
-| `audio` | symphonia decoding, cubeb (native) / WebAudio (WASM) |
+| `audio` | symphonia decoding, SDL3 (native) / SDL3-sidecar (WASM) |
 | `full` | `2d` + `3d` + `audio` |
 
 ## your first game

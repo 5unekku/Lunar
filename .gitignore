@@ -8,6 +8,8 @@
 
 # cross-compiled output
 /dist/
+crates/lunar-audio/sidecar/build/
+crates/lunar-audio/sidecar/dist/
 **/*.rs.bk
 
 # git worktrees

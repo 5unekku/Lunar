@@ -55,9 +55,9 @@ jobs:
     runs-on: ubuntu-latest
     container: rust:slim-trixie
     env:
-      # every crate except the sdl3 windowing layer (lunar, lunar-render, lunar-input)
-      # and lunar-audio (cubeb's nested cmake build does not cross-compile cleanly).
-      # the sdl3 layer is target-independent rust verified by the x86_64/aarch64 full builds.
+      # every crate except the sdl3-dependent ones (lunar, lunar-render,
+      # lunar-input, lunar-audio): sdl3 is target-independent rust, verified
+      # by the x86_64/aarch64 full builds instead of every cross target here.
       ENGINE_CRATES: >-
         -p lunar-math -p lunar-core -p lunar-2d -p lunar-3d -p lunar-bsp
         -p lunar-gamedata -p lunar-atlas -p lunar-lightmap -p lunar-render-3d

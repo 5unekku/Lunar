@@ -8,8 +8,8 @@ use lunar_assets::Sound;
 use lunar_core::{App, GamePlugin};
 
 // PlatformBackend is Send but not Sync (it holds a Sender<Box<dyn AudioSource>>
-// and CubebHandle). bevy_ecs Resources require Send + Sync, so we wrap in a
-// newtype that asserts Sync.
+// and a platform stream handle). bevy_ecs Resources require Send + Sync, so we
+// wrap in a newtype that asserts Sync.
 //
 // SAFETY: AudioPlayer is only accessed from the ECS world where bevy_ecs
 // guarantees single-threaded access to a given resource at a time through
@@ -64,6 +64,7 @@ impl GamePlugin for AudioPlugin {
         match backend::init() {
             Ok(backend) => {
                 app.insert_resource(AudioPlayer::new(backend));
+                app.add_system(pump_audio_backend);
                 log::info!("AudioPlugin: {} backend initialized", backend_name());
             }
             Err(error) => {
@@ -73,7 +74,11 @@ impl GamePlugin for AudioPlugin {
     }
 }
 
+fn pump_audio_backend(mut player: ResMut<AudioPlayer>) {
+    player.backend.0.pump();
+}
+
 #[cfg(not(target_arch = "wasm32"))]
-fn backend_name() -> &'static str { "cubeb" }
+fn backend_name() -> &'static str { "sdl3" }
 #[cfg(target_arch = "wasm32")]
-fn backend_name() -> &'static str { "cpal/webaudio" }
+fn backend_name() -> &'static str { "sdl3-sidecar" }

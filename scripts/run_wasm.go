@@ -78,32 +78,39 @@ func main() {
 	}
 	reportWasmSize(bound)
 
-	// copy jolt physics sidecar if it has been built (optional, only needed for
-	// physics examples). sidecar dist lives in the sibling jolt repo.
-	sidecarDist := filepath.Join(filepath.Dir(root), "jolt", "jolt-rust", "sidecar", "dist")
-	hasSidecar := fileExists(filepath.Join(sidecarDist, "jolt_sidecar.js")) &&
-		fileExists(filepath.Join(sidecarDist, "jolt_sidecar.wasm"))
-	if hasSidecar {
-		for _, fname := range []string{"jolt_sidecar.js", "jolt_sidecar.wasm"} {
-			if err := copyFile(filepath.Join(sidecarDist, fname), filepath.Join(tmpDir, fname)); err != nil {
+	// copy any built sidecar modules present (optional, each only needed for
+	// examples that use that subsystem). each sidecar's dist dir is checked
+	// independently so jolt and audio can be present or absent on their own.
+	type sidecarModule struct {
+		distDir     string
+		jsFile      string
+		wasmFile    string
+		globalName  string // e.g. "__jolt", "__audioSidecar"
+		factoryName string // e.g. "createJoltModule", "createAudioSidecarModule"
+	}
+
+	sidecars := []sidecarModule{
+		{filepath.Join(filepath.Dir(root), "jolt", "jolt-rust", "sidecar", "dist"),
+			"jolt_sidecar.js", "jolt_sidecar.wasm", "__jolt", "createJoltModule"},
+		{filepath.Join(root, "crates", "lunar-audio", "sidecar", "dist"),
+			"audio_sidecar.js", "audio_sidecar.wasm", "__audioSidecar", "createAudioSidecarModule"},
+	}
+
+	var moduleScript strings.Builder
+	for _, sc := range sidecars {
+		if !fileExists(filepath.Join(sc.distDir, sc.jsFile)) || !fileExists(filepath.Join(sc.distDir, sc.wasmFile)) {
+			continue
+		}
+		for _, fname := range []string{sc.jsFile, sc.wasmFile} {
+			if err := copyFile(filepath.Join(sc.distDir, fname), filepath.Join(tmpDir, fname)); err != nil {
 				log.Fatalf("failed to copy sidecar file %s: %v", fname, err)
 			}
 		}
-		fmt.Println("sidecar: jolt_sidecar.{js,wasm} included")
+		fmt.Printf("sidecar: %s,%s included\n", sc.jsFile, sc.wasmFile)
+		fmt.Fprintf(&moduleScript, "import %s from './%s';\nwindow.%s = await %s();\n",
+			sc.factoryName, sc.jsFile, sc.globalName, sc.factoryName)
 	}
-
-	// build the module init block: load the jolt sidecar first when present so
-	// window.__jolt is ready before the main wasm initializes.
-	var moduleScript string
-	if hasSidecar {
-		moduleScript = fmt.Sprintf(`import createJoltModule from './jolt_sidecar.js';
-window.__jolt = await createJoltModule();
-import init from './%s.js';
-await init();`, name)
-	} else {
-		moduleScript = fmt.Sprintf(`import init from './%s.js';
-await init();`, name)
-	}
+	fmt.Fprintf(&moduleScript, "import init from './%s.js';\nawait init();", name)
 
 	// minimal index.html: canvas fits the viewport while preserving aspect ratio.
 	// JS sets the canvas buffer size to match its CSS-rendered size so there is
@@ -142,7 +149,7 @@ canvas { display: block; width: min(100vw, calc(100vh * 1280 / 720)); aspect-rat
 %s
 </script>
 </body>
-</html>`, name, moduleScript)
+</html>`, name, moduleScript.String())
 
 	if err := os.WriteFile(filepath.Join(tmpDir, "index.html"), []byte(html), 0644); err != nil {
 		log.Fatalf("failed to write index.html: %v", err)

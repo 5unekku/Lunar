@@ -2,7 +2,7 @@
 
 ## project rules
 
-- **audio is minimal**: `lunar-audio` (cubeb native, cpal on wasm) lives here behind the off-by-default `audio` feature. deeper audio work (tracker engines, DSP, mixing graphs) belongs to the moonwalker project.
+- **audio is minimal**: `lunar-audio` (SDL3 native, SDL3-emscripten-sidecar on wasm) lives here behind the off-by-default `audio` feature. deeper audio work (tracker engines, DSP, mixing graphs) belongs to the moonwalker project.
 - **no async runtime**: async needs are covered by `pollster::block_on` (wgpu init), `std::thread` + crossbeam (asset IO), and `wasm_bindgen_futures::spawn_local` (wasm fetch). rayon only if profiling proves it necessary.
 - **prelude is the contract**: game code depends only on `lunar`. `bevy_ecs`, `wgpu`, `sdl3` never appear in a game's `Cargo.toml`. any leak is a bug.
 - **editor is downstream**: the editor lives in a separate repo that depends on `lunar`. no editor code in this workspace.

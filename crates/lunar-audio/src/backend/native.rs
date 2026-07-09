@@ -1,82 +1,77 @@
-//! cubeb backend for native targets (WASAPI / CoreAudio / PulseAudio / ALSA).
+//! sdl3 backend for native targets (WASAPI / CoreAudio / PulseAudio / ALSA via SDL3).
 //!
-//! the cubeb stream runs on a dedicated OS audio thread; game code submits
+//! the sdl3 stream runs on a dedicated OS audio thread; game code submits
 //! sources via a crossbeam channel and the callback drains it lock-free.
 
 use crate::mixer::Mixer;
 use crate::source::{AudioSource, SAMPLE_RATE};
 use super::AudioBackend;
 use crossbeam_channel::{Sender, unbounded};
-use cubeb::{ChannelLayout, SampleFormat, StereoFrame, StreamParamsBuilder};
+use sdl3::audio::{AudioCallback, AudioFormat, AudioSpec, AudioStream, AudioStreamWithCallback};
 
-// libcubeb is internally thread-safe. Context and Stream hold raw C pointers
-// that cubeb-rs leaves non-Send to force explicit acknowledgement; we provide it.
-struct CubebHandle {
-    _context: cubeb::Context,
-    _stream: cubeb::Stream<StereoFrame<f32>>,
-}
-// SAFETY: libcubeb uses a dedicated OS audio thread internally and synchronises
-// all access to the context and stream handle itself. moving them across Rust
-// threads is safe as long as we never call their methods concurrently, which
-// we don't; _handle is permanently idle after construction.
-unsafe impl Send for CubebHandle {}
-unsafe impl Sync for CubebHandle {}
-
-pub struct CubebBackend {
-    sender: Sender<Box<dyn AudioSource>>,
-    _handle: CubebHandle,
+struct MixerCallback {
+    mixer: Mixer,
+    scratch: Vec<f32>, // resized lazily, mirrors the old cubeb `flat` buffer
 }
 
-impl CubebBackend {
-    pub fn new() -> Result<Self, cubeb::Error> {
-        let context = cubeb::init("lunar-audio")?;
-
-        let params = StreamParamsBuilder::new()
-            .format(SampleFormat::Float32LE)
-            .rate(SAMPLE_RATE)
-            .channels(2)
-            .layout(ChannelLayout::STEREO)
-            .take();
-
-        let (sender, receiver) = unbounded::<Box<dyn AudioSource>>();
-        let mut mixer = Mixer::new(receiver);
-        // pre-allocate the flat f32 scratch for the callback; resized lazily if cubeb
-        // ever changes the buffer size (rare in practice).
-        let mut flat: Vec<f32> = Vec::new();
-
-        let mut builder = cubeb::StreamBuilder::<StereoFrame<f32>>::new();
-        // 512 frames ≈ 10 ms at 48000 Hz: low latency without underruns
-        builder
-            .name("lunar")
-            .default_output(&params)
-            .latency(512)
-            .data_callback(move |_input, output: &mut [StereoFrame<f32>]| {
-                let needed = output.len() * 2;
-                if flat.len() < needed {
-                    flat.resize(needed, 0.0);
-                }
-                mixer.fill(&mut flat[..needed]);
-                for (frame, chunk) in output.iter_mut().zip(flat.chunks_exact(2)) {
-                    frame.l = chunk[0];
-                    frame.r = chunk[1];
-                }
-                output.len() as isize
-            })
-            .state_callback(|state| {
-                log::debug!("cubeb stream state: {state:?}");
-            });
-        let stream = builder.init(&context)?;
-
-        stream.start()?;
-
-        Ok(Self {
-            sender,
-            _handle: CubebHandle { _context: context, _stream: stream },
-        })
+impl AudioCallback<f32> for MixerCallback {
+    fn callback(&mut self, stream: &mut AudioStream, requested: i32) {
+        // requested is total interleaved samples (not frames). mixer.fill()
+        // already takes a flat &mut [f32], so this drops the old cubeb
+        // StereoFrame conversion step entirely.
+        let needed = requested.max(0) as usize;
+        self.scratch.resize(needed, 0.0);
+        self.mixer.fill(&mut self.scratch);
+        stream.put_data_f32(&self.scratch).ok();
     }
 }
 
-impl AudioBackend for CubebBackend {
+// wraps just the returned stream: sdl3-rs's AudioStreamOwner already holds its
+// own AudioSubsystem internally, so the stream alone transitively keeps
+// AudioSubsystem (and the underlying SDL_Init) alive. no need to separately
+// store Sdl/AudioSubsystem.
+struct Sdl3StreamHandle(#[allow(dead_code)] AudioStreamWithCallback<MixerCallback>);
+// SAFETY: SDL3 runs the audio callback on its own dedicated OS thread and
+// synchronises all access to the stream handle internally. moving the handle
+// across Rust threads is safe as long as we never call its methods
+// concurrently, which we don't: it's permanently idle after construction,
+// aside from the one-time resume() call in `new`.
+unsafe impl Send for Sdl3StreamHandle {}
+unsafe impl Sync for Sdl3StreamHandle {}
+
+pub struct Sdl3Backend {
+    sender: Sender<Box<dyn AudioSource>>,
+    _stream: Sdl3StreamHandle,
+}
+
+impl Sdl3Backend {
+    pub fn new() -> Result<Self, sdl3::Error> {
+        // independent sdl3::init() rather than sharing bootstrap.rs's Sdl handle:
+        // Sdl::new() only hard-errors on a second call from a *different* thread,
+        // and AudioPlugin::build() always runs on the same thread that ran the
+        // original init() in bootstrap(), so this just bumps SDL's refcounts.
+        let sdl = sdl3::init()?;
+        let audio_subsystem = sdl.audio()?;
+
+        let spec = AudioSpec {
+            freq: Some(SAMPLE_RATE as i32),
+            channels: Some(2),
+            format: Some(AudioFormat::F32LE),
+        };
+
+        let (sender, receiver) = unbounded::<Box<dyn AudioSource>>();
+        let mixer = Mixer::new(receiver);
+
+        let stream = audio_subsystem
+            .open_playback_stream(&spec, MixerCallback { mixer, scratch: Vec::new() })?;
+        // the device begins paused: skipping this means silent, errorless no sound.
+        stream.resume()?;
+
+        Ok(Self { sender, _stream: Sdl3StreamHandle(stream) })
+    }
+}
+
+impl AudioBackend for Sdl3Backend {
     fn submit(&self, source: Box<dyn AudioSource>) {
         // ignore send errors, stream may have closed during shutdown
         let _ = self.sender.send(source);

@@ -2,8 +2,9 @@
 //!
 //! # backends
 //!
-//! - **native**: cubeb (WASAPI / CoreAudio / PulseAudio / ALSA), low latency
-//! - **wasm32**: cpal webaudio (ScriptProcessorNode over the browser's AudioContext)
+//! - **native**: SDL3 (WASAPI / CoreAudio / PulseAudio / ALSA / pipewire)
+//! - **wasm32**: SDL3 via a standalone emscripten sidecar module, batched PCM
+//!   pushed once per frame (mirrors the `lunar-plugin-physics-3d` jolt sidecar)
 //!
 //! # extension point
 //!

@@ -7,7 +7,7 @@ repository.workspace = true
 readme.workspace = true
 categories.workspace = true
 keywords.workspace = true
-description = "audio system: AudioSource trait, mixer, symphonia decoding, cubeb/cpal backends"
+description = "audio system: AudioSource trait, mixer, symphonia decoding, sdl3 native + emscripten-sidecar backends"
 
 [dependencies]
 lunar-core   = { path = "../lunar-core",   version = "1.0.0" }
@@ -21,7 +21,7 @@ symphonia = { version = "0.5", default-features = false, features = [
 ] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-cubeb = "0.34"
+sdl3 = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-cpal = { version = "0.15", features = ["wasm-bindgen"] }
+wasm-bindgen = "0.2"
