@@ -20,7 +20,7 @@ unsafe impl Sync for SyncBackend {}
 
 /// game-facing audio API: available as a [`Resource`] after [`AudioPlugin`] builds.
 ///
-/// call [`play`] to decode and start a sound, or [`play_source`] to submit a custom
+/// call [`Self::play`] to decode and start a sound, or [`Self::play_source`] to submit a custom
 /// [`AudioSource`] (tracker, procedural synth, etc.) directly.
 #[derive(Resource)]
 pub struct AudioPlayer {
@@ -35,7 +35,7 @@ impl AudioPlayer {
     /// the first play of a sound decodes synchronously on the caller's thread
     /// and caches the PCM on the asset; repeat plays are an Arc clone. fine for
     /// short SFX: for streaming music, decode off-thread and use
-    /// [`play_source`] instead.
+    /// [`Self::play_source`] instead.
     pub fn play(&self, sound: &Sound, options: PlaybackOptions) {
         match DecodedSource::from_sound(sound, options) {
             Ok(source) => self.backend.0.submit(Box::new(source)),

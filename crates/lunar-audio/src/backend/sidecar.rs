@@ -79,7 +79,9 @@ impl AudioBackend for SidecarBackend {
     fn pump(&mut self) {
         let queued = audio_queued_bytes();
         if queued >= self.target_queued_bytes { return; }
-        let want_floats = (self.target_queued_bytes - queued) as usize / 4;
+        // round down to a whole number of stereo frames (2 floats) so a push
+        // never splits a frame across buffers
+        let want_floats = ((self.target_queued_bytes - queued) as usize / 4) & !1;
         self.scratch.resize(want_floats, 0.0);
         self.mixer.fill(&mut self.scratch);
         audio_push(self.scratch.as_ptr() as u32, self.scratch.len() as i32);
