@@ -2,7 +2,7 @@ Lunar Engine
 Copyright (c) 2024-2026 5unekku and contributors
 
 This software is licensed under the Mozilla Public License 2.0 (MPL-2.0).
-A copy of the license is available in the LICENSE-MPL file in this repository.
+A copy of the license is available in the LICENSE-MPL-2.0 file in this repository.
 
 -------------------------------------------------------------------------------
 Additional Permission: Compiled Applications (MPL-2.0 Section 7)
@@ -23,7 +23,7 @@ files, provided that:
        "Built with Lunar Engine (https://gitlab.com/5unekku/Lunar),
         licensed under the Mozilla Public License 2.0."
 
-  3. A copy of this NOTICE file and the LICENSE-MPL file is included with the
+  3. A copy of this NOTICE file and the LICENSE-MPL-2.0 file is included with the
      Compiled Work or made available at a URL disclosed to recipients.
 
 This permission does not extend to modified versions of Lunar distributed as
@@ -35,10 +35,9 @@ Third-Party Notices
 -------------------------------------------------------------------------------
 
 This software depends on third-party libraries. Their licenses are reproduced
-in full in the LICENSE-MIT file included in this repository, or available from
-the sources listed below.
+in full in the LICENSE-MIT and LICENSE-Apache-2.0 files included in this
+repository.
 
   bevy_ecs    : MIT OR Apache-2.0   https://github.com/bevyengine/bevy
   wgpu        : MIT OR Apache-2.0   https://github.com/gfx-rs/wgpu
   glam        : MIT OR Apache-2.0   https://github.com/bitshifter/glam-rs
-  SDL3        : zlib                https://github.com/libsdl-org/SDL

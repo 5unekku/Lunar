@@ -2,7 +2,7 @@
 name = "lunar-math"
 version.workspace = true
 edition.workspace = true
-license = "MIT"
+license = "MIT OR Apache-2.0"
 description = "math types: Vec2, Vec3, Color, Rect, Transform, LocalTransform, WorldTransform, convenience macros"
 repository.workspace = true
 readme.workspace = true
