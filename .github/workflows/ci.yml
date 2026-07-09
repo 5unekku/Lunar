@@ -86,4 +86,8 @@ jobs:
       - run: pip install cargo-zigbuild --break-system-packages
       - run: |
           if [ "${{ matrix.full }}" = "true" ]; then scope="--workspace"; else scope="$ENGINE_CRATES"; fi
-          cargo zigbuild --target ${{ matrix.target }} $scope
+          # force llvm here: [profile.dev] pins cranelift for fast local debug
+          # iteration, but cranelift can't target 32-bit (armv7/i686) at all, and
+          # CI cross-builds are throughput, not interactive debugging, so they
+          # want the real shipping backend regardless of target.
+          cargo zigbuild --target ${{ matrix.target }} $scope --config 'profile.dev.codegen-backend="llvm"'
