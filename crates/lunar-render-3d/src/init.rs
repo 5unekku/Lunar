@@ -97,7 +97,7 @@ impl RenderEngine3d {
 			label: Some("lunar-render-3d device"),
 			required_features,
 			required_limits: wgpu::Limits {
-				max_bind_groups: 8,
+				max_bind_groups: Self::negotiate_max_bind_groups(adapter),
 				..wgpu::Limits::default()
 			},
 			memory_hints: wgpu::MemoryHints::Performance,
@@ -113,6 +113,27 @@ impl RenderEngine3d {
 		};
 		log::info!("HDR format: {hdr_format:?}, indirect: {has_indirect}");
 		(device, queue, hdr_format, has_indirect)
+	}
+
+	/// bind groups the renderer wants vs what the adapter actually grants.
+	///
+	/// some pipelines bind `@group(0)`..`@group(5)` (6 groups) and the renderer
+	/// asks for 8. Chrome/Dawn hard-caps `maxBindGroups` at 4 while Firefox and
+	/// native wgpu expose 8, so clamp to the adapter's limit (requesting more
+	/// than it supports makes device creation panic) and warn when the cap is
+	/// below what the heaviest passes need.
+	fn negotiate_max_bind_groups(adapter: &wgpu::Adapter) -> u32 {
+		const WANTED: u32 = 8;
+		const NEEDED: u32 = 6; // highest shader @group index is 5
+		let granted = adapter.limits().max_bind_groups.min(WANTED);
+		if granted < NEEDED {
+			log::warn!(
+				"adapter grants only {granted} bind groups (renderer wants {WANTED}, \
+				 heaviest passes need {NEEDED}); shadow/cull/post pipelines may fail to \
+				 build. Chrome/Dawn caps maxBindGroups at 4; Firefox and native wgpu allow 8."
+			);
+		}
+		granted
 	}
 
 	/// create the 3d render engine from a surface (wasm async path).
@@ -143,7 +164,7 @@ impl RenderEngine3d {
 				label: Some("lunar-render-3d device"),
 				required_features: wgpu::Features::empty(),
 				required_limits: wgpu::Limits {
-					max_bind_groups: 8,
+					max_bind_groups: Self::negotiate_max_bind_groups(&adapter),
 					..wgpu::Limits::downlevel_webgl2_defaults()
 				},
 				memory_hints: wgpu::MemoryHints::Performance,
