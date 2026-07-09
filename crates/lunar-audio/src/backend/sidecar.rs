@@ -15,14 +15,18 @@ use wasm_bindgen::prelude::*;
 export function audio_init(freq, channels) {
     return window.__audioSidecar._audio_init(freq, channels);
 }
-export function audio_push(ptr, num_floats) {
-    if (num_floats === 0) return;
+export function audio_push(data) {
+    if (data.length === 0) return;
     const M = window.__audioSidecar;
-    const bytes = num_floats * 4;
+    const bytes = data.length * 4;
     const sidecar_ptr = M._malloc(bytes);
+    // data is a Float32Array view over the caller's wasm memory (passed by
+    // wasm-bindgen). copy its bytes into the sidecar's separate heap. this
+    // avoids referencing the main module's `wasm` binding, which is not in
+    // scope inside a wasm-bindgen inline_js snippet module.
     new Uint8Array(M.HEAPU8.buffer, sidecar_ptr, bytes)
-        .set(new Uint8Array(wasm.memory.buffer, ptr, bytes));
-    M._audio_push(sidecar_ptr, num_floats);
+        .set(new Uint8Array(data.buffer, data.byteOffset, bytes));
+    M._audio_push(sidecar_ptr, data.length);
     M._free(sidecar_ptr);
 }
 export function audio_queued_bytes() {
@@ -34,7 +38,7 @@ export function audio_shutdown() {
 "#)]
 extern "C" {
     fn audio_init(freq: i32, channels: i32) -> i32;
-    fn audio_push(ptr: u32, num_floats: i32);
+    fn audio_push(data: &[f32]);
     fn audio_queued_bytes() -> u32;
     fn audio_shutdown();
 }
@@ -84,6 +88,6 @@ impl AudioBackend for SidecarBackend {
         let want_floats = ((self.target_queued_bytes - queued) as usize / 4) & !1;
         self.scratch.resize(want_floats, 0.0);
         self.mixer.fill(&mut self.scratch);
-        audio_push(self.scratch.as_ptr() as u32, self.scratch.len() as i32);
+        audio_push(&self.scratch);
     }
 }
