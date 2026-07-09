@@ -1379,6 +1379,7 @@ pub(crate) struct FrameQueries {
 		&'static ComputedVisibility,
 		bevy_ecs::query::Has<Overlay>,
 	)>,
+	#[allow(clippy::type_complexity)]
 	pub(crate) cullables: QueryState<(
 		Entity,
 		&'static Mesh3d,
@@ -1580,6 +1581,7 @@ pub struct RenderEngine3d {
 	surface_scratch: Vec<(u32, usize, [u32; 4], [SurfaceStagePacked; 4])>,
 	// same tuple plus the entity's view-z, for entities tagged Overlay: drawn in
 	// the 2d overlay pass, painter-sorted by z (no depth buffer there)
+	#[allow(clippy::type_complexity)]
 	surface_overlay_scratch: Vec<(u32, usize, [u32; 4], [SurfaceStagePacked; 4], f32)>,
 	// dedicated overlay pipeline: single-sampled, no depth, alpha-blended into
 	// the resolved hdr target so the 2d hud composites over the whole scene
