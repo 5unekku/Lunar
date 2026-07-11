@@ -38,10 +38,13 @@ pub mod portal;
 pub use bvh::{Bvh, BvhNode, BvhPlugin, BvhVisible};
 pub use level::{BspBlob, BspLevel, BspNode, PortalData};
 pub use plugin::BspPlugin;
-pub use portal::{Area, Portal, PortalCulling, PortalPlugin, VisibleAreas};
+pub use portal::{Area, CameraArea, Portal, PortalCulling, PortalOpen, PortalPlugin, VisibleAreas};
 
 /// common, game-facing BSP/BVH types for `use lunar::prelude::*`.
 /// the full surface (BVH nodes, portal/level internals, …) stays at the crate root.
 pub mod prelude {
-	pub use crate::{Area, BspPlugin, BvhPlugin, PortalPlugin};
+	pub use crate::{
+		Area, BspPlugin, BvhPlugin, CameraArea, Portal, PortalCulling, PortalOpen,
+		PortalPlugin, VisibleAreas,
+	};
 }

@@ -86,6 +86,8 @@ pub use lunar_math;
 pub use lunar_render;
 #[cfg(feature = "3d")]
 pub use lunar_render_3d;
+#[cfg(feature = "3d")]
+pub use lunar_bsp;
 #[cfg(feature = "audio")]
 pub use lunar_audio;
 
