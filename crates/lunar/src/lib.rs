@@ -80,16 +80,16 @@ pub use lunar_2d;
 #[cfg(feature = "3d")]
 pub use lunar_3d;
 pub use lunar_assets;
+#[cfg(feature = "audio")]
+pub use lunar_audio;
+#[cfg(feature = "3d")]
+pub use lunar_bsp;
 pub use lunar_core;
 pub use lunar_input;
 pub use lunar_math;
 pub use lunar_render;
 #[cfg(feature = "3d")]
 pub use lunar_render_3d;
-#[cfg(feature = "3d")]
-pub use lunar_bsp;
-#[cfg(feature = "audio")]
-pub use lunar_audio;
 
 pub mod prelude;
 pub use prelude::*;
