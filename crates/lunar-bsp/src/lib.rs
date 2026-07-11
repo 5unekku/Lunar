@@ -44,7 +44,7 @@ pub use portal::{Area, CameraArea, Portal, PortalCulling, PortalOpen, PortalPlug
 /// the full surface (BVH nodes, portal/level internals, …) stays at the crate root.
 pub mod prelude {
 	pub use crate::{
-		Area, BspPlugin, BvhPlugin, CameraArea, Portal, PortalCulling, PortalOpen,
-		PortalPlugin, VisibleAreas,
+		Area, BspPlugin, BvhPlugin, CameraArea, Portal, PortalCulling, PortalOpen, PortalPlugin,
+		VisibleAreas,
 	};
 }
