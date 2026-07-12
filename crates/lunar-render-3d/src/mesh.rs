@@ -93,7 +93,13 @@ impl RenderEngine3d {
 				#[cfg(target_arch = "wasm32")]
 				let u32_indices: Vec<u32> = v.iter().map(|&i| i as u32).collect();
 				let optimized = Self::forsyth_optimize(&u32_indices, data.vertices.len());
-				let u16_opt: Vec<u16> = optimized.iter().map(|&i| i as u16).collect();
+				let mut u16_opt: Vec<u16> = optimized.iter().map(|&i| i as u16).collect();
+				// wgpu rejects buffer copies not aligned to COPY_BUFFER_ALIGNMENT (4 bytes);
+				// an odd index count is 2 mod 4 bytes, so pad with one unused index.
+				// index_count below excludes the pad, so it is never drawn.
+				if u16_opt.len() % 2 == 1 {
+					u16_opt.push(0);
+				}
 				let ibuf = device.create_buffer(&wgpu::BufferDescriptor {
 					label: Some("[mesh] ibuf"),
 					size: (u16_opt.len() * 2) as u64,
@@ -105,7 +111,7 @@ impl RenderEngine3d {
 					vbuf,
 					pos_buf,
 					ibuf,
-					index_count: u16_opt.len() as u32,
+					index_count: optimized.len() as u32,
 					index_fmt: wgpu::IndexFormat::Uint16,
 				}
 			}
