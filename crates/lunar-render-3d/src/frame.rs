@@ -6,14 +6,16 @@
 use super::*;
 
 impl RenderEngine3d {
-	/// upload one material texture asset (full mip chain) and return its view.
-	/// srgb picks the srgb variant for color data (diffuse); normal/specular
-	/// stay linear. supports every `TextureCompression` the asset layer carries.
+	/// upload one texture asset (full mip chain) with the given debug label and
+	/// return its view. srgb picks the srgb variant for color data; data
+	/// textures stay linear. supports every `TextureCompression` the asset
+	/// layer carries.
 	pub(crate) fn upload_material_texture(
 		device: &wgpu::Device,
 		queue: &wgpu::Queue,
 		tex: &lunar_assets::Texture,
 		srgb: bool,
+		label: &str,
 	) -> (wgpu::Texture, wgpu::TextureView) {
 		use lunar_assets::TextureCompression as Tc;
 		let (gpu_fmt, bytes_per_row): (wgpu::TextureFormat, fn(u32) -> u32) =
@@ -35,7 +37,7 @@ impl RenderEngine3d {
 		// no small-mip exception), so copy at the physical block-rounded size
 		let physical = |d: u32| if block_compressed { d.div_ceil(4) * 4 } else { d };
 		let gpu_tex = device.create_texture(&wgpu::TextureDescriptor {
-			label: Some("[mat tex]"),
+			label: Some(label),
 			size: wgpu::Extent3d {
 				width: tex.width,
 				height: tex.height,
@@ -664,100 +666,6 @@ impl RenderEngine3d {
 			self.lm_evict_scratch.clear();
 			let asset_server = world.resource::<lunar_assets::AssetServer>();
 
-			// helper: upload one Texture asset to GPU, return (Texture, TextureView)
-			let upload_lm_tex = |device: &wgpu::Device,
-			                     queue: &wgpu::Queue,
-			                     tex: &lunar_assets::Texture,
-			                     label: &str,
-			                     srgb: bool|
-			 -> (wgpu::Texture, wgpu::TextureView) {
-				let (gpu_fmt, bpr_fn): (wgpu::TextureFormat, Box<dyn Fn(u32) -> u32>) =
-					match tex.compression {
-						lunar_assets::TextureCompression::None => {
-							if srgb {
-								(wgpu::TextureFormat::Rgba8UnormSrgb, Box::new(|w| w * 4))
-							} else {
-								(wgpu::TextureFormat::Rgba8Unorm, Box::new(|w| w * 4))
-							}
-						}
-						// BC1: 8 bytes per 4×4 block (0.5 bytes/texel)
-						lunar_assets::TextureCompression::Bc1 => (
-							wgpu::TextureFormat::Bc1RgbaUnormSrgb,
-							Box::new(|w| w.div_ceil(4) * 8),
-						),
-						// BC3/BC5/BC6H/BC7: 16 bytes per 4×4 block (1 byte/texel)
-						lunar_assets::TextureCompression::Bc3 => (
-							wgpu::TextureFormat::Bc3RgbaUnorm,
-							Box::new(|w| w.div_ceil(4) * 16),
-						),
-						lunar_assets::TextureCompression::Bc5 => (
-							wgpu::TextureFormat::Bc5RgUnorm,
-							Box::new(|w| w.div_ceil(4) * 16),
-						),
-						lunar_assets::TextureCompression::Bc6h => (
-							wgpu::TextureFormat::Bc6hRgbFloat,
-							Box::new(|w| w.div_ceil(4) * 16),
-						),
-						lunar_assets::TextureCompression::Bc7 => (
-							wgpu::TextureFormat::Bc7RgbaUnorm,
-							Box::new(|w| w.div_ceil(4) * 16),
-						),
-					};
-				let gpu_tex = device.create_texture(&wgpu::TextureDescriptor {
-					label: Some(label),
-					size: wgpu::Extent3d {
-						width: tex.width,
-						height: tex.height,
-						depth_or_array_layers: 1,
-					},
-					mip_level_count: tex.mip_level_count(),
-					sample_count: 1,
-					dimension: wgpu::TextureDimension::D2,
-					format: gpu_fmt,
-					usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-					view_formats: &[],
-				});
-				queue.write_texture(
-					gpu_tex.as_image_copy(),
-					&tex.pixels,
-					wgpu::TexelCopyBufferLayout {
-						offset: 0,
-						bytes_per_row: Some(bpr_fn(tex.width)),
-						rows_per_image: Some(tex.height.div_ceil(4)),
-					},
-					wgpu::Extent3d {
-						width: tex.width,
-						height: tex.height,
-						depth_or_array_layers: 1,
-					},
-				);
-				for (mip_idx, mip_data) in tex.mips.iter().enumerate() {
-					let mip_w = (tex.width >> (mip_idx + 1)).max(1);
-					let mip_h = (tex.height >> (mip_idx + 1)).max(1);
-					queue.write_texture(
-						wgpu::TexelCopyTextureInfo {
-							texture: &gpu_tex,
-							mip_level: (mip_idx + 1) as u32,
-							origin: wgpu::Origin3d::ZERO,
-							aspect: wgpu::TextureAspect::All,
-						},
-						mip_data,
-						wgpu::TexelCopyBufferLayout {
-							offset: 0,
-							bytes_per_row: Some(bpr_fn(mip_w)),
-							rows_per_image: Some(mip_h.div_ceil(4)),
-						},
-						wgpu::Extent3d {
-							width: mip_w,
-							height: mip_h,
-							depth_or_array_layers: 1,
-						},
-					);
-				}
-				let view = gpu_tex.create_view(&Default::default());
-				(gpu_tex, view)
-			};
-
 			let mut new_vram_bytes = 0u64;
 			// upload irradiance textures not yet in cache
 			for &(lm_id, _) in &self.lm_needed_scratch {
@@ -768,8 +676,13 @@ impl RenderEngine3d {
 					// desired_mip_count could limit uploads in future; upload full for now
 					let _desired = asset_server.desired_mip_count(lm_id, max_mips);
 					new_vram_bytes += (tex.width * tex.height * 4) as u64 * 4 / 3;
-					let entry =
-						upload_lm_tex(&self.device, &self.queue, tex, "[lightmap] irr", true);
+					let entry = Self::upload_material_texture(
+						&self.device,
+						&self.queue,
+						tex,
+						true,
+						"[lightmap] irr",
+					);
 					self.lm_tex_cache.insert(lm_id, entry);
 					self.lm_evict_scratch.push(lm_id);
 				}
@@ -781,8 +694,13 @@ impl RenderEngine3d {
 					&& let Some(tex) = asset_server.get_texture_by_id(dir_lm_id)
 				{
 					new_vram_bytes += (tex.width * tex.height * 4) as u64;
-					let entry =
-						upload_lm_tex(&self.device, &self.queue, tex, "[lightmap] dir", false);
+					let entry = Self::upload_material_texture(
+						&self.device,
+						&self.queue,
+						tex,
+						false,
+						"[lightmap] dir",
+					);
 					self.dir_lm_tex_cache.insert(dir_lm_id, entry);
 					self.lm_evict_scratch.push(dir_lm_id);
 				}
@@ -878,8 +796,13 @@ impl RenderEngine3d {
 							new_bytes += (tex.pixels.len()
 								+ tex.mips.iter().map(|m| m.len()).sum::<usize>())
 								as u64;
-							let entry =
-								Self::upload_material_texture(&self.device, &self.queue, tex, srgb);
+							let entry = Self::upload_material_texture(
+								&self.device,
+								&self.queue,
+								tex,
+								srgb,
+								"[mat tex]",
+							);
 							self.mat_tex_cache.insert(texture_id, entry);
 							self.lm_evict_scratch.push(texture_id);
 						}
@@ -1365,86 +1288,13 @@ impl RenderEngine3d {
 						// non-srgb on purpose: the surface path is unlit and the
 						// swapchain is non-srgb with no gamma encode in composite,
 						// so srgb sampling would darken authored colors by ^2.2
-						let (gpu_fmt, bytes_per_row): (wgpu::TextureFormat, fn(u32) -> u32) =
-							match tex.compression {
-								lunar_assets::TextureCompression::None => {
-									(wgpu::TextureFormat::Rgba8Unorm, |w| w * 4)
-								}
-								lunar_assets::TextureCompression::Bc1 => {
-									(wgpu::TextureFormat::Bc1RgbaUnorm, |w| w.div_ceil(4) * 8)
-								}
-								lunar_assets::TextureCompression::Bc3 => {
-									(wgpu::TextureFormat::Bc3RgbaUnorm, |w| w.div_ceil(4) * 16)
-								}
-								lunar_assets::TextureCompression::Bc5 => {
-									(wgpu::TextureFormat::Bc5RgUnorm, |w| w.div_ceil(4) * 16)
-								}
-								lunar_assets::TextureCompression::Bc6h => {
-									(wgpu::TextureFormat::Bc6hRgbFloat, |w| w.div_ceil(4) * 16)
-								}
-								lunar_assets::TextureCompression::Bc7 => {
-									(wgpu::TextureFormat::Bc7RgbaUnorm, |w| w.div_ceil(4) * 16)
-								}
-							};
-						let block_compressed =
-							tex.compression != lunar_assets::TextureCompression::None;
-						let rows_per_image =
-							|h: u32| if block_compressed { h.div_ceil(4) } else { h };
-						let gpu_tex = self.device.create_texture(&wgpu::TextureDescriptor {
-							label: Some("[surface] tex"),
-							size: wgpu::Extent3d {
-								width: tex.width,
-								height: tex.height,
-								depth_or_array_layers: 1,
-							},
-							mip_level_count: tex.mip_level_count(),
-							sample_count: 1,
-							dimension: wgpu::TextureDimension::D2,
-							format: gpu_fmt,
-							usage: wgpu::TextureUsages::TEXTURE_BINDING
-								| wgpu::TextureUsages::COPY_DST,
-							view_formats: &[],
-						});
-						self.queue.write_texture(
-							gpu_tex.as_image_copy(),
-							&tex.pixels,
-							wgpu::TexelCopyBufferLayout {
-								offset: 0,
-								bytes_per_row: Some(bytes_per_row(tex.width)),
-								rows_per_image: Some(rows_per_image(tex.height)),
-							},
-							wgpu::Extent3d {
-								width: tex.width,
-								height: tex.height,
-								depth_or_array_layers: 1,
-							},
+						let (gpu_tex, view) = Self::upload_material_texture(
+							&self.device,
+							&self.queue,
+							tex,
+							false,
+							"[surface] tex",
 						);
-						// the texture is allocated with its full mip chain; upload
-						// every level, or minified sampling reads unwritten memory
-						for (mip_idx, mip_data) in tex.mips.iter().enumerate() {
-							let mip_w = (tex.width >> (mip_idx + 1)).max(1);
-							let mip_h = (tex.height >> (mip_idx + 1)).max(1);
-							self.queue.write_texture(
-								wgpu::TexelCopyTextureInfo {
-									texture: &gpu_tex,
-									mip_level: (mip_idx + 1) as u32,
-									origin: wgpu::Origin3d::ZERO,
-									aspect: wgpu::TextureAspect::All,
-								},
-								mip_data,
-								wgpu::TexelCopyBufferLayout {
-									offset: 0,
-									bytes_per_row: Some(bytes_per_row(mip_w)),
-									rows_per_image: Some(rows_per_image(mip_h)),
-								},
-								wgpu::Extent3d {
-									width: mip_w,
-									height: mip_h,
-									depth_or_array_layers: 1,
-								},
-							);
-						}
-						let view = gpu_tex.create_view(&Default::default());
 						self.surface_tex_cache.insert(tid, (gpu_tex, view));
 						self.surface_evict_scratch.push(tid);
 					}
