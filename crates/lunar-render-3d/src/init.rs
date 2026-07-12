@@ -94,6 +94,14 @@ impl RenderEngine3d {
 		{
 			required_features |= wgpu::Features::MULTI_DRAW_INDIRECT_COUNT;
 		}
+		// BC-compressed textures (.bctex assets, material/surface texture uploads).
+		// upload paths fall back per texture when the device lacks it.
+		if adapter
+			.features()
+			.contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
+		{
+			required_features |= wgpu::Features::TEXTURE_COMPRESSION_BC;
+		}
 		// SPIR-V passthrough skips wgpu's runtime naga re-validation of our precompiled .spv.
 		// only meaningful on Vulkan (where SPIR-V is the native format); DX12 wants DXIL/HLSL.
 		let has_passthrough = adapter
@@ -134,7 +142,7 @@ impl RenderEngine3d {
 	/// below what the heaviest passes need.
 	fn negotiate_max_bind_groups(adapter: &wgpu::Adapter) -> u32 {
 		const WANTED: u32 = 8;
-		const NEEDED: u32 = 6; // highest shader @group index is 5
+		const NEEDED: u32 = 7; // highest shader @group index is 6 (material textures)
 		let granted = adapter.limits().max_bind_groups.min(WANTED);
 		if granted < NEEDED {
 			log::warn!(
@@ -788,6 +796,137 @@ impl RenderEngine3d {
 			],
 		});
 
+		// ── material texture set (group 6) ────────────────────────────────
+		// diffuse + normal + specular views and one shared sampler, rebound per
+		// draw group. untextured materials bind 1x1 neutral fallbacks so their
+		// shading is byte-identical to the pre-texture pipeline.
+		let mat_tex_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("[mat tex] bgl"),
+			entries: &[
+				wgpu::BindGroupLayoutEntry {
+					binding: 0,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+						view_dimension: wgpu::TextureViewDimension::D2,
+						multisampled: false,
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 1,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+						view_dimension: wgpu::TextureViewDimension::D2,
+						multisampled: false,
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 2,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+						view_dimension: wgpu::TextureViewDimension::D2,
+						multisampled: false,
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 3,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+					count: None,
+				},
+			],
+		});
+		// world textures tile (uv far outside 0..1) and get viewed at grazing
+		// angles: repeat addressing + anisotropy
+		let mat_tex_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+			label: Some("[mat tex] sampler"),
+			mag_filter: wgpu::FilterMode::Linear,
+			min_filter: wgpu::FilterMode::Linear,
+			mipmap_filter: wgpu::MipmapFilterMode::Linear,
+			address_mode_u: wgpu::AddressMode::Repeat,
+			address_mode_v: wgpu::AddressMode::Repeat,
+			anisotropy_clamp: 8,
+			..Default::default()
+		});
+		let make_1x1 = |label: &str, format: wgpu::TextureFormat, pixel: [u8; 4]| {
+			let tex = device.create_texture(&wgpu::TextureDescriptor {
+				label: Some(label),
+				size: wgpu::Extent3d {
+					width: 1,
+					height: 1,
+					depth_or_array_layers: 1,
+				},
+				mip_level_count: 1,
+				sample_count: 1,
+				dimension: wgpu::TextureDimension::D2,
+				format,
+				usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+				view_formats: &[],
+			});
+			queue.write_texture(
+				tex.as_image_copy(),
+				&pixel,
+				wgpu::TexelCopyBufferLayout {
+					offset: 0,
+					bytes_per_row: Some(4),
+					rows_per_image: Some(1),
+				},
+				wgpu::Extent3d {
+					width: 1,
+					height: 1,
+					depth_or_array_layers: 1,
+				},
+			);
+			tex.create_view(&Default::default())
+		};
+		let mat_tex_fallback_diffuse = make_1x1(
+			"[mat tex] fallback diffuse 1x1",
+			wgpu::TextureFormat::Rgba8UnormSrgb,
+			[255, 255, 255, 255],
+		);
+		let mat_tex_fallback_normal = make_1x1(
+			"[mat tex] fallback normal 1x1",
+			wgpu::TextureFormat::Rgba8Unorm,
+			[128, 128, 255, 255],
+		);
+		let mat_tex_fallback_specular = make_1x1(
+			"[mat tex] fallback specular 1x1",
+			wgpu::TextureFormat::Rgba8Unorm,
+			[255, 255, 255, 255],
+		);
+		let mat_tex_fallback_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+			label: Some("[mat tex] fallback bg"),
+			layout: &mat_tex_bgl,
+			entries: &[
+				wgpu::BindGroupEntry {
+					binding: 0,
+					resource: wgpu::BindingResource::TextureView(&mat_tex_fallback_diffuse),
+				},
+				wgpu::BindGroupEntry {
+					binding: 1,
+					resource: wgpu::BindingResource::TextureView(&mat_tex_fallback_normal),
+				},
+				wgpu::BindGroupEntry {
+					binding: 2,
+					resource: wgpu::BindingResource::TextureView(&mat_tex_fallback_specular),
+				},
+				wgpu::BindGroupEntry {
+					binding: 3,
+					resource: wgpu::BindingResource::Sampler(&mat_tex_sampler),
+				},
+			],
+		});
+		let mat_tex_fallback_views = [
+			mat_tex_fallback_diffuse,
+			mat_tex_fallback_normal,
+			mat_tex_fallback_specular,
+		];
+
 		// cluster render BGL must exist before pipeline_layout; full cluster setup done later.
 		let cluster_bgl_render_early =
 			device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -845,6 +984,7 @@ impl RenderEngine3d {
 				Some(&lights_bgl),
 				Some(&lightmap_bgl),
 				Some(&cluster_bgl_render_early),
+				Some(&mat_tex_bgl),
 			],
 			immediate_size: 0,
 		});
@@ -3831,6 +3971,7 @@ impl RenderEngine3d {
 			static_draw_list: Vec::new(),
 			static_list_scratch: Vec::new(),
 			static_bundle_params: (wgpu::TextureFormat::Rgba16Float, 0),
+			static_bundle_texset_count: 0,
 			static_entity_count: 0,
 			static_entity_slots: HashMap::default(),
 			lightmap_bgl,
@@ -3840,6 +3981,15 @@ impl RenderEngine3d {
 			dir_lm_fallback_tex,
 			dir_lm_fallback_view,
 			lightmap_fallback_bg,
+			mat_tex_bgl,
+			mat_tex_sampler,
+			mat_tex_fallback_bg,
+			mat_tex_fallback_views,
+			mat_tex_cache: HashMap::default(),
+			mat_texset_bg_cache: HashMap::default(),
+			mat_texsets: HashMap::default(),
+			mat_tex_failed: HashSet::default(),
+			any_material_textures: false,
 			lm_tex_cache: HashMap::default(),
 			dir_lm_tex_cache: HashMap::default(),
 			lightmap_bg_cache: HashMap::default(),

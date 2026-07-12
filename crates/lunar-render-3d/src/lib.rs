@@ -1838,6 +1838,9 @@ pub struct RenderEngine3d {
 	static_list_scratch: Vec<(u32, u32, u32, u32, usize)>,
 	// (hdr_format, msaa_samples) the bundle was recorded with
 	static_bundle_params: (wgpu::TextureFormat, u32),
+	// texset bind-group count at last bundle record; growth forces a re-record
+	// (the bundle bakes texture bind groups, async uploads add them later)
+	static_bundle_texset_count: usize,
 	// number of entity slots reserved for static entities (slots 2..2+N)
 	static_entity_count: usize,
 	// stable entity→slot assignments for static entities
@@ -1858,6 +1861,26 @@ pub struct RenderEngine3d {
 	dir_lm_tex_cache: HashMap<u32, (wgpu::Texture, wgpu::TextureView)>,
 	// combined bind groups keyed by (lm_id, dir_lm_id); u32::MAX = use fallback
 	lightmap_bg_cache: HashMap<(u32, u32), wgpu::BindGroup>,
+
+	// ── material textures (group 6): diffuse/normal/specular per material ──
+	mat_tex_bgl: wgpu::BindGroupLayout,
+	mat_tex_sampler: wgpu::Sampler,
+	// bound for every draw whose material has no texture set (1x1 neutrals)
+	mat_tex_fallback_bg: wgpu::BindGroup,
+	// neutral views (diffuse, normal, specular) for texsets missing one map
+	mat_tex_fallback_views: [wgpu::TextureView; 3],
+	// uploaded material textures (texture handle id → (texture, view))
+	mat_tex_cache: HashMap<u32, (wgpu::Texture, wgpu::TextureView)>,
+	// bind groups keyed by [diffuse, normal, specular] ids; u32::MAX = fallback slot
+	mat_texset_bg_cache: HashMap<[u32; 3], wgpu::BindGroup>,
+	// material id → its texture set, refreshed by gather_draw_list
+	mat_texsets: HashMap<u32, [u32; 3]>,
+	// textures the device cannot upload (e.g. BC without TEXTURE_COMPRESSION_BC);
+	// their texsets bind neutral fallback views instead of waiting forever
+	mat_tex_failed: HashSet<u32>,
+	// sticky: some loaded material carries textures. gates the one-call
+	// multi-draw path off (it cannot rebind textures mid-draw)
+	any_material_textures: bool,
 	// lightmap atlas (phase 3): packs all lightmap textures into one RGBA8 4096×4096 texture.
 	// built/rebuilt when has_indirect and lm_tex_cache changes.
 	// atlas_lm_uvs maps lm_id → [offset_u, offset_v, scale_u, scale_v]

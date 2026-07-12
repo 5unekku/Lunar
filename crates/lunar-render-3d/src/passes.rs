@@ -13,6 +13,15 @@ const SHADOW_CASCADE_LABELS: [&str; NUM_CASCADES as usize] = [
 ];
 
 impl RenderEngine3d {
+	/// material texture bind group for a material id: its texset's cached bind
+	/// group, or the neutral fallback while textures are absent or still loading.
+	fn mat_texset_bg(&self, mat_id: u32) -> &wgpu::BindGroup {
+		self.mat_texsets
+			.get(&mat_id)
+			.and_then(|texset| self.mat_texset_bg_cache.get(texset))
+			.unwrap_or(&self.mat_tex_fallback_bg)
+	}
+
 	/// build the detail-sprite compute bind group. resolves the density map view
 	/// (1×1 fallback until the texture uploads). returns `None` if the layout isn't ready.
 	fn build_detail_compute_bg(
@@ -164,8 +173,14 @@ impl RenderEngine3d {
 			self.static_list_scratch.sort_unstable();
 			let format_changed = self.static_bundle_params != (self.hdr_format, self.msaa_samples);
 			let list_changed = self.static_list_scratch != self.static_draw_list;
-			if (list_changed || format_changed) && !self.static_list_scratch.is_empty() {
+			// the bundle bakes material texture bind groups; async texture uploads
+			// grow the texset cache after the first record, so re-record when it does
+			let texsets_changed = self.mat_texset_bg_cache.len() != self.static_bundle_texset_count;
+			if (list_changed || format_changed || texsets_changed)
+				&& !self.static_list_scratch.is_empty()
+			{
 				self.static_bundle_params = (self.hdr_format, self.msaa_samples);
+				self.static_bundle_texset_count = self.mat_texset_bg_cache.len();
 				// adopt the freshly built list; scratch keeps the old vec's capacity for reuse
 				std::mem::swap(&mut self.static_draw_list, &mut self.static_list_scratch);
 				let new_static_list = &self.static_draw_list;
@@ -188,6 +203,7 @@ impl RenderEngine3d {
 				benc.set_bind_group(2, &self.entity_bg, &[]);
 				benc.set_bind_group(3, &self.lights_bg, &[]);
 				benc.set_bind_group(5, &self.cluster_bg_render, &[]);
+				benc.set_bind_group(6, &self.mat_tex_fallback_bg, &[]);
 				let mut last_mesh = u32::MAX;
 				let mut last_mat = u32::MAX;
 				let mut last_lm = u32::MAX;
@@ -229,6 +245,7 @@ impl RenderEngine3d {
 							&self.lightmap_fallback_bg
 						};
 						benc.set_bind_group(4, lm_bg, &[]);
+						benc.set_bind_group(6, self.mat_texset_bg(cur_mat), &[]);
 						benc.set_vertex_buffer(0, gpu.vbuf.slice(..));
 						benc.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
 						last_mesh = cur_mesh;
@@ -307,6 +324,8 @@ impl RenderEngine3d {
 			pass.set_bind_group(4, &self.lightmap_fallback_bg, &[]);
 			// group 5: clustered lights (same for entire pass)
 			pass.set_bind_group(5, &self.cluster_bg_render, &[]);
+			// group 6 fallback: neutral material textures until a draw group rebinds
+			pass.set_bind_group(6, &self.mat_tex_fallback_bg, &[]);
 
 			// sky pass: a configured panorama texture replaces the dome+sun and
 			// draws after the opaque section instead (depth-tested at far plane,
@@ -350,6 +369,7 @@ impl RenderEngine3d {
 			pass.set_bind_group(3, &self.lights_bg, &[]);
 			pass.set_bind_group(4, &self.lightmap_fallback_bg, &[]);
 			pass.set_bind_group(5, &self.cluster_bg_render, &[]);
+			pass.set_bind_group(6, &self.mat_tex_fallback_bg, &[]);
 			if self.gpu_indirect_active() {
 				// phase 4: GPU cull wrote draw commands to indirect_buf.
 				// bind atlas once (all lightmaps packed into it), bind mega-VBO/IBO, one call.
@@ -429,6 +449,7 @@ impl RenderEngine3d {
 							&self.lightmap_fallback_bg
 						};
 						pass.set_bind_group(4, lm_bg, &[]);
+						pass.set_bind_group(6, self.mat_texset_bg(cur_mat), &[]);
 						pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
 						pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
 						last_mesh = cur_mesh;
@@ -498,6 +519,7 @@ impl RenderEngine3d {
 						&self.lightmap_fallback_bg
 					};
 					pass.set_bind_group(4, lm_bg, &[]);
+					pass.set_bind_group(6, self.mat_texset_bg(self.draw_scratch[i].2), &[]);
 					pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
 					pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
 					let base = (ENTITY_SLOT_START + i) as u32;

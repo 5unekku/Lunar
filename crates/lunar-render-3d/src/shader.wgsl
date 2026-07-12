@@ -124,6 +124,15 @@ struct ClusterParamsF {
 @group(4) @binding(1) var lightmap_dir_tex: texture_2d<f32>;
 @group(4) @binding(2) var lightmap_sampler: sampler;
 
+// ── material textures ──────────────────────────────────────────────────────
+// per-material texture set, rebound per draw group. absent maps bind 1×1
+// neutral fallbacks (white diffuse, flat normal, white specular), so untextured
+// materials shade identically to the pre-texture pipeline.
+@group(6) @binding(0) var mat_diffuse_tex:  texture_2d<f32>;
+@group(6) @binding(1) var mat_normal_tex:   texture_2d<f32>;
+@group(6) @binding(2) var mat_specular_tex: texture_2d<f32>;
+@group(6) @binding(3) var mat_tex_sampler:  sampler;
+
 // ── vertex I/O ─────────────────────────────────────────────────────────────
 
 struct VertIn {
@@ -144,6 +153,8 @@ struct VertOut {
     @location(4)       view_depth:   f32,   // linear view-space depth for cascade selection
     @location(5)       uv_lightmap:  vec2<f32>,
     @location(6) @interpolate(flat) instance_id:  u32,
+    // world-space tangent for normal mapping; .w carries handedness
+    @location(7)       world_tangent: vec4<f32>,
 }
 
 // vertex snapping: quantize clip-space xy onto a low-resolution grid.
@@ -178,6 +189,7 @@ fn vs_main(in: VertIn, @builtin(instance_index) instance_id: u32) -> VertOut {
     out.view_depth   = view_pos4.w;
     out.uv_lightmap  = in.uv_lightmap;
     out.instance_id  = instance_id;
+    out.world_tangent = vec4<f32>(normalize(normal_mat * in.tangent.xyz), in.tangent.w);
     return out;
 }
 
@@ -221,18 +233,19 @@ fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
     return f0 + (1.0 - f0) * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
 }
 
-// Cook-Torrance specular + Lambertian diffuse for one light sample
+// Cook-Torrance specular + Lambertian diffuse for one light sample.
+// spec_scale modulates only the specular lobe (material specular map, 1.0 = neutral).
 fn pbr_light(
     n: vec3<f32>, v: vec3<f32>, l: vec3<f32>,
     albedo: vec3<f32>, metallic: f32, roughness: f32,
-    irradiance: vec3<f32>, ndotl: f32,
+    irradiance: vec3<f32>, ndotl: f32, spec_scale: f32,
 ) -> vec3<f32> {
     let h = normalize(v + l);
     let f0 = mix(vec3<f32>(0.04), albedo, metallic);
     let d = distribution_ggx(n, h, roughness);
     let g = geometry_smith(n, v, l, roughness);
     let f = fresnel_schlick(max(dot(h, v), 0.0), f0);
-    let specular = (d * g * f) / max(4.0 * max(dot(n, v), 0.0) * ndotl, 0.001);
+    let specular = (d * g * f) / max(4.0 * max(dot(n, v), 0.0) * ndotl, 0.001) * spec_scale;
     let kd = (vec3<f32>(1.0) - f) * (1.0 - metallic);
     return (kd * albedo / PI + specular) * irradiance * ndotl;
 }
@@ -243,12 +256,12 @@ fn pbr_light(
 fn lit(
     n: vec3<f32>, v: vec3<f32>, l: vec3<f32>,
     albedo: vec3<f32>, metallic: f32, roughness: f32,
-    irradiance: vec3<f32>, ndotl: f32,
+    irradiance: vec3<f32>, ndotl: f32, spec_scale: f32,
 ) -> vec3<f32> {
     if globals.lighting_model == LIGHTING_LAMBERT {
         return albedo / PI * irradiance * ndotl;
     }
-    return pbr_light(n, v, l, albedo, metallic, roughness, irradiance, ndotl);
+    return pbr_light(n, v, l, albedo, metallic, roughness, irradiance, ndotl, spec_scale);
 }
 
 // ── Poisson disk sample sets ───────────────────────────────────────────────
@@ -414,17 +427,33 @@ const LIT_EXPOSURE: f32 = 16.0;
 @fragment
 fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     let material = materials[in.instance_id];
-    let albedo   = material.base_color.rgb * in.color.rgb;
-    let alpha    = material.base_color.a * in.color.a;
+    // material texture set: neutral 1×1 fallbacks make these no-ops for
+    // untextured materials
+    let tex_diffuse = textureSample(mat_diffuse_tex, mat_tex_sampler, in.uv);
+    let albedo   = material.base_color.rgb * in.color.rgb * tex_diffuse.rgb;
+    let alpha    = material.base_color.a * in.color.a * tex_diffuse.a;
     let metallic = material.metallic;
     let roughness = clamp(material.roughness, 0.04, 1.0);
+    // specular map: B channel scales the specular lobe (phong intensity map
+    // convention; white fallback = 1.0 = unchanged)
+    let spec_scale = textureSample(mat_specular_tex, mat_tex_sampler, in.uv).b;
 
     // unlit path (sky dome, sun disc, debug geo)
     if (material.flags & 1u) != 0u {
         return vec4<f32>(albedo, alpha);
     }
 
-    let n = normalize(in.world_normal);
+    var n = normalize(in.world_normal);
+    // bit 2 = material has a normal map: perturb n in tangent space. XY from the
+    // map's RG channels, Z reconstructed (id Tech 4 convention; also correct for
+    // full-RGB normal maps since a unit normal's z follows from xy)
+    if (material.flags & 4u) != 0u {
+        let t = normalize(in.world_tangent.xyz);
+        let b = cross(n, t) * in.world_tangent.w;
+        let nxy = textureSample(mat_normal_tex, mat_tex_sampler, in.uv).rg * 2.0 - 1.0;
+        let nz = sqrt(max(1.0 - dot(nxy, nxy), 0.0));
+        n = normalize(t * nxy.x + b * nxy.y + n * nz);
+    }
     let v = normalize(globals.cam_pos - in.world_pos);
 
     // LIGHTING_BAKED skips all runtime dynamic lights (ambient + lightmap only).
@@ -439,7 +468,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
         if ndotl > 0.0 {
             let irradiance = lights.dir_color * (lights.dir_illuminance / 80000.0);
             let shadow = shadow_factor(in.world_pos, n, in.view_depth);
-            dir_lo += lit(n, v, l, albedo, metallic, roughness, irradiance, ndotl) * shadow;
+            dir_lo += lit(n, v, l, albedo, metallic, roughness, irradiance, ndotl, spec_scale) * shadow;
         }
     }
 
@@ -501,7 +530,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
                     shadow_fac = textureSampleCompare(point_shadow_maps, shadow_sampler, luv.xy, i32(luv.z), ref_depth);
                 }
             }
-            point_lo += shadow_fac * lit(n, v, l, albedo, metallic, roughness, irradiance, ndotl);
+            point_lo += shadow_fac * lit(n, v, l, albedo, metallic, roughness, irradiance, ndotl, spec_scale);
         }
     }
 

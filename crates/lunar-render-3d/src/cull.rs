@@ -735,19 +735,37 @@ impl RenderEngine3d {
 		{
 			let registry = world.resource::<MeshRegistry>();
 			for &(entity, mesh_id, mat_id, model, lm_id, dir_lm_id) in &self.raw_scratch {
-				let (color, metallic, roughness, alpha, mat_flags) = registry
+				let (color, metallic, roughness, alpha, mat_flags, texset) = registry
 					.get_material(lunar_assets::Handle::new(mat_id, 0))
 					.map(|m| {
 						let mut color = m.base_color;
 						color.a = m.alpha;
-						let flags = if m.shading == lunar_3d::ShadingModel::Unlit {
+						let mut flags = if m.shading == lunar_3d::ShadingModel::Unlit {
 							1u32
 						} else {
 							0u32
 						};
-						(color, m.metallic, m.roughness, m.alpha, flags)
+						// bit 2: material has a normal map (shader gates the
+						// tangent-space perturb on it)
+						if m.normal_map.is_some() {
+							flags |= 4;
+						}
+						let texset = [
+							m.diffuse.map(|h| h.id()).unwrap_or(u32::MAX),
+							m.normal_map.map(|h| h.id()).unwrap_or(u32::MAX),
+							m.specular.map(|h| h.id()).unwrap_or(u32::MAX),
+						];
+						(color, m.metallic, m.roughness, m.alpha, flags, texset)
 					})
-					.unwrap_or((Color::WHITE, 0.0, 0.5, 1.0, 0u32));
+					.unwrap_or((Color::WHITE, 0.0, 0.5, 1.0, 0u32, [u32::MAX; 3]));
+				if texset != [u32::MAX; 3] && !self.any_material_textures {
+					self.any_material_textures = true;
+					log::info!(
+						"material textures in use: one-call gpu multi-draw disabled, \
+						 per-batch indirect path active"
+					);
+				}
+				self.mat_texsets.insert(mat_id, texset);
 				self.draw_scratch.push((
 					entity, mesh_id, mat_id, color, metallic, roughness, model, alpha, mat_flags,
 					lm_id, dir_lm_id,

@@ -6,6 +6,89 @@
 use super::*;
 
 impl RenderEngine3d {
+	/// upload one material texture asset (full mip chain) and return its view.
+	/// srgb picks the srgb variant for color data (diffuse); normal/specular
+	/// stay linear. supports every `TextureCompression` the asset layer carries.
+	pub(crate) fn upload_material_texture(
+		device: &wgpu::Device,
+		queue: &wgpu::Queue,
+		tex: &lunar_assets::Texture,
+		srgb: bool,
+	) -> (wgpu::Texture, wgpu::TextureView) {
+		use lunar_assets::TextureCompression as Tc;
+		let (gpu_fmt, bytes_per_row): (wgpu::TextureFormat, fn(u32) -> u32) =
+			match (tex.compression, srgb) {
+				(Tc::None, true) => (wgpu::TextureFormat::Rgba8UnormSrgb, |w| w * 4),
+				(Tc::None, false) => (wgpu::TextureFormat::Rgba8Unorm, |w| w * 4),
+				(Tc::Bc1, true) => (wgpu::TextureFormat::Bc1RgbaUnormSrgb, |w| w.div_ceil(4) * 8),
+				(Tc::Bc1, false) => (wgpu::TextureFormat::Bc1RgbaUnorm, |w| w.div_ceil(4) * 8),
+				(Tc::Bc3, true) => (wgpu::TextureFormat::Bc3RgbaUnormSrgb, |w| w.div_ceil(4) * 16),
+				(Tc::Bc3, false) => (wgpu::TextureFormat::Bc3RgbaUnorm, |w| w.div_ceil(4) * 16),
+				(Tc::Bc5, _) => (wgpu::TextureFormat::Bc5RgUnorm, |w| w.div_ceil(4) * 16),
+				(Tc::Bc6h, _) => (wgpu::TextureFormat::Bc6hRgbFloat, |w| w.div_ceil(4) * 16),
+				(Tc::Bc7, true) => (wgpu::TextureFormat::Bc7RgbaUnormSrgb, |w| w.div_ceil(4) * 16),
+				(Tc::Bc7, false) => (wgpu::TextureFormat::Bc7RgbaUnorm, |w| w.div_ceil(4) * 16),
+			};
+		let block_compressed = tex.compression != Tc::None;
+		let rows_per_image = |h: u32| if block_compressed { h.div_ceil(4) } else { h };
+		// block-compressed copy extents must be whole blocks (wgpu validates with
+		// no small-mip exception), so copy at the physical block-rounded size
+		let physical = |d: u32| if block_compressed { d.div_ceil(4) * 4 } else { d };
+		let gpu_tex = device.create_texture(&wgpu::TextureDescriptor {
+			label: Some("[mat tex]"),
+			size: wgpu::Extent3d {
+				width: tex.width,
+				height: tex.height,
+				depth_or_array_layers: 1,
+			},
+			mip_level_count: tex.mip_level_count(),
+			sample_count: 1,
+			dimension: wgpu::TextureDimension::D2,
+			format: gpu_fmt,
+			usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+			view_formats: &[],
+		});
+		queue.write_texture(
+			gpu_tex.as_image_copy(),
+			&tex.pixels,
+			wgpu::TexelCopyBufferLayout {
+				offset: 0,
+				bytes_per_row: Some(bytes_per_row(tex.width)),
+				rows_per_image: Some(rows_per_image(tex.height)),
+			},
+			wgpu::Extent3d {
+				width: physical(tex.width),
+				height: physical(tex.height),
+				depth_or_array_layers: 1,
+			},
+		);
+		for (mip_idx, mip_data) in tex.mips.iter().enumerate() {
+			let mip_w = (tex.width >> (mip_idx + 1)).max(1);
+			let mip_h = (tex.height >> (mip_idx + 1)).max(1);
+			queue.write_texture(
+				wgpu::TexelCopyTextureInfo {
+					texture: &gpu_tex,
+					mip_level: (mip_idx + 1) as u32,
+					origin: wgpu::Origin3d::ZERO,
+					aspect: wgpu::TextureAspect::All,
+				},
+				mip_data,
+				wgpu::TexelCopyBufferLayout {
+					offset: 0,
+					bytes_per_row: Some(bytes_per_row(mip_w)),
+					rows_per_image: Some(rows_per_image(mip_h)),
+				},
+				wgpu::Extent3d {
+					width: physical(mip_w),
+					height: physical(mip_h),
+					depth_or_array_layers: 1,
+				},
+			);
+		}
+		let view = gpu_tex.create_view(&Default::default());
+		(gpu_tex, view)
+	}
+
 	// a few loops below index multiple parallel arrays by the same counter, or use a
 	// sentinel final iteration for batch flushing, clearer as indexed loops than as
 	// iterator adapters, so the range-loop/counter lints are intentionally allowed.
@@ -756,6 +839,114 @@ impl RenderEngine3d {
 				],
 			});
 			self.lightmap_bg_cache.insert((lm_id, dir_lm_id), bg);
+		}
+
+		// ── material textures (group 6): upload + per-texset bind groups ──
+		// texture sets were recorded by gather_draw_list (mat_texsets). upload any
+		// referenced texture not yet on the gpu, then build one bind group per
+		// distinct set. async loads self-heal: a set with a still-loading texture
+		// gets no bind group yet, so its draws bind the neutral fallback until the
+		// upload lands.
+		if self.any_material_textures {
+			// lm_evict_scratch reused: drained by the lightmap section above
+			let device_has_bc = self
+				.device
+				.features()
+				.contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+			let mat_new_vram: u64 = {
+				let asset_server = world.resource::<lunar_assets::AssetServer>();
+				let mut new_bytes = 0u64;
+				for texset in self.mat_texsets.values() {
+					for (slot, &texture_id) in texset.iter().enumerate() {
+						if texture_id != u32::MAX
+							&& !self.mat_tex_cache.contains_key(&texture_id)
+							&& let Some(tex) = asset_server.get_texture_by_id(texture_id)
+						{
+							if tex.compression != lunar_assets::TextureCompression::None
+								&& !device_has_bc
+							{
+								if self.mat_tex_failed.insert(texture_id) {
+									log::warn!(
+										"texture {texture_id} is BC-compressed but the device \
+										 lacks TEXTURE_COMPRESSION_BC; using neutral fallback"
+									);
+								}
+								continue;
+							}
+							// diffuse is authored srgb; normal/specular are data
+							let srgb = slot == 0;
+							new_bytes += (tex.pixels.len()
+								+ tex.mips.iter().map(|m| m.len()).sum::<usize>())
+								as u64;
+							let entry =
+								Self::upload_material_texture(&self.device, &self.queue, tex, srgb);
+							self.mat_tex_cache.insert(texture_id, entry);
+							self.lm_evict_scratch.push(texture_id);
+						}
+					}
+				}
+				new_bytes
+			};
+			if mat_new_vram > 0
+				&& let Some(mut vram) = world.get_resource_mut::<lunar_assets::TextureVramUsage>()
+			{
+				vram.add_bytes(mat_new_vram);
+			}
+			if !self.lm_evict_scratch.is_empty() {
+				let mut asset_server = world.resource_mut::<lunar_assets::AssetServer>();
+				for id in self.lm_evict_scratch.drain(..) {
+					if let Some(tex) = asset_server.get_texture_by_id_mut(id) {
+						tex.evict_cpu_data();
+					}
+				}
+			}
+			for texset in self.mat_texsets.values() {
+				if *texset == [u32::MAX; 3] || self.mat_texset_bg_cache.contains_key(texset) {
+					continue;
+				}
+				// a referenced texture is still loading: keep waiting (unsupported
+				// ones are marked failed and bind the neutral fallback instead)
+				if texset.iter().any(|&id| {
+					id != u32::MAX
+						&& !self.mat_tex_cache.contains_key(&id)
+						&& !self.mat_tex_failed.contains(&id)
+				}) {
+					continue;
+				}
+				let view_for = |slot: usize| -> &wgpu::TextureView {
+					let id = texset[slot];
+					if id != u32::MAX
+						&& let Some((_, view)) = self.mat_tex_cache.get(&id)
+					{
+						view
+					} else {
+						&self.mat_tex_fallback_views[slot]
+					}
+				};
+				let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+					label: Some("[mat tex] bg"),
+					layout: &self.mat_tex_bgl,
+					entries: &[
+						wgpu::BindGroupEntry {
+							binding: 0,
+							resource: wgpu::BindingResource::TextureView(view_for(0)),
+						},
+						wgpu::BindGroupEntry {
+							binding: 1,
+							resource: wgpu::BindingResource::TextureView(view_for(1)),
+						},
+						wgpu::BindGroupEntry {
+							binding: 2,
+							resource: wgpu::BindingResource::TextureView(view_for(2)),
+						},
+						wgpu::BindGroupEntry {
+							binding: 3,
+							resource: wgpu::BindingResource::Sampler(&self.mat_tex_sampler),
+						},
+					],
+				});
+				self.mat_texset_bg_cache.insert(*texset, bg);
+			}
 		}
 
 		// ── lightmap atlas (phase 3, has_indirect path) ───────────────────

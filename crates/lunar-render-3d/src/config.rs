@@ -17,6 +17,9 @@ impl RenderEngine3d {
 				.device
 				.features()
 				.contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT)
+			// the one-call multi-draw cannot rebind textures per material; textured
+			// scenes take the per-batch indirect path until a bindless array lands
+			&& !self.any_material_textures
 			&& self.cull_indirect_pipeline.is_some()
 			&& !self.mega_mesh_entries.is_empty()
 	}
@@ -749,6 +752,7 @@ impl RenderEngine3d {
 					Some(&self.lights_bgl),
 					Some(&self.lightmap_bgl),
 					Some(&self.cluster_bgl_render),
+					Some(&self.mat_tex_bgl),
 				],
 				immediate_size: 0,
 			});
