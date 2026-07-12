@@ -1388,6 +1388,28 @@ impl AssetServer {
 			(width * height * 4) as usize,
 			"pixel buffer size mismatch"
 		);
+		self.create_texture_compressed(width, height, TextureCompression::None, pixels, Vec::new())
+	}
+
+	/// register a pre-built texture from in-memory data with an explicit
+	/// compression format, for example BC blocks unpacked from a game archive.
+	///
+	/// returns a handle that is immediately ready. the render system will
+	/// upload the data to the GPU on the next frame without any CPU decode.
+	///
+	/// `pixels` holds the base mip level: RGBA8 bytes for
+	/// [`TextureCompression::None`], raw block data
+	/// (`ceil(width / 4) * ceil(height / 4) * block_bytes`) for BC formats.
+	/// `mips` holds pre-generated lower mip levels in the same encoding
+	/// (index 0 = half-res); pass an empty vec for a single-mip texture.
+	pub fn create_texture_compressed(
+		&mut self,
+		width: u32,
+		height: u32,
+		compression: TextureCompression,
+		pixels: Vec<u8>,
+		mips: Vec<Vec<u8>>,
+	) -> Handle<Texture> {
 		let path = format!("__proc_{}", self.proc_texture_counter);
 		self.proc_texture_counter += 1;
 		let handle = self.texture_store.allocate_slot(path);
@@ -1398,8 +1420,8 @@ impl AssetServer {
 				width,
 				height,
 				pixels,
-				mips: Vec::new(),
-				compression: TextureCompression::None,
+				mips,
+				compression,
 				keep_cpu_data: false,
 			},
 		);
@@ -2208,5 +2230,25 @@ mod handle_tests {
 		// just verifying it compiles
 		fn _accepts_asset(_: &dyn Asset) {}
 		_accepts_asset(&Foo);
+	}
+
+	#[test]
+	fn create_texture_compressed_bc1_roundtrip() {
+		let mut server = AssetServer::new(0);
+		// one 4x4 bc1 block is 8 bytes
+		let block: Vec<u8> = (0u8..8).collect();
+		let handle = server.create_texture_compressed(
+			4,
+			4,
+			TextureCompression::Bc1,
+			block.clone(),
+			Vec::new(),
+		);
+		let texture = server.get_texture(&handle).expect("immediately ready");
+		assert_eq!(texture.width, 4);
+		assert_eq!(texture.height, 4);
+		assert_eq!(texture.compression, TextureCompression::Bc1);
+		assert_eq!(texture.pixels, block);
+		assert_eq!(server.drain_new_texture_ids(), vec![handle.id()]);
 	}
 }
