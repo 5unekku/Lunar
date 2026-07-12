@@ -52,8 +52,8 @@ use lunar_3d::{
 	Decal, DetailDensity, DirectionalLight, Frustum, IndexBuffer, IrradianceSH, Material3d, Mesh3d,
 	MeshData, MeshImpostor, MeshLod, MeshRegistry, Overlay, ParticleEmitter, PlanarReflector,
 	PointLight,
-	PrevWorldTransform3d, Projection, ShadowCaster, StaticMesh, SurfaceShader, Terrain, Vertex3d,
-	ViewportAspect, ViewportRect, Water, WorldTransform3d,
+	PrevWorldTransform3d, Projection, ShadowCaster, SkySurface, StaticMesh, SurfaceShader, Terrain,
+	Vertex3d, ViewportAspect, ViewportRect, Water, WorldTransform3d,
 };
 use lunar_bsp::{Area, BspLevel, VisibleAreas};
 use lunar_core::{App, GamePlugin, UpdateStage};
@@ -81,6 +81,7 @@ const SURFACE_SHADER_SRC: &str = include_str!("surface.wgsl");
 const SURFACE_PREPASS_SHADER_SRC: &str = include_str!("surface_prepass.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const PANORAMA_SKY_SCENE_SHADER_SRC: &str = include_str!("panorama_sky_scene.wgsl");
+const PANORAMA_SKY_SURFACE_SHADER_SRC: &str = include_str!("panorama_sky_surface.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const BLOOM_SHADER_SRC: &str = include_str!("bloom.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
@@ -309,6 +310,12 @@ const TERRAIN_PARAMS_SIZE: u64 = 96;
 
 /// stride for dynamic UBO slots: must be ≥ min_uniform_buffer_offset_alignment (256).
 const UNIFORM_STRIDE: u64 = 256;
+
+/// max surface-shader draws per frame (world surfaces + overlays like the HUD and
+/// the doom screen-melt columns share this budget). backs the fixed surface param
+/// UBO; excess surfaces past this are dropped by the gather. 1024 fits a full doom
+/// level plus the 160 melt columns during a wipe with headroom.
+const MAX_SURFACES: usize = 1024;
 
 /// initial number of slots (dome + sun + entities) in the entity uniform buffer.
 const INITIAL_ENTITY_CAPACITY: usize = 64;
@@ -1472,6 +1479,11 @@ pub struct RenderEngine3d {
 	/// set for the single frame that services a [`CaptureRequest`]; drives the
 	/// extra composite-into-capture pass and the post-present readback + publish.
 	capture_this_frame: bool,
+	/// wasm cannot block on a CPU readback, so the capture GPU texture is published
+	/// straight into `surface_tex_cache` under this reused handle instead. `None`
+	/// until the first capture; unused on native.
+	#[cfg(target_arch = "wasm32")]
+	wasm_capture_handle: Option<lunar_assets::Handle<lunar_assets::Texture>>,
 	render_tier: RenderTier,
 	hdr_format: wgpu::TextureFormat,
 
@@ -1720,6 +1732,13 @@ pub struct RenderEngine3d {
 	panorama_params_buf: wgpu::Buffer,
 	panorama_scene_shader: wgpu::ShaderModule,
 	panorama_scene_pipeline: wgpu::RenderPipeline,
+	/// same panorama mapping drawn onto real depth-writing geometry (sky ceilings,
+	/// sky-to-sky upper walls) so those planes occlude what is behind them
+	panorama_surface_shader: wgpu::ShaderModule,
+	panorama_surface_pipeline: wgpu::RenderPipeline,
+	/// mesh ids of visible `SkySurface` entities this frame, drawn with the surface
+	/// sky pipeline; rebuilt each frame (typically a handful per map)
+	sky_mesh_ids: Vec<u32>,
 	/// panorama bind group keyed by asset id; the texture is owned here only
 	/// when the surface cache didn't already hold a gpu copy
 	panorama_sky_cache: Option<(u32, Option<wgpu::Texture>, wgpu::BindGroup)>,

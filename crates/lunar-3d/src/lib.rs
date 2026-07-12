@@ -82,7 +82,7 @@ pub use mesh_registry::MeshRegistry;
 pub use particles::ParticleEmitter;
 pub use plugin::Plugin3d;
 pub use surface_shader::{
-	AlphaGen, BlendMode, Overlay, SurfaceShader, SurfaceStage, TcGen, UvTransform,
+	AlphaGen, BlendMode, Overlay, SkySurface, SurfaceShader, SurfaceStage, TcGen, UvTransform,
 };
 pub use systems::{TransformScratch3d, copy_prev_transforms, propagate_transforms_3d};
 pub use terrain::Terrain;

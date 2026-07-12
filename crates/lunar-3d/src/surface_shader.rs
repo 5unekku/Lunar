@@ -54,6 +54,16 @@ pub struct SurfaceShader {
 #[derive(Debug, Clone, Copy, Default, Component)]
 pub struct Overlay;
 
+/// marker: draw this `Mesh3d` entity as a sky surface. the renderer shades it with
+/// the configured `Sky` panorama (sampled per pixel by view direction) while
+/// writing real depth, so it occludes any geometry behind it: this reproduces a
+/// software renderer's sky ceilings and sky-to-sky upper walls, which hide
+/// everything beyond them instead of leaving a see-through hole. entities with
+/// this marker carry no `SurfaceShader` or `Material3d`, so the normal opaque pass
+/// ignores them; only the dedicated sky pass draws them.
+#[derive(Debug, Clone, Copy, Default, Component)]
+pub struct SkySurface;
+
 /// one rendering stage in a surface shader.
 #[derive(Debug, Clone)]
 pub struct SurfaceStage {

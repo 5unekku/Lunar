@@ -118,6 +118,31 @@ impl RenderEngine3d {
 		let mut draw_calls = 0u32;
 		// panorama sky replaces the dome inside the main pass when configured
 		let panorama_ready = self.prepare_panorama_sky(world);
+		// gather this frame's visible sky surfaces (sky ceilings, sky-to-sky upper
+		// walls; a handful per map). drawn after opaques with the depth-writing sky
+		// pipeline so they occlude geometry behind them, then shaded from the panorama.
+		// these entities carry no material, so they are in neither the cullable nor
+		// the surface-shader gather: upload their meshes here the same way those do.
+		self.sky_mesh_ids.clear();
+		if panorama_ready {
+			let mut sky_query =
+				world.query_filtered::<(&Mesh3d, &ComputedVisibility), With<SkySurface>>();
+			for (mesh, vis) in sky_query.iter(world) {
+				if vis.0 {
+					self.sky_mesh_ids.push(mesh.0.id());
+				}
+			}
+			for idx in 0..self.sky_mesh_ids.len() {
+				let mesh_id = self.sky_mesh_ids[idx];
+				if !self.mesh_gpu.contains_key(&mesh_id) {
+					let registry = world.resource::<MeshRegistry>();
+					if let Some(data) = registry.get_mesh(lunar_assets::Handle::new(mesh_id, 0)) {
+						let gpu = Self::upload_mesh_data(&self.device, &self.queue, data);
+						self.mesh_gpu.insert(mesh_id, gpu);
+					}
+				}
+			}
+		}
 		// ── main color pass → HDR texture ───��─────────────────────────────
 		// MSAA resolves into the non-MSAA HDR texture; no MSAA renders direct to HDR.
 		// composite pass reads the HDR texture and writes to swapchain.
@@ -414,6 +439,31 @@ impl RenderEngine3d {
 					}
 					i += 1;
 				}
+			}
+
+			// occluding sky surfaces: real geometry (sky ceilings, sky-to-sky upper
+			// walls) drawn with the depth-writing sky pipeline so it hides whatever
+			// is behind it, shaded from the same panorama. after opaques (depth is
+			// populated) and before the fullscreen sky, which then fills only the
+			// remaining background pixels; both use the identical screen-space map
+			// so surface sky and background sky stay seamless.
+			if panorama_ready
+				&& !self.sky_mesh_ids.is_empty()
+				&& let Some((_, _, panorama_bg)) = &self.panorama_sky_cache
+			{
+				pass.set_pipeline(&self.panorama_surface_pipeline);
+				pass.set_bind_group(0, &self.globals_bg, &[]);
+				pass.set_bind_group(1, panorama_bg, &[]);
+				for &mesh_id in &self.sky_mesh_ids {
+					if let Some(gpu) = self.mesh_gpu.get(&mesh_id) {
+						pass.set_vertex_buffer(0, gpu.vbuf.slice(..));
+						pass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+						pass.draw_indexed(0..gpu.index_count, 0, 0..1);
+						draw_calls += 1;
+					}
+				}
+				// restore material bind group for the fullscreen sky + transparents
+				pass.set_bind_group(1, &self.material_bg, &[]);
 			}
 
 			// panorama sky: fullscreen triangle at far depth (LessEqual, no

@@ -223,7 +223,12 @@ impl RenderEngine3d {
 			sample_count: 1,
 			dimension: wgpu::TextureDimension::D2,
 			format,
-			usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+			// TEXTURE_BINDING lets wasm publish this capture straight into the
+			// surface cache and sample it (no CPU readback on wasm); harmless for
+			// the native readback path, which only needs COPY_SRC.
+			usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+				| wgpu::TextureUsages::COPY_SRC
+				| wgpu::TextureUsages::TEXTURE_BINDING,
 			view_formats: &[],
 		});
 		let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -1281,7 +1286,7 @@ impl RenderEngine3d {
 		let surface_fallback_view = surface_fallback_tex.create_view(&Default::default());
 		let surface_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("[surface] stage params"),
-			size: 512 * UNIFORM_STRIDE,
+			size: MAX_SURFACES as u64 * UNIFORM_STRIDE,
 			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 			mapped_at_creation: false,
 		});
@@ -2467,9 +2472,11 @@ impl RenderEngine3d {
 		// atmos_bg0 needs gtao_depth_tex (created in GTAO section); assigned after that section.
 
 		// ── panorama sky: cylindrical texture over sky pixels ────────────
+		// 32 bytes: 4 mapping floats + 4 viewport floats (the surface sky shader
+		// needs the viewport to turn a fragment pixel into a 0..1 uv)
 		let panorama_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("[panorama sky] params buffer"),
-			size: 16,
+			size: 32,
 			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 			mapped_at_creation: false,
 		});
@@ -2482,7 +2489,7 @@ impl RenderEngine3d {
 					ty: wgpu::BindingType::Buffer {
 						ty: wgpu::BufferBindingType::Uniform,
 						has_dynamic_offset: false,
-						min_binding_size: wgpu::BufferSize::new(16),
+						min_binding_size: wgpu::BufferSize::new(32),
 					},
 					count: None,
 				},
@@ -2523,6 +2530,12 @@ impl RenderEngine3d {
 			});
 		let panorama_scene_pipeline =
 			Self::make_panorama_scene_pipeline(&device, &panorama_pipeline_layout, &panorama_scene_shader, hdr_format, msaa_samples, pipeline_cache_ref);
+
+		// same panorama, drawn onto real geometry that writes depth (sky ceilings /
+		// sky-to-sky upper walls) so those planes occlude anything behind them
+		let panorama_surface_shader = make_shader!(device, shader_passthrough, "[panorama sky surface] shader", PANORAMA_SKY_SURFACE_SHADER_SRC, "panorama_sky_surface.spv");
+		let panorama_surface_pipeline =
+			Self::make_panorama_surface_pipeline(&device, &panorama_pipeline_layout, &panorama_surface_shader, hdr_format, msaa_samples, pipeline_cache_ref);
 
 		// ── water rendering: Gerstner waves + refraction ─────────────────
 
@@ -3565,6 +3578,8 @@ impl RenderEngine3d {
 			headless_target,
 			capture_target: None,
 			capture_this_frame: false,
+			#[cfg(target_arch = "wasm32")]
+			wasm_capture_handle: None,
 			msaa_samples,
 			msaa_color_view,
 			surface_config,
@@ -3748,6 +3763,9 @@ impl RenderEngine3d {
 			panorama_params_buf,
 			panorama_scene_shader,
 			panorama_scene_pipeline,
+			panorama_surface_shader,
+			panorama_surface_pipeline,
+			sky_mesh_ids: Vec::new(),
 			panorama_sky_cache: None,
 			water_params_buf,
 			water_bgl0,

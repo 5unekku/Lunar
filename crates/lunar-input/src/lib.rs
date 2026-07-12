@@ -1163,6 +1163,7 @@ const fn keycode_from_sdl(key: sdl3::keyboard::Keycode) -> Option<KeyCode> {
 		Keycode::Equals => Some(KeyCode::Equals),
 		Keycode::LeftBracket => Some(KeyCode::LeftBracket),
 		Keycode::RightBracket => Some(KeyCode::RightBracket),
+		Keycode::Grave => Some(KeyCode::Grave),
 		Keycode::_0 => Some(KeyCode::Num0),
 		Keycode::_1 => Some(KeyCode::Num1),
 		Keycode::_2 => Some(KeyCode::Num2),
@@ -1443,6 +1444,7 @@ mod web_input {
 			"Shift" => Some(KeyCode::LShift),
 			"Control" => Some(KeyCode::LCtrl),
 			"Alt" => Some(KeyCode::LAlt),
+			"`" | "~" => Some(KeyCode::Grave),
 			_ => None,
 		}
 	}

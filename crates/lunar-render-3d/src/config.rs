@@ -615,6 +615,63 @@ impl RenderEngine3d {
 		})
 	}
 
+	/// like the fullscreen panorama pipeline, but drawn onto real mesh geometry:
+	/// reads only vertex position, writes depth (Less), so the sky plane occludes
+	/// whatever sits behind it. cull off so a sky surface shows from either side.
+	pub(crate) fn make_panorama_surface_pipeline(
+		device: &wgpu::Device,
+		layout: &wgpu::PipelineLayout,
+		shader: &wgpu::ShaderModule,
+		hdr_format: wgpu::TextureFormat,
+		msaa_samples: u32,
+		cache: Option<&wgpu::PipelineCache>,
+	) -> wgpu::RenderPipeline {
+		let vert_attrs = [wgpu::VertexAttribute {
+			format: wgpu::VertexFormat::Float32x3,
+			offset: 0,
+			shader_location: 0,
+		}];
+		let vertex_buffers = [wgpu::VertexBufferLayout {
+			array_stride: VERTEX_STRIDE,
+			step_mode: wgpu::VertexStepMode::Vertex,
+			attributes: &vert_attrs,
+		}];
+		device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+			label: Some("[panorama sky surface] pipeline"),
+			layout: Some(layout),
+			vertex: wgpu::VertexState {
+				module: shader,
+				entry_point: Some("vs_main"),
+				buffers: &vertex_buffers,
+				compilation_options: wgpu::PipelineCompilationOptions::default(),
+			},
+			fragment: Some(wgpu::FragmentState {
+				module: shader,
+				entry_point: Some("fs_main"),
+				targets: &[Some(wgpu::ColorTargetState {
+					format: hdr_format,
+					blend: None,
+					write_mask: wgpu::ColorWrites::ALL,
+				})],
+				compilation_options: wgpu::PipelineCompilationOptions::default(),
+			}),
+			primitive: wgpu::PrimitiveState::default(),
+			depth_stencil: Some(wgpu::DepthStencilState {
+				format: wgpu::TextureFormat::Depth32Float,
+				depth_write_enabled: Some(true),
+				depth_compare: Some(wgpu::CompareFunction::Less),
+				stencil: wgpu::StencilState::default(),
+				bias: wgpu::DepthBiasState::default(),
+			}),
+			multisample: wgpu::MultisampleState {
+				count: msaa_samples,
+				..Default::default()
+			},
+			cache,
+			multiview_mask: None,
+		})
+	}
+
 	pub(crate) fn rebuild_msaa_pipelines(&mut self) {
 		let msaa = self.msaa_samples;
 		let hdr = self.hdr_format;
@@ -978,6 +1035,14 @@ impl RenderEngine3d {
 				&self.device,
 				&panorama_layout,
 				&self.panorama_scene_shader,
+				hdr,
+				msaa,
+				cache,
+			);
+			self.panorama_surface_pipeline = Self::make_panorama_surface_pipeline(
+				&self.device,
+				&panorama_layout,
+				&self.panorama_surface_shader,
 				hdr,
 				msaa,
 				cache,

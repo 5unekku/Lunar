@@ -382,7 +382,7 @@ impl RenderEngine3d {
 		// the post-gather grow check. pre-size the cpu staging vecs so the writes
 		// don't panic; the post-gather check still handles the gpu buffer side.
 		{
-			let worst_case = ENTITY_SLOT_START + self.draw_scratch.len() + 512;
+			let worst_case = ENTITY_SLOT_START + self.draw_scratch.len() + MAX_SURFACES;
 			let min_bytes = worst_case.next_power_of_two().max(INITIAL_ENTITY_CAPACITY);
 			let min_uniform = min_bytes * UNIFORM_STRIDE as usize;
 			if self.uniform_staging.len() < min_uniform {
@@ -397,7 +397,7 @@ impl RenderEngine3d {
 			let surface_slot_base = ENTITY_SLOT_START + self.draw_scratch.len();
 			let mut surface_idx = 0usize;
 			for (mesh, surf, wt, vis, is_overlay) in sq.iter(world) {
-				if surface_idx >= 512 {
+				if surface_idx >= MAX_SURFACES {
 					break;
 				}
 				if !vis.0 {
@@ -2005,6 +2005,31 @@ impl RenderEngine3d {
 				world.remove_resource::<CaptureRequest>();
 			}
 		}
+		// wasm has no blocking readback: publish the capture GPU texture straight
+		// into the surface cache under a reused handle, skipping the readback +
+		// re-upload roundtrip. the pre-inserted cache entry makes the surface
+		// upload path a no-op (contains_key short-circuits), so games sample the
+		// live capture texture directly.
+		#[cfg(target_arch = "wasm32")]
+		if self.capture_this_frame {
+			self.capture_this_frame = false;
+			if let Some((texture, view)) = self.capture_target.as_ref() {
+				let texture = texture.clone();
+				let view = view.clone();
+				let handle = self
+					.wasm_capture_handle
+					.get_or_insert_with(|| {
+						world
+							.resource_mut::<lunar_assets::AssetServer>()
+							.create_texture(1, 1, vec![0, 0, 0, 255])
+					})
+					.clone();
+				self.surface_tex_cache.insert(handle.id(), (texture, view));
+				world.insert_resource(CapturedFrame(handle));
+				world.remove_resource::<CaptureRequest>();
+			}
+		}
+
 		#[cfg(not(target_arch = "wasm32"))]
 		self.staging_belt.recall();
 		draw_calls
