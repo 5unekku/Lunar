@@ -260,6 +260,11 @@ impl RenderEngine3d {
 				usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
 				mapped_at_creation: false,
 			}));
+			// the old staging buffer (possibly still map-pending) was just dropped;
+			// reset readback state so the new buffer starts fresh
+			self.cull_staging_pending = false;
+			self.cull_staging_ready
+				.store(false, std::sync::atomic::Ordering::Release);
 			self.gpu_cull_flags.resize(cap, 0);
 
 			if self.cull_pipeline.is_none() {
@@ -689,6 +694,11 @@ impl RenderEngine3d {
 			usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
 			mapped_at_creation: false,
 		}));
+		// old staging buffer (possibly still map-pending) was just dropped;
+		// reset readback state so the new buffer starts fresh
+		self.hzb_staging_pending = false;
+		self.hzb_staging_ready
+			.store(false, std::sync::atomic::Ordering::Release);
 		self.hzb_cull_aabb_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("[hzb] cull aabb buf"),
 			size: (cap * 32) as u64,
@@ -1020,6 +1030,11 @@ impl RenderEngine3d {
 				usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
 				mapped_at_creation: false,
 			}));
+			// old staging buffer (possibly still map-pending) was just dropped;
+			// reset readback state so the new buffer starts fresh
+			self.lod_staging_pending = false;
+			self.lod_staging_ready
+				.store(false, std::sync::atomic::Ordering::Release);
 		}
 
 		if self.lod_select_bgl.is_none() {

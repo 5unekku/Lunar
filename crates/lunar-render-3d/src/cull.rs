@@ -82,14 +82,16 @@ impl RenderEngine3d {
 					self.cull_staging_ready.store(false, Ordering::Release);
 					self.cull_staging_pending = false;
 				} else {
-					// gpu not done yet: use stale gpu_cull_flags from last frame, no stall
+					// gpu not done yet: use stale gpu_cull_flags from last frame, no stall.
+					// keep pending set: the map_async is still outstanding, and a buffer
+					// with a pending map must not appear in a submit, so the dispatch
+					// below skips the readback until the map completes and is drained
 					let soa = world.resource::<CullSoa>();
 					for (i, &entity) in soa.entities.iter().enumerate() {
 						if i < self.gpu_cull_flags.len() && self.gpu_cull_flags[i] != 0 {
 							self.frustum_visible.insert(entity);
 						}
 					}
-					self.cull_staging_pending = false;
 				}
 			}
 
@@ -136,6 +138,11 @@ impl RenderEngine3d {
 
 				// ensure LOD buffers before borrowing aabb_buf (borrow checker requirement)
 				self.ensure_lod_select_resources(entity_count);
+
+				// a staging buffer is only reusable once its previous map_async has been
+				// drained (pending cleared by the read blocks above or a buffer rebuild)
+				let cull_staging_free = !self.cull_staging_pending;
+				let lod_staging_free = !self.lod_staging_pending;
 
 				// (re)build the cull + LOD bind groups only when their backing buffers regrew;
 				// the ensure_* paths reset these to None on growth. done before the local buffer
@@ -247,7 +254,7 @@ impl RenderEngine3d {
 						lpass.set_bind_group(0, lod_bg, &[]);
 						lpass.dispatch_workgroups((entity_count as u32).div_ceil(64), 1, 1);
 					}
-					if let Some(lod_staging) = self.lod_indices_staging.as_ref() {
+					if lod_staging_free && let Some(lod_staging) = self.lod_indices_staging.as_ref() {
 						cull_enc.copy_buffer_to_buffer(
 							lod_buf,
 							0,
@@ -258,30 +265,38 @@ impl RenderEngine3d {
 					}
 				}
 
-				cull_enc.copy_buffer_to_buffer(
-					flags_buf,
-					0,
-					staging_buf,
-					0,
-					(entity_count * 4) as u64,
-				);
+				// copy fresh flags out and register the readback only while the staging
+				// buffer is free: a buffer with an outstanding map_async must not appear
+				// in a submit, so slow-gpu frames run the compute dispatch but keep the
+				// previous readback in flight until it is drained above
+				if cull_staging_free {
+					cull_enc.copy_buffer_to_buffer(
+						flags_buf,
+						0,
+						staging_buf,
+						0,
+						(entity_count * 4) as u64,
+					);
+				}
 				self.queue.submit([cull_enc.finish()]);
-				// register map_async for next frame: callback fires when GPU finishes, no CPU stall
-				let ready = self.cull_staging_ready.clone();
-				ready.store(false, Ordering::Release);
-				staging_buf.slice(0..(entity_count * 4) as u64).map_async(
-					wgpu::MapMode::Read,
-					move |result| {
-						if result.is_ok() {
-							ready.store(true, Ordering::Release);
-						}
-					},
-				);
-				self.cull_staging_pending = true;
-				self.cull_pending_entity_count = entity_count;
+				if cull_staging_free {
+					// register map_async for next frame: callback fires when GPU finishes, no CPU stall
+					let ready = self.cull_staging_ready.clone();
+					ready.store(false, Ordering::Release);
+					staging_buf.slice(0..(entity_count * 4) as u64).map_async(
+						wgpu::MapMode::Read,
+						move |result| {
+							if result.is_ok() {
+								ready.store(true, Ordering::Release);
+							}
+						},
+					);
+					self.cull_staging_pending = true;
+					self.cull_pending_entity_count = entity_count;
+				}
 
 				// register LOD staging map_async for next frame
-				if let Some(lod_staging) = self.lod_indices_staging.as_ref() {
+				if lod_staging_free && let Some(lod_staging) = self.lod_indices_staging.as_ref() {
 					let lod_ready = self.lod_staging_ready.clone();
 					lod_ready.store(false, Ordering::Release);
 					lod_staging.slice(0..(entity_count * 4) as u64).map_async(
@@ -402,8 +417,10 @@ impl RenderEngine3d {
 					// if not ready: skip hzb cull for this frame (frustum_visible unchanged)
 				}
 
-				// dispatch this frame's HZB occlusion compute
-				if !self.gpu_cull_flags.is_empty() {
+				// dispatch this frame's HZB occlusion compute. skipped while the previous
+				// readback is still in flight: a buffer with an outstanding map_async must
+				// not appear in a submit, so wait for the drain above before reusing it
+				if !self.hzb_staging_pending && !self.gpu_cull_flags.is_empty() {
 					// reuse the AABB data built above for the frustum cull (same CullSoa order)
 					let vp_array = view_proj.to_cols_array();
 					let mut params_data = [0f32; 24];
