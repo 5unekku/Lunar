@@ -11,6 +11,12 @@ impl RenderEngine3d {
 	}
 	pub(crate) fn gpu_indirect_active(&self) -> bool {
 		self.has_indirect
+			// multi_draw_indexed_indirect_count needs this device feature; without it
+			// the per-batch indirect path in passes.rs is used instead
+			&& self
+				.device
+				.features()
+				.contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT)
 			&& self.cull_indirect_pipeline.is_some()
 			&& !self.mega_mesh_entries.is_empty()
 	}

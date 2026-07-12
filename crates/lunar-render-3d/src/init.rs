@@ -84,6 +84,16 @@ impl RenderEngine3d {
 		if has_pipeline_cache {
 			required_features |= wgpu::Features::PIPELINE_CACHE;
 		}
+		// tier High's one-call opaque path (multi_draw_indexed_indirect_count in
+		// passes.rs) needs MULTI_DRAW_INDIRECT_COUNT as its own feature; request it
+		// whenever the adapter has it. gpu_indirect_active() gates the draw on the
+		// device actually granting it, so adapters without it fall back cleanly.
+		if adapter
+			.features()
+			.contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT)
+		{
+			required_features |= wgpu::Features::MULTI_DRAW_INDIRECT_COUNT;
+		}
 		// SPIR-V passthrough skips wgpu's runtime naga re-validation of our precompiled .spv.
 		// only meaningful on Vulkan (where SPIR-V is the native format); DX12 wants DXIL/HLSL.
 		let has_passthrough = adapter
