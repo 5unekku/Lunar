@@ -213,8 +213,14 @@ const NUM_CASCADES: u32 = 3;
 const GLOBALS_SIZE: u64 = 112;
 
 /// group 1: base_color (16) + metallic (4) + roughness (4) + flags (4) + has_lightmap (4)
-///          + lm_uv_offset (8) + lm_uv_scale (8) = 48 bytes.
-const MATERIAL_UNIFORMS_SIZE: u64 = 48;
+///          + lm_uv_offset (8) + lm_uv_scale (8) + tex_indices (12) + pad (4) = 64 bytes.
+const MATERIAL_UNIFORMS_SIZE: u64 = 64;
+
+/// bindless material texture array size for the one-call gpu-driven path. fixed so
+/// the wgsl variant, bind group layout, and bind group always agree; adapters that
+/// cannot grant this many binding array elements keep the per-batch fallback.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_BINDLESS_TEXTURES: u32 = 2048;
 
 /// initial size of the mega vertex buffer (16 MB).
 const MEGA_VBUF_INIT: u64 = 16 * 1024 * 1024;

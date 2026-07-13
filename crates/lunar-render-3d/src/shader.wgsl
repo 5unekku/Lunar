@@ -26,7 +26,9 @@ struct MaterialUniforms {
     has_lightmap:  u32,         //  4 bytes, offset 28
     lm_uv_offset:  vec2<f32>,  //  8 bytes, offset 32  (atlas offset; identity = (0,0))
     lm_uv_scale:   vec2<f32>,  //  8 bytes, offset 40  (atlas scale;  identity = (1,1))
-    // total: 48 bytes
+    // bindless texture array slots (diffuse, normal, specular); slots 0..2 are the
+    // neutral fallbacks. only the bindless shader variant reads these.
+    tex_indices:   vec3<u32>,  // 12 bytes, offset 48 (+4 implicit pad; total 64)
 }
 @group(1) @binding(0) var<storage, read> materials: array<MaterialUniforms>;
 

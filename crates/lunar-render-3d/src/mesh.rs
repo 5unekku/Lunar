@@ -478,6 +478,7 @@ impl RenderEngine3d {
 		has_lightmap: u32,
 		lm_uv_offset: [f32; 2],
 		lm_uv_scale: [f32; 2],
+		texture_indices: [u32; 3],
 	) {
 		let offset = slot * MATERIAL_UNIFORMS_SIZE as usize;
 		Self::pack_material_uniforms_at(
@@ -489,9 +490,10 @@ impl RenderEngine3d {
 			has_lightmap,
 			lm_uv_offset,
 			lm_uv_scale,
+			texture_indices,
 		);
 	}
-	/// write the 48-byte material block at the start of `slot_buf` (slot-relative form
+	/// write the 64-byte material block at the start of `slot_buf` (slot-relative form
 	/// for the parallel per-entity packing loop).
 	#[allow(clippy::too_many_arguments)]
 	pub(crate) fn pack_material_uniforms_at(
@@ -503,6 +505,7 @@ impl RenderEngine3d {
 		has_lightmap: u32,
 		lm_uv_offset: [f32; 2],
 		lm_uv_scale: [f32; 2],
+		texture_indices: [u32; 3],
 	) {
 		// base_color(16) + metallic(4) + roughness(4) + flags(4) + has_lightmap(4) = 32 bytes
 		let data: [f32; 7] = [
@@ -519,6 +522,8 @@ impl RenderEngine3d {
 		// lm_uv_offset(8) + lm_uv_scale(8) = 16 bytes at offset 32
 		slot_buf[32..40].copy_from_slice(bytemuck::cast_slice(&lm_uv_offset));
 		slot_buf[40..48].copy_from_slice(bytemuck::cast_slice(&lm_uv_scale));
+		// bindless texture array slots at offset 48; bytes 60..64 stay zero padding
+		slot_buf[48..60].copy_from_slice(bytemuck::cast_slice(&texture_indices));
 	}
 
 	// ── public surface management ──────────────────────────────────────────
@@ -587,6 +592,7 @@ mod packing_tests {
 				(i % 2) as u32,
 				[0.1, 0.2],
 				[0.9, 0.8],
+				[i as u32 % 7, (i % 5) as u32, 2],
 			);
 		}
 
@@ -609,6 +615,7 @@ mod packing_tests {
 					(i % 2) as u32,
 					[0.1, 0.2],
 					[0.9, 0.8],
+					[i as u32 % 7, (i % 5) as u32, 2],
 				);
 			});
 

@@ -610,6 +610,7 @@ impl RenderEngine3d {
 			0,
 			[0.0, 0.0],
 			[1.0, 1.0],
+			[0; 3],
 		);
 
 		if let Some(sky) = sky {
@@ -625,6 +626,7 @@ impl RenderEngine3d {
 				0,
 				[0.0, 0.0],
 				[1.0, 1.0],
+				[0; 3],
 			);
 		}
 
@@ -1060,6 +1062,7 @@ impl RenderEngine3d {
 					has_lightmap,
 					lm_uv_offset,
 					lm_uv_scale,
+					[0; 3],
 				);
 			};
 
