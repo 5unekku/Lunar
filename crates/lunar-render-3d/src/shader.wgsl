@@ -49,9 +49,9 @@ struct PointLightGpu {
     color:       vec3<f32>,  // offset 16
     radius:      f32,         // offset 28
     shadow_index: u32,        // offset 32  (0xffffffff = unshadowed)
-    _pad0:        u32,        // offset 36
-    _pad1:        u32,        // offset 40
-    _pad2:        u32,        // offset 44, total: 48 bytes
+    inv_radius_x: f32,        // offset 36  per-axis inverse radii for ellipsoid falloff
+    inv_radius_y: f32,        // offset 40
+    inv_radius_z: f32,        // offset 44, total: 48 bytes
 }
 
 // lights uniform buffer layout (total 816 bytes):
@@ -502,11 +502,13 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
             let light = light_list_f[light_idx];
             let to_light = light.position - in.world_pos;
             let dist    = length(to_light);
-            if dist >= light.radius { continue; }
+            // ellipsoid falloff: normalized distance in per-axis radii space.
+            // spherical lights pack inv radii = splat(1/radius), identical to before.
+            let r = length(to_light * vec3<f32>(light.inv_radius_x, light.inv_radius_y, light.inv_radius_z));
+            if r >= 1.0 { continue; }
             let l     = to_light / dist;
             let ndotl = max(dot(n, l), 0.0);
             if ndotl <= 0.0 { continue; }
-            let r     = dist / light.radius;
             let window = clamp(1.0 - r * r * r * r, 0.0, 1.0);
             let att   = window * window / (dist * dist + 1.0);
             let irradiance = light.color * light.intensity * att;

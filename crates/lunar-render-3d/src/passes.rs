@@ -1385,10 +1385,12 @@ impl RenderEngine3d {
 			// and collect the depth-array layers that need re-recording this frame.
 			self.point_shadow_layer_scratch.clear();
 			let mut pt_shadow_idx = 0usize;
-			for &(light_pos, _, _, light_radius, casts, _) in self.point_light_scratch.iter() {
+			for &(light_pos, _, _, light_radii, casts, _) in self.point_light_scratch.iter() {
 				if !casts || pt_shadow_idx >= MAX_POINT_SHADOW_LIGHTS {
 					break;
 				}
+				// shadows use the conservative max-axis sphere
+				let light_radius = light_radii.max_element();
 				let lp = Vec3::from(light_pos);
 				let last_pos = self.point_shadow_last_positions[pt_shadow_idx];
 				if (lp - last_pos).length_squared() > 1e-6 {

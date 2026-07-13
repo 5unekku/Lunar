@@ -27,7 +27,12 @@ struct PointLightEntry {
     color:       vec3<f32>,
     radius:      f32,
     shadow_index: u32,
-    _pad:        vec3<u32>,
+    // scalar fields, not vec3: a vec3 pad aligns to 16 and inflates the wgsl
+    // stride to 64 while the buffer packs 48-byte entries. unused here; cluster
+    // assignment stays a conservative sphere of radius (= max axis).
+    inv_radius_x: f32,
+    inv_radius_y: f32,
+    inv_radius_z: f32,
 }
 
 @group(0) @binding(0) var<uniform>             cluster_params:       ClusterParams;

@@ -125,6 +125,11 @@ pub struct PointLight {
 	pub intensity: f32,
 	/// world-space radius. light reaches zero at this distance (hard culling boundary).
 	pub radius: f32,
+	/// optional per-axis radii for ellipsoid falloff (doom-style box lights).
+	/// when set, attenuation reaches zero at the ellipsoid surface; culling and
+	/// shadows still use a sphere of the largest axis. `None` keeps spherical
+	/// falloff at `radius`.
+	pub ellipsoid_radii: Option<Vec3>,
 	pub casts_shadows: bool,
 }
 
@@ -134,6 +139,7 @@ impl Default for PointLight {
 			color: Color::WHITE,
 			intensity: 800.0,
 			radius: 20.0,
+			ellipsoid_radii: None,
 			casts_shadows: false,
 		}
 	}

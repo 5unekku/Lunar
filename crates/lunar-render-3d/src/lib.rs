@@ -1923,7 +1923,7 @@ pub struct RenderEngine3d {
 	#[allow(clippy::type_complexity)]
 	draw_sorted_scratch: Vec<(Entity, u32, u32, Color, f32, f32, Mat4, f32, u32, u32, u32)>,
 	uniform_staging: Vec<u8>,
-	point_light_scratch: Vec<(Vec3, Color, f32, f32, bool, f32)>, // (pos, color, intensity, radius, casts_shadows, dist_sq)
+	point_light_scratch: Vec<(Vec3, Color, f32, Vec3, bool, f32)>, // (pos, color, intensity, radii, casts_shadows, dist_sq)
 	// feature-pass scratch buffers: cleared + refilled each frame, never reallocated in steady state
 	terrain_snap_scratch: Vec<TerrainSnap>,
 	water_scratch: Vec<(Water, u32, WorldTransform3d)>, // (water, mesh_id, transform)

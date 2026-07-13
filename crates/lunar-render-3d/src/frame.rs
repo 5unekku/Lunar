@@ -361,19 +361,20 @@ impl RenderEngine3d {
 			pq.iter(world).for_each(|(pl, wt)| {
 				// decorate with distance² (computed once, SIMD Vec3A) so the sort never recomputes it
 				let dist_sq = (Vec3A::from(wt.translation) - cam_pos_a).length_squared();
+				let radii = pl.ellipsoid_radii.unwrap_or(Vec3::splat(pl.radius));
 				self.point_light_scratch.push((
 					wt.translation,
 					pl.color,
 					pl.intensity,
-					pl.radius,
+					radii,
 					pl.casts_shadows,
 					dist_sq,
 				));
 			});
 		}
 		let max_lights = dev_max_point_lights.min(MAX_CLUSTERED_LIGHTS);
-		let cmp_dist = |a: &(Vec3, Color, f32, f32, bool, f32),
-		                b: &(Vec3, Color, f32, f32, bool, f32)| {
+		let cmp_dist = |a: &(Vec3, Color, f32, Vec3, bool, f32),
+		                b: &(Vec3, Color, f32, Vec3, bool, f32)| {
 			a.5.partial_cmp(&b.5).unwrap_or(std::cmp::Ordering::Equal)
 		};
 		// partial sort: select the closest `max_lights` to the front, then order just those
@@ -1118,7 +1119,7 @@ impl RenderEngine3d {
 			color: [f32; 3],
 			radius: f32,
 			shadow_index: u32,
-			_pad: [u32; 3],
+			inverse_radii: [f32; 3],
 		}
 
 		#[repr(C)]
@@ -1176,7 +1177,7 @@ impl RenderEngine3d {
 		if light_count > 0 {
 			self.light_data_scratch.clear();
 			self.light_data_scratch.resize(light_count * 48, 0);
-			for (i, &(pos, color, intensity, radius, _, _)) in
+			for (i, &(pos, color, intensity, radii, _, _)) in
 				self.point_light_scratch.iter().enumerate()
 			{
 				let off = i * 48;
@@ -1184,9 +1185,11 @@ impl RenderEngine3d {
 					position: [pos.x, pos.y, pos.z],
 					intensity,
 					color: [color.r, color.g, color.b],
-					radius,
+					// conservative sphere for cluster assignment and shadow ref_depth
+					radius: radii.max_element(),
 					shadow_index: self.shadow_indices_scratch[i],
-					_pad: [0; 3],
+					// clamp so a zero axis cannot produce inf * 0 = NaN in the shader
+					inverse_radii: radii.max(Vec3::splat(1e-4)).recip().to_array(),
 				};
 				self.light_data_scratch[off..off + 48].copy_from_slice(bytemuck::bytes_of(&entry));
 			}
