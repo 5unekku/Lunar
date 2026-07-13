@@ -14,308 +14,22 @@ fn mapped_u32s(bytes: &[u8]) -> Vec<u32> {
 }
 
 impl RenderEngine3d {
-	/// frustum + HZB occlusion culling for this frame. high tier reads the
-	/// previous frame's GPU compute result (no stall) and dispatches this
-	/// frame's; mid/low tier does a CPU AABB test. populates `self.frustum_visible`.
-	pub(crate) fn cull_entities(&mut self, world: &mut World, view_proj: Mat4, cam_pos: Vec3) {
-		// ── frustum cull ─────────────────────────────────────────────────
-		// high tier: 1-frame pipelined GPU compute cull.
-		//   frame N: read previous frame's staging result (no stall), dispatch this frame's compute.
-		//   frame N+1: read frame N's result.
-		//   first frame: no prior result: fall through to CPU cull as bootstrap.
-		// mid/low tier: CPU test over contiguous CullSoa arrays.
+	/// frustum + HZB occlusion culling for this frame. the frustum test is a
+	/// fresh CPU SIMD sweep every frame on every tier; high tier additionally
+	/// applies the previous frame's HZB occlusion result (1-frame pipelined,
+	/// tested against the view_proj snapshot the HZB was built with) and
+	/// dispatches this frame's occlusion + LOD compute. populates `self.frustum_visible`.
+	pub(crate) fn cull_entities(&mut self, world: &mut World, cam_pos: Vec3) {
+		// ── frustum cull: CPU SIMD sweep, every tier ─────────────────────
+		// always this-frame correct. the old high-tier path gated visibility on
+		// a 1-frame-stale gpu readback: rotating the camera popped geometry at
+		// the screen edges for a frame, and slow-gpu frames applied flags from
+		// an even older camera. the sweep is 8 boxes/iter on AVX2 and costs
+		// microseconds at real entity counts; the late gpu cull in frame.rs
+		// still feeds the one-call indirect path gpu-side with this-frame data.
 		self.frustum_visible.clear();
-		if self.gpu_cull_enabled {
-			let (entity_count, frustum_planes) = {
-				let frustum = *world.resource::<Frustum>();
-				let soa = world.resource::<CullSoa>();
-				(soa.entities.len(), frustum.planes)
-			};
-
-			// read previous frame's LOD staging result (1-frame pipelined, same as cull)
-			if self.lod_staging_pending
-				&& entity_count > 0
-				&& self.lod_staging_ready.load(Ordering::Acquire)
-			{
-				let prev_count = self.lod_pending_entity_count;
-				if let Some(staging) = self.lod_indices_staging.as_ref() {
-					{
-						let slice = staging.slice(0..(prev_count * 4) as u64);
-						let data = slice.get_mapped_range();
-						let indices = mapped_u32s(&data);
-						let soa = world.resource::<CullSoa>();
-						self.gpu_lod_indices.clear();
-						for (i, &entity) in soa.entities.iter().take(prev_count).enumerate() {
-							if i < indices.len() {
-								self.gpu_lod_indices.insert(entity, indices[i]);
-							}
-						}
-					}
-					staging.unmap();
-				}
-				self.lod_staging_ready.store(false, Ordering::Release);
-				self.lod_staging_pending = false;
-			}
-
-			// read previous frame's staging result: non-blocking, uses AtomicBool set by map_async callback
-			if self.cull_staging_pending && entity_count > 0 {
-				let _ = self.device.poll(wgpu::PollType::Poll); // fire any completed callbacks
-				if self.cull_staging_ready.load(Ordering::Acquire) {
-					let prev_count = self.cull_pending_entity_count;
-					if let Some(staging_buf) = self.cull_flags_staging.as_ref() {
-						{
-							let staging_slice = staging_buf.slice(0..(prev_count * 4) as u64);
-							let data = staging_slice.get_mapped_range();
-							let flags = mapped_u32s(&data);
-							let soa = world.resource::<CullSoa>();
-							for (i, &entity) in soa.entities.iter().take(prev_count).enumerate() {
-								if i < flags.len() && flags[i] != 0 {
-									self.frustum_visible.insert(entity);
-								}
-							}
-							self.gpu_cull_flags.clear();
-							self.gpu_cull_flags
-								.extend_from_slice(&flags[..prev_count.min(flags.len())]);
-						}
-						staging_buf.unmap();
-					}
-					self.cull_staging_ready.store(false, Ordering::Release);
-					self.cull_staging_pending = false;
-				} else {
-					// gpu not done yet: use stale gpu_cull_flags from last frame, no stall.
-					// keep pending set: the map_async is still outstanding, and a buffer
-					// with a pending map must not appear in a submit, so the dispatch
-					// below skips the readback until the map completes and is drained
-					let soa = world.resource::<CullSoa>();
-					for (i, &entity) in soa.entities.iter().enumerate() {
-						if i < self.gpu_cull_flags.len() && self.gpu_cull_flags[i] != 0 {
-							self.frustum_visible.insert(entity);
-						}
-					}
-				}
-			}
-
-			// if no prior result yet (first frame), fall back to CPU cull
-			if self.frustum_visible.is_empty() && entity_count > 0 {
-				let frustum = *world.resource::<Frustum>();
-				let soa = world.resource::<CullSoa>();
-				for (i, &entity) in soa.entities.iter().enumerate() {
-					if frustum.intersects_aabb(soa.center(i), soa.half_extent(i)) {
-						self.frustum_visible.insert(entity);
-					}
-				}
-			}
-
-			// dispatch this frame's GPU cull (result used next frame)
-			if entity_count > 0 {
-				self.ensure_gpu_cull_resources(entity_count);
-
-				// build per-entity AABB upload data once; the HZB cull below reuses it
-				self.cull_aabb_scratch.clear();
-				{
-					let soa = world.resource::<CullSoa>();
-					for i in 0..entity_count {
-						self.cull_aabb_scratch.extend_from_slice(&[
-							soa.center_x[i],
-							soa.center_y[i],
-							soa.center_z[i],
-							0.0,
-							soa.half_x[i],
-							soa.half_y[i],
-							soa.half_z[i],
-							0.0,
-						]);
-					}
-				}
-				let mut frustum_data = [0f32; 32];
-				for (p, plane) in frustum_planes.iter().enumerate() {
-					frustum_data[p * 4] = plane.x;
-					frustum_data[p * 4 + 1] = plane.y;
-					frustum_data[p * 4 + 2] = plane.z;
-					frustum_data[p * 4 + 3] = plane.w;
-				}
-				frustum_data[24] = f32::from_bits(entity_count as u32);
-
-				// ensure LOD buffers before borrowing aabb_buf (borrow checker requirement)
-				self.ensure_lod_select_resources(entity_count);
-
-				// a staging buffer is only reusable once its previous map_async has been
-				// drained (pending cleared by the read blocks above or a buffer rebuild)
-				let cull_staging_free = !self.cull_staging_pending;
-				let lod_staging_free = !self.lod_staging_pending;
-
-				// (re)build the cull + LOD bind groups only when their backing buffers regrew;
-				// the ensure_* paths reset these to None on growth. done before the local buffer
-				// borrows below so the mutable self writes don't clash with them.
-				if self.cull_bg.is_none() {
-					self.cull_bg =
-						Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-							label: Some("[cull] bg"),
-							layout: self.cull_bgl.as_ref().unwrap(),
-							entries: &[
-								wgpu::BindGroupEntry {
-									binding: 0,
-									resource:
-										self.cull_aabb_buf.as_ref().unwrap().as_entire_binding(),
-								},
-								wgpu::BindGroupEntry {
-									binding: 1,
-									resource:
-										self.cull_frustum_buf.as_ref().unwrap().as_entire_binding(),
-								},
-								wgpu::BindGroupEntry {
-									binding: 2,
-									resource:
-										self.cull_flags_buf.as_ref().unwrap().as_entire_binding(),
-								},
-							],
-						}));
-				}
-				if self.lod_select_bg.is_none()
-					&& let (Some(lod_bgl), Some(lod_params_buf), Some(lod_buf), Some(aabb_for_lod)) = (
-						self.lod_select_bgl.as_ref(),
-						self.lod_params_buf.as_ref(),
-						self.lod_indices_buf.as_ref(),
-						self.cull_aabb_buf.as_ref(),
-					) {
-					self.lod_select_bg =
-						Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-							label: Some("[lod select] bg"),
-							layout: lod_bgl,
-							entries: &[
-								wgpu::BindGroupEntry {
-									binding: 0,
-									resource: lod_params_buf.as_entire_binding(),
-								},
-								wgpu::BindGroupEntry {
-									binding: 1,
-									resource: aabb_for_lod.as_entire_binding(),
-								},
-								wgpu::BindGroupEntry {
-									binding: 2,
-									resource: lod_buf.as_entire_binding(),
-								},
-							],
-						}));
-				}
-
-				let aabb_buf = self.cull_aabb_buf.as_ref().unwrap();
-				let frustum_buf = self.cull_frustum_buf.as_ref().unwrap();
-				let flags_buf = self.cull_flags_buf.as_ref().unwrap();
-				let staging_buf = self.cull_flags_staging.as_ref().unwrap();
-				let bg = self.cull_bg.as_ref().unwrap();
-
-				self.queue
-					.write_buffer(aabb_buf, 0, bytemuck::cast_slice(&self.cull_aabb_scratch));
-				self.queue
-					.write_buffer(frustum_buf, 0, bytemuck::cast_slice(&frustum_data));
-				let mut cull_enc =
-					self.device
-						.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-							label: Some("[cull] encoder"),
-						});
-				{
-					let mut cpass = cull_enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-						label: Some("[cull] pass"),
-						timestamp_writes: None,
-					});
-					cpass.set_pipeline(self.cull_pipeline.as_ref().unwrap());
-					cpass.set_bind_group(0, bg, &[]);
-					cpass.dispatch_workgroups((entity_count as u32).div_ceil(64), 1, 1);
-				}
-				// also dispatch LOD selection in the same encoder (reuses the cached bind group)
-				if let (Some(lod_pipeline), Some(lod_params_buf), Some(lod_buf), Some(lod_bg)) = (
-					self.lod_select_pipeline.as_ref(),
-					self.lod_params_buf.as_ref(),
-					self.lod_indices_buf.as_ref(),
-					self.lod_select_bg.as_ref(),
-				) {
-					let mut lod_params_data = [0u32; 8];
-					lod_params_data[0] = cam_pos.x.to_bits();
-					lod_params_data[1] = cam_pos.y.to_bits();
-					lod_params_data[2] = cam_pos.z.to_bits();
-					lod_params_data[3] = entity_count as u32;
-					// squared distance thresholds: [15²=225, 50²=2500, 150²=22500, 400²=160000]
-					lod_params_data[4] = 225.0f32.to_bits();
-					lod_params_data[5] = 2500.0f32.to_bits();
-					lod_params_data[6] = 22500.0f32.to_bits();
-					lod_params_data[7] = 160000.0f32.to_bits();
-					self.queue.write_buffer(
-						lod_params_buf,
-						0,
-						bytemuck::cast_slice(&lod_params_data),
-					);
-					{
-						let mut lpass = cull_enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-							label: Some("[lod select] pass"),
-							timestamp_writes: None,
-						});
-						lpass.set_pipeline(lod_pipeline);
-						lpass.set_bind_group(0, lod_bg, &[]);
-						lpass.dispatch_workgroups((entity_count as u32).div_ceil(64), 1, 1);
-					}
-					if lod_staging_free && let Some(lod_staging) = self.lod_indices_staging.as_ref() {
-						cull_enc.copy_buffer_to_buffer(
-							lod_buf,
-							0,
-							lod_staging,
-							0,
-							(entity_count * 4) as u64,
-						);
-					}
-				}
-
-				// copy fresh flags out and register the readback only while the staging
-				// buffer is free: a buffer with an outstanding map_async must not appear
-				// in a submit, so slow-gpu frames run the compute dispatch but keep the
-				// previous readback in flight until it is drained above
-				if cull_staging_free {
-					cull_enc.copy_buffer_to_buffer(
-						flags_buf,
-						0,
-						staging_buf,
-						0,
-						(entity_count * 4) as u64,
-					);
-				}
-				self.queue.submit([cull_enc.finish()]);
-				if cull_staging_free {
-					// register map_async for next frame: callback fires when GPU finishes, no CPU stall
-					let ready = self.cull_staging_ready.clone();
-					ready.store(false, Ordering::Release);
-					staging_buf.slice(0..(entity_count * 4) as u64).map_async(
-						wgpu::MapMode::Read,
-						move |result| {
-							if result.is_ok() {
-								ready.store(true, Ordering::Release);
-							}
-						},
-					);
-					self.cull_staging_pending = true;
-					self.cull_pending_entity_count = entity_count;
-				}
-
-				// register LOD staging map_async for next frame
-				if lod_staging_free && let Some(lod_staging) = self.lod_indices_staging.as_ref() {
-					let lod_ready = self.lod_staging_ready.clone();
-					lod_ready.store(false, Ordering::Release);
-					lod_staging.slice(0..(entity_count * 4) as u64).map_async(
-						wgpu::MapMode::Read,
-						move |result| {
-							if result.is_ok() {
-								lod_ready.store(true, Ordering::Release);
-							}
-						},
-					);
-					self.lod_staging_pending = true;
-					self.lod_pending_entity_count = entity_count;
-				}
-			}
-		} else {
-			// mid/low tier CPU cull: SIMD frustum test (8 boxes/iter on AVX2) over the
-			// CullSoa axis slices, writing 1/0 into a reused scratch buffer: no per-frame
-			// allocation (the old rayon `.collect()` heap-allocated a Vec every frame).
-			let frustum = *world.resource::<Frustum>();
+		let frustum = *world.resource::<Frustum>();
+		{
 			let soa = world.resource::<CullSoa>();
 			let n = soa.entities.len();
 			self.frustum_flags_scratch.clear();
@@ -379,16 +93,163 @@ impl RenderEngine3d {
 			}
 		}
 
+		let entity_count = world.resource::<CullSoa>().entities.len();
+
+		// per-entity AABB upload data (CullSoa order): built once, shared by the
+		// gpu LOD select and the HZB occlusion dispatch below
+		let hzb_active = self.hzb_enabled && self.hzb_texture.is_some();
+		if (self.gpu_cull_enabled || hzb_active) && entity_count > 0 {
+			self.cull_aabb_scratch.clear();
+			let soa = world.resource::<CullSoa>();
+			for i in 0..entity_count {
+				self.cull_aabb_scratch.extend_from_slice(&[
+					soa.center_x[i],
+					soa.center_y[i],
+					soa.center_z[i],
+					0.0,
+					soa.half_x[i],
+					soa.half_y[i],
+					soa.half_z[i],
+					0.0,
+				]);
+			}
+		}
+
+		// ── gpu LOD selection (high tier, 1-frame pipelined) ─────────────
+		if self.gpu_cull_enabled && entity_count > 0 {
+			let _ = self.device.poll(wgpu::PollType::Poll); // fire completed map_async callbacks
+
+			// read previous frame's LOD staging result
+			if self.lod_staging_pending && self.lod_staging_ready.load(Ordering::Acquire) {
+				let prev_count = self.lod_pending_entity_count;
+				if let Some(staging) = self.lod_indices_staging.as_ref() {
+					{
+						let slice = staging.slice(0..(prev_count * 4) as u64);
+						let data = slice.get_mapped_range();
+						let indices = mapped_u32s(&data);
+						let soa = world.resource::<CullSoa>();
+						self.gpu_lod_indices.clear();
+						for (i, &entity) in soa.entities.iter().take(prev_count).enumerate() {
+							if i < indices.len() {
+								self.gpu_lod_indices.insert(entity, indices[i]);
+							}
+						}
+					}
+					staging.unmap();
+				}
+				self.lod_staging_ready.store(false, Ordering::Release);
+				self.lod_staging_pending = false;
+			}
+
+			self.ensure_gpu_cull_resources(entity_count);
+			self.ensure_lod_select_resources(entity_count);
+
+			// a staging buffer is only reusable once its previous map_async has been
+			// drained (pending cleared by the read block above or a buffer rebuild)
+			let lod_staging_free = !self.lod_staging_pending;
+
+			// (re)build the LOD bind group only when its backing buffers regrew;
+			// the ensure_* paths reset it to None on growth
+			if self.lod_select_bg.is_none()
+				&& let (Some(lod_bgl), Some(lod_params_buf), Some(lod_buf), Some(aabb_for_lod)) = (
+					self.lod_select_bgl.as_ref(),
+					self.lod_params_buf.as_ref(),
+					self.lod_indices_buf.as_ref(),
+					self.cull_aabb_buf.as_ref(),
+				) {
+				self.lod_select_bg =
+					Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+						label: Some("[lod select] bg"),
+						layout: lod_bgl,
+						entries: &[
+							wgpu::BindGroupEntry {
+								binding: 0,
+								resource: lod_params_buf.as_entire_binding(),
+							},
+							wgpu::BindGroupEntry {
+								binding: 1,
+								resource: aabb_for_lod.as_entire_binding(),
+							},
+							wgpu::BindGroupEntry {
+								binding: 2,
+								resource: lod_buf.as_entire_binding(),
+							},
+						],
+					}));
+			}
+
+			if let (Some(lod_pipeline), Some(lod_params_buf), Some(lod_buf), Some(lod_bg), Some(aabb_buf)) = (
+				self.lod_select_pipeline.as_ref(),
+				self.lod_params_buf.as_ref(),
+				self.lod_indices_buf.as_ref(),
+				self.lod_select_bg.as_ref(),
+				self.cull_aabb_buf.as_ref(),
+			) {
+				self.queue
+					.write_buffer(aabb_buf, 0, bytemuck::cast_slice(&self.cull_aabb_scratch));
+				let mut lod_params_data = [0u32; 8];
+				lod_params_data[0] = cam_pos.x.to_bits();
+				lod_params_data[1] = cam_pos.y.to_bits();
+				lod_params_data[2] = cam_pos.z.to_bits();
+				lod_params_data[3] = entity_count as u32;
+				// squared distance thresholds: [15²=225, 50²=2500, 150²=22500, 400²=160000]
+				lod_params_data[4] = 225.0f32.to_bits();
+				lod_params_data[5] = 2500.0f32.to_bits();
+				lod_params_data[6] = 22500.0f32.to_bits();
+				lod_params_data[7] = 160000.0f32.to_bits();
+				self.queue
+					.write_buffer(lod_params_buf, 0, bytemuck::cast_slice(&lod_params_data));
+				let mut lod_enc =
+					self.device
+						.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+							label: Some("[lod select] encoder"),
+						});
+				{
+					let mut lpass = lod_enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+						label: Some("[lod select] pass"),
+						timestamp_writes: None,
+					});
+					lpass.set_pipeline(lod_pipeline);
+					lpass.set_bind_group(0, lod_bg, &[]);
+					lpass.dispatch_workgroups((entity_count as u32).div_ceil(64), 1, 1);
+				}
+				// copy fresh indices out only while the staging buffer is free: a buffer
+				// with an outstanding map_async must not appear in a submit
+				if lod_staging_free && let Some(lod_staging) = self.lod_indices_staging.as_ref() {
+					lod_enc.copy_buffer_to_buffer(
+						lod_buf,
+						0,
+						lod_staging,
+						0,
+						(entity_count * 4) as u64,
+					);
+				}
+				self.queue.submit([lod_enc.finish()]);
+
+				// register LOD staging map_async for next frame
+				if lod_staging_free && let Some(lod_staging) = self.lod_indices_staging.as_ref() {
+					let lod_ready = self.lod_staging_ready.clone();
+					lod_ready.store(false, Ordering::Release);
+					lod_staging.slice(0..(entity_count * 4) as u64).map_async(
+						wgpu::MapMode::Read,
+						move |result| {
+							if result.is_ok() {
+								lod_ready.store(true, Ordering::Release);
+							}
+						},
+					);
+					self.lod_staging_pending = true;
+					self.lod_pending_entity_count = entity_count;
+				}
+			}
+		}
+
 		// ── HZB occlusion cull (high tier, 1-frame pipelined) ────────────
 		// applies previous frame's occlusion result to frustum_visible, then
 		// dispatches this frame's occlusion compute for next frame's use.
 		// no CPU stall: the previous frame's compute completed while we were
 		// building the draw list.
-		if self.hzb_enabled && self.hzb_texture.is_some() {
-			let entity_count = {
-				let soa = world.resource::<CullSoa>();
-				soa.entities.len()
-			};
+		if hzb_active {
 			if entity_count > 0 {
 				self.ensure_hzb_cull_buffers(entity_count);
 
@@ -418,23 +279,31 @@ impl RenderEngine3d {
 				}
 
 				// dispatch this frame's HZB occlusion compute. skipped while the previous
-				// readback is still in flight: a buffer with an outstanding map_async must
-				// not appear in a submit, so wait for the drain above before reusing it
-				if !self.hzb_staging_pending && !self.gpu_cull_flags.is_empty() {
-					// reuse the AABB data built above for the frustum cull (same CullSoa order)
-					let vp_array = view_proj.to_cols_array();
+				// readback is still in flight (a buffer with an outstanding map_async must
+				// not appear in a submit) and until the first HZB has actually been built,
+				// so the test never runs against a cleared depth pyramid
+				if !self.hzb_staging_pending && self.hzb_built {
+					// test against the view_proj snapshot taken when the HZB depth was
+					// drawn: testing last frame's depth with this frame's matrix falsely
+					// culled still-visible geometry whenever the camera moved
+					let vp_array = self.hzb_view_proj.to_cols_array();
 					let mut params_data = [0f32; 24];
 					params_data[..16].copy_from_slice(&vp_array);
-					params_data[16] = self.surface_config.width as f32;
-					params_data[17] = self.surface_config.height as f32;
+					// footprint-to-mip selection happens in HZB texel space, so the
+					// viewport is the HZB mip 0 size (not the display surface size)
+					params_data[16] = self.hzb_width as f32;
+					params_data[17] = self.hzb_height as f32;
 					params_data[18] = f32::from_bits(self.hzb_mip_count);
 					params_data[19] = f32::from_bits(entity_count as u32);
 
-					let n = entity_count.min(self.gpu_cull_flags.len());
+					// seed occlusion flags from this frame's fresh CPU frustum result
+					self.hzb_seed_scratch.clear();
+					self.hzb_seed_scratch
+						.extend(self.frustum_flags_scratch.iter().map(|&flag| flag as u32));
 					self.queue.write_buffer(
 						self.hzb_occ_buf.as_ref().unwrap(),
 						0,
-						bytemuck::cast_slice(&self.gpu_cull_flags[..n]),
+						bytemuck::cast_slice(&self.hzb_seed_scratch),
 					);
 					self.queue.write_buffer(
 						self.hzb_cull_aabb_buf.as_ref().unwrap(),

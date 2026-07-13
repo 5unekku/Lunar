@@ -1,10 +1,10 @@
 // hierarchical Z-buffer (HZB) shaders: three entry points.
 //
 // cs_copy_depth: copies a Depth32Float texture to the R32Float HZB mip 0.
-// cs_downsample: downsamples one HZB mip to the next (MIN of 4 texels).
-//   - uses MIN so the HZB stores the nearest occluder depth in each tile.
-//   - an entity is occluded if its nearest projected depth > the HZB sample
-//     (even the entity's front face is farther than the closest thing in the tile).
+// cs_downsample: downsamples one HZB mip to the next (MAX of 4 texels).
+//   - uses MAX so the HZB stores the farthest surface depth in each tile.
+//   - an entity is occluded only if its nearest projected depth > the HZB sample,
+//     i.e. the whole entity is behind the farthest surface covering the tile.
 // cs_cull_hzb:   tests entity AABBs against last-frame HZB and clears flags
 //   for occluded entities. operates on the same visible_flags array as
 //   cs_cull in cull.wgsl; cull_flags already zeroed for frustum-culled entities.
@@ -39,8 +39,11 @@ fn cs_downsample(@builtin(global_invocation_id) gid: vec3<u32>) {
     let s1 = textureLoad(mip_src, clamp(src + vec2(1, 0), vec2(0), vec2<i32>(src_size) - 1), 0).r;
     let s2 = textureLoad(mip_src, clamp(src + vec2(0, 1), vec2(0), vec2<i32>(src_size) - 1), 0).r;
     let s3 = textureLoad(mip_src, clamp(src + vec2(1, 1), vec2(0), vec2<i32>(src_size) - 1), 0).r;
-    // min depth = nearest occluder in this tile (conservative)
-    textureStore(mip_dst, vec2<i32>(gid.xy), vec4<f32>(min(min(s0, s1), min(s2, s3)), 0.0, 0.0, 1.0));
+    // max depth = farthest surface in this tile. occlusion needs a max pyramid:
+    // an entity is only occluded when its nearest depth is behind the FARTHEST
+    // surface covering the whole tile. a min pyramid would cull any entity behind
+    // the nearest surface, even when it's visible through gaps around it.
+    textureStore(mip_dst, vec2<i32>(gid.xy), vec4<f32>(max(max(s0, s1), max(s2, s3)), 0.0, 0.0, 1.0));
 }
 
 // ── hzb occlusion cull ───────────────────────────────────────────────────────

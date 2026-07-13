@@ -68,7 +68,6 @@ const SHADER_SRC: &str = include_str!("shader.wgsl");
 #[cfg(not(target_arch = "wasm32"))]
 const SHADER_WGSL_SRC: &str = include_str!("shader.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
-const CULL_SHADER_SRC: &str = include_str!("cull.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const CULL_INDIRECT_SHADER_SRC: &str = include_str!("cull_indirect.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
@@ -2002,26 +2001,13 @@ pub struct RenderEngine3d {
 	indirect_buf: Option<wgpu::Buffer>,
 	indirect_args: Vec<u32>, // scratch: 5 u32s per entry (index_count, inst_count, first_idx, base_vert, first_inst)
 
-	// GPU-driven frustum culling (high tier only).
-	// a compute pass replaces the CPU CullSoa frustum test.
-	// 1-frame pipelined: this frame writes to cull_flags_buf, previous frame's
-	// staging result is read. first frame falls back to CPU cull (no prior result).
+	// GPU-driven cull support buffers (high tier only). the CPU SIMD sweep owns
+	// the frustum test; these feed the gpu LOD select, the HZB occlusion pass,
+	// and the late-frame indirect cull in frame.rs.
 	gpu_cull_enabled: bool,
 	cull_aabb_buf: Option<wgpu::Buffer>,
-	cull_frustum_buf: Option<wgpu::Buffer>,
 	cull_flags_buf: Option<wgpu::Buffer>,
-	cull_flags_staging: Option<wgpu::Buffer>,
-	cull_count_buf: Option<wgpu::Buffer>,
-	cull_bgl: Option<wgpu::BindGroupLayout>,
-	cull_pipeline: Option<wgpu::ComputePipeline>,
-	// cached cull bind group (aabb+frustum+flags); rebuilt only when those buffers regrow
-	cull_bg: Option<wgpu::BindGroup>,
-	// cpu-side visible flag result (read back from previous frame's GPU result)
-	gpu_cull_flags: Vec<u32>,
 	cull_entity_capacity: usize,
-	// whether the staging buffer has been written and is ready to map next frame
-	cull_staging_pending: bool,
-	cull_pending_entity_count: usize,
 	// indirect cull pipeline (6 bindings): created alongside standard pipeline when has_indirect
 	cull_indirect_bgl: Option<wgpu::BindGroupLayout>,
 	cull_indirect_pipeline: Option<wgpu::ComputePipeline>,
@@ -2055,11 +2041,8 @@ pub struct RenderEngine3d {
 	// depth-source view for hzb copy (non-msaa, texture_binding)
 	hzb_depth_src: Option<wgpu::Texture>,
 	hzb_depth_src_view: Option<wgpu::TextureView>,
-	// per-entity occlusion flags from hzb cull (combined with gpu_cull_flags)
-	hzb_occ_flags: Vec<u32>,
 	hzb_occ_buf: Option<wgpu::Buffer>,
-	// async staging readback signals: set by map_async callback, checked next frame
-	cull_staging_ready: Arc<AtomicBool>,
+	// async staging readback signal: set by map_async callback, checked next frame
 	hzb_staging_ready: Arc<AtomicBool>,
 	hzb_occ_staging: Option<wgpu::Buffer>,
 	// hzb cull aabb / camera param buffers
@@ -2068,6 +2051,12 @@ pub struct RenderEngine3d {
 	// 1-frame pipeline state for hzb occlusion readback
 	hzb_staging_pending: bool,
 	hzb_pending_entity_count: usize,
+	// u32 widening of frustum_flags_scratch, uploaded to seed hzb_occ_buf
+	hzb_seed_scratch: Vec<u32>,
+	// view_proj the current HZB depth was drawn with: the occlusion test must
+	// use this matrix, not the current frame's, or camera motion falsely culls
+	hzb_view_proj: Mat4,
+	hzb_built: bool,
 
 	// ── contact shadows ──────────────────────────────────────────────────
 	contact_shadow_tex: Option<wgpu::Texture>,

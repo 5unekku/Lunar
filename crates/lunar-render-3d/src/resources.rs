@@ -215,19 +215,18 @@ impl RenderEngine3d {
 		self.mega_mesh_entries
 			.insert(mesh_id, [first_index, index_count, base_vertex]);
 	}
-	/// lazily create (or grow) GPU frustum cull buffers and pipeline.
+	/// lazily create (or grow) the gpu cull support buffers (LOD select input,
+	/// late indirect cull) and the indirect cull pipeline.
 	pub(crate) fn ensure_gpu_cull_resources(&mut self, entity_count: usize) {
 		if entity_count == 0 {
 			return;
 		}
-		let needs_rebuild =
-			self.cull_pipeline.is_none() || entity_count > self.cull_entity_capacity;
+		let needs_rebuild = entity_count > self.cull_entity_capacity;
 		if needs_rebuild {
 			let cap = entity_count.next_power_of_two().max(256);
 			self.cull_entity_capacity = cap;
 
-			// these buffers back the cull + LOD bind groups: force a rebuild of both
-			self.cull_bg = None;
+			// these buffers back the LOD + late-cull bind groups: force a rebuild of both
 			self.lod_select_bg = None;
 			self.late_cull_bg = None;
 
@@ -238,93 +237,15 @@ impl RenderEngine3d {
 				usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
 				mapped_at_creation: false,
 			}));
-			// frustum params: 6×vec4 planes + u32 count + 3 pad = 112 bytes, padded to 128
-			self.cull_frustum_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-				label: Some("[cull] frustum buf"),
-				size: 128,
-				usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-				mapped_at_creation: false,
-			}));
-			// visible flags: one u32 per entity
+			// visible flags: one u32 per entity (written by the late indirect cull)
 			self.cull_flags_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
 				label: Some("[cull] flags buf"),
 				size: (cap * 4) as u64,
-				usage: wgpu::BufferUsages::STORAGE
-					| wgpu::BufferUsages::COPY_SRC
-					| wgpu::BufferUsages::COPY_DST,
+				usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
 				mapped_at_creation: false,
 			}));
-			self.cull_flags_staging = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-				label: Some("[cull] flags staging"),
-				size: (cap * 4) as u64,
-				usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-				mapped_at_creation: false,
-			}));
-			// the old staging buffer (possibly still map-pending) was just dropped;
-			// reset readback state so the new buffer starts fresh
-			self.cull_staging_pending = false;
-			self.cull_staging_ready
-				.store(false, std::sync::atomic::Ordering::Release);
-			self.gpu_cull_flags.resize(cap, 0);
 
-			if self.cull_pipeline.is_none() {
-				let bgl = self
-					.device
-					.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-						label: Some("[cull] bgl"),
-						entries: &[
-							wgpu::BindGroupLayoutEntry {
-								binding: 0,
-								visibility: wgpu::ShaderStages::COMPUTE,
-								ty: wgpu::BindingType::Buffer {
-									ty: wgpu::BufferBindingType::Storage { read_only: true },
-									has_dynamic_offset: false,
-									min_binding_size: None,
-								},
-								count: None,
-							},
-							wgpu::BindGroupLayoutEntry {
-								binding: 1,
-								visibility: wgpu::ShaderStages::COMPUTE,
-								ty: wgpu::BindingType::Buffer {
-									ty: wgpu::BufferBindingType::Uniform,
-									has_dynamic_offset: false,
-									min_binding_size: None,
-								},
-								count: None,
-							},
-							wgpu::BindGroupLayoutEntry {
-								binding: 2,
-								visibility: wgpu::ShaderStages::COMPUTE,
-								ty: wgpu::BindingType::Buffer {
-									ty: wgpu::BufferBindingType::Storage { read_only: false },
-									has_dynamic_offset: false,
-									min_binding_size: None,
-								},
-								count: None,
-							},
-						],
-					});
-				let layout = self
-					.device
-					.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-						label: Some("[cull] pipeline layout"),
-						bind_group_layouts: &[Some(&bgl)],
-						immediate_size: 0,
-					});
-				let module = make_shader!(self.device, self.shader_passthrough, "[cull] shader", CULL_SHADER_SRC, "cull.spv");
-				self.cull_pipeline = Some(self.device.create_compute_pipeline(
-					&wgpu::ComputePipelineDescriptor {
-						label: Some("[cull] pipeline"),
-						layout: Some(&layout),
-						module: &module,
-						entry_point: Some("cs_cull"),
-						compilation_options: wgpu::PipelineCompilationOptions::default(),
-						cache: None,
-					},
-				));
-				self.cull_bgl = Some(bgl);
-
+			{
 				// create indirect cull pipeline (6 bindings) when has_indirect
 				if self.has_indirect && self.cull_indirect_pipeline.is_none() {
 					let storage_ro = |binding: u32| wgpu::BindGroupLayoutEntry {
@@ -712,7 +633,6 @@ impl RenderEngine3d {
 			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 			mapped_at_creation: false,
 		}));
-		self.hzb_occ_flags.resize(cap, 0);
 	}
 	pub(crate) fn ensure_contact_shadow_resources(
 		&mut self,

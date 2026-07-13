@@ -438,7 +438,7 @@ impl RenderEngine3d {
 		};
 
 		// frustum + HZB occlusion culling (1-frame pipelined on high tier)
-		self.cull_entities(world, view_proj, cam_pos);
+		self.cull_entities(world, cam_pos);
 		self.gather_draw_list(world, cam_pos);
 		// ── upload missing meshes ─────────────────────────────────────────
 		self.mesh_evict_scratch.clear();
@@ -1951,8 +1951,14 @@ impl RenderEngine3d {
 				let n = self.draw_scratch.len();
 				let mut i = 0usize;
 				while i <= n {
-					let done = i == n;
-					let (cur_mesh, cur_mat) = if done {
+					// the HZB is a conservative occluder buffer: only solid opaque
+					// depth may go in it. transparents (sorted last, alpha < 1) never
+					// occlude, and cutout full-quad depth (mat flag bit 3) would stamp
+					// near-depth over the holes and falsely cull geometry visible
+					// through them. skip both, mirroring the main z-prepass.
+					let done = i == n || self.draw_scratch[i].7 < 1.0;
+					let cutout = !done && (self.draw_scratch[i].8 & 8) != 0;
+					let (cur_mesh, cur_mat) = if done || cutout {
 						(u32::MAX, u32::MAX)
 					} else {
 						(self.draw_scratch[i].1, self.draw_scratch[i].2)
@@ -2056,6 +2062,11 @@ impl RenderEngine3d {
 				cpass.set_bind_group(0, &self.hzb_downsample_bgs[mip - 1], &[]);
 				cpass.dispatch_workgroups(mip_w.div_ceil(8), mip_h.div_ceil(8), 1);
 			}
+			// snapshot the matrix this depth was drawn with. next frame's cull
+			// projects AABBs with this same matrix, never the current view_proj,
+			// so camera motion can't shift the projection off the stale depth.
+			self.hzb_view_proj = view_proj;
+			self.hzb_built = true;
 		}
 
 		// bundle read-only per-frame state once; shared by the pre-color and post passes
