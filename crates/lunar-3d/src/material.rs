@@ -69,6 +69,12 @@ pub struct MaterialData {
 	pub lightmap: Option<Handle<Texture>>,
 	/// alpha < 1.0 triggers alpha-blend; 1.0 = opaque.
 	pub alpha: f32,
+	/// alpha-test cutout threshold: when set, fragments whose shaded alpha
+	/// (base_color.a * vertex alpha * diffuse texture alpha) falls below the
+	/// cutoff are discarded, and the material renders in the opaque pass with
+	/// depth writes (grates, fences, foliage). the gpu quantizes the threshold
+	/// to 8 bits. none = no alpha test.
+	pub alpha_cutoff: Option<f32>,
 	/// set false for decals, transparent surfaces, and particles.
 	pub depth_write: bool,
 }
@@ -87,6 +93,7 @@ impl Default for MaterialData {
 			roughness: 0.5,
 			lightmap: None,
 			alpha: 1.0,
+			alpha_cutoff: None,
 			depth_write: true,
 		}
 	}

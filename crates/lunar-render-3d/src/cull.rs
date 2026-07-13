@@ -750,12 +750,23 @@ impl RenderEngine3d {
 						if m.normal_map.is_some() {
 							flags |= 4;
 						}
+						// bit 3: alpha-test cutout. the threshold rides bits 24..31 of the
+						// same flags word (quantized to 8 bits), and the entity keeps
+						// alpha 1.0 so it routes to the opaque pass with depth writes.
+						let alpha = match m.alpha_cutoff {
+							Some(cutoff) => {
+								flags |= 8
+									| (((cutoff.clamp(0.0, 1.0) * 255.0).round() as u32) << 24);
+								1.0
+							}
+							None => m.alpha,
+						};
 						let texset = [
 							m.diffuse.map(|h| h.id()).unwrap_or(u32::MAX),
 							m.normal_map.map(|h| h.id()).unwrap_or(u32::MAX),
 							m.specular.map(|h| h.id()).unwrap_or(u32::MAX),
 						];
-						(color, m.metallic, m.roughness, m.alpha, flags, texset)
+						(color, m.metallic, m.roughness, alpha, flags, texset)
 					})
 					.unwrap_or((Color::WHITE, 0.0, 0.5, 1.0, 0u32, [u32::MAX; 3]));
 				if texset != [u32::MAX; 3] && !self.any_material_textures {

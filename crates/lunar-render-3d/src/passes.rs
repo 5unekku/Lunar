@@ -1733,7 +1733,16 @@ impl RenderEngine3d {
 							let mut i = 0usize;
 							while i <= n {
 								let done = i == n;
-								let (cur_mesh, cur_mat) = if done {
+								// cutout materials (mat flags bit 3) skip the prepass: vs_depth
+								// has no fragment stage, so a full-quad depth stamp would
+								// depth-reject the geometry visible through the holes in the
+								// main pass. mesh id u32::MAX never resolves in mesh_gpu, so
+								// the sentinel run is never drawn.
+								// ponytail: costs early-z on grates; an alpha-tested mesh
+								// prepass variant like surface_masked_zprepass_pipeline would
+								// restore it if overdraw ever matters.
+								let cutout = !done && (s_draw[i].8 & 8) != 0;
+								let (cur_mesh, cur_mat) = if done || cutout {
 									(u32::MAX, u32::MAX)
 								} else {
 									(s_draw[i].1, s_draw[i].2)
@@ -1969,7 +1978,9 @@ impl RenderEngine3d {
 					let mut i = 0usize;
 					while i <= n {
 						let done = i == n;
-						let (cur_mesh, cur_mat) = if done {
+						// cutout materials skip the prepass (see native path)
+						let cutout = !done && (self.draw_scratch[i].8 & 8) != 0;
+						let (cur_mesh, cur_mat) = if done || cutout {
 							(u32::MAX, u32::MAX)
 						} else {
 							(self.draw_scratch[i].1, self.draw_scratch[i].2)

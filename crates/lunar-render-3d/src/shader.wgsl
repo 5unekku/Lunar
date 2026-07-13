@@ -22,7 +22,7 @@ struct MaterialUniforms {
     base_color:    vec4<f32>,  // 16 bytes, offset  0
     metallic:      f32,         //  4 bytes, offset 16
     roughness:     f32,         //  4 bytes, offset 20
-    flags:         u32,         //  4 bytes, offset 24  (bit 0 = unlit)
+    flags:         u32,         //  4 bytes, offset 24  (1 = unlit, 2 = directional lightmap, 4 = normal map, 8 = alpha cutout; bits 24..31 = cutout threshold * 255)
     has_lightmap:  u32,         //  4 bytes, offset 28
     lm_uv_offset:  vec2<f32>,  //  8 bytes, offset 32  (atlas offset; identity = (0,0))
     lm_uv_scale:   vec2<f32>,  //  8 bytes, offset 40  (atlas scale;  identity = (1,1))
@@ -437,6 +437,12 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     // specular map: B channel scales the specular lobe (phong intensity map
     // convention; white fallback = 1.0 = unchanged)
     let spec_scale = textureSample(mat_specular_tex, mat_tex_sampler, in.uv).b;
+
+    // alpha-test cutout (flags bit 3): binary discard keeps the surface in the
+    // opaque pass with depth writes; the threshold rides flags bits 24..31
+    if (material.flags & 8u) != 0u && alpha < f32(material.flags >> 24u) / 255.0 {
+        discard;
+    }
 
     // unlit path (sky dome, sun disc, debug geo)
     if (material.flags & 1u) != 0u {
