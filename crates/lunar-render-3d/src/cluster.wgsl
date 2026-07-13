@@ -2,12 +2,12 @@
 // produces cluster_counts and cluster_light_indices for the fragment shader.
 //
 // cluster grid: CLUSTER_X × CLUSTER_Y × CLUSTER_Z (16×9×24 = 3456 cells).
-// each cell holds up to MAX_LIGHTS_PER_CLUSTER (32) light indices.
+// each cell holds up to MAX_LIGHTS_PER_CLUSTER (64) light indices.
 
 const CLUSTER_X: u32 = 16u;
 const CLUSTER_Y: u32 = 9u;
 const CLUSTER_Z: u32 = 24u;
-const MAX_LIGHTS_PER_CLUSTER: u32 = 32u;
+const MAX_LIGHTS_PER_CLUSTER: u32 = 64u;
 
 struct ClusterParams {
     view_proj:   mat4x4<f32>,   // 64 bytes

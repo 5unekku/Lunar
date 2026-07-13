@@ -236,11 +236,11 @@ const CLUSTER_X: u32 = 16;
 const CLUSTER_Y: u32 = 9;
 const CLUSTER_Z: u32 = 24;
 const NUM_CLUSTERS: usize = (CLUSTER_X * CLUSTER_Y * CLUSTER_Z) as usize; // 3456
-const MAX_LIGHTS_PER_CLUSTER: usize = 32;
+const MAX_LIGHTS_PER_CLUSTER: usize = 64;
 /// cluster params uniform size: mat4 (64) + 4×u32 (16) + 4×f32 (16) = 96 bytes.
 const CLUSTER_PARAMS_SIZE: u64 = 96;
 /// max point lights in the clustered path.
-const MAX_CLUSTERED_LIGHTS: usize = 256;
+const MAX_CLUSTERED_LIGHTS: usize = 1024;
 /// max point lights that can cast shadows (cube face layers = MAX_POINT_SHADOW_LIGHTS × 6).
 const MAX_POINT_SHADOW_LIGHTS: usize = 4;
 /// size of point shadow globals uniform: mat4 (64) + vec3 (12) + f32 (4).
@@ -989,7 +989,7 @@ pub struct DevRenderProfile {
 	/// point light cube shadow maps. off by default; enable for doom/hl2 style flashlight games.
 	/// requires `with_point_light_shadows(true)` since `classic()` leaves this off.
 	pub point_light_shadows: bool,
-	/// maximum point lights in the scene. classic/standard cap at 8; full allows up to 256
+	/// maximum point lights in the scene. classic/standard cap at 8; full allows up to 1024
 	/// using the clustered forward path (requires high tier with compute shaders).
 	pub max_point_lights: u32,
 	/// pcss for directional shadows (variable-width penumbra) + pcf for point shadows.
@@ -1091,7 +1091,7 @@ impl DevRenderProfile {
 			max_msaa: 8,
 			max_particles: u32::MAX,
 			point_light_shadows: true,
-			max_point_lights: 256,
+			max_point_lights: 1024,
 			soft_shadows: true,
 			contact_shadows: true,
 			forced_upscale_mode: None,
@@ -1569,7 +1569,7 @@ pub struct RenderEngine3d {
 	cluster_bgl_render: wgpu::BindGroupLayout,
 	cluster_pipeline: wgpu::ComputePipeline,
 	cluster_params_buf: wgpu::Buffer, // ClusterParams uniform (96 bytes)
-	light_list_buf: wgpu::Buffer,     // PointLightEntry × 256 (storage)
+	light_list_buf: wgpu::Buffer,     // PointLightEntry × MAX_CLUSTERED_LIGHTS (storage)
 	cluster_counts_buf: wgpu::Buffer, // u32 × NUM_CLUSTERS (atomic in compute)
 	cluster_indices_buf: wgpu::Buffer, // u32 × NUM_CLUSTERS × MAX_PER_CLUSTER
 	cluster_bg_compute: wgpu::BindGroup, // group 0 for compute pass

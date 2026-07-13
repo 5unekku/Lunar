@@ -86,7 +86,7 @@ struct Lights {
     sh3:  vec4<f32>,   sh4:  vec4<f32>,   sh5:  vec4<f32>,
     sh6:  vec4<f32>,   sh7:  vec4<f32>,   sh8:  vec4<f32>,
 }
-// point lights are in group 5 (separate storage buffer for up to 256 lights)
+// point lights are in group 5 (separate storage buffer for up to 1024 lights)
 @group(3) @binding(0) var<uniform>  lights:            Lights;
 @group(3) @binding(1) var           shadow_map:        texture_depth_2d_array;
 @group(3) @binding(2) var           shadow_sampler:    sampler_comparison;
@@ -94,11 +94,11 @@ struct Lights {
 @group(3) @binding(3) var           point_shadow_maps: texture_depth_2d_array;
 
 // group 5: clustered point lighting
-// 16×9×24 = 3456 clusters; each cluster holds up to 32 light indices.
+// 16×9×24 = 3456 clusters; each cluster holds up to 64 light indices.
 const CLUSTER_X_F: u32 = 16u;
 const CLUSTER_Y_F: u32 = 9u;
 const CLUSTER_Z_F: u32 = 24u;
-const MAX_LIGHTS_PER_CLUSTER_F: u32 = 32u;
+const MAX_LIGHTS_PER_CLUSTER_F: u32 = 64u;
 
 struct ClusterParamsF {
     view_proj:   mat4x4<f32>,

@@ -1222,16 +1222,19 @@ impl RenderEngine3d {
 
 			// CPU path: every cluster points to the whole light list. that table is
 			// camera- and position-independent, so it only changes when light_count does;
-			// rebuilding+uploading ~432KB every frame is pure waste. gate on the cached count.
+			// rebuilding+uploading ~864KB every frame is pure waste. gate on the cached count.
 			if !cluster_needs_compute && light_count != self.cpu_cluster_last_count {
 				self.cluster_counts_scratch.clear();
 				self.cluster_counts_scratch.resize(NUM_CLUSTERS, 0);
 				self.cluster_indices_scratch.clear();
 				self.cluster_indices_scratch
 					.resize(NUM_CLUSTERS * MAX_LIGHTS_PER_CLUSTER, 0);
+				// clamp to the per-cluster stride: a non-indirect device with a dev cap
+				// above MAX_LIGHTS_PER_CLUSTER must not write past its row
+				let cpu_cluster_lights = light_count.min(MAX_LIGHTS_PER_CLUSTER);
 				for c in 0..NUM_CLUSTERS {
-					self.cluster_counts_scratch[c] = light_count as u32;
-					for j in 0..light_count {
+					self.cluster_counts_scratch[c] = cpu_cluster_lights as u32;
+					for j in 0..cpu_cluster_lights {
 						self.cluster_indices_scratch[c * MAX_LIGHTS_PER_CLUSTER + j] = j as u32;
 					}
 				}
