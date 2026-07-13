@@ -873,6 +873,66 @@ impl RenderEngine3d {
 				});
 				self.mat_texset_bg_cache.insert(*texset, bg);
 			}
+
+			// ── bindless array (one-call gpu-driven path, native only) ────
+			// assign array slots to newly uploaded textures and rebuild the
+			// fixed-size bind group when the set grows. slots are sticky for
+			// the process lifetime (mat_tex_cache never evicts)
+			#[cfg(not(target_arch = "wasm32"))]
+			if self.bindless_supported() {
+				self.ensure_bindless_pipeline();
+				if self.bindless_tex_slots.len() < self.mat_tex_cache.len() {
+					for &texture_id in self.mat_tex_cache.keys() {
+						if self.bindless_tex_slots.contains_key(&texture_id) {
+							continue;
+						}
+						// slots 0..2 are the neutral fallbacks
+						let slot = 3 + self.bindless_tex_order.len() as u32;
+						if slot < MAX_BINDLESS_TEXTURES {
+							self.bindless_tex_slots.insert(texture_id, slot);
+							self.bindless_tex_order.push(texture_id);
+						} else if !self.bindless_overflow_warned {
+							self.bindless_overflow_warned = true;
+							log::warn!(
+								"bindless texture array full ({MAX_BINDLESS_TEXTURES}); overflow \
+								 textures sample neutral fallbacks in the one-call path"
+							);
+						}
+					}
+				}
+				if let Some(bindless_bgl) = &self.bindless_bgl
+					&& (self.bindless_bg.is_none()
+						|| self.bindless_bg_count != self.bindless_tex_order.len())
+				{
+					let mut views: Vec<&wgpu::TextureView> =
+						Vec::with_capacity(MAX_BINDLESS_TEXTURES as usize);
+					views.extend(self.mat_tex_fallback_views.iter());
+					views.extend(
+						self.bindless_tex_order
+							.iter()
+							.map(|id| &self.mat_tex_cache[id].1),
+					);
+					// layout count must be met exactly (no PARTIALLY_BOUND):
+					// pad the tail with the neutral diffuse
+					views.resize(MAX_BINDLESS_TEXTURES as usize, &self.mat_tex_fallback_views[0]);
+					self.bindless_bg =
+						Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+							label: Some("[mat tex] bindless bg"),
+							layout: bindless_bgl,
+							entries: &[
+								wgpu::BindGroupEntry {
+									binding: 0,
+									resource: wgpu::BindingResource::TextureViewArray(&views),
+								},
+								wgpu::BindGroupEntry {
+									binding: 1,
+									resource: wgpu::BindingResource::Sampler(&self.mat_tex_sampler),
+								},
+							],
+						}));
+					self.bindless_bg_count = self.bindless_tex_order.len();
+				}
+			}
 		}
 
 		// ── lightmap atlas (phase 3, has_indirect path) ───────────────────
@@ -1019,6 +1079,9 @@ impl RenderEngine3d {
 			// read-only scene data plus two mutable, non-overlapping staging slices.
 			let has_indirect = self.has_indirect;
 			let atlas_lm_uvs = &self.atlas_lm_uvs;
+			let mat_texsets = &self.mat_texsets;
+			let bindless_tex_slots = &self.bindless_tex_slots;
+			let bindless_active = self.bindless_bg.is_some();
 			let draw_scratch = &self.draw_scratch;
 			let uniform_region =
 				&mut self.uniform_staging[base * stride..(base + entity_count) * stride];
@@ -1026,7 +1089,7 @@ impl RenderEngine3d {
 				&mut self.material_staging[base * mat_size..(base + entity_count) * mat_size];
 
 			let pack_slot = |i: usize, uniform_slot: &mut [u8], material_slot: &mut [u8]| {
-				let (_, _, _, color, metallic, roughness, model, _, mat_flags, lm_id, dir_lm_id) =
+				let (_, _, mat_id, color, metallic, roughness, model, _, mat_flags, lm_id, dir_lm_id) =
 					draw_scratch[i];
 				Self::pack_mesh_uniforms_at(uniform_slot, model);
 				// per-entity SH: probe grid takes priority, then global IrradianceSH, else leave prior
@@ -1053,6 +1116,17 @@ impl RenderEngine3d {
 				} else {
 					([0.0f32, 0.0], [1.0f32, 1.0])
 				};
+				// bindless array slots: absent or still-loading maps use the fixed
+				// fallback slot for their channel (0 diffuse, 1 normal, 2 specular)
+				let texture_indices: [u32; 3] = if bindless_active {
+					let texset = mat_texsets.get(&mat_id).copied().unwrap_or([u32::MAX; 3]);
+					[0u32, 1, 2].map(|k| match texset[k as usize] {
+						u32::MAX => k,
+						id => bindless_tex_slots.get(&id).copied().unwrap_or(k),
+					})
+				} else {
+					[0; 3]
+				};
 				Self::pack_material_uniforms_at(
 					material_slot,
 					color,
@@ -1062,7 +1136,7 @@ impl RenderEngine3d {
 					has_lightmap,
 					lm_uv_offset,
 					lm_uv_scale,
-					[0; 3],
+					texture_indices,
 				);
 			};
 

@@ -771,10 +771,16 @@ impl RenderEngine3d {
 					.unwrap_or((Color::WHITE, 0.0, 0.5, 1.0, 0u32, [u32::MAX; 3]));
 				if texset != [u32::MAX; 3] && !self.any_material_textures {
 					self.any_material_textures = true;
-					log::info!(
-						"material textures in use: one-call gpu multi-draw disabled, \
-						 per-batch indirect path active"
-					);
+					if self.bindless_supported() {
+						log::info!(
+							"material textures in use: bindless one-call gpu multi-draw path"
+						);
+					} else {
+						log::info!(
+							"material textures in use: one-call gpu multi-draw disabled, \
+							 per-batch indirect path active"
+						);
+					}
 				}
 				self.mat_texsets.insert(mat_id, texset);
 				self.draw_scratch.push((

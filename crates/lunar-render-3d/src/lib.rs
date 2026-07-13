@@ -63,6 +63,10 @@ use lunar_math::{glam::camera::rh as camera_rh, Color, Mat3, Mat4, Vec2, Vec3, V
 // dev builds and wasm keep wgsl inline; native release uses pre-compiled spirv (build.rs)
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const SHADER_SRC: &str = include_str!("shader.wgsl");
+// bindless shader variant is string-patched from the wgsl source at runtime,
+// so native release keeps the source text too (SHADER_SRC is spirv there)
+#[cfg(not(target_arch = "wasm32"))]
+const SHADER_WGSL_SRC: &str = include_str!("shader.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
 const CULL_SHADER_SRC: &str = include_str!("cull.wgsl");
 #[cfg(any(debug_assertions, target_arch = "wasm32"))]
@@ -1884,9 +1888,25 @@ pub struct RenderEngine3d {
 	// textures the device cannot upload (e.g. BC without TEXTURE_COMPRESSION_BC);
 	// their texsets bind neutral fallback views instead of waiting forever
 	mat_tex_failed: HashSet<u32>,
-	// sticky: some loaded material carries textures. gates the one-call
-	// multi-draw path off (it cannot rebind textures mid-draw)
+	// sticky: some loaded material carries textures. the one-call multi-draw
+	// path needs the bindless variant below; otherwise per-batch fallback
 	any_material_textures: bool,
+	// ── bindless material textures (one-call gpu-driven path, native only) ──
+	// texture id → slot in the binding array; slots 0..2 are the neutral fallbacks
+	bindless_tex_slots: HashMap<u32, u32>,
+	// slot assignment order (entry 0 lives at array slot 3)
+	bindless_tex_order: Vec<u32>,
+	// group 6 variant: binding_array<texture_2d<f32>, MAX_BINDLESS_TEXTURES> + sampler
+	bindless_bgl: Option<wgpu::BindGroupLayout>,
+	bindless_bg: Option<wgpu::BindGroup>,
+	// bindless_tex_order length baked into bindless_bg (growth detector)
+	bindless_bg_count: usize,
+	// mesh pipeline whose fragment stage indexes the binding array
+	opaque_pipeline_bindless: Option<wgpu::RenderPipeline>,
+	// (hdr_format, msaa_samples) the bindless pipeline was built against
+	bindless_pipeline_params: (wgpu::TextureFormat, u32),
+	bindless_overflow_warned: bool,
+	bindless_active_logged: bool,
 	// lightmap atlas (phase 3): packs all lightmap textures into one RGBA8 4096×4096 texture.
 	// built/rebuilt when has_indirect and lm_tex_cache changes.
 	// atlas_lm_uvs maps lm_id → [offset_u, offset_v, scale_u, scale_v]

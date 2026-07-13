@@ -273,6 +273,14 @@ impl RenderEngine3d {
 				),
 				None => (&self.hdr_view as &wgpu::TextureView, None),
 			};
+			// hoisted flag update: the pass below holds immutable borrows of self,
+			// so the first-frame log decision happens before it starts
+			let first_bindless_frame = self.gpu_indirect_active()
+				&& self.any_material_textures
+				&& !self.bindless_active_logged;
+			if first_bindless_frame {
+				self.bindless_active_logged = true;
+			}
 			let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 				label: Some("[frame] pass"),
 				color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -376,6 +384,20 @@ impl RenderEngine3d {
 				// phase 5: render path doesn't use frustum_visible; GPU handles culling entirely.
 				let atlas_bg = self.atlas_bg.as_ref().unwrap_or(&self.lightmap_fallback_bg);
 				pass.set_bind_group(4, atlas_bg, &[]);
+				// textured scenes only reach this branch when the bindless variant is
+				// ready (gpu_indirect_active checks); untextured scenes keep the plain
+				// pipeline. groups 0..5 stay valid across the switch (same bgls)
+				if self.any_material_textures {
+					pass.set_pipeline(self.opaque_pipeline_bindless.as_ref().unwrap());
+					pass.set_bind_group(6, self.bindless_bg.as_ref().unwrap(), &[]);
+					if first_bindless_frame {
+						log::info!(
+							"bindless one-call gpu multi-draw active: {} textures, {} draw params",
+							3 + self.bindless_bg_count,
+							self.draw_scratch.len()
+						);
+					}
+				}
 				let mega_vbuf = self.mega_vbuf.as_ref().unwrap();
 				let mega_ibuf = self.mega_ibuf.as_ref().unwrap();
 				let indirect_buf = self.indirect_buf.as_ref().unwrap();

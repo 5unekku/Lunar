@@ -17,9 +17,10 @@ impl RenderEngine3d {
 				.device
 				.features()
 				.contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT)
-			// the one-call multi-draw cannot rebind textures per material; textured
-			// scenes take the per-batch indirect path until a bindless array lands
-			&& !self.any_material_textures
+			// textured scenes need the bindless variant; untextured scenes keep the
+			// plain pipeline. per-batch indirect path remains the fallback elsewhere
+			&& (!self.any_material_textures
+				|| (self.opaque_pipeline_bindless.is_some() && self.bindless_bg.is_some()))
 			&& self.cull_indirect_pipeline.is_some()
 			&& !self.mega_mesh_entries.is_empty()
 	}
@@ -681,6 +682,216 @@ impl RenderEngine3d {
 		})
 	}
 
+	/// true when the device granted the binding-array features the bindless
+	/// material texture path needs (never on wasm/WebGPU).
+	pub(crate) fn bindless_supported(&self) -> bool {
+		self.device.features().contains(
+			wgpu::Features::TEXTURE_BINDING_ARRAY
+				| wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING,
+		)
+	}
+
+	/// build the bindless fragment shader by string-patching the wgsl source:
+	/// group 6 becomes a fixed-size binding_array + sampler and the three sample
+	/// sites index it by the material's tex_indices. each needle must match the
+	/// source exactly once, so any shader.wgsl drift fails loudly (unit-tested).
+	#[cfg(not(target_arch = "wasm32"))]
+	fn bindless_shader_source() -> String {
+		fn replace_exactly_once(source: String, needle: &str, replacement: &str) -> String {
+			assert_eq!(
+				source.matches(needle).count(),
+				1,
+				"bindless shader patch needle missing or ambiguous: {needle}"
+			);
+			source.replacen(needle, replacement, 1)
+		}
+		let mut source = SHADER_WGSL_SRC.to_string();
+		source = replace_exactly_once(
+			source,
+			"@group(6) @binding(0) var mat_diffuse_tex:  texture_2d<f32>;",
+			&format!(
+				"@group(6) @binding(0) var mat_textures: binding_array<texture_2d<f32>, {MAX_BINDLESS_TEXTURES}>;"
+			),
+		);
+		source = replace_exactly_once(
+			source,
+			"@group(6) @binding(1) var mat_normal_tex:   texture_2d<f32>;",
+			"",
+		);
+		source = replace_exactly_once(
+			source,
+			"@group(6) @binding(2) var mat_specular_tex: texture_2d<f32>;",
+			"",
+		);
+		source = replace_exactly_once(
+			source,
+			"@group(6) @binding(3) var mat_tex_sampler:  sampler;",
+			"@group(6) @binding(1) var mat_tex_sampler: sampler;",
+		);
+		source = replace_exactly_once(
+			source,
+			"textureSample(mat_diffuse_tex, mat_tex_sampler, in.uv)",
+			"textureSample(mat_textures[material.tex_indices.x], mat_tex_sampler, in.uv)",
+		);
+		source = replace_exactly_once(
+			source,
+			"textureSample(mat_specular_tex, mat_tex_sampler, in.uv)",
+			"textureSample(mat_textures[material.tex_indices.z], mat_tex_sampler, in.uv)",
+		);
+		replace_exactly_once(
+			source,
+			"textureSample(mat_normal_tex, mat_tex_sampler, in.uv)",
+			"textureSample(mat_textures[material.tex_indices.y], mat_tex_sampler, in.uv)",
+		)
+	}
+
+	/// build (or rebuild after hdr/msaa changes) the bindless group 6 layout and
+	/// the opaque pipeline variant whose fragment stage indexes the binding array.
+	/// called every textured frame before recording, so parameter changes re-key
+	/// it before any draw uses it.
+	#[cfg(not(target_arch = "wasm32"))]
+	pub(crate) fn ensure_bindless_pipeline(&mut self) {
+		if !self.bindless_supported() {
+			return;
+		}
+		if self.bindless_bgl.is_none() {
+			self.bindless_bgl = Some(self.device.create_bind_group_layout(
+				&wgpu::BindGroupLayoutDescriptor {
+					label: Some("[mat tex] bindless bgl"),
+					entries: &[
+						wgpu::BindGroupLayoutEntry {
+							binding: 0,
+							visibility: wgpu::ShaderStages::FRAGMENT,
+							ty: wgpu::BindingType::Texture {
+								sample_type: wgpu::TextureSampleType::Float { filterable: true },
+								view_dimension: wgpu::TextureViewDimension::D2,
+								multisampled: false,
+							},
+							count: Some(std::num::NonZeroU32::new(MAX_BINDLESS_TEXTURES).unwrap()),
+						},
+						wgpu::BindGroupLayoutEntry {
+							binding: 1,
+							visibility: wgpu::ShaderStages::FRAGMENT,
+							ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+							count: None,
+						},
+					],
+				},
+			));
+		}
+		let params = (self.hdr_format, self.msaa_samples);
+		if self.opaque_pipeline_bindless.is_some() && self.bindless_pipeline_params == params {
+			return;
+		}
+		// always compiled from wgsl (never the spv passthrough): wgpu lays the
+		// binding array out against this pipeline layout at compile time
+		let module = self
+			.device
+			.create_shader_module(wgpu::ShaderModuleDescriptor {
+				label: Some("3d PBR shader (bindless)"),
+				source: wgpu::ShaderSource::Wgsl(Self::bindless_shader_source().into()),
+			});
+		let vert_attrs = [
+			wgpu::VertexAttribute {
+				format: wgpu::VertexFormat::Float32x3,
+				offset: 0,
+				shader_location: 0,
+			},
+			wgpu::VertexAttribute {
+				format: wgpu::VertexFormat::Snorm8x4,
+				offset: 12,
+				shader_location: 1,
+			},
+			wgpu::VertexAttribute {
+				format: wgpu::VertexFormat::Snorm8x4,
+				offset: 16,
+				shader_location: 2,
+			},
+			wgpu::VertexAttribute {
+				format: wgpu::VertexFormat::Float32x2,
+				offset: 20,
+				shader_location: 3,
+			},
+			wgpu::VertexAttribute {
+				format: wgpu::VertexFormat::Unorm16x2,
+				offset: 28,
+				shader_location: 4,
+			},
+			wgpu::VertexAttribute {
+				format: wgpu::VertexFormat::Unorm8x4,
+				offset: 32,
+				shader_location: 5,
+			},
+		];
+		let vertex_buffers = [wgpu::VertexBufferLayout {
+			array_stride: VERTEX_STRIDE,
+			step_mode: wgpu::VertexStepMode::Vertex,
+			attributes: &vert_attrs,
+		}];
+		let layout = self
+			.device
+			.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+				label: Some("3d bindless pipeline layout"),
+				bind_group_layouts: &[
+					Some(&self.globals_bgl),
+					Some(&self.material_bgl),
+					Some(&self.mesh_bgl),
+					Some(&self.lights_bgl),
+					Some(&self.lightmap_bgl),
+					Some(&self.cluster_bgl_render),
+					Some(self.bindless_bgl.as_ref().unwrap()),
+				],
+				immediate_size: 0,
+			});
+		let tier = self.render_tier;
+		self.opaque_pipeline_bindless = Some(self.device.create_render_pipeline(
+			&wgpu::RenderPipelineDescriptor {
+				label: Some("3d opaque pipeline (bindless)"),
+				layout: Some(&layout),
+				vertex: wgpu::VertexState {
+					module: &module,
+					entry_point: Some("vs_main"),
+					buffers: &vertex_buffers,
+					compilation_options: wgpu::PipelineCompilationOptions::default(),
+				},
+				fragment: Some(wgpu::FragmentState {
+					module: &module,
+					entry_point: Some("fs_main"),
+					targets: &[Some(wgpu::ColorTargetState {
+						format: self.hdr_format,
+						blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+						write_mask: wgpu::ColorWrites::ALL,
+					})],
+					compilation_options: wgpu::PipelineCompilationOptions::default(),
+				}),
+				primitive: wgpu::PrimitiveState {
+					topology: wgpu::PrimitiveTopology::TriangleList,
+					front_face: wgpu::FrontFace::Ccw,
+					cull_mode: Some(wgpu::Face::Back),
+					..Default::default()
+				},
+				depth_stencil: Some(wgpu::DepthStencilState {
+					format: wgpu::TextureFormat::Depth32Float,
+					depth_write_enabled: Some(tier == RenderTier::LowGles),
+					depth_compare: Some(if tier == RenderTier::LowGles {
+						wgpu::CompareFunction::Less
+					} else {
+						wgpu::CompareFunction::LessEqual
+					}),
+					stencil: wgpu::StencilState::default(),
+					bias: wgpu::DepthBiasState::default(),
+				}),
+				multisample: wgpu::MultisampleState {
+					count: self.msaa_samples,
+					..Default::default()
+				},
+				cache: self.pipeline_cache.as_ref(),
+				multiview_mask: None,
+			},
+		));
+		self.bindless_pipeline_params = params;
+	}
+
 	pub(crate) fn rebuild_msaa_pipelines(&mut self) {
 		let msaa = self.msaa_samples;
 		let hdr = self.hdr_format;
@@ -1335,5 +1546,24 @@ impl RenderEngine3d {
 		drop(mapped);
 
 		Some((out, width, height))
+	}
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod bindless_tests {
+	use super::*;
+
+	/// the patch needles assert exactly-once matches internally, so this both
+	/// exercises the patch and guards against shader.wgsl drift.
+	#[test]
+	fn bindless_shader_patch_applies() {
+		let patched = RenderEngine3d::bindless_shader_source();
+		assert!(patched.contains("binding_array<texture_2d<f32>"));
+		assert!(!patched.contains("mat_diffuse_tex"));
+		assert!(!patched.contains("mat_normal_tex"));
+		assert!(!patched.contains("mat_specular_tex"));
+		assert!(patched.contains("mat_textures[material.tex_indices.x]"));
+		assert!(patched.contains("mat_textures[material.tex_indices.y]"));
+		assert!(patched.contains("mat_textures[material.tex_indices.z]"));
 	}
 }

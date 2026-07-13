@@ -102,6 +102,22 @@ impl RenderEngine3d {
 		{
 			required_features |= wgpu::Features::TEXTURE_COMPRESSION_BC;
 		}
+		// bindless material textures: fixed-size texture binding array indexed per draw
+		// by the one-call gpu-driven path. request only when the adapter can grant the
+		// whole array; the render path checks device.features() and keeps the per-batch
+		// fallback otherwise (wasm/WebGPU never exposes these). the array is always
+		// fully bound (tail padded with fallbacks), so PARTIALLY_BOUND_BINDING_ARRAY
+		// is not needed
+		let bindless_features = wgpu::Features::TEXTURE_BINDING_ARRAY
+			| wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING;
+		// LUNAR_NO_BINDLESS forces the per-batch fallback (a/b debugging, driver escape hatch)
+		let has_bindless = adapter.features().contains(bindless_features)
+			&& adapter.limits().max_binding_array_elements_per_shader_stage
+				>= MAX_BINDLESS_TEXTURES
+			&& std::env::var_os("LUNAR_NO_BINDLESS").is_none();
+		if has_bindless {
+			required_features |= bindless_features;
+		}
 		// SPIR-V passthrough skips wgpu's runtime naga re-validation of our precompiled .spv.
 		// only meaningful on Vulkan (where SPIR-V is the native format); DX12 wants DXIL/HLSL.
 		let has_passthrough = adapter
@@ -116,6 +132,12 @@ impl RenderEngine3d {
 			required_features,
 			required_limits: wgpu::Limits {
 				max_bind_groups: Self::negotiate_max_bind_groups(adapter),
+				// default is 0; the bindless bgl creation fails without this
+				max_binding_array_elements_per_shader_stage: if has_bindless {
+					MAX_BINDLESS_TEXTURES
+				} else {
+					0
+				},
 				..wgpu::Limits::default()
 			},
 			memory_hints: wgpu::MemoryHints::Performance,
@@ -3990,6 +4012,15 @@ impl RenderEngine3d {
 			mat_texsets: HashMap::default(),
 			mat_tex_failed: HashSet::default(),
 			any_material_textures: false,
+			bindless_tex_slots: HashMap::default(),
+			bindless_tex_order: Vec::new(),
+			bindless_bgl: None,
+			bindless_bg: None,
+			bindless_bg_count: 0,
+			opaque_pipeline_bindless: None,
+			bindless_pipeline_params: (wgpu::TextureFormat::Rgba16Float, 0),
+			bindless_overflow_warned: false,
+			bindless_active_logged: false,
 			lm_tex_cache: HashMap::default(),
 			dir_lm_tex_cache: HashMap::default(),
 			lightmap_bg_cache: HashMap::default(),
