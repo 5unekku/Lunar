@@ -619,7 +619,11 @@ impl RenderEngine3d {
 					visibility: wgpu::ShaderStages::VERTEX,
 					ty: wgpu::BindingType::Buffer {
 						ty: wgpu::BufferBindingType::Uniform,
-						has_dynamic_offset: false,
+						// the cascade pass rebinds this per cascade via a 256-byte
+						// dynamic offset (see passes.rs record_shadows), so the layout
+						// must declare a dynamic offset — otherwise wgpu aborts with a
+						// dynamic-offset-count mismatch the moment a cascade renders.
+						has_dynamic_offset: true,
 						min_binding_size: wgpu::BufferSize::new(SHADOW_GLOBALS_SIZE),
 					},
 					count: None,
@@ -634,12 +638,18 @@ impl RenderEngine3d {
 			mapped_at_creation: false,
 		});
 
+		// bind a single 64-byte slot; the dynamic offset selects which cascade.
+		// (a whole-buffer binding would let offset 512 + size 768 run past the end.)
 		let shadow_globals_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
 			label: Some("[shadow globals] bg"),
 			layout: &shadow_globals_bgl,
 			entries: &[wgpu::BindGroupEntry {
 				binding: 0,
-				resource: shadow_globals_buf.as_entire_binding(),
+				resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+					buffer: &shadow_globals_buf,
+					offset: 0,
+					size: wgpu::BufferSize::new(SHADOW_GLOBALS_SIZE),
+				}),
 			}],
 		});
 
@@ -3981,6 +3991,7 @@ impl RenderEngine3d {
 			pipeline_cache,
 			#[cfg(not(target_arch = "wasm32"))]
 			pipeline_cache_path,
+			adapter_info: adapter.get_info(),
 			// 4 MiB chunk: larger than any single write, handles most scene sizes
 			#[cfg(not(target_arch = "wasm32"))]
 			staging_belt: wgpu::util::StagingBelt::new(device_for_belt, 4 * 1024 * 1024),

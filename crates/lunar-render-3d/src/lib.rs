@@ -1833,6 +1833,10 @@ pub struct RenderEngine3d {
 	#[cfg(not(target_arch = "wasm32"))]
 	pipeline_cache_path: Option<std::path::PathBuf>,
 
+	// info snapshot of the adapter the engine was created on, for tooling
+	// (bench harness keys baselines and golden frames per adapter)
+	adapter_info: wgpu::AdapterInfo,
+
 	// staging belt: explicit frame-temporary upload staging for large buffers (native only)
 	#[cfg(not(target_arch = "wasm32"))]
 	staging_belt: wgpu::util::StagingBelt,
@@ -2370,6 +2374,80 @@ mod headless_tests {
 			draw_calls = engine.render_frame(&mut world);
 		}
 		assert!(draw_calls > 0, "a visible mesh must produce at least one draw call");
+		engine
+			.device
+			.poll(wgpu::PollType::wait_indefinitely())
+			.unwrap();
+	}
+
+	/// regression guard for the shadow-cascade dynamic-offset mismatch: the
+	/// cascade pass binds `[shadow globals]` group 0 with one 256-byte dynamic
+	/// offset per cascade, so its bind-group layout must declare
+	/// `has_dynamic_offset: true` and bind a single 64-byte slot window. before
+	/// the fix the layout said `false`, and any shadow-casting directional light
+	/// aborted the process with a wgpu validation error the moment the cascade
+	/// pass ran. a shadow-casting sun + a shadow-caster mesh drives that path.
+	#[test]
+	fn headless_directional_shadows_render_without_validation_errors() {
+		let instance = wgpu::Instance::default();
+		if pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+			power_preference: wgpu::PowerPreference::HighPerformance,
+			force_fallback_adapter: false,
+			compatible_surface: None,
+		}))
+		.is_err()
+		{
+			eprintln!("skipping headless shadow test: no gpu adapter available");
+			return;
+		}
+
+		let config = RenderConfig3d {
+			width: 128,
+			height: 128,
+			..RenderConfig3d::default()
+		};
+		let mut engine = RenderEngine3d::headless(&instance, &config);
+
+		let mut world = World::new();
+		world.insert_resource(ActiveViewports::default());
+		world.insert_resource(Frustum::default());
+		world.insert_resource(ViewportAspect(1.0));
+		world.insert_resource(CullSoa::default());
+		world.insert_resource(lunar_core::Time::default());
+		world.insert_resource(lunar_assets::AssetServer::new(1));
+
+		let mut registry = MeshRegistry::default();
+		let quad = registry.add_mesh(quad_mesh(1.0, 1.0));
+		let material = registry.add_material(lunar_3d::MaterialData::default());
+		world.insert_resource(registry);
+
+		// a shadow-casting mesh so the shadow list is non-empty
+		world.spawn((
+			Mesh3d(quad),
+			Material3d(material),
+			WorldTransform3d {
+				translation: Vec3::new(0.0, 0.0, -5.0),
+				..WorldTransform3d::new()
+			},
+			ComputedVisibility(true),
+			ShadowCaster,
+		));
+
+		// a shadow-casting sun — this is what makes the cascade pass run, hitting
+		// the `[shadow globals]` dynamic-offset bind.
+		world.spawn((
+			DirectionalLight { casts_shadows: true, ..DirectionalLight::default() },
+			WorldTransform3d::new(),
+		));
+
+		let camera = world
+			.spawn((Camera3d::default(), WorldTransform3d::new()))
+			.id();
+		world.insert_resource(ActiveCamera3d { entity: Some(camera) });
+
+		for _ in 0..3 {
+			engine.render_frame(&mut world);
+		}
 		engine
 			.device
 			.poll(wgpu::PollType::wait_indefinitely())
