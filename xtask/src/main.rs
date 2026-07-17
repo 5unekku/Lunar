@@ -5,6 +5,7 @@
 //!   cargo xtask dist --modular               release build, separate binary + .so → dist/
 //!   cargo xtask dist --single                release build, .so embedded in binary → dist/
 //!   cargo xtask run                          debug build (CoreCLR), then run platform_demo_cs
+//!   cargo xtask bench [-- <render-bench args>]   release build + run the headless render bench
 //!
 //! debug builds use the CoreCLR hosting path (dotnet build → .dll, no NativeAOT).
 //! release / dist builds use NativeAOT (dotnet publish -p:PublishAot=true → .so).
@@ -38,8 +39,11 @@ fn main() -> ExitCode {
             if single { dist_single() } else { dist_modular() }
         }
         "run"   => run(),
+        // forward everything after `bench` straight to the render-bench binary,
+        // dropping a leading `--` separator if cargo passed one through.
+        "bench" => run_bench(rest.iter().skip_while(|a| *a == "--").cloned().collect()),
         other   => {
-            eprintln!("unknown task '{other}'. available: build, dist, run");
+            eprintln!("unknown task '{other}'. available: build, dist, run, bench");
             return ExitCode::FAILURE;
         }
     };
@@ -177,6 +181,15 @@ fn run() -> Result<(), String> {
         host_dll.to_str().unwrap(),
         plugin_dll.to_str().unwrap(),
     ], &root)
+}
+
+/// release build + run the headless render benchmark, forwarding any extra args
+/// (e.g. `--scene static-city --golden capture`) through to the render-bench bin.
+fn run_bench(extra: Vec<String>) -> Result<(), String> {
+    let root = workspace_root();
+    let mut args: Vec<&str> = vec!["run", "--release", "-p", "render-bench", "--"];
+    args.extend(extra.iter().map(String::as_str));
+    cmd("cargo", &args, &root)
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
