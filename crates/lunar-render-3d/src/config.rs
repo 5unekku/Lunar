@@ -556,6 +556,17 @@ impl RenderEngine3d {
 	pub fn render_tier(&self) -> RenderTier {
 		self.render_tier
 	}
+	/// info for the adapter this engine was created on (name, vendor/device ids, backend).
+	/// tooling keys per-adapter artifacts (bench baselines, golden frames) off this.
+	pub fn adapter_info(&self) -> &wgpu::AdapterInfo {
+		&self.adapter_info
+	}
+	/// disk path of this adapter's pipeline-cache blob, or `None` when the device
+	/// lacks `PIPELINE_CACHE`. lets tooling clear it for cold-start measurements.
+	#[cfg(not(target_arch = "wasm32"))]
+	pub fn pipeline_cache_file(&self) -> Option<&std::path::Path> {
+		self.pipeline_cache_path.as_deref()
+	}
 	/// apply a new MSAA sample count. rebuilds all MSAA-dependent pipelines and
 	/// the depth/MSAA color views. causes a brief gpu stall (hidden by a settings menu).
 	pub fn apply_msaa_change(&mut self, samples: u32) {

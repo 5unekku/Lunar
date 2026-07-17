@@ -479,6 +479,9 @@ pub struct RenderEngine {
 	render_target_views: HashMap<u32, wgpu::TextureView>,
 	/// counter for generating unique render target IDs (high range, no collision with asset IDs).
 	render_target_counter: u32,
+	/// info snapshot of the adapter the engine was created on, for tooling
+	/// (bench harness keys baselines and golden frames per adapter)
+	adapter_info: wgpu::AdapterInfo,
 }
 
 /// gpu-ready texture: texture + view + sampler
@@ -904,7 +907,14 @@ impl RenderEngine {
 			text_layout_cache: text::TextLayoutCache::new(256),
 			render_target_views: HashMap::default(),
 			render_target_counter: 0,
+			adapter_info: adapter.get_info(),
 		}
+	}
+
+	/// info for the adapter this engine was created on (name, vendor/device ids, backend).
+	/// tooling keys per-adapter artifacts (bench baselines, golden frames) off this.
+	pub fn adapter_info(&self) -> &wgpu::AdapterInfo {
+		&self.adapter_info
 	}
 
 	/// update the uniform buffer with the projection matrix for a specific layer.
@@ -1167,6 +1177,71 @@ impl RenderEngine {
 		let handle = Handle::<Texture>::new(tex_id, 0);
 		store.entries.insert(rt_id, handle);
 		(rt_id, handle)
+	}
+
+	/// read back an offscreen render target's pixels as tightly-packed rgba8.
+	///
+	/// blocks until the gpu copy completes — tooling and tests only, never a
+	/// per-frame path. returns `None` for an unknown target id or a failed map.
+	/// the 3d counterpart is [`read_headless_rgba`] on `RenderEngine3d`; this one
+	/// normalizes to rgba regardless of the underlying target format.
+	#[cfg(not(target_arch = "wasm32"))]
+	pub fn read_target_rgba(&self, id: RenderTargetId) -> Option<(Vec<u8>, u32, u32)> {
+		let target = self.textures.get(&id.0)?;
+		let size = target.texture.size();
+		let (width, height) = (size.width, size.height);
+		let unpadded = width * 4;
+		let padded = unpadded.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+			* wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+		let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("render target readback"),
+			size: u64::from(padded) * u64::from(height),
+			usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+			mapped_at_creation: false,
+		});
+		let mut encoder = self
+			.device
+			.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+				label: Some("render target readback"),
+			});
+		encoder.copy_texture_to_buffer(
+			target.texture.as_image_copy(),
+			wgpu::TexelCopyBufferInfo {
+				buffer: &readback,
+				layout: wgpu::TexelCopyBufferLayout {
+					offset: 0,
+					bytes_per_row: Some(padded),
+					rows_per_image: None,
+				},
+			},
+			size,
+		);
+		self.queue.submit([encoder.finish()]);
+
+		let slice = readback.slice(..);
+		let (sender, receiver) = std::sync::mpsc::channel();
+		slice.map_async(wgpu::MapMode::Read, move |result| {
+			let _ = sender.send(result);
+		});
+		self.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+		receiver.recv().ok()?.ok()?;
+		let data = slice.get_mapped_range();
+
+		let mut out = Vec::with_capacity((unpadded * height) as usize);
+		for row in 0..height {
+			let start = (row * padded) as usize;
+			out.extend_from_slice(&data[start..start + unpadded as usize]);
+		}
+		// render targets share the surface/headless format; normalize bgra to rgba
+		if matches!(
+			self.config.format,
+			wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+		) {
+			for px in out.chunks_exact_mut(4) {
+				px.swap(0, 2);
+			}
+		}
+		Some((out, width, height))
 	}
 
 	/// register font bytes with the glyph atlas. glyphs are rasterized on demand
