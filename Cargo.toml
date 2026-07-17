@@ -29,6 +29,7 @@ members = [
 		"xtask",
 		"tests/api_seal",
 	"tools/navmesh-bench",
+	"tools/render-bench",
 ]
 resolver = "2"
 

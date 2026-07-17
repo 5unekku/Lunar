@@ -1,0 +1,21 @@
+render-bench — headless deterministic render benchmark
+
+usage:
+  cargo run --release -p render-bench -- [flags]
+  cargo xtask bench -- [flags]
+
+flags:
+  --scene <name>    run one scene: static-city | dynamic-swarm | feature-reel | sprite-storm
+  --runs <n>        fresh-boot runs per scene (default 3)
+  --frames <n>      measured ticks per run (default 500)
+  --golden <mode>   off | capture | check (default check)
+  --cache-probe     also measure pipeline-cache cold vs warm boot
+  --out <dir>       output directory (default docs/bench)
+  --width <px>      render width (default 1280)
+  --height <px>     render height (default 720)
+  -h, --help        show this help
+
+output:
+  docs/bench/<host>_<adapter>.json   machine-readable results
+  docs/bench/<host>_<adapter>.md     human-readable table
+  docs/bench/golden/<adapter>/<scene>.png   golden frames (capture mode)
