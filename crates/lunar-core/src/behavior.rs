@@ -2,6 +2,7 @@
 //! this is the per-entity layer over the existing system-centric scripting.
 
 use bevy_ecs::prelude::{Component, Entity, Resource, World};
+use bevy_ecs::schedule::IntoScheduleConfigs;
 use std::collections::HashMap;
 
 /// a tunable field a behavior exposes to the editor (Godot's @export analog).
@@ -427,9 +428,13 @@ impl GamePlugin for BehaviorPlugin {
 		app.insert_resource(BehaviorRegistry::default());
 		// instantiate pending refs on startup and early each update
 		app.add_startup_system(instantiate_pending_behaviors);
-		app.add_system_to_stage(UpdateStage::Update, instantiate_pending_behaviors);
-		// exclusive dispatch systems, one per dispatched stage
-		app.add_system_to_stage(UpdateStage::Update, dispatch_update_system);
+		// exclusive dispatch systems, one per dispatched stage. the ordering edge
+		// makes the executor apply the instantiation commands before dispatch, so
+		// new behaviors get on_ready/on_update the tick they appear (corr-34)
+		app.add_system_to_stage(
+			UpdateStage::Update,
+			(instantiate_pending_behaviors, dispatch_update_system).chain(),
+		);
 		app.add_system_to_stage(UpdateStage::Physics, dispatch_physics_system);
 	}
 }
@@ -656,6 +661,26 @@ mod tests {
 		let world = app.world_mut();
 		assert!(world.entity(entity).get::<Behaviors>().is_some());
 		assert!(world.entity(entity).get::<PendingBehaviors>().is_none());
+	}
+
+	/// corr-34: a behavior instantiated from PendingBehaviors must run on_update in
+	/// the same tick, not one tick late.
+	#[test]
+	fn pending_behavior_updates_same_tick() {
+		use crate::app::App;
+		let mut app = App::new();
+		app.insert_resource(TickLog::default());
+		app.add_plugin(BehaviorPlugin);
+		app.tick(1.0 / 60.0);
+		app.world_mut()
+			.resource_mut::<BehaviorRegistry>()
+			.register("Counter", || Box::new(Counter { ticks: 0 }));
+		app.world_mut().spawn(PendingBehaviors(vec![BehaviorRefData {
+			id: "Counter".into(),
+			fields: Vec::new(),
+		}]));
+		app.tick(1.0 / 60.0);
+		assert_eq!(app.world_mut().resource::<TickLog>().0, 1);
 	}
 
 	/// on_update despawns its own entity through the documented destroy route.
