@@ -351,6 +351,25 @@ impl RenderEngine3d {
 			view_formats: &[],
 		});
 		if !data.is_empty() {
+			// Terrain's heightmap and its width/height are independent public fields; a
+			// buffer shorter than the declared size failed write_texture validation,
+			// which is fatal. pad the missing samples with zero height instead
+			let needed = width as usize * height as usize * 2;
+			let padded;
+			let data = if data.len() < needed {
+				log::warn!(
+					"terrain heightmap has {} bytes, {width}x{height} r16 needs {needed}; padding with zeros",
+					data.len()
+				);
+				padded = {
+					let mut v = data.to_vec();
+					v.resize(needed, 0);
+					v
+				};
+				&padded[..]
+			} else {
+				data
+			};
 			queue.write_texture(
 				tex.as_image_copy(),
 				data,

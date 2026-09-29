@@ -2806,4 +2806,22 @@ mod headless_tests {
 			.poll(wgpu::PollType::wait_indefinitely())
 			.unwrap();
 	}
+
+	/// corr-23: a heightmap shorter than width * height * 2 bytes (sizes bumped before
+	/// the buffer is refilled) failed write_texture validation, which is fatal.
+	#[test]
+	fn short_heightmap_uploads_without_validation_errors() {
+		let instance = wgpu::Instance::default();
+		if pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).is_err() {
+			return;
+		}
+		let engine = RenderEngine3d::headless(&instance, &RenderConfig3d::default());
+		let short = vec![0u8; 64 * 64]; // half of 64 * 64 * 2
+		let _ = RenderEngine3d::upload_heightmap(&engine.device, &engine.queue, &short, 64, 64);
+		engine.queue.submit([]);
+		engine
+			.device
+			.poll(wgpu::PollType::wait_indefinitely())
+			.unwrap();
+	}
 }
