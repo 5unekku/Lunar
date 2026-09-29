@@ -36,6 +36,18 @@ pub enum ColliderShape {
 	Circle { radius: f32 },
 }
 
+impl ColliderShape {
+	/// the same shape with non-negative extents. a negative half extent (a flipped
+	/// size passed to `Collider::aabb`, or a hand-built shape) made the aabb-vs-circle
+	/// test call `f32::clamp` with min > max, which panics; treat it as its magnitude.
+	fn normalized(self) -> Self {
+		match self {
+			Self::Aabb { half_extents } => Self::Aabb { half_extents: half_extents.abs() },
+			Self::Circle { radius } => Self::Circle { radius: radius.abs() },
+		}
+	}
+}
+
 /// component that makes an entity participate in 2d collision detection.
 ///
 /// attach alongside a [`Transform`] component, or use [`Collider2dBundle`].
@@ -110,6 +122,7 @@ struct ColliderEntry {
 
 impl ColliderEntry {
 	fn new(entity: Entity, position: Vec2, shape: ColliderShape, layer: u32, mask: u32) -> Self {
+		let shape = shape.normalized();
 		let (min_x, max_x) = match shape {
 			ColliderShape::Aabb { half_extents } => {
 				(position.x - half_extents.x, position.x + half_extents.x)
@@ -252,6 +265,7 @@ impl CollisionWorld {
 		center: Vec2,
 		half_extents: Vec2,
 	) -> impl Iterator<Item = Entity> + '_ {
+		let half_extents = half_extents.abs();
 		let qmin_x = center.x - half_extents.x;
 		let qmax_x = center.x + half_extents.x;
 		let candidates = self.x_candidates(qmin_x, qmax_x);
@@ -351,6 +365,12 @@ pub fn ray_cast_2d(
 	mask: u32,
 	world: &CollisionWorld,
 ) -> Option<RayHit2d> {
+	// a zero (or NaN) direction has no ray: the circle test would divide 0 by 0 and
+	// its NaN distance could never be displaced by a real hit below
+	let len_sq = direction.length_squared();
+	if len_sq.is_nan() || len_sq <= f32::EPSILON {
+		return None;
+	}
 	let mut nearest: Option<RayHit2d> = None;
 
 	for entry in &world.entries {
@@ -440,6 +460,9 @@ fn ray_vs_circle(
 	radius: f32,
 	max_dist: f32,
 ) -> Option<(f32, Vec2, Vec2)> {
+	if radius <= 0.0 {
+		return None;
+	}
 	let oc = origin - center;
 	let a = direction.dot(direction);
 	let b = 2.0 * oc.dot(direction);
@@ -804,5 +827,33 @@ mod tests {
 			);
 			assert_eq!(fast, brute, "query_rect differs at {p:?} {half:?}");
 		}
+	}
+
+	/// corr-07: a negative half extent (a flipped size, or a hand-built shape) made
+	/// the aabb-vs-circle test call f32::clamp with min > max, which panics.
+	#[test]
+	fn negative_aabb_extents_behave_like_their_magnitude() {
+		let mut world = World::new();
+		world.insert_resource(CollisionWorld::default());
+		let wall = world
+			.spawn((Transform::from_xy(0.0, 0.0), Collider::aabb(Vec2::new(-20.0, 20.0))))
+			.id();
+		let ball = world
+			.spawn((Transform::from_xy(12.0, 0.0), Collider::circle(4.0)))
+			.id();
+		run_build(&mut world);
+		let cw = world.resource::<CollisionWorld>();
+		assert!(cw.overlapping(ball).any(|e| e == wall));
+		assert!(cw.query_rect(Vec2::ZERO, Vec2::new(-1.0, -1.0)).any(|e| e == wall));
+	}
+
+	/// corr-08: a zero-length direction made ray_vs_circle return a NaN hit that no
+	/// real hit could ever displace from the nearest-hit accumulator.
+	#[test]
+	fn zero_direction_ray_hits_nothing() {
+		let world = build_ray_world(&[(Vec2::new(0.5, 0.0), ColliderShape::Circle { radius: 2.0 })]);
+		assert!(ray_cast_2d(Vec2::ZERO, Vec2::ZERO, 100.0, u32::MAX, &world).is_none());
+		let hit = ray_cast_2d(Vec2::new(-10.0, 0.0), Vec2::X, 100.0, u32::MAX, &world).unwrap();
+		assert!(hit.distance.is_finite());
 	}
 }
