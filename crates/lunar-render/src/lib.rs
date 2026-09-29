@@ -1746,7 +1746,12 @@ impl RenderEngine {
 					current_tex = Some(tex_id);
 				}
 
-				if self.vertex_offset + 6 * VERTEX_STRIDE > self.vertex_capacity * VERTEX_STRIDE {
+				// text writes one quad per glyph; everything else writes one quad
+				let quads = match command.kind {
+					DrawKind::Text { .. } => self.text_quads.get(&orig_idx).map_or(0, Vec::len),
+					_ => 1,
+				};
+				if self.vertex_offset + quads * 6 * VERTEX_STRIDE > self.vertex_capacity * VERTEX_STRIDE {
 					self.overflow_flag = true;
 					continue;
 				}
@@ -3880,5 +3885,59 @@ mod tests {
 			g > 200 && r < 60 && b < 60,
 			"layer 1 must use its parallax offset, got ({r}, {g}, {b}) at (48,48)"
 		);
+	}
+
+	/// a text command writes one quad per glyph, so the capacity guard must reserve
+	/// room for every glyph, not just one quad. otherwise a long string drawn near
+	/// capacity writes past the vertex buffer end, a wgpu validation error (fatal).
+	#[test]
+	fn text_near_vertex_capacity_does_not_overrun_the_buffer() {
+		let instance = wgpu::Instance::default();
+		if pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).is_err() {
+			eprintln!("skipping headless render test: no gpu adapter available");
+			return;
+		}
+		let mut engine = RenderEngine::headless(
+			&instance,
+			RenderConfig {
+				width: 64,
+				height: 64,
+				..RenderConfig::default()
+			},
+		);
+		let font = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/fonts/Inconsolata.ttf"))
+			.expect("bundled test font");
+		engine.upload_font(1, &font);
+		let mut store = RenderTargetStore::default();
+		let (rt_id, _texture_handle) = engine.create_render_target(&mut store, 64, 64);
+		let mut camera = Camera::new();
+		camera.target = Some(rt_id);
+
+		// fill the buffer to within one quad of capacity, then draw a 40-glyph string
+		let quads_that_fit = INITIAL_VERTEX_CAPACITY / 6;
+		let mut commands: Vec<DrawCommand> = (0..quads_that_fit - 1)
+			.map(|_| colored_rect(Vec2::ZERO, Vec2::ONE, Color::RED, 0))
+			.collect();
+		commands.push(DrawCommand {
+			kind: DrawKind::Text {
+				font: Some(1),
+				content: Arc::from("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"),
+				position: Vec2::ZERO,
+				font_size: 16.0,
+				color: Color::WHITE,
+				layer: 1,
+				wrap_width: None,
+				line_height: 0.0,
+			},
+		});
+		let mut render_info = RenderInfo::new();
+		engine.render(&commands, Some(&camera), &mut render_info);
+		engine.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+		assert!(engine.overflow_flag, "text that does not fit must flag overflow for next frame's growth");
+
+		// next frame grows the buffer and draws everything
+		engine.render(&commands, Some(&camera), &mut render_info);
+		engine.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+		assert!(!engine.overflow_flag, "grown buffer must fit the whole frame");
 	}
 }
