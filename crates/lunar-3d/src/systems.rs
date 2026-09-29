@@ -194,7 +194,7 @@ pub fn propagate_transforms_3d(world: &mut World) {
 		scratch.depths.clear();
 		scratch.depths.resize(n, u32::MAX);
 		for i in 0..n {
-			depth_of(i, &scratch.parent_idx, &mut scratch.depths);
+			lunar_core::hierarchy_depth(i, &scratch.parent_idx, &mut scratch.depths);
 		}
 		scratch.order.clear();
 		scratch.order.extend(0..n);
@@ -314,17 +314,6 @@ pub fn copy_prev_transforms(mut query: Query<(&WorldTransform3d, &mut PrevWorldT
 	}
 }
 
-fn depth_of(idx: usize, parent_idx: &[Option<usize>], depths: &mut [u32]) -> u32 {
-	if depths[idx] != u32::MAX {
-		return depths[idx];
-	}
-	let depth = parent_idx[idx]
-		.map(|parent| depth_of(parent, parent_idx, depths) + 1)
-		.unwrap_or(0);
-	depths[idx] = depth;
-	depth
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -343,6 +332,23 @@ mod tests {
 		propagate_transforms_3d(&mut world);
 		let wt = world.get::<WorldTransform3d>(e).unwrap();
 		assert!(close(wt.translation, Vec3::new(3.0, 4.0, 5.0)));
+	}
+
+	// corr-01: a Parent cycle used to recurse in depth_of until the stack overflowed,
+	// aborting the process (and this test binary) every frame.
+	#[test]
+	fn parent_cycle_does_not_abort() {
+		let mut world = World::new();
+		world.init_resource::<TransformScratch3d>();
+		let a = world.spawn(LocalTransform3d::from_xyz(1.0, 0.0, 0.0)).id();
+		let b = world.spawn((LocalTransform3d::from_xyz(2.0, 0.0, 0.0), Parent(a))).id();
+		world.entity_mut(a).insert(Parent(b));
+		let loner = world.spawn((LocalTransform3d::from_xyz(3.0, 0.0, 0.0), Parent(b))).id();
+		propagate_transforms_3d(&mut world);
+		propagate_transforms_3d(&mut world);
+		for e in [a, b, loner] {
+			assert!(world.get::<WorldTransform3d>(e).unwrap().translation.is_finite());
+		}
 	}
 
 	// child world transform composes with its parent's.

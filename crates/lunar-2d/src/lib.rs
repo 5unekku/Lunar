@@ -103,7 +103,7 @@ pub fn propagate_transforms(world: &mut World) {
 	scratch.depths.clear();
 	scratch.depths.resize(n, u32::MAX);
 	for i in 0..n {
-		depth_of_2d(i, &scratch.parent_idx, &mut scratch.depths);
+		lunar_core::hierarchy_depth(i, &scratch.parent_idx, &mut scratch.depths);
 	}
 
 	scratch.order.clear();
@@ -136,17 +136,6 @@ pub fn propagate_transforms(world: &mut World) {
 	world.insert_resource(scratch);
 }
 
-fn depth_of_2d(idx: usize, parent_idx: &[Option<usize>], depths: &mut [u32]) -> u32 {
-	if depths[idx] != u32::MAX {
-		return depths[idx];
-	}
-	let depth = parent_idx[idx]
-		.map(|parent| depth_of_2d(parent, parent_idx, depths) + 1)
-		.unwrap_or(0);
-	depths[idx] = depth;
-	depth
-}
-
 fn compute_world_transform(parent: &WorldTransform, local: &LocalTransform) -> WorldTransform {
 	let scaled_x = local.translation.x * parent.scale.x;
 	let scaled_y = local.translation.y * parent.scale.y;
@@ -173,6 +162,21 @@ fn compute_world_transform(parent: &WorldTransform, local: &LocalTransform) -> W
 mod tests {
 	use super::*;
 	use lunar_core::Parent;
+
+	// corr-01: a Parent cycle used to recurse in depth_of_2d until the stack
+	// overflowed, aborting the process (and this test binary) every frame.
+	#[test]
+	fn parent_cycle_does_not_abort() {
+		let mut world = World::new();
+		let a = world.spawn(LocalTransform::from_xy(1.0, 0.0)).id();
+		let b = world.spawn((LocalTransform::from_xy(2.0, 0.0), Parent(a))).id();
+		world.entity_mut(a).insert(Parent(b));
+		propagate_transforms(&mut world);
+		propagate_transforms(&mut world);
+		for e in [a, b] {
+			assert!(world.get::<WorldTransform>(e).unwrap().translation.is_finite());
+		}
+	}
 
 	#[test]
 	fn compute_world_transform_no_parent() {
