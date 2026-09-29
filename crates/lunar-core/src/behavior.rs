@@ -94,6 +94,11 @@ pub struct AttachedBehavior {
 #[derive(Component, Default)]
 pub struct Behaviors {
 	items: Vec<AttachedBehavior>,
+	/// the list is taken out while this entity's hooks run
+	dispatching: bool,
+	/// `despawn_with_behaviors` was called on this entity mid-hook; honored once the
+	/// hooks return and the list is back
+	pending_despawn: bool,
 }
 
 impl Behaviors {
@@ -160,42 +165,7 @@ pub fn dispatch_behaviors(world: &mut World, stage: BehaviorStage) {
 	cache.entities.extend(cache.query.iter(world));
 
 	for &entity in &cache.entities {
-		// take the behavior list out of the component so hooks get the whole world
-		let Some(mut items) = world
-			.entity_mut(entity)
-			.get_mut::<Behaviors>()
-			.map(|mut behaviors| behaviors.take_items())
-		else {
-			continue;
-		};
-
-		for attached in &mut items {
-			let mut ctx = BehaviorContext { entity, world };
-			match stage {
-				BehaviorStage::Ready => {
-					if !attached.started {
-						attached.behavior.on_ready(&mut ctx);
-						attached.started = true;
-					}
-				}
-				BehaviorStage::Update => {
-					if !attached.started {
-						attached.behavior.on_ready(&mut ctx);
-						attached.started = true;
-					}
-					attached.behavior.on_update(&mut ctx);
-				}
-				BehaviorStage::Physics => attached.behavior.on_physics(&mut ctx),
-				BehaviorStage::Destroy => attached.behavior.on_destroy(&mut ctx),
-			}
-		}
-
-		// put the list back (a behavior may have despawned the entity; guard it)
-		if let Ok(mut entity_mut) = world.get_entity_mut(entity)
-			&& let Some(mut behaviors) = entity_mut.get_mut::<Behaviors>()
-		{
-			*behaviors.items_mut() = items;
-		}
+		run_entity_hooks(world, entity, stage, true);
 	}
 
 	world.insert_resource(cache);
@@ -204,6 +174,14 @@ pub fn dispatch_behaviors(world: &mut World, stage: BehaviorStage) {
 /// fire `on_destroy` for one entity's behaviors then despawn it. the runtime's
 /// despawn routes (FFI, editor host) call this so destroy hooks always run.
 pub fn despawn_with_behaviors(world: &mut World, entity: Entity) {
+	// called from one of this entity's own hooks: its behavior list is held by the
+	// dispatcher, so defer until the hooks return (run_entity_hooks honors it)
+	if let Some(mut behaviors) = world.get_mut::<Behaviors>(entity)
+		&& behaviors.dispatching
+	{
+		behaviors.pending_despawn = true;
+		return;
+	}
 	if let Ok(entity_ref) = world.get_entity(entity)
 		&& entity_ref.contains::<Behaviors>()
 	{
@@ -216,13 +194,27 @@ pub fn despawn_with_behaviors(world: &mut World, entity: Entity) {
 
 /// run a lifecycle stage for a single entity (used by despawn destroy + attach ready).
 fn dispatch_one(world: &mut World, entity: Entity, stage: BehaviorStage) {
-	let Some(mut items) = world
-		.entity_mut(entity)
-		.get_mut::<Behaviors>()
-		.map(|mut behaviors| behaviors.take_items())
-	else {
+	run_entity_hooks(world, entity, stage, false);
+}
+
+/// run `stage` for one entity's behaviors. the list is taken out of the component so
+/// hooks get exclusive `&mut World`; while it is out, a `despawn_with_behaviors` on
+/// this entity is deferred and behaviors a hook attaches land in the emptied
+/// component. both are resolved when the list is put back. `ready_before_update`
+/// fires a pending on_ready ahead of on_update (the per-tick dispatcher does).
+fn run_entity_hooks(
+	world: &mut World,
+	entity: Entity,
+	stage: BehaviorStage,
+	ready_before_update: bool,
+) {
+	let Some(mut items) = world.get_mut::<Behaviors>(entity).map(|mut behaviors| {
+		behaviors.dispatching = true;
+		behaviors.take_items()
+	}) else {
 		return;
 	};
+
 	for attached in &mut items {
 		let mut ctx = BehaviorContext { entity, world };
 		match stage {
@@ -232,15 +224,33 @@ fn dispatch_one(world: &mut World, entity: Entity, stage: BehaviorStage) {
 					attached.started = true;
 				}
 			}
-			BehaviorStage::Update => attached.behavior.on_update(&mut ctx),
+			BehaviorStage::Update => {
+				if ready_before_update && !attached.started {
+					attached.behavior.on_ready(&mut ctx);
+					attached.started = true;
+				}
+				attached.behavior.on_update(&mut ctx);
+			}
 			BehaviorStage::Physics => attached.behavior.on_physics(&mut ctx),
 			BehaviorStage::Destroy => attached.behavior.on_destroy(&mut ctx),
 		}
 	}
-	if let Ok(mut entity_mut) = world.get_entity_mut(entity)
-		&& let Some(mut behaviors) = entity_mut.get_mut::<Behaviors>()
-	{
-		*behaviors.items_mut() = items;
+
+	// put the list back, after anything attached mid-hook. the entity may be gone if a
+	// hook despawned it directly (not via despawn_with_behaviors): nothing to restore
+	let pending_despawn = match world.get_mut::<Behaviors>(entity) {
+		Some(mut behaviors) => {
+			let attached_mid_hook = behaviors.take_items();
+			items.extend(attached_mid_hook);
+			behaviors.items = items;
+			behaviors.dispatching = false;
+			std::mem::take(&mut behaviors.pending_despawn)
+		}
+		None => false,
+	};
+	// a destroy pass is already on its way to despawning the entity
+	if pending_despawn && stage != BehaviorStage::Destroy {
+		despawn_with_behaviors(world, entity);
 	}
 }
 
@@ -640,5 +650,90 @@ mod tests {
 		let world = app.world_mut();
 		assert!(world.entity(entity).get::<Behaviors>().is_some());
 		assert!(world.entity(entity).get::<PendingBehaviors>().is_none());
+	}
+
+	/// on_update despawns its own entity through the documented destroy route.
+	struct SelfDestruct;
+	impl ExportedFields for SelfDestruct {
+		fn fields(&self) -> Vec<FieldSchema> {
+			Vec::new()
+		}
+		fn get_field(&self, _name: &str) -> Option<FieldValue> {
+			None
+		}
+		fn set_field(&mut self, _name: &str, _value: FieldValue) {}
+	}
+	impl Behavior for SelfDestruct {
+		fn on_update(&mut self, ctx: &mut BehaviorContext) {
+			despawn_with_behaviors(ctx.world, ctx.entity);
+		}
+	}
+
+	/// on_update attaches one more behavior to its own entity, once.
+	struct Spawner {
+		done: bool,
+	}
+	impl ExportedFields for Spawner {
+		fn fields(&self) -> Vec<FieldSchema> {
+			Vec::new()
+		}
+		fn get_field(&self, _name: &str) -> Option<FieldValue> {
+			None
+		}
+		fn set_field(&mut self, _name: &str, _value: FieldValue) {}
+	}
+	impl Behavior for Spawner {
+		fn on_update(&mut self, ctx: &mut BehaviorContext) {
+			if self.done {
+				return;
+			}
+			self.done = true;
+			if let Some(mut behaviors) = ctx.world.get_mut::<Behaviors>(ctx.entity) {
+				behaviors.push(AttachedBehavior {
+					id: "Counter".into(),
+					behavior: Box::new(Counter { ticks: 0 }),
+					started: false,
+				});
+			}
+		}
+	}
+
+	#[test]
+	fn self_despawn_from_a_hook_still_fires_on_destroy() {
+		let mut world = World::new();
+		world.insert_resource(DestroyLog::default());
+		let mut behaviors = Behaviors::default();
+		behaviors.push(AttachedBehavior {
+			id: "SelfDestruct".into(),
+			behavior: Box::new(SelfDestruct),
+			started: true,
+		});
+		behaviors.push(AttachedBehavior {
+			id: "Bye".into(),
+			behavior: Box::new(Bye),
+			started: true,
+		});
+		let entity = world.spawn(behaviors).id();
+		dispatch_behaviors(&mut world, BehaviorStage::Update);
+		assert!(
+			world.resource::<DestroyLog>().0,
+			"despawning yourself mid-hook must still run every on_destroy"
+		);
+		assert!(world.get_entity(entity).is_err(), "entity must be despawned");
+	}
+
+	#[test]
+	fn behaviors_attached_during_a_hook_are_kept() {
+		let mut world = World::new();
+		let mut behaviors = Behaviors::default();
+		behaviors.push(AttachedBehavior {
+			id: "Spawner".into(),
+			behavior: Box::new(Spawner { done: false }),
+			started: true,
+		});
+		let entity = world.spawn(behaviors).id();
+		dispatch_behaviors(&mut world, BehaviorStage::Update);
+		let ids: Vec<&str> = world.get::<Behaviors>(entity).unwrap().ids().collect();
+		assert_eq!(ids, ["Spawner", "Counter"], "the behavior added mid-hook must survive");
 	}
 }
