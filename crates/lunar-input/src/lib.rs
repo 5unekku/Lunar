@@ -269,10 +269,11 @@ impl InputBinding {
 			Self::GamepadButton(index, button) => input
 				.gamepad(*index)
 				.is_some_and(|gp| gp.is_button_just_pressed(*button)),
-			// axis has no edge-triggered press, treat as held
-			Self::GamepadAxis(index, axis, threshold) => input
-				.gamepad(*index)
-				.is_some_and(|gp| Self::axis_active(gp.axis(*axis), *threshold)),
+			// edge: crossed the threshold since the start of the frame (corr-38)
+			Self::GamepadAxis(index, axis, threshold) => input.gamepad(*index).is_some_and(|gp| {
+				Self::axis_active(gp.axis(*axis), *threshold)
+					&& !Self::axis_active(gp.previous_axis(*axis), *threshold)
+			}),
 		}
 	}
 
@@ -283,8 +284,10 @@ impl InputBinding {
 			Self::GamepadButton(index, button) => input
 				.gamepad(*index)
 				.is_some_and(|gp| gp.is_button_just_released(*button)),
-			// axis has no edge-triggered release
-			Self::GamepadAxis(..) => false,
+			Self::GamepadAxis(index, axis, threshold) => input.gamepad(*index).is_some_and(|gp| {
+				!Self::axis_active(gp.axis(*axis), *threshold)
+					&& Self::axis_active(gp.previous_axis(*axis), *threshold)
+			}),
 		}
 	}
 }
@@ -463,6 +466,8 @@ pub struct GamepadState {
 	buttons_just_pressed: [bool; GAMEPAD_BUTTON_COUNT],
 	buttons_just_released: [bool; GAMEPAD_BUTTON_COUNT],
 	axes: [f32; GAMEPAD_AXIS_COUNT],
+	/// axis values at the start of the frame, for axis-binding edges
+	prev_axes: [f32; GAMEPAD_AXIS_COUNT],
 }
 
 impl GamepadState {
@@ -474,6 +479,7 @@ impl GamepadState {
 			buttons_just_pressed: [false; GAMEPAD_BUTTON_COUNT],
 			buttons_just_released: [false; GAMEPAD_BUTTON_COUNT],
 			axes: [0.0; GAMEPAD_AXIS_COUNT],
+			prev_axes: [0.0; GAMEPAD_AXIS_COUNT],
 		}
 	}
 
@@ -499,6 +505,12 @@ impl GamepadState {
 	#[must_use]
 	pub const fn axis(&self, axis: GamepadAxis) -> f32 {
 		self.axes[axis as usize]
+	}
+
+	/// the axis value at the start of this frame (before this frame's events)
+	#[must_use]
+	pub const fn previous_axis(&self, axis: GamepadAxis) -> f32 {
+		self.prev_axes[axis as usize]
 	}
 
 	/// press a button
@@ -528,6 +540,7 @@ impl GamepadState {
 	pub const fn begin_frame(&mut self) {
 		self.buttons_just_pressed = [false; GAMEPAD_BUTTON_COUNT];
 		self.buttons_just_released = [false; GAMEPAD_BUTTON_COUNT];
+		self.prev_axes = self.axes;
 	}
 }
 
@@ -1239,6 +1252,60 @@ const fn keycode_from_sdl(key: sdl3::keyboard::Keycode) -> Option<KeyCode> {
 		Keycode::_7 => Some(KeyCode::Num7),
 		Keycode::_8 => Some(KeyCode::Num8),
 		Keycode::_9 => Some(KeyCode::Num9),
+		Keycode::Semicolon => Some(KeyCode::Semicolon),
+		Keycode::Apostrophe => Some(KeyCode::Apostrophe),
+		Keycode::Comma => Some(KeyCode::Comma),
+		Keycode::Period => Some(KeyCode::Period),
+		Keycode::Slash => Some(KeyCode::Slash),
+		Keycode::Backslash => Some(KeyCode::Backslash),
+		Keycode::Home => Some(KeyCode::Home),
+		Keycode::End => Some(KeyCode::End),
+		Keycode::PageUp => Some(KeyCode::PageUp),
+		Keycode::PageDown => Some(KeyCode::PageDown),
+		Keycode::Insert => Some(KeyCode::Insert),
+		Keycode::Delete => Some(KeyCode::Delete),
+		Keycode::Kp0 => Some(KeyCode::Numpad0),
+		Keycode::Kp1 => Some(KeyCode::Numpad1),
+		Keycode::Kp2 => Some(KeyCode::Numpad2),
+		Keycode::Kp3 => Some(KeyCode::Numpad3),
+		Keycode::Kp4 => Some(KeyCode::Numpad4),
+		Keycode::Kp5 => Some(KeyCode::Numpad5),
+		Keycode::Kp6 => Some(KeyCode::Numpad6),
+		Keycode::Kp7 => Some(KeyCode::Numpad7),
+		Keycode::Kp8 => Some(KeyCode::Numpad8),
+		Keycode::Kp9 => Some(KeyCode::Numpad9),
+		Keycode::KpPlus => Some(KeyCode::NumpadAdd),
+		Keycode::KpMinus => Some(KeyCode::NumpadSub),
+		Keycode::KpMultiply => Some(KeyCode::NumpadMul),
+		Keycode::KpDivide => Some(KeyCode::NumpadDiv),
+		Keycode::KpEnter => Some(KeyCode::NumpadEnter),
+		Keycode::KpPeriod => Some(KeyCode::NumpadDecimal),
+		Keycode::NumLockClear => Some(KeyCode::NumLock),
+		Keycode::CapsLock => Some(KeyCode::CapsLock),
+		Keycode::ScrollLock => Some(KeyCode::ScrollLock),
+		Keycode::Pause => Some(KeyCode::Pause),
+		Keycode::PrintScreen => Some(KeyCode::PrintScreen),
+		Keycode::LGui => Some(KeyCode::LSuper),
+		Keycode::RGui => Some(KeyCode::RSuper),
+		Keycode::MediaPlay | Keycode::MediaPlayPause => Some(KeyCode::MediaPlay),
+		Keycode::MediaStop => Some(KeyCode::MediaStop),
+		Keycode::MediaNextTrack => Some(KeyCode::MediaNext),
+		Keycode::MediaPreviousTrack => Some(KeyCode::MediaPrev),
+		Keycode::VolumeUp => Some(KeyCode::VolumeUp),
+		Keycode::VolumeDown => Some(KeyCode::VolumeDown),
+		Keycode::Mute => Some(KeyCode::Mute),
+		Keycode::F13 => Some(KeyCode::F13),
+		Keycode::F14 => Some(KeyCode::F14),
+		Keycode::F15 => Some(KeyCode::F15),
+		Keycode::F16 => Some(KeyCode::F16),
+		Keycode::F17 => Some(KeyCode::F17),
+		Keycode::F18 => Some(KeyCode::F18),
+		Keycode::F19 => Some(KeyCode::F19),
+		Keycode::F20 => Some(KeyCode::F20),
+		Keycode::F21 => Some(KeyCode::F21),
+		Keycode::F22 => Some(KeyCode::F22),
+		Keycode::F23 => Some(KeyCode::F23),
+		Keycode::F24 => Some(KeyCode::F24),
 		_ => None,
 	}
 }
@@ -1273,6 +1340,7 @@ const fn gamepad_button_from_sdl(button: sdl3::gamepad::Button) -> Option<Gamepa
 		SdlBtn::DPadDown => Some(GamepadButton::DpadDown),
 		SdlBtn::DPadLeft => Some(GamepadButton::DpadLeft),
 		SdlBtn::DPadRight => Some(GamepadButton::DpadRight),
+		SdlBtn::Misc1 => Some(GamepadButton::Share),
 		_ => None,
 	}
 }
@@ -1288,6 +1356,190 @@ const fn gamepad_axis_from_sdl(axis: sdl3::gamepad::Axis) -> Option<GamepadAxis>
 		SdlAxis::TriggerLeft => Some(GamepadAxis::LeftTrigger),
 		SdlAxis::TriggerRight => Some(GamepadAxis::RightTrigger),
 	}
+}
+
+/// map a browser keyboard event to a KeyCode (corr-37). letters follow `key`,
+/// so they respect the keyboard layout like SDL keycodes do on native, falling
+/// back to the physical `code` when the layout's character isn't a latin letter.
+/// everything else follows `code`: it is shift-invariant (a key pressed as "1"
+/// and released as "!" is still one key) and tells numpad and left/right
+/// modifiers apart, which `key` can't.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn key_from_web(key: &str, code: &str) -> Option<KeyCode> {
+	const LETTERS: [KeyCode; 26] = [
+		KeyCode::A,
+		KeyCode::B,
+		KeyCode::C,
+		KeyCode::D,
+		KeyCode::E,
+		KeyCode::F,
+		KeyCode::G,
+		KeyCode::H,
+		KeyCode::I,
+		KeyCode::J,
+		KeyCode::K,
+		KeyCode::L,
+		KeyCode::M,
+		KeyCode::N,
+		KeyCode::O,
+		KeyCode::P,
+		KeyCode::Q,
+		KeyCode::R,
+		KeyCode::S,
+		KeyCode::T,
+		KeyCode::U,
+		KeyCode::V,
+		KeyCode::W,
+		KeyCode::X,
+		KeyCode::Y,
+		KeyCode::Z,
+	];
+	let letter = |c: u8| LETTERS[usize::from(c.to_ascii_lowercase() - b'a')];
+	if let [c] = key.as_bytes()
+		&& c.is_ascii_alphabetic()
+	{
+		return Some(letter(*c));
+	}
+	if let Some(rest) = code.strip_prefix("Key")
+		&& let [c] = rest.as_bytes()
+		&& c.is_ascii_alphabetic()
+	{
+		return Some(letter(*c));
+	}
+	Some(match code {
+		"Digit0" => KeyCode::Num0,
+		"Digit1" => KeyCode::Num1,
+		"Digit2" => KeyCode::Num2,
+		"Digit3" => KeyCode::Num3,
+		"Digit4" => KeyCode::Num4,
+		"Digit5" => KeyCode::Num5,
+		"Digit6" => KeyCode::Num6,
+		"Digit7" => KeyCode::Num7,
+		"Digit8" => KeyCode::Num8,
+		"Digit9" => KeyCode::Num9,
+		"F1" => KeyCode::F1,
+		"F2" => KeyCode::F2,
+		"F3" => KeyCode::F3,
+		"F4" => KeyCode::F4,
+		"F5" => KeyCode::F5,
+		"F6" => KeyCode::F6,
+		"F7" => KeyCode::F7,
+		"F8" => KeyCode::F8,
+		"F9" => KeyCode::F9,
+		"F10" => KeyCode::F10,
+		"F11" => KeyCode::F11,
+		"F12" => KeyCode::F12,
+		"F13" => KeyCode::F13,
+		"F14" => KeyCode::F14,
+		"F15" => KeyCode::F15,
+		"F16" => KeyCode::F16,
+		"F17" => KeyCode::F17,
+		"F18" => KeyCode::F18,
+		"F19" => KeyCode::F19,
+		"F20" => KeyCode::F20,
+		"F21" => KeyCode::F21,
+		"F22" => KeyCode::F22,
+		"F23" => KeyCode::F23,
+		"F24" => KeyCode::F24,
+		"Escape" => KeyCode::Escape,
+		"Space" => KeyCode::Space,
+		"Enter" => KeyCode::Enter,
+		"Tab" => KeyCode::Tab,
+		"Backspace" => KeyCode::Backspace,
+		"ArrowLeft" => KeyCode::Left,
+		"ArrowRight" => KeyCode::Right,
+		"ArrowUp" => KeyCode::Up,
+		"ArrowDown" => KeyCode::Down,
+		"ShiftLeft" => KeyCode::LShift,
+		"ShiftRight" => KeyCode::RShift,
+		"ControlLeft" => KeyCode::LCtrl,
+		"ControlRight" => KeyCode::RCtrl,
+		"AltLeft" => KeyCode::LAlt,
+		"AltRight" => KeyCode::RAlt,
+		// "OS*" is firefox < 118's name for the meta keys
+		"MetaLeft" | "OSLeft" => KeyCode::LSuper,
+		"MetaRight" | "OSRight" => KeyCode::RSuper,
+		"Minus" => KeyCode::Minus,
+		"Equal" => KeyCode::Equals,
+		"Semicolon" => KeyCode::Semicolon,
+		"Quote" => KeyCode::Apostrophe,
+		"Comma" => KeyCode::Comma,
+		"Period" => KeyCode::Period,
+		"Slash" => KeyCode::Slash,
+		"Backslash" => KeyCode::Backslash,
+		"BracketLeft" => KeyCode::LeftBracket,
+		"BracketRight" => KeyCode::RightBracket,
+		"Backquote" => KeyCode::Grave,
+		"Home" => KeyCode::Home,
+		"End" => KeyCode::End,
+		"PageUp" => KeyCode::PageUp,
+		"PageDown" => KeyCode::PageDown,
+		"Insert" => KeyCode::Insert,
+		"Delete" => KeyCode::Delete,
+		"Numpad0" => KeyCode::Numpad0,
+		"Numpad1" => KeyCode::Numpad1,
+		"Numpad2" => KeyCode::Numpad2,
+		"Numpad3" => KeyCode::Numpad3,
+		"Numpad4" => KeyCode::Numpad4,
+		"Numpad5" => KeyCode::Numpad5,
+		"Numpad6" => KeyCode::Numpad6,
+		"Numpad7" => KeyCode::Numpad7,
+		"Numpad8" => KeyCode::Numpad8,
+		"Numpad9" => KeyCode::Numpad9,
+		"NumpadAdd" => KeyCode::NumpadAdd,
+		"NumpadSubtract" => KeyCode::NumpadSub,
+		"NumpadMultiply" => KeyCode::NumpadMul,
+		"NumpadDivide" => KeyCode::NumpadDiv,
+		"NumpadEnter" => KeyCode::NumpadEnter,
+		"NumpadDecimal" => KeyCode::NumpadDecimal,
+		"NumLock" => KeyCode::NumLock,
+		"CapsLock" => KeyCode::CapsLock,
+		"ScrollLock" => KeyCode::ScrollLock,
+		"Pause" => KeyCode::Pause,
+		"PrintScreen" => KeyCode::PrintScreen,
+		"MediaPlayPause" => KeyCode::MediaPlay,
+		"MediaStop" => KeyCode::MediaStop,
+		"MediaTrackNext" => KeyCode::MediaNext,
+		"MediaTrackPrevious" => KeyCode::MediaPrev,
+		"AudioVolumeUp" | "VolumeUp" => KeyCode::VolumeUp,
+		"AudioVolumeDown" | "VolumeDown" => KeyCode::VolumeDown,
+		"AudioVolumeMute" | "VolumeMute" => KeyCode::Mute,
+		_ => return None,
+	})
+}
+
+/// what a browser standard-mapping gamepad button index drives. LT/RT (6, 7)
+/// are analog buttons, so they feed the trigger axes from `GamepadButton.value`
+/// rather than a digital button (corr-36).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum WebPadInput {
+	Button(GamepadButton),
+	Axis(GamepadAxis),
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+const fn web_pad_input(index: usize) -> Option<WebPadInput> {
+	Some(match index {
+		0 => WebPadInput::Button(GamepadButton::South),
+		1 => WebPadInput::Button(GamepadButton::East),
+		2 => WebPadInput::Button(GamepadButton::West),
+		3 => WebPadInput::Button(GamepadButton::North),
+		4 => WebPadInput::Button(GamepadButton::LeftShoulder),
+		5 => WebPadInput::Button(GamepadButton::RightShoulder),
+		6 => WebPadInput::Axis(GamepadAxis::LeftTrigger),
+		7 => WebPadInput::Axis(GamepadAxis::RightTrigger),
+		8 => WebPadInput::Button(GamepadButton::Back),
+		9 => WebPadInput::Button(GamepadButton::Start),
+		10 => WebPadInput::Button(GamepadButton::LeftStick),
+		11 => WebPadInput::Button(GamepadButton::RightStick),
+		12 => WebPadInput::Button(GamepadButton::DpadUp),
+		13 => WebPadInput::Button(GamepadButton::DpadDown),
+		14 => WebPadInput::Button(GamepadButton::DpadLeft),
+		15 => WebPadInput::Button(GamepadButton::DpadRight),
+		16 => WebPadInput::Button(GamepadButton::Home),
+		_ => return None,
+	})
 }
 
 /// web input event queue (populated by JS callbacks via wasm-bindgen)
@@ -1333,7 +1585,7 @@ mod web_input {
 	}
 
 	thread_local! {
-		static EVENT_QUEUE: RefCell<VecDeque<WebEvent>> = RefCell::new(VecDeque::new());
+		static EVENT_QUEUE: RefCell<VecDeque<WebEvent>> = const { RefCell::new(VecDeque::new()) };
 	}
 
 	pub fn push_key_down(key: KeyCode) {
@@ -1452,74 +1704,6 @@ mod web_input {
 		});
 	}
 
-	/// map a web keyboard event key string to KeyCode
-	pub fn key_from_web(key: &str) -> Option<KeyCode> {
-		match key {
-			"a" | "A" => Some(KeyCode::A),
-			"b" | "B" => Some(KeyCode::B),
-			"c" | "C" => Some(KeyCode::C),
-			"d" | "D" => Some(KeyCode::D),
-			"e" | "E" => Some(KeyCode::E),
-			"f" | "F" => Some(KeyCode::F),
-			"g" | "G" => Some(KeyCode::G),
-			"h" | "H" => Some(KeyCode::H),
-			"i" | "I" => Some(KeyCode::I),
-			"j" | "J" => Some(KeyCode::J),
-			"k" | "K" => Some(KeyCode::K),
-			"l" | "L" => Some(KeyCode::L),
-			"m" | "M" => Some(KeyCode::M),
-			"n" | "N" => Some(KeyCode::N),
-			"o" | "O" => Some(KeyCode::O),
-			"p" | "P" => Some(KeyCode::P),
-			"q" | "Q" => Some(KeyCode::Q),
-			"r" | "R" => Some(KeyCode::R),
-			"s" | "S" => Some(KeyCode::S),
-			"t" | "T" => Some(KeyCode::T),
-			"u" | "U" => Some(KeyCode::U),
-			"v" | "V" => Some(KeyCode::V),
-			"w" | "W" => Some(KeyCode::W),
-			"x" | "X" => Some(KeyCode::X),
-			"y" | "Y" => Some(KeyCode::Y),
-			"z" | "Z" => Some(KeyCode::Z),
-			"0" => Some(KeyCode::Num0),
-			"1" => Some(KeyCode::Num1),
-			"2" => Some(KeyCode::Num2),
-			"3" => Some(KeyCode::Num3),
-			"4" => Some(KeyCode::Num4),
-			"5" => Some(KeyCode::Num5),
-			"6" => Some(KeyCode::Num6),
-			"7" => Some(KeyCode::Num7),
-			"8" => Some(KeyCode::Num8),
-			"9" => Some(KeyCode::Num9),
-			"F1" => Some(KeyCode::F1),
-			"F2" => Some(KeyCode::F2),
-			"F3" => Some(KeyCode::F3),
-			"F4" => Some(KeyCode::F4),
-			"F5" => Some(KeyCode::F5),
-			"F6" => Some(KeyCode::F6),
-			"F7" => Some(KeyCode::F7),
-			"F8" => Some(KeyCode::F8),
-			"F9" => Some(KeyCode::F9),
-			"F10" => Some(KeyCode::F10),
-			"F11" => Some(KeyCode::F11),
-			"F12" => Some(KeyCode::F12),
-			"Escape" => Some(KeyCode::Escape),
-			" " => Some(KeyCode::Space),
-			"Enter" => Some(KeyCode::Enter),
-			"Tab" => Some(KeyCode::Tab),
-			"Backspace" => Some(KeyCode::Backspace),
-			"ArrowLeft" => Some(KeyCode::Left),
-			"ArrowRight" => Some(KeyCode::Right),
-			"ArrowUp" => Some(KeyCode::Up),
-			"ArrowDown" => Some(KeyCode::Down),
-			"Shift" => Some(KeyCode::LShift),
-			"Control" => Some(KeyCode::LCtrl),
-			"Alt" => Some(KeyCode::LAlt),
-			"`" | "~" => Some(KeyCode::Grave),
-			_ => None,
-		}
-	}
-
 	/// map a web mouse button index to MouseButton
 	/// button 0 = left, 1 = middle, 2 = right (browser API ordering)
 	pub fn mouse_button_from_web(button: i16) -> Option<MouseButton> {
@@ -1571,30 +1755,18 @@ fn poll_gamepads(_input: &mut InputState) {
 				Ok(b) => b,
 				Err(_) => continue,
 			};
-			let pressed = web_btn.pressed();
-			let mapped = match btn_index {
-				0 => Some(GamepadButton::South),
-				1 => Some(GamepadButton::East),
-				2 => Some(GamepadButton::West),
-				3 => Some(GamepadButton::North),
-				4 => Some(GamepadButton::LeftShoulder),
-				5 => Some(GamepadButton::RightShoulder),
-				8 => Some(GamepadButton::Back),
-				9 => Some(GamepadButton::Start),
-				10 => Some(GamepadButton::LeftStick),
-				11 => Some(GamepadButton::RightStick),
-				12 => Some(GamepadButton::DpadUp),
-				13 => Some(GamepadButton::DpadDown),
-				14 => Some(GamepadButton::DpadLeft),
-				15 => Some(GamepadButton::DpadRight),
-				_ => None,
-			};
-			if let Some(button) = mapped {
-				if pressed {
-					push_gamepad_button(index, button);
-				} else {
-					release_gamepad_button(index, button);
+			match web_pad_input(btn_index) {
+				Some(WebPadInput::Button(button)) => {
+					if web_btn.pressed() {
+						push_gamepad_button(index, button);
+					} else {
+						release_gamepad_button(index, button);
+					}
 				}
+				Some(WebPadInput::Axis(axis)) => {
+					push_gamepad_axis(index, axis, web_btn.value() as f32);
+				}
+				None => {}
 			}
 		}
 
@@ -1636,7 +1808,7 @@ fn poll_gamepads(_input: &mut InputState) {
 #[cfg(target_arch = "wasm32")]
 pub fn setup_web_input(canvas: &web_sys::HtmlElement) {
 	use wasm_bindgen::JsCast;
-	use web_input::{key_from_web, mouse_button_from_web};
+	use web_input::mouse_button_from_web;
 	use web_sys::EventTarget;
 
 	let canvas_target: &EventTarget = canvas.as_ref();
@@ -1651,7 +1823,7 @@ pub fn setup_web_input(canvas: &web_sys::HtmlElement) {
 		let keydown_closure =
 			wasm_bindgen::closure::Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
 				event.prevent_default();
-				if let Some(code) = key_from_web(&event.key()) {
+				if let Some(code) = key_from_web(&event.key(), &event.code()) {
 					web_input::push_key_down(code);
 				}
 			}) as Box<dyn FnMut(_)>);
@@ -1663,7 +1835,7 @@ pub fn setup_web_input(canvas: &web_sys::HtmlElement) {
 		let keyup_closure =
 			wasm_bindgen::closure::Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
 				event.prevent_default();
-				if let Some(code) = key_from_web(&event.key()) {
+				if let Some(code) = key_from_web(&event.key(), &event.code()) {
 					web_input::push_key_up(code);
 				}
 			}) as Box<dyn FnMut(_)>);
@@ -1750,6 +1922,137 @@ mod tests {
 
 	fn make_input() -> InputState {
 		InputState::new()
+	}
+
+	/// corr-37: every KeyCode past the original core set was declared but never
+	/// translated, so binding it compiled and never fired.
+	#[cfg(not(target_arch = "wasm32"))]
+	#[test]
+	fn sdl_translates_extended_keys() {
+		use sdl3::keyboard::Keycode as K;
+		let cases = [
+			(K::Semicolon, KeyCode::Semicolon),
+			(K::Apostrophe, KeyCode::Apostrophe),
+			(K::Comma, KeyCode::Comma),
+			(K::Period, KeyCode::Period),
+			(K::Slash, KeyCode::Slash),
+			(K::Backslash, KeyCode::Backslash),
+			(K::Home, KeyCode::Home),
+			(K::End, KeyCode::End),
+			(K::PageUp, KeyCode::PageUp),
+			(K::PageDown, KeyCode::PageDown),
+			(K::Insert, KeyCode::Insert),
+			(K::Delete, KeyCode::Delete),
+			(K::Kp0, KeyCode::Numpad0),
+			(K::Kp9, KeyCode::Numpad9),
+			(K::KpPlus, KeyCode::NumpadAdd),
+			(K::KpMinus, KeyCode::NumpadSub),
+			(K::KpMultiply, KeyCode::NumpadMul),
+			(K::KpDivide, KeyCode::NumpadDiv),
+			(K::KpEnter, KeyCode::NumpadEnter),
+			(K::KpPeriod, KeyCode::NumpadDecimal),
+			(K::NumLockClear, KeyCode::NumLock),
+			(K::CapsLock, KeyCode::CapsLock),
+			(K::ScrollLock, KeyCode::ScrollLock),
+			(K::Pause, KeyCode::Pause),
+			(K::PrintScreen, KeyCode::PrintScreen),
+			(K::LGui, KeyCode::LSuper),
+			(K::RGui, KeyCode::RSuper),
+			(K::MediaPlay, KeyCode::MediaPlay),
+			(K::MediaStop, KeyCode::MediaStop),
+			(K::MediaNextTrack, KeyCode::MediaNext),
+			(K::MediaPreviousTrack, KeyCode::MediaPrev),
+			(K::VolumeUp, KeyCode::VolumeUp),
+			(K::VolumeDown, KeyCode::VolumeDown),
+			(K::Mute, KeyCode::Mute),
+			(K::F13, KeyCode::F13),
+			(K::F24, KeyCode::F24),
+		];
+		for (sdl, expected) in cases {
+			assert_eq!(keycode_from_sdl(sdl), Some(expected), "{sdl:?}");
+		}
+		assert_eq!(
+			gamepad_button_from_sdl(sdl3::gamepad::Button::Misc1),
+			Some(GamepadButton::Share)
+		);
+	}
+
+	/// corr-37: the web mapper covers the extended keys, keeps letters
+	/// layout-aware, and resolves the rest by physical code.
+	#[test]
+	fn web_translates_keys() {
+		let cases = [
+			("a", "KeyQ", KeyCode::A), // azerty: layout decides letters
+			("Q", "KeyQ", KeyCode::Q),
+			("ф", "KeyA", KeyCode::A), // non-latin layout falls back to position
+			("!", "Digit1", KeyCode::Num1), // shift-invariant
+			("1", "Numpad1", KeyCode::Numpad1),
+			("Shift", "ShiftRight", KeyCode::RShift),
+			("Control", "ControlRight", KeyCode::RCtrl),
+			("Meta", "MetaLeft", KeyCode::LSuper),
+			(";", "Semicolon", KeyCode::Semicolon),
+			("'", "Quote", KeyCode::Apostrophe),
+			("-", "Minus", KeyCode::Minus),
+			("=", "Equal", KeyCode::Equals),
+			("[", "BracketLeft", KeyCode::LeftBracket),
+			("Home", "Home", KeyCode::Home),
+			("PageDown", "PageDown", KeyCode::PageDown),
+			("+", "NumpadAdd", KeyCode::NumpadAdd),
+			("Enter", "NumpadEnter", KeyCode::NumpadEnter),
+			("CapsLock", "CapsLock", KeyCode::CapsLock),
+			("F24", "F24", KeyCode::F24),
+			("AudioVolumeMute", "AudioVolumeMute", KeyCode::Mute),
+			(" ", "Space", KeyCode::Space),
+		];
+		for (key, code, expected) in cases {
+			assert_eq!(key_from_web(key, code), Some(expected), "{key:?}/{code:?}");
+		}
+		assert_eq!(key_from_web("Unidentified", "Lang1"), None);
+	}
+
+	/// corr-36: the browser's analog LT/RT buttons drive the trigger axes.
+	#[test]
+	fn web_triggers_map_to_axes() {
+		assert_eq!(
+			web_pad_input(6),
+			Some(WebPadInput::Axis(GamepadAxis::LeftTrigger))
+		);
+		assert_eq!(
+			web_pad_input(7),
+			Some(WebPadInput::Axis(GamepadAxis::RightTrigger))
+		);
+		assert_eq!(
+			web_pad_input(16),
+			Some(WebPadInput::Button(GamepadButton::Home))
+		);
+	}
+
+	/// corr-38: an axis binding's just-pressed/just-released must be edges, not
+	/// "held" every tick and "never" respectively.
+	#[test]
+	fn axis_binding_edges_fire_once() {
+		let mut input = make_input();
+		let mut actions = ActionMap::new();
+		actions.bind(
+			"fire",
+			InputBinding::GamepadAxis(0, GamepadAxis::RightTrigger, 0.5),
+		);
+		input.add_gamepad();
+
+		input.begin_frame();
+		input.set_gamepad_axis(0, GamepadAxis::RightTrigger, 0.9);
+		assert!(actions.is_action_just_pressed(&input, "fire"));
+
+		input.begin_frame();
+		assert!(actions.is_action_held(&input, "fire"));
+		assert!(!actions.is_action_just_pressed(&input, "fire"));
+
+		input.begin_frame();
+		input.set_gamepad_axis(0, GamepadAxis::RightTrigger, 0.1);
+		assert!(actions.is_action_just_released(&input, "fire"));
+
+		input.begin_frame();
+		assert!(!actions.is_action_just_released(&input, "fire"));
 	}
 
 	#[test]
