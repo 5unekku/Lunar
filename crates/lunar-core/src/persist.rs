@@ -69,6 +69,11 @@ impl From<std::io::Error> for PersistError {
 
 /// serialize `value` to RON and write it to `path`.
 ///
+/// the write is atomic: data goes to a temporary file next to `path`, is flushed to
+/// disk, then renamed over `path`. if anything fails (disk full, the process is
+/// killed mid-write) the previous save at `path` is untouched; writing straight to
+/// `path` truncated the old save before the new bytes landed.
+///
 /// on WASM this always returns [`PersistError::NotSupported`].
 #[cfg(not(target_arch = "wasm32"))]
 pub fn save<T: Serialize>(path: &str, value: &T) -> Result<(), PersistError> {
@@ -79,7 +84,18 @@ pub fn save<T: Serialize>(path: &str, value: &T) -> Result<(), PersistError> {
 	{
 		std::fs::create_dir_all(parent)?;
 	}
-	std::fs::write(path, content.as_bytes())?;
+	let tmp_path = format!("{path}.tmp");
+	let written = (|| {
+		use std::io::Write;
+		let mut file = std::fs::File::create(&tmp_path)?;
+		file.write_all(content.as_bytes())?;
+		file.sync_all()
+	})();
+	if let Err(error) = written {
+		let _ = std::fs::remove_file(&tmp_path);
+		return Err(error.into());
+	}
+	std::fs::rename(&tmp_path, path)?;
 	Ok(())
 }
 
@@ -160,5 +176,25 @@ mod tests {
 		let result = load::<TestData>(path);
 		assert!(matches!(result, Err(PersistError::Deserialize(_))));
 		let _ = std::fs::remove_file(path);
+	}
+
+	/// corr-14: a failed save must leave the previous save intact.
+	#[test]
+	fn failed_save_keeps_the_previous_save() {
+		let dir = std::env::temp_dir().join("lunar_persist_test_atomic");
+		let _ = std::fs::remove_dir_all(&dir);
+		std::fs::create_dir_all(&dir).unwrap();
+		let path = dir.join("slot.ron");
+		let path = path.to_str().unwrap();
+		let good = TestData { level: 1, score: 10, name: "first".into() };
+		save(path, &good).unwrap();
+		assert!(!std::path::Path::new(&format!("{path}.tmp")).exists(), "no temp file left behind");
+
+		// make the temp write fail: a directory sits where the temp file goes
+		std::fs::create_dir_all(format!("{path}.tmp")).unwrap();
+		let newer = TestData { level: 2, score: 20, name: "second".into() };
+		assert!(save(path, &newer).is_err());
+		assert_eq!(load::<TestData>(path).unwrap(), good, "the old save must survive");
+		let _ = std::fs::remove_dir_all(&dir);
 	}
 }
