@@ -22,13 +22,50 @@
 mod find;
 
 use std::{
-    ffi::{CString, c_char, c_void},
+    ffi::c_void,
     path::Path,
 };
 
 // ── hostfxr raw types ─────────────────────────────────────────────────────────
 
 type Handle = *mut c_void;
+
+/// hostfxr's `char_t`: `wchar_t` (utf-16) on windows, narrow utf-8 elsewhere. every
+/// string argument used to be passed as narrow bytes, so on windows hostfxr read
+/// them as utf-16 and scanned past the single NUL for a 16-bit one (sec-05).
+#[cfg(windows)]
+type CharT = u16;
+#[cfg(not(windows))]
+type CharT = std::ffi::c_char;
+
+/// an owned, NUL-terminated `char_t` string for passing to hostfxr.
+struct HostString(Vec<CharT>);
+
+impl HostString {
+    fn new(s: &str) -> Result<Self, HostError> {
+        if s.contains('\0') {
+            return Err(HostError::NulPath);
+        }
+        #[cfg(windows)]
+        let units: Vec<CharT> = s.encode_utf16().chain([0]).collect();
+        #[cfg(not(windows))]
+        let units: Vec<CharT> = s.bytes().map(|b| b as CharT).chain([0]).collect();
+        Ok(Self(units))
+    }
+
+    fn from_path(path: &Path) -> Result<Self, HostError> {
+        Self::new(path.to_str().ok_or(HostError::NulPath)?)
+    }
+
+    fn as_ptr(&self) -> *const CharT {
+        self.0.as_ptr()
+    }
+
+    #[cfg(test)]
+    fn units(&self) -> &[CharT] {
+        &self.0
+    }
+}
 
 // hdt_load_assembly_and_get_function_pointer = 5
 const HDT_LOAD_ASSEMBLY_AND_GET_FUNCTION_POINTER: i32 = 5;
@@ -38,7 +75,7 @@ const SUCCESS: i32 = 0x00000000;
 const SUCCESS_HOST_ALREADY_INITIALIZED: i32 = 0x00000001;
 
 type FnInitForRuntimeConfig = unsafe extern "C" fn(
-    runtime_config_path: *const c_char,
+    runtime_config_path: *const CharT,
     parameters: *const c_void,
     host_context_handle: *mut Handle,
 ) -> i32;
@@ -52,10 +89,10 @@ type FnGetRuntimeDelegate = unsafe extern "C" fn(
 type FnClose = unsafe extern "C" fn(host_context_handle: Handle) -> i32;
 
 type FnLoadAssemblyAndGetFunctionPointer = unsafe extern "C" fn(
-    assembly_path: *const c_char,
-    type_name: *const c_char,
-    method_name: *const c_char,
-    delegate_type_name: *const c_char, // null = [UnmanagedCallersOnly]
+    assembly_path: *const CharT,
+    type_name: *const CharT,
+    method_name: *const CharT,
+    delegate_type_name: *const CharT, // null = [UnmanagedCallersOnly]
     reserved: *const c_void,
     delegate: *mut *const c_void,
 ) -> i32;
@@ -134,7 +171,7 @@ impl DotnetRuntime {
                 .map_err(HostError::Load)?
         };
 
-        let config_cstr = path_to_cstring(runtimeconfig)?;
+        let config_cstr = HostString::from_path(runtimeconfig)?;
         let mut handle: Handle = std::ptr::null_mut();
 
         let rc = unsafe { init(config_cstr.as_ptr(), std::ptr::null(), &mut handle) };
@@ -178,13 +215,13 @@ impl DotnetRuntime {
         type_name: &str,
         method_name: &str,
     ) -> Result<*const c_void, HostError> {
-        let assembly  = path_to_cstring(assembly_path)?;
-        let type_name = CString::new(type_name).map_err(|_| HostError::NulPath)?;
-        let method    = CString::new(method_name).map_err(|_| HostError::NulPath)?;
+        let assembly  = HostString::from_path(assembly_path)?;
+        let type_name = HostString::new(type_name)?;
+        let method    = HostString::new(method_name)?;
 
         // UNMANAGEDCALLERSONLY_METHOD sentinel: (const char_t*)-1
         // passing null would mean "use a managed delegate type", which is wrong here
-        const UNMANAGEDCALLERSONLY_METHOD: *const c_char = usize::MAX as *const c_char;
+        const UNMANAGEDCALLERSONLY_METHOD: *const CharT = usize::MAX as *const CharT;
 
         let mut fp: *const c_void = std::ptr::null();
         let rc = unsafe {
@@ -205,7 +242,23 @@ impl DotnetRuntime {
     }
 }
 
-fn path_to_cstring(path: &Path) -> Result<CString, HostError> {
-    let s = path.to_str().ok_or(HostError::NulPath)?;
-    CString::new(s).map_err(|_| HostError::NulPath)
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// sec-05: hostfxr's char_t is wchar_t (utf-16) on windows. strings are built
+    /// as NUL-terminated char_t units for the target, never narrow bytes there.
+    #[test]
+    fn host_strings_are_nul_terminated_char_t() {
+        let s = HostString::new("Ab").unwrap();
+        let expected: Vec<CharT> = "Ab\0"
+            .chars()
+            .map(|c| c as u32 as CharT)
+            .collect();
+        assert_eq!(s.units(), expected.as_slice());
+        #[cfg(windows)]
+        assert_eq!(std::mem::size_of::<CharT>(), 2);
+        assert!(HostString::new("a\0b").is_err());
+    }
 }
