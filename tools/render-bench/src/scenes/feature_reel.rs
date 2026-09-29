@@ -6,9 +6,13 @@
 //! several feature passes are deliberately left out because they currently crash
 //! the engine the moment they render (each is a discovered runtime bug the bench
 //! surfaced; re-add as the fixes land):
-//!   - DetailDensity  → `[detail sprite] pipeline` layout is missing its @group(1) binding
-//!   - Water / Decal / ParticleEmitter → `[hdr] color attachment` used as RESOURCE and
-//!                                        COLOR_TARGET in the same pass scope (usage conflict)
+//!   - DetailDensity → shader binds @group(1) but the render layout / bind site use
+//!                     group 0 (rt-02)
+//!   - Water         → `[water] bg0` samples `[hdr] color attachment` while the water
+//!                     pass renders into it (rt-03)
+//!
+//! Decal and ParticleEmitter were removed alongside Water but are not implicated in
+//! rt-03; see docs/superpowers/audits/2026-07-harness-runtime-bugs.md.
 
 use lunar::lunar_3d::{Aabb3d, Terrain};
 use lunar::lunar_math::Vec3A;
