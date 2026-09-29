@@ -965,14 +965,16 @@ impl VisualStyle {
 /// is the developer's decision about the game's visual design. they are orthogonal:
 /// a developer building a Quake-style game inserts `DevRenderProfile::classic()` and
 /// users scale shadow resolution and MSAA without ever enabling SSAO or bloom.
-/// a developer building a photorealistic game uses `DevRenderProfile::default()` (all on)
-/// and users can turn features off but the dev's artistic intent is the ceiling.
+/// a developer building a photorealistic game inserts `DevRenderProfile::full()` (all
+/// on) and users can turn features off but the dev's artistic intent is the ceiling.
 ///
 /// the renderer takes `min(user_settings, dev_profile)` each frame. features disabled
 /// here are never executed regardless of user or hardware tier.
 ///
-/// insert as a resource before adding `RenderPlugin3d`. if not inserted, `default()` is
-/// used; every feature the hardware supports is available to the user.
+/// insert as a resource before adding `RenderPlugin3d`. if not inserted, `default()`
+/// is used, which is `classic()`: the cheapest profile, with shadows, bloom, ssao, ssr,
+/// volumetric fog, point-light shadows and contact shadows all off. insert `full()`
+/// (or `standard()`) to make those available.
 #[derive(Resource, Clone)]
 pub struct DevRenderProfile {
 	/// real-time cascaded shadow maps. disable for fully lightmapped games (quake-style).
