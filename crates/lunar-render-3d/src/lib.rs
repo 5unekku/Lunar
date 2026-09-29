@@ -1575,7 +1575,8 @@ pub struct RenderEngine3d {
 	point_shadow_pipeline: wgpu::RenderPipeline,
 	point_shadow_dirty: [[bool; 6]; MAX_POINT_SHADOW_LIGHTS],
 	point_shadow_last_positions: [Vec3; MAX_POINT_SHADOW_LIGHTS],
-	point_shadow_last_draw_count: usize,
+	/// hash of the draw list (entity, mesh, model) the point shadow faces were last rendered from
+	point_shadow_last_signature: u64,
 
 	// clustered forward lighting (group 5)
 	cluster_shader_src_loaded: bool, // sentinel; real init happens on first use
@@ -2676,5 +2677,98 @@ mod headless_tests {
 		let steady = cascade_covered_texels(&engine, 0);
 		assert!(first > 0, "the caster must land in cascade 0 on the first frame");
 		assert_eq!(steady, first, "cascade 0 must still hold the caster after 5 more frames");
+	}
+
+	/// (sum of x, sum of y, count) over texels of depth-array `layer` of `texture`
+	/// nearer than the far plane: a cheap fingerprint of where casters landed.
+	fn covered_footprint(engine: &RenderEngine3d, texture: &wgpu::Texture, layer: u32) -> (u64, u64, u64) {
+		let size = texture.size().width;
+		let row = (size * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+		let staging = engine.device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("depth layer readback"),
+			size: u64::from(row) * u64::from(size),
+			usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+			mapped_at_creation: false,
+		});
+		let mut encoder = engine
+			.device
+			.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+		encoder.copy_texture_to_buffer(
+			wgpu::TexelCopyTextureInfo {
+				texture,
+				mip_level: 0,
+				origin: wgpu::Origin3d { x: 0, y: 0, z: layer },
+				aspect: wgpu::TextureAspect::DepthOnly,
+			},
+			wgpu::TexelCopyBufferInfo {
+				buffer: &staging,
+				layout: wgpu::TexelCopyBufferLayout {
+					offset: 0,
+					bytes_per_row: Some(row),
+					rows_per_image: Some(size),
+				},
+			},
+			wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+		);
+		engine.queue.submit([encoder.finish()]);
+		let slice = staging.slice(..);
+		let (sender, receiver) = std::sync::mpsc::channel();
+		slice.map_async(wgpu::MapMode::Read, move |r| sender.send(r).unwrap());
+		engine.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+		receiver.recv().unwrap().unwrap();
+		let data = slice.get_mapped_range();
+		let mut fp = (0, 0, 0);
+		for y in 0..size {
+			let line = bytemuck::cast_slice::<u8, f32>(&data[(y * row) as usize..][..(size * 4) as usize]);
+			for (x, &d) in line.iter().enumerate() {
+				if d < 0.999 {
+					fp = (fp.0 + x as u64, fp.1 + u64::from(y), fp.2 + 1);
+				}
+			}
+		}
+		fp
+	}
+
+	/// point-light shadow faces were only re-rendered when a light moved or the draw
+	/// count changed, so a caster moving in place left its old shadow behind.
+	#[test]
+	fn point_shadow_follows_a_moving_caster() {
+		let Some((mut engine, mut world, _quad, material)) = feature_test_setup() else {
+			return;
+		};
+		let ball = world.resource_mut::<MeshRegistry>().add_mesh(sphere_mesh(0.5, 16, 12));
+		let caster = world
+			.spawn((
+				Mesh3d(ball),
+				Material3d(material),
+				WorldTransform3d {
+					translation: Vec3::new(2.0, 0.0, -5.0),
+					..WorldTransform3d::new()
+				},
+				ComputedVisibility(true),
+				ShadowCaster,
+			))
+			.id();
+		world.spawn((
+			PointLight {
+				casts_shadows: true,
+				radius: 20.0,
+				..PointLight::default()
+			},
+			WorldTransform3d {
+				translation: Vec3::new(0.0, 0.0, -5.0),
+				..WorldTransform3d::new()
+			},
+		));
+		render_frames(&mut engine, &mut world, 2);
+		// +x face of the first shadow-casting light
+		let before = covered_footprint(&engine, &engine.point_shadow_tex, 0);
+		assert!(before.2 > 0, "the caster must land in the light's +x face");
+
+		world.get_mut::<WorldTransform3d>(caster).unwrap().translation = Vec3::new(2.0, 0.8, -5.0);
+		render_frames(&mut engine, &mut world, 2);
+		let after = covered_footprint(&engine, &engine.point_shadow_tex, 0);
+		assert!(after.2 > 0);
+		assert_ne!(before, after, "the +x face must be re-rendered after the caster moved");
 	}
 }

@@ -1430,11 +1430,25 @@ impl RenderEngine3d {
 		// for each light with casts_shadows=true (up to MAX_POINT_SHADOW_LIGHTS),
 		// render scene into the appropriate 6 face layers of point_shadow_tex.
 		if dev_point_shadows {
-			// dirty detection: re-render all faces when any light position changes or draw count changes
-			let pt_draw_count = self.draw_scratch.len();
-			if pt_draw_count != self.point_shadow_last_draw_count {
+			// dirty detection: re-render all faces when a light moves or anything in the
+			// draw list changes. the signature covers each draw's entity, mesh and model
+			// matrix, so a caster moving in place (same draw count) invalidates too; a
+			// count-only check left moved casters' old shadows behind.
+			let signature = {
+				use std::hash::{Hash, Hasher};
+				let mut hasher = rustc_hash::FxHasher::default();
+				for draw in &self.draw_scratch {
+					draw.0.to_bits().hash(&mut hasher);
+					draw.1.hash(&mut hasher);
+					for v in draw.6.to_cols_array() {
+						v.to_bits().hash(&mut hasher);
+					}
+				}
+				hasher.finish()
+			};
+			if signature != self.point_shadow_last_signature {
 				self.point_shadow_dirty.fill([true; 6]);
-				self.point_shadow_last_draw_count = pt_draw_count;
+				self.point_shadow_last_signature = signature;
 			}
 			// ── phase A: compute face view-projections, upload per-face globals, ─
 			// and collect the depth-array layers that need re-recording this frame.

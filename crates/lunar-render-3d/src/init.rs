@@ -571,7 +571,10 @@ impl RenderEngine3d {
 			sample_count: 1,
 			dimension: wgpu::TextureDimension::D2,
 			format: wgpu::TextureFormat::Depth32Float,
-			usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+			// COPY_SRC: lets tests read a face back to check it tracks moving casters
+			usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+				| wgpu::TextureUsages::TEXTURE_BINDING
+				| wgpu::TextureUsages::COPY_SRC,
 			view_formats: &[],
 		});
 		let point_shadow_array_view = point_shadow_tex.create_view(&wgpu::TextureViewDescriptor {
@@ -3790,7 +3793,7 @@ impl RenderEngine3d {
 			point_shadow_pipeline,
 			point_shadow_dirty: [[true; 6]; MAX_POINT_SHADOW_LIGHTS],
 			point_shadow_last_positions: [Vec3::ZERO; MAX_POINT_SHADOW_LIGHTS],
-			point_shadow_last_draw_count: 0,
+			point_shadow_last_signature: 0,
 			cluster_shader_src_loaded: true,
 			cluster_bgl_compute,
 			cluster_bgl_render,
