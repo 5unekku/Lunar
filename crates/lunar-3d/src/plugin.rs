@@ -1,3 +1,4 @@
+use bevy_ecs::schedule::IntoScheduleConfigs;
 use lunar_core::{App, GamePlugin, UpdateStage};
 
 use crate::camera::{
@@ -48,8 +49,20 @@ impl GamePlugin for Plugin3d {
 		app.add_system_to_stage(UpdateStage::Render, propagate_transforms_3d);
 		app.add_system_to_stage(UpdateStage::Render, update_active_camera);
 		app.add_system_to_stage(UpdateStage::Render, update_active_viewports);
-		app.add_system_to_stage(UpdateStage::Render, update_frustum);
-		app.add_system_to_stage(UpdateStage::Render, build_cull_soa);
+		// explicit edges: the Render stage runs on the multithreaded executor, where
+		// unordered systems get no implicit sequencing. the frustum needs this frame's
+		// camera transform and viewports, the cull soa this frame's world transforms
+		app.add_system_to_stage(
+			UpdateStage::Render,
+			update_frustum
+				.after(propagate_transforms_3d)
+				.after(update_active_camera)
+				.after(update_active_viewports),
+		);
+		app.add_system_to_stage(
+			UpdateStage::Render,
+			build_cull_soa.after(propagate_transforms_3d),
+		);
 
 		log::info!("Plugin3d: 3d systems registered");
 	}

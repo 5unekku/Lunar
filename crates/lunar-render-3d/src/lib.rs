@@ -2243,9 +2243,14 @@ impl GamePlugin for RenderPlugin3d {
 		// renderer can win the race and read a just-spawned entity's default
 		// (origin) WorldTransform3d before propagate_transforms_3d fills it in,
 		// flashing freshly-spawned overlay quads at screen center for one frame.
+		// likewise it reads Frustum and CullSoa, so it must follow their writers too;
+		// relying on plugin registration order is not an ordering guarantee
 		app.add_system_to_stage(
 			UpdateStage::Render,
-			render_3d_system.after(lunar_3d::propagate_transforms_3d),
+			render_3d_system
+				.after(lunar_3d::propagate_transforms_3d)
+				.after(lunar_3d::update_frustum)
+				.after(lunar_3d::build_cull_soa),
 		);
 		log::info!("RenderPlugin3d: 3d render system registered");
 	}
