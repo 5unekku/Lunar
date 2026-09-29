@@ -60,7 +60,7 @@ impl RenderEngine3d {
 		);
 		let (hdr_texture, hdr_view) =
 			Self::make_hdr_texture(&self.device, render_w, render_h, self.hdr_format);
-		let n = self.bloom_mip_views.len();
+		let n = self.bloom_mip_target;
 		let (mip_views, mip_sizes, ds_bgs, us_bgs) = Self::build_bloom_resources(
 			&self.device,
 			&hdr_texture,

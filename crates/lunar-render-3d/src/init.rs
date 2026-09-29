@@ -3824,6 +3824,7 @@ impl RenderEngine3d {
 			hdr_view,
 			bloom_enabled,
 			bloom_mip_views,
+			bloom_mip_target: bloom_mip_count,
 			bloom_mip_sizes,
 			bloom_params_buf,
 			bloom_downsample_bgl,

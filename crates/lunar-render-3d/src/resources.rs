@@ -1238,14 +1238,18 @@ impl RenderEngine3d {
 		Vec<wgpu::BindGroup>,
 		Vec<wgpu::BindGroup>,
 	) {
-		let actual_mips = mip_count.clamp(1, MAX_BLOOM_MIPS);
+		// half-res base, never zero-sized (a 1-px-wide target made a 0 extent: fatal),
+		// and no more levels than that base can halve into
+		let (base_w, base_h) = ((width / 2).max(1), (height / 2).max(1));
+		let max_levels = (u32::BITS - base_w.max(base_h).leading_zeros()) as usize;
+		let actual_mips = mip_count.clamp(1, MAX_BLOOM_MIPS).min(max_levels);
 
 		// one bloom texture with mip_count mip levels
 		let bloom_tex = device.create_texture(&wgpu::TextureDescriptor {
 			label: Some("[bloom] mip chain"),
 			size: wgpu::Extent3d {
-				width: width / 2,
-				height: height / 2,
+				width: base_w,
+				height: base_h,
 				depth_or_array_layers: 1,
 			},
 			mip_level_count: actual_mips as u32,
@@ -1258,8 +1262,7 @@ impl RenderEngine3d {
 
 		let mut mip_views = Vec::with_capacity(actual_mips);
 		let mut mip_sizes = Vec::with_capacity(actual_mips);
-		let mut w = width / 2;
-		let mut h = height / 2;
+		let (mut w, mut h) = (base_w, base_h);
 		for i in 0..actual_mips {
 			mip_views.push(bloom_tex.create_view(&wgpu::TextureViewDescriptor {
 				base_mip_level: i as u32,

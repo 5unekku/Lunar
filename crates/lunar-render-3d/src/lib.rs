@@ -1625,6 +1625,9 @@ pub struct RenderEngine3d {
 	// bloom pipeline: downsample + upsample mip chain
 	bloom_enabled: bool,
 	bloom_mip_views: Vec<wgpu::TextureView>, // one per mip level
+	/// bloom levels the quality tier asked for; the chain may hold fewer while the
+	/// render target is too small for them, and grows back on resize
+	bloom_mip_target: usize,
 	bloom_mip_sizes: Vec<(u32, u32)>,        // (width, height) per mip
 	bloom_params_buf: wgpu::Buffer,          // MAX_BLOOM_MIPS × UNIFORM_STRIDE slots
 	bloom_downsample_bgl: wgpu::BindGroupLayout,
@@ -2770,5 +2773,30 @@ mod headless_tests {
 		let after = covered_footprint(&engine, &engine.point_shadow_tex, 0);
 		assert!(after.2 > 0);
 		assert_ne!(before, after, "the +x face must be re-rendered after the caster moved");
+	}
+
+	/// corr-05: the bloom chain was sized width/2 x height/2 with no clamp, so a
+	/// 1-pixel-wide render target created a zero-sized texture (fatal validation
+	/// error). growing back must restore the full chain, not keep the clamped one.
+	#[test]
+	fn one_pixel_render_target_and_back() {
+		let instance = wgpu::Instance::default();
+		if pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).is_err() {
+			return;
+		}
+		let config = RenderConfig3d {
+			width: 1,
+			height: 1,
+			..RenderConfig3d::default()
+		};
+		let mut engine = RenderEngine3d::headless(&instance, &config);
+		let full_chain = engine.bloom_mip_target;
+		engine.resize(1, 1);
+		engine.resize(512, 256);
+		assert_eq!(engine.bloom_mip_views.len(), full_chain.clamp(1, MAX_BLOOM_MIPS));
+		engine
+			.device
+			.poll(wgpu::PollType::wait_indefinitely())
+			.unwrap();
 	}
 }
