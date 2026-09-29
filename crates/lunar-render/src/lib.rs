@@ -1521,6 +1521,12 @@ impl RenderEngine {
 			match surface.get_current_texture() {
 				wgpu::CurrentSurfaceTexture::Success(f)
 				| wgpu::CurrentSurfaceTexture::Suboptimal(f) => Some(f),
+				// reconfigure so the next frame can acquire again (as the 3d engine does);
+				// returning alone left the surface broken until an unrelated resize
+				wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+					surface.configure(&self.device, &self.config);
+					return;
+				}
 				_ => return,
 			}
 		} else {
