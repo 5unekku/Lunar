@@ -70,6 +70,51 @@ pub struct BspBlob {
 	pub area_map: Vec<(u32, u32)>,
 }
 
+impl BspBlob {
+	/// check the invariants the runtime walks rely on. bincode only checks the byte
+	/// layout, so a stale or mismatched blob (compiled by an older tool, partially
+	/// regenerated) used to deserialize fine and then panic on an out-of-range index
+	/// in `camera_leaf` every frame.
+	///
+	/// - internal node children point strictly forward (`parent < child < len`); the
+	///   compiler emits nodes parent-first, and this also makes every walk terminate
+	/// - leaf triangle ranges lie inside `leaf_triangles`, leaf indices below `leaf_count`
+	/// - the pvs holds `leaf_count * pvs_stride` words; area-map leaves exist
+	pub fn validate(&self) -> Result<(), String> {
+		let len = self.nodes.len();
+		for (i, node) in self.nodes.iter().enumerate() {
+			if node.left_or_start < 0 {
+				let start = -(i64::from(node.left_or_start) + 1);
+				let end = -(i64::from(node.right_or_end) + 1);
+				if start < 0 || end < start || end as usize > self.leaf_triangles.len() {
+					return Err(format!("bsp: leaf node {i} has triangle range {start}..{end}"));
+				}
+				if node.leaf_index >= self.leaf_count {
+					return Err(format!(
+						"bsp: leaf node {i} has leaf_index {} >= leaf_count {}",
+						node.leaf_index, self.leaf_count
+					));
+				}
+			} else {
+				for child in [node.left_or_start, node.right_or_end] {
+					let child = child as usize;
+					if child <= i || child >= len {
+						return Err(format!("bsp: node {i} has child {child} (nodes: {len})"));
+					}
+				}
+			}
+		}
+		let expected_pvs = self.leaf_count as usize * self.pvs_stride as usize;
+		if self.pvs_stride > 0 && self.pvs.len() != expected_pvs {
+			return Err(format!("bsp: pvs has {} words, expected {expected_pvs}", self.pvs.len()));
+		}
+		if let Some(&(leaf, _)) = self.area_map.iter().find(|(leaf, _)| *leaf >= self.leaf_count) {
+			return Err(format!("bsp: area map names leaf {leaf} >= leaf_count {}", self.leaf_count));
+		}
+		Ok(())
+	}
+}
+
 /// resource: a loaded, precompiled BSP level.
 ///
 /// insert this resource to enable BSP-based PVS culling. when absent, the engine
@@ -96,6 +141,7 @@ impl BspLevel {
 	pub fn from_binary(bytes: &[u8]) -> Result<Self, String> {
 		let blob: BspBlob = bincode::deserialize(bytes)
 			.map_err(|error| format!("bsp deserialize error: {error}"))?;
+		blob.validate()?;
 		Ok(Self { blob: Some(blob) })
 	}
 
@@ -117,9 +163,13 @@ impl BspLevel {
 		if blob.nodes.is_empty() {
 			return 0;
 		}
+		// from_binary validates the tree, but the fields are public: stay in bounds and
+		// bounded regardless (a malformed tree yields leaf 0, i.e. "see everything")
 		let mut node_idx = 0usize;
-		loop {
-			let node = &blob.nodes[node_idx];
+		for _ in 0..blob.nodes.len() {
+			let Some(node) = blob.nodes.get(node_idx) else {
+				return 0;
+			};
 			if node.left_or_start < 0 {
 				return node.leaf_index as usize;
 			}
@@ -134,6 +184,7 @@ impl BspLevel {
 				node.left_or_start as usize
 			};
 		}
+		0
 	}
 
 	/// call `callback` with each leaf index visible from `camera_leaf` per the PVS.
@@ -190,5 +241,78 @@ impl BspLevel {
 	/// area map: `(leaf_index, area_id)` pairs for leaves with an assigned area.
 	pub fn area_map(&self) -> &[(u32, u32)] {
 		self.blob.as_ref().map_or(&[], |b| b.area_map.as_slice())
+	}
+}
+
+#[cfg(test)]
+mod validation_tests {
+	use super::*;
+
+	fn node(left_or_start: i32, right_or_end: i32, leaf_index: u32) -> BspNode {
+		BspNode {
+			min: [-1.0; 3],
+			max: [1.0; 3],
+			left_or_start,
+			right_or_end,
+			split_axis: 0,
+			split_value: 0.0,
+			leaf_index,
+		}
+	}
+
+	/// root splits on x into two leaves holding triangles [0, 1) and [1, 2)
+	fn two_leaf_blob() -> BspBlob {
+		BspBlob {
+			nodes: vec![node(1, 2, u32::MAX), node(-1, -2, 0), node(-2, -3, 1)],
+			leaf_triangles: vec![0, 1],
+			pvs: vec![0b11, 0b11],
+			pvs_stride: 1,
+			leaf_count: 2,
+			portals: Vec::new(),
+			area_map: vec![(0, 0), (1, 1)],
+		}
+	}
+
+	fn encode(blob: &BspBlob) -> Vec<u8> {
+		bincode::serialize(blob).unwrap()
+	}
+
+	#[test]
+	fn a_consistent_blob_loads_and_walks() {
+		let level = BspLevel::from_binary(&encode(&two_leaf_blob())).unwrap();
+		assert_eq!(level.camera_leaf(Vec3::new(-0.5, 0.0, 0.0)), 0);
+		assert_eq!(level.camera_leaf(Vec3::new(0.5, 0.0, 0.0)), 1);
+	}
+
+	/// corr-13: child indices were followed unchecked, so a stale or mismatched blob
+	/// panicked in camera_leaf on the first frame and every frame after.
+	#[test]
+	fn out_of_range_or_cyclic_children_are_rejected() {
+		let mut blob = two_leaf_blob();
+		blob.nodes[0].right_or_end = 9;
+		assert!(BspLevel::from_binary(&encode(&blob)).is_err());
+
+		let mut blob = two_leaf_blob();
+		blob.nodes[0].left_or_start = 0; // points at itself: the walk never ends
+		assert!(BspLevel::from_binary(&encode(&blob)).is_err());
+	}
+
+	#[test]
+	fn bad_leaf_ranges_and_tables_are_rejected() {
+		let mut blob = two_leaf_blob();
+		blob.nodes[2].right_or_end = -9; // triangle range past leaf_triangles
+		assert!(BspLevel::from_binary(&encode(&blob)).is_err());
+
+		let mut blob = two_leaf_blob();
+		blob.nodes[1].leaf_index = 5;
+		assert!(BspLevel::from_binary(&encode(&blob)).is_err());
+
+		let mut blob = two_leaf_blob();
+		blob.pvs.pop();
+		assert!(BspLevel::from_binary(&encode(&blob)).is_err());
+
+		let mut blob = two_leaf_blob();
+		blob.area_map.push((7, 0));
+		assert!(BspLevel::from_binary(&encode(&blob)).is_err());
 	}
 }
