@@ -140,24 +140,26 @@ impl PluginLoader {
         let version = libs.len();
 
         log::info!("hot reload: loading nativeaot version {version}");
+        // every fallible step (copy, dlopen, symbol lookup) happens before the world is
+        // touched: clearing the schedules first meant a failed reload left the game
+        // with no systems and is_reload stuck true
+        let versioned = versioned_plugin_copy(path, version)?;
+        // borrow checker: load_nativeaot also borrows self, so inline it here
+        log::info!("plugin-loader: loading {}", versioned.display());
+        let lib = unsafe { libloading::Library::new(&versioned) }.map_err(LoadError::DlOpen)?;
+        // copy the fn pointer out of the Symbol; it stays valid while `lib` is kept
+        // alive, which it is (pushed into `libs` below and never dropped)
+        let init: unsafe extern "C" fn(*mut LunarWorld) =
+            *unsafe { lib.get(b"lunar_plugin_init\0") }.map_err(LoadError::MissingSymbol)?;
+
         // snapshot per-entity behavior field values so they survive the swap. the new
         // plugin Init re-registers behavior factories; reinstantiate restores state.
         let behavior_snapshot = snapshot_behavior_fields(world);
         lunar_ffi::clear_schedule(world, LunarSchedule::Update);
         lunar_ffi::clear_schedule(world, LunarSchedule::FixedUpdate);
         lunar_ffi::clear_schedule(world, LunarSchedule::Shutdown);
-
-        let versioned = versioned_plugin_copy(path, version)?;
         lunar_ffi::set_is_reload(world, true);
-
-        // borrow checker: load_nativeaot also borrows self, so inline it here
-        log::info!("plugin-loader: loading {}", versioned.display());
-        let lib = unsafe { libloading::Library::new(&versioned) }.map_err(LoadError::DlOpen)?;
-        {
-            let init: libloading::Symbol<unsafe extern "C" fn(*mut LunarWorld)> =
-                unsafe { lib.get(b"lunar_plugin_init\0") }.map_err(LoadError::MissingSymbol)?;
-            unsafe { init(world as *mut World as *mut LunarWorld) };
-        }
+        unsafe { init(world as *mut World as *mut LunarWorld) };
         libs.push(lib);
 
         // re-create behaviors from the freshly re-registered factories with restored fields.
@@ -180,6 +182,8 @@ impl PluginLoader {
         let host_reload = *host_reload;
 
         log::info!("hot reload: reloading via CoreCLR");
+        // the one fallible step goes first so a failure leaves the world untouched
+        let path_cstr = path_to_cstr(path)?;
         // snapshot behavior field values before the assembly swap (the live managed
         // instances are still valid here), restore after re-registration below.
         let behavior_snapshot = snapshot_behavior_fields(world);
@@ -188,7 +192,6 @@ impl PluginLoader {
         lunar_ffi::clear_schedule(world, LunarSchedule::Shutdown);
         lunar_ffi::set_is_reload(world, true);
 
-        let path_cstr = path_to_cstr(path)?;
         let world_ptr = world as *mut World as isize;
         unsafe { host_reload(world_ptr, path_cstr.as_ptr()) };
 
@@ -500,4 +503,42 @@ where
         lunar_ffi::dispatch_systems(world, LunarSchedule::Update);
     }
     lunar_ffi::dispatch_systems(world, LunarSchedule::Shutdown);
+}
+
+#[cfg(test)]
+mod reload_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static CALLS: AtomicU32 = AtomicU32::new(0);
+
+    unsafe extern "C" fn count_call(_world: *mut LunarWorld, _user: *mut std::ffi::c_void) {
+        CALLS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// corr-18: the schedules were cleared (and is_reload set) before the fallible
+    /// copy / dlopen / symbol steps, so a failed reload left the game with no systems.
+    #[test]
+    fn failed_reload_leaves_systems_and_flag_intact() {
+        let mut world = World::new();
+        lunar_ffi::init_registry(&mut world);
+        let id = unsafe {
+            lunar_ffi::lunar_system_register(
+                &mut world as *mut World as *mut LunarWorld,
+                LunarSchedule::Update as u32,
+                Some(count_call),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_ne!(id, lunar_ffi::LUNAR_INVALID_SYSTEM_ID);
+
+        let mut loader = PluginLoader::new();
+        let missing = Path::new("/nonexistent/lunar_plugin_that_is_not_there.so");
+        assert!(loader.reload(&mut world, missing).is_err());
+
+        let before = CALLS.load(Ordering::SeqCst);
+        lunar_ffi::dispatch_systems(&mut world, LunarSchedule::Update);
+        assert_eq!(CALLS.load(Ordering::SeqCst), before + 1, "update system must survive");
+        assert!(!unsafe { lunar_ffi::lunar_is_reload(&mut world as *mut World as *mut LunarWorld) });
+    }
 }
