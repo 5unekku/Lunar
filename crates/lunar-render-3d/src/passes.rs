@@ -762,6 +762,17 @@ impl RenderEngine3d {
 				}
 			}
 
+			// refraction samples a snapshot of the scene color: the water pass renders into
+			// the hdr target, so it cannot also bind that texture for sampling
+			if !self.water_scratch.is_empty() {
+				self.ensure_water_refract_target();
+				encoder.copy_texture_to_texture(
+					self.hdr_texture.as_image_copy(),
+					self.water_refract_texture.as_image_copy(),
+					self.hdr_texture.size(),
+				);
+			}
+
 			for (water_comp, mesh_id, wt) in &self.water_scratch {
 				let Some(gpu_mesh) = self.mesh_gpu.get(mesh_id) else {
 					continue;
@@ -1275,7 +1286,7 @@ impl RenderEngine3d {
 							multiview_mask: None,
 						});
 						rpass.set_pipeline(render_pipeline);
-						rpass.set_bind_group(0, &entry.render_bg, &[]);
+						rpass.set_bind_group(1, &entry.render_bg, &[]);
 						rpass.draw_indirect(&entry.draw_buf, 0);
 						draw_calls += 1;
 					}

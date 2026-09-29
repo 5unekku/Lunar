@@ -88,11 +88,18 @@ fn cs_generate_instances(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 // ── render shader: billboard sprite ──────────────────────────────────────
 
+// binding 0 is the engine's shared globals buffer, so this must mirror `Globals` in
+// shader.wgsl (only the leading fields are read; the tail keeps the size identical)
 struct SpriteGlobals {
-    view_proj: mat4x4<f32>,
-    cam_right: vec3<f32>, _p0: f32,
-    cam_up:    vec3<f32>, _p1: f32,
-    cam_pos:   vec3<f32>, _p2: f32,
+    view_proj:      mat4x4<f32>,
+    cam_pos:        vec3<f32>,
+    elapsed_secs:   f32,
+    delta_secs:     f32,
+    lighting_model: u32,
+    render_flags:   u32,
+    vertex_snap:    f32,
+    classic_light:  f32,
+    _pad0: f32, _pad1: f32, _pad2: f32,
 }
 
 @group(1) @binding(0) var<uniform> sprite_globals: SpriteGlobals;
@@ -122,9 +129,15 @@ fn vs_sprite(
     let inst     = sprite_instances[ii];
     let offset   = QUAD_OFFSETS[vi];
     let scale    = inst.scale;
+    // cylindrical billboard: stays upright (world +y) and turns about y to face the
+    // camera, the usual choice for ground cover
+    let to_cam    = sprite_globals.cam_pos - inst.position;
+    let flat      = vec2<f32>(to_cam.x, to_cam.z);
+    let flat_len  = max(length(flat), 1e-4);
+    let right     = vec3<f32>(flat.y / flat_len, 0.0, -flat.x / flat_len);
     let world_pos = inst.position
-        + sprite_globals.cam_right * offset.x * scale
-        + sprite_globals.cam_up    * offset.y * scale;
+        + right * offset.x * scale
+        + vec3<f32>(0.0, 1.0, 0.0) * offset.y * scale;
 
     var out: SpriteVertOut;
     out.clip_pos = sprite_globals.view_proj * vec4<f32>(world_pos, 1.0);

@@ -1330,32 +1330,7 @@ impl RenderEngine3d {
 
 				// rebuild water_bg0 to point at the new reflection texture
 				if self.water_bg_dirty {
-					let refl_v = self
-						.reflection_view
-						.as_ref()
-						.unwrap_or(&self.reflection_fallback_view);
-					self.water_bg0 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-						label: Some("[water] bg0"),
-						layout: &self.water_bgl0,
-						entries: &[
-							wgpu::BindGroupEntry {
-								binding: 0,
-								resource: self.globals_buf.as_entire_binding(),
-							},
-							wgpu::BindGroupEntry {
-								binding: 1,
-								resource: wgpu::BindingResource::TextureView(&self.hdr_view),
-							},
-							wgpu::BindGroupEntry {
-								binding: 2,
-								resource: wgpu::BindingResource::Sampler(&self.post_sampler),
-							},
-							wgpu::BindGroupEntry {
-								binding: 3,
-								resource: wgpu::BindingResource::TextureView(refl_v),
-							},
-						],
-					});
+					self.water_bg0 = self.build_water_bg0();
 					self.water_bg_dirty = false;
 				}
 			}

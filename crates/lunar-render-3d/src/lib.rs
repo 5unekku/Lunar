@@ -2089,6 +2089,11 @@ pub struct RenderEngine3d {
 	reflection_fallback_view: wgpu::TextureView,
 	// set true when reflection_tex is first created to trigger water_bg0 rebuild
 	water_bg_dirty: bool,
+	// water refraction source: a copy of the hdr target taken just before the water pass
+	// (sampling the live color attachment is a RESOURCE + COLOR_TARGET conflict). 1×1
+	// until the first water frame, then kept at the hdr size by ensure_water_refract_target.
+	water_refract_texture: wgpu::Texture,
+	water_refract_view: wgpu::TextureView,
 
 	// ── detail sprites ────────────────────────────────────────────────────
 	detail_sprite_bgl: Option<wgpu::BindGroupLayout>,
@@ -2452,5 +2457,106 @@ mod headless_tests {
 			.device
 			.poll(wgpu::PollType::wait_indefinitely())
 			.unwrap();
+	}
+
+	/// headless engine + a world holding the resources `render_frame` reads, one quad
+	/// mesh/material in the registry, and an active camera at the origin looking down -z.
+	/// `None` when no gpu adapter is available.
+	fn feature_test_setup() -> Option<(
+		RenderEngine3d,
+		World,
+		lunar_assets::Handle<lunar_3d::MeshData>,
+		lunar_assets::Handle<lunar_3d::MaterialData>,
+	)> {
+		let instance = wgpu::Instance::default();
+		if pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).is_err() {
+			eprintln!("skipping headless feature test: no gpu adapter available");
+			return None;
+		}
+		let config = RenderConfig3d {
+			width: 128,
+			height: 128,
+			..RenderConfig3d::default()
+		};
+		let engine = RenderEngine3d::headless(&instance, &config);
+
+		let mut world = World::new();
+		world.insert_resource(ActiveViewports::default());
+		world.insert_resource(Frustum::default());
+		world.insert_resource(ViewportAspect(1.0));
+		world.insert_resource(CullSoa::default());
+		world.insert_resource(lunar_core::Time::default());
+		world.insert_resource(lunar_assets::AssetServer::new(1));
+
+		let mut registry = MeshRegistry::default();
+		let quad = registry.add_mesh(quad_mesh(4.0, 4.0));
+		let material = registry.add_material(lunar_3d::MaterialData::default());
+		world.insert_resource(registry);
+
+		let camera = world
+			.spawn((Camera3d::default(), WorldTransform3d::new()))
+			.id();
+		world.insert_resource(ActiveCamera3d { entity: Some(camera) });
+		Some((engine, world, quad, material))
+	}
+
+	fn render_frames(engine: &mut RenderEngine3d, world: &mut World, frames: usize) {
+		for _ in 0..frames {
+			engine.render_frame(world);
+		}
+		engine
+			.device
+			.poll(wgpu::PollType::wait_indefinitely())
+			.unwrap();
+	}
+
+	/// regression guard for rt-03: the water pass sampled `[hdr] color attachment`
+	/// for refraction while rendering into it, a RESOURCE + COLOR_TARGET usage
+	/// conflict wgpu rejects (fatal) the moment any `Water` entity drew.
+	#[test]
+	fn headless_water_renders_without_validation_errors() {
+		let Some((mut engine, mut world, quad, material)) = feature_test_setup() else {
+			return;
+		};
+		world.spawn((
+			lunar_3d::Water::default(),
+			Mesh3d(quad),
+			Material3d(material),
+			WorldTransform3d {
+				translation: Vec3::new(0.0, -1.0, -5.0),
+				..WorldTransform3d::new()
+			},
+			ComputedVisibility(true),
+		));
+		render_frames(&mut engine, &mut world, 3);
+	}
+
+	/// regression guard for rt-02: detail_sprite.wgsl bound its render resources at
+	/// @group(1) while the render pipeline layout held one bgl at index 0, so
+	/// pipeline creation failed (fatal) the moment any `DetailDensity` existed.
+	#[test]
+	fn headless_detail_sprites_render_without_validation_errors() {
+		let Some((mut engine, mut world, _quad, _material)) = feature_test_setup() else {
+			return;
+		};
+		world.spawn((
+			lunar_3d::DetailDensity {
+				texture: lunar_assets::Handle::new(0, 0),
+				density_map: lunar_assets::Handle::new(0, 0),
+				world_origin: Vec2::new(-8.0, -8.0),
+				world_size: Vec2::new(16.0, 16.0),
+				max_dist: 50.0,
+				size_range: [0.2, 0.4],
+				variant_count: 1,
+				density_scale: 4.0,
+				grid_step: 0.5,
+			},
+			WorldTransform3d {
+				translation: Vec3::new(0.0, -1.0, 0.0),
+				..WorldTransform3d::new()
+			},
+			ComputedVisibility(true),
+		));
+		render_frames(&mut engine, &mut world, 3);
 	}
 }

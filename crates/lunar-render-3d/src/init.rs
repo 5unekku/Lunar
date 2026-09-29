@@ -2803,6 +2803,8 @@ impl RenderEngine3d {
 		let reflection_fallback_view =
 			reflection_fallback_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
+		let (water_refract_texture, water_refract_view) =
+			Self::make_water_refract_texture(&device, 1, 1, hdr_format);
 		let water_bg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
 			label: Some("[water] bg0"),
 			layout: &water_bgl0,
@@ -2813,7 +2815,7 @@ impl RenderEngine3d {
 				},
 				wgpu::BindGroupEntry {
 					binding: 1,
-					resource: wgpu::BindingResource::TextureView(&hdr_view),
+					resource: wgpu::BindingResource::TextureView(&water_refract_view),
 				},
 				wgpu::BindGroupEntry {
 					binding: 2,
@@ -4159,6 +4161,8 @@ impl RenderEngine3d {
 			reflection_globals_bg: None,
 			reflection_fallback_tex,
 			reflection_fallback_view,
+			water_refract_texture,
+			water_refract_view,
 			water_bg_dirty: false,
 
 			detail_sprite_bgl: None,

@@ -763,16 +763,6 @@ impl RenderEngine3d {
 			return;
 		}
 
-		let storage_ro = |binding: u32| wgpu::BindGroupLayoutEntry {
-			binding,
-			visibility: wgpu::ShaderStages::COMPUTE,
-			ty: wgpu::BindingType::Buffer {
-				ty: wgpu::BufferBindingType::Storage { read_only: true },
-				has_dynamic_offset: false,
-				min_binding_size: None,
-			},
-			count: None,
-		};
 		let storage_rw = |binding: u32| wgpu::BindGroupLayoutEntry {
 			binding,
 			visibility: wgpu::ShaderStages::COMPUTE,
@@ -874,14 +864,27 @@ impl RenderEngine3d {
 						ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
 						count: None,
 					},
-					storage_ro(3),
+					// instance buffer: read by vs_sprite (the compute-visible
+					// storage_ro helper would hide it from the vertex stage)
+					wgpu::BindGroupLayoutEntry {
+						binding: 3,
+						visibility: wgpu::ShaderStages::VERTEX,
+						ty: wgpu::BindingType::Buffer {
+							ty: wgpu::BufferBindingType::Storage { read_only: true },
+							has_dynamic_offset: false,
+							min_binding_size: None,
+						},
+						count: None,
+					},
 				],
 			});
 		let render_layout = self
 			.device
 			.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
 				label: Some("[detail sprite] render layout"),
-				bind_group_layouts: &[Some(&render_bgl_0)],
+				// the render entry points share detail_sprite.wgsl with the compute pass,
+				// whose resources own group 0, so the render resources live at group 1
+				bind_group_layouts: &[None, Some(&render_bgl_0)],
 				immediate_size: 0,
 			});
 		let render_shader = make_shader!(self.device, self.shader_passthrough, "[detail sprite] render shader", DETAIL_SPRITE_SHADER_SRC, "detail_sprite.spv");
@@ -1110,11 +1113,80 @@ impl RenderEngine3d {
 			sample_count: 1,
 			dimension: wgpu::TextureDimension::D2,
 			format: hdr_format,
-			usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+			// COPY_SRC: the water pass copies it into its refraction source
+			usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+				| wgpu::TextureUsages::TEXTURE_BINDING
+				| wgpu::TextureUsages::COPY_SRC,
 			view_formats: &[],
 		});
 		let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
 		(tex, view)
+	}
+	pub(crate) fn make_water_refract_texture(
+		device: &wgpu::Device,
+		width: u32,
+		height: u32,
+		hdr_format: wgpu::TextureFormat,
+	) -> (wgpu::Texture, wgpu::TextureView) {
+		let tex = device.create_texture(&wgpu::TextureDescriptor {
+			label: Some("[water] refraction source"),
+			size: wgpu::Extent3d {
+				width,
+				height,
+				depth_or_array_layers: 1,
+			},
+			mip_level_count: 1,
+			sample_count: 1,
+			dimension: wgpu::TextureDimension::D2,
+			format: hdr_format,
+			usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+			view_formats: &[],
+		});
+		let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+		(tex, view)
+	}
+	/// the one place `[water] bg0` is built: binding 1 is the refraction copy (never the
+	/// live hdr target), binding 3 the planar reflection or its 1×1 fallback.
+	pub(crate) fn build_water_bg0(&self) -> wgpu::BindGroup {
+		let refl_v = self
+			.reflection_view
+			.as_ref()
+			.unwrap_or(&self.reflection_fallback_view);
+		self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+			label: Some("[water] bg0"),
+			layout: &self.water_bgl0,
+			entries: &[
+				wgpu::BindGroupEntry {
+					binding: 0,
+					resource: self.globals_buf.as_entire_binding(),
+				},
+				wgpu::BindGroupEntry {
+					binding: 1,
+					resource: wgpu::BindingResource::TextureView(&self.water_refract_view),
+				},
+				wgpu::BindGroupEntry {
+					binding: 2,
+					resource: wgpu::BindingResource::Sampler(&self.post_sampler),
+				},
+				wgpu::BindGroupEntry {
+					binding: 3,
+					resource: wgpu::BindingResource::TextureView(refl_v),
+				},
+			],
+		})
+	}
+	/// size the refraction source to the hdr target (lazily, so water-free scenes never
+	/// pay for a second full-res hdr texture) and rebuild `[water] bg0` when it changes.
+	pub(crate) fn ensure_water_refract_target(&mut self) {
+		if self.water_refract_texture.size() == self.hdr_texture.size() {
+			return;
+		}
+		let size = self.hdr_texture.size();
+		let (tex, view) =
+			Self::make_water_refract_texture(&self.device, size.width, size.height, self.hdr_format);
+		self.water_refract_texture = tex;
+		self.water_refract_view = view;
+		self.water_bg0 = self.build_water_bg0();
 	}
 	/// creates the bloom mip chain texture, per-mip views, and per-step bind groups.
 	#[allow(clippy::too_many_arguments, clippy::type_complexity)]

@@ -39,12 +39,16 @@ regression test (`headless_directional_shadows_render_without_validation_errors`
 lib.rs) spawns a shadow-casting sun + caster and renders three frames; it SIGABRTs before
 the fix, passes after.
 
-## rt-02 — detail-sprite pipeline layout missing its bind group — OPEN
+## rt-02 — detail-sprite pipeline layout missing its bind group — FIXED
 
 - **location:** crates/lunar-render-3d/src/resources.rs:880-930 (`ensure_detail_sprite_resources`,
   lazy layout + pipeline creation) vs detail_sprite.wgsl:98-101; bind site in passes.rs
 - **impact:** critical (process abort on pipeline creation)
-- **status:** open — reproduced, not yet fixed
+- **status:** fixed 2026-09-29, test-first (`headless_detail_sprites_render_without_validation_errors`).
+  the render layout is now `[None, Some(bgl)]` with the draw binding group 1 (the
+  shader module is shared with the compute pass, which owns group 0); the instance
+  buffer is vertex-visible; `SpriteGlobals` mirrors the engine `Globals` and the
+  billboard basis is derived from `cam_pos` (cylindrical, y-up)
 
 with a `DetailDensity` component present, the engine builds `[detail sprite] pipeline`
 and wgpu rejects it: the vertex shader declares `@group(1) @binding(0)` but that binding
@@ -69,12 +73,15 @@ uniform with camera right/up, or derive right/up from `view_proj` in the shader 
 declare binding 0 as the real `Globals`. do not re-add DetailDensity to feature-reel
 until both are fixed, or the golden frame records broken output.
 
-## rt-03 — hdr color attachment used as RESOURCE and COLOR_TARGET in one pass — OPEN
+## rt-03 — hdr color attachment used as RESOURCE and COLOR_TARGET in one pass — FIXED
 
 - **location:** crates/lunar-render-3d — the water pass (passes.rs:811-842) and `[water] bg0`
   (init.rs:2816, config.rs:325, rebuilt in post.rs:1337)
 - **impact:** critical (process abort)
-- **status:** open — reproduced; culprit isolated to water by code inspection
+- **status:** fixed 2026-09-29, test-first (`headless_water_renders_without_validation_errors`).
+  the water pass copies the hdr target into `[water] refraction source` (sized lazily)
+  and `[water] bg0` samples that; the bind group is now built in one place
+  (`build_water_bg0`) instead of three
 
 with a `Water` plane present, a frame aborts:
 "Texture with '[hdr] color attachment' label ... conflicting usages. Current usage
