@@ -621,7 +621,9 @@ pub struct InputState {
 	pending_mouse_delta: (f32, f32),
 	pending_mouse_buttons_just_pressed: [bool; MOUSE_BUTTON_COUNT],
 	pending_mouse_buttons_just_released: [bool; MOUSE_BUTTON_COUNT],
-	gamepads: Vec<GamepadState>,
+	/// one slot per gamepad index; a disconnect empties its slot instead of shifting
+	/// later pads down, so indices cached by the platform layer stay valid
+	gamepads: Vec<Option<GamepadState>>,
 }
 
 impl InputState {
@@ -747,7 +749,7 @@ impl InputState {
 	/// rate. (gamepad edges are still per-frame; a ponytail upgrade path if a pad
 	/// game needs tick-exact buttons.)
 	pub fn begin_frame(&mut self) {
-		for gamepad in &mut self.gamepads {
+		for gamepad in self.gamepads.iter_mut().flatten() {
 			gamepad.begin_frame();
 		}
 	}
@@ -756,13 +758,17 @@ impl InputState {
 	/// returns None if the gamepad is not connected.
 	#[must_use]
 	pub fn gamepad(&self, index: usize) -> Option<&GamepadState> {
-		self.gamepads.get(index)
+		self.gamepads.get(index).and_then(Option::as_ref)
+	}
+
+	fn gamepad_mut(&mut self, index: usize) -> Option<&mut GamepadState> {
+		self.gamepads.get_mut(index).and_then(Option::as_mut)
 	}
 
 	/// whether gamepad `index` is connected.
 	#[must_use]
 	pub fn is_gamepad_connected(&self, index: usize) -> bool {
-		index < self.gamepads.len()
+		self.gamepad(index).is_some()
 	}
 
 	/// whether `button` is held on gamepad `index` (false if it is not connected).
@@ -791,46 +797,53 @@ impl InputState {
 
 	/// register a new gamepad, returns its index
 	pub fn add_gamepad(&mut self) -> usize {
-		let index = self.gamepads.len();
-		self.gamepads.push(GamepadState::new());
-		index
+		// reuse the first free slot (a reconnecting pad usually gets its old index)
+		if let Some(index) = self.gamepads.iter().position(Option::is_none) {
+			self.gamepads[index] = Some(GamepadState::new());
+			return index;
+		}
+		self.gamepads.push(Some(GamepadState::new()));
+		self.gamepads.len() - 1
 	}
 
-	/// make sure a gamepad slot exists at `index`, registering empty ones up to it.
+	/// make sure a gamepad is registered at `index` (lower empty slots stay disconnected).
 	/// platforms that report pads by a fixed index (the browser gamepad api) call this
 	/// before applying events; indices past [`MAX_GAMEPADS`] are ignored.
 	pub fn ensure_gamepad(&mut self, index: usize) {
 		if index < MAX_GAMEPADS {
-			while self.gamepads.len() <= index {
-				self.gamepads.push(GamepadState::new());
+			if self.gamepads.len() <= index {
+				self.gamepads.resize_with(index + 1, || None);
 			}
+			self.gamepads[index].get_or_insert_with(GamepadState::new);
 		}
 	}
 
 	/// remove a gamepad by index
 	pub fn remove_gamepad(&mut self, index: usize) {
-		if index < self.gamepads.len() {
-			self.gamepads.remove(index);
+		// empty the slot rather than Vec::remove: shifting later pads down desynced the
+		// indices the sdl provider cached for every pad above the removed one
+		if let Some(slot) = self.gamepads.get_mut(index) {
+			*slot = None;
 		}
 	}
 
 	/// press a gamepad button
 	pub fn press_gamepad_button(&mut self, gamepad_index: usize, button: GamepadButton) {
-		if let Some(gamepad) = self.gamepads.get_mut(gamepad_index) {
+		if let Some(gamepad) = self.gamepad_mut(gamepad_index) {
 			gamepad.press_button(button);
 		}
 	}
 
 	/// release a gamepad button
 	pub fn release_gamepad_button(&mut self, gamepad_index: usize, button: GamepadButton) {
-		if let Some(gamepad) = self.gamepads.get_mut(gamepad_index) {
+		if let Some(gamepad) = self.gamepad_mut(gamepad_index) {
 			gamepad.release_button(button);
 		}
 	}
 
 	/// set a gamepad axis
 	pub fn set_gamepad_axis(&mut self, gamepad_index: usize, axis: GamepadAxis, value: f32) {
-		if let Some(gamepad) = self.gamepads.get_mut(gamepad_index) {
+		if let Some(gamepad) = self.gamepad_mut(gamepad_index) {
 			gamepad.set_axis(axis, value);
 		}
 	}
@@ -1891,7 +1904,7 @@ mod tests {
 		input.ensure_gamepad(1);
 		input.press_gamepad_button(1, GamepadButton::South);
 		assert!(input.gamepad(1).is_some_and(|g| g.is_button_held(GamepadButton::South)));
-		assert!(input.gamepad(0).is_some(), "lower indices get empty slots");
+		assert!(input.gamepad(0).is_none(), "lower slots stay disconnected");
 		input.ensure_gamepad(MAX_GAMEPADS);
 		assert!(input.gamepad(MAX_GAMEPADS).is_none(), "out-of-range indices are ignored");
 	}
@@ -1909,5 +1922,21 @@ mod tests {
 		assert!(input.is_gamepad_button_held(gp, GamepadButton::South));
 		assert_eq!(input.gamepad_axis(gp, GamepadAxis::LeftStickY), -0.75);
 		assert!(!input.is_gamepad_button_held(gp + 1, GamepadButton::South));
+	}
+
+	/// corr-17: removing a pad shifted every later pad down, so the sdl provider's
+	/// cached indices sent their input to the wrong pad (or nowhere).
+	#[test]
+	fn removing_a_gamepad_keeps_other_indices() {
+		let mut input = make_input();
+		let a = input.add_gamepad();
+		let b = input.add_gamepad();
+		let c = input.add_gamepad();
+		input.remove_gamepad(a);
+		input.press_gamepad_button(c, GamepadButton::South);
+		assert!(input.is_gamepad_button_held(c, GamepadButton::South));
+		assert!(!input.is_gamepad_button_held(b, GamepadButton::South));
+		assert!(!input.is_gamepad_connected(a));
+		assert_eq!(input.add_gamepad(), a, "a reconnect reuses the freed slot");
 	}
 }
