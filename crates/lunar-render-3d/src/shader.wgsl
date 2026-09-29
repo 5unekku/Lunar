@@ -147,7 +147,8 @@ struct VertIn {
 }
 
 struct VertOut {
-    @builtin(position) clip_pos:     vec4<f32>,
+    // invariant: the z-prepass (vs_depth) must produce bit-identical positions
+    @builtin(position) @invariant clip_pos:     vec4<f32>,
     @location(0)       world_pos:    vec3<f32>,
     @location(1)       world_normal: vec3<f32>,
     @location(2)       uv:           vec2<f32>,
@@ -200,10 +201,13 @@ fn vs_main(in: VertIn, @builtin(instance_index) instance_id: u32) -> VertOut {
 fn vs_depth(
     @location(0) position: vec3<f32>,
     @builtin(instance_index) instance_id: u32,
-) -> @builtin(position) vec4<f32> {
-    let model = instances[instance_id].model;
-    // snap identically to vs_main so a depth-prepass matches the colour pass exactly.
-    return snap_vertex(globals.view_proj * model * vec4<f32>(position, 1.0));
+) -> @builtin(position) @invariant vec4<f32> {
+    // same operation order as vs_main: `view_proj * (model * p)`. writing
+    // `view_proj * model * p` multiplies the matrices first, rounding differently,
+    // so prepass depth and colour-pass depth disagreed by a few ulps and the
+    // LessEqual colour pass dropped whole rows of pixels (stair-step stripes).
+    let world_pos4 = instances[instance_id].model * vec4<f32>(position, 1.0);
+    return snap_vertex(globals.view_proj * world_pos4);
 }
 
 // ── PBR helpers ────────────────────────────────────────────────────────────

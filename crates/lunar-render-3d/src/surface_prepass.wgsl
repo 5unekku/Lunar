@@ -55,7 +55,7 @@ struct VertIn {
 }
 
 struct VertOut {
-    @builtin(position) clip_pos:    vec4<f32>,
+    @builtin(position) @invariant clip_pos:    vec4<f32>,
     @location(0)       uv:          vec2<f32>,
     @location(1)       uv_lightmap: vec2<f32>,
     // screen-linear interpolant, selected when affine_textures is on, must
