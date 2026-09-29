@@ -16,6 +16,9 @@ use crate::common::{checker_texture, f32_to_f16_bits};
 
 const HEIGHTMAP: u32 = 256;
 const TERRAIN_WORLD: f32 = 400.0;
+const TERRAIN_HEIGHT: f32 = 12.0;
+/// half-size of the ground plate the features stand on
+const PLATE_HALF: f32 = 70.0;
 
 pub fn register(app: &mut App) {
 	app.add_startup_system(spawn);
@@ -26,29 +29,31 @@ fn spawn(mut commands: Commands, mut registry: ResMut<MeshRegistry>, mut assets:
 	commands.insert_resource(AtmosphericScattering::default());
 
 	// ── terrain ──────────────────────────────────────────────────────────────
+	// sunk so its peaks stay just under the ground plate: the rolling hills show
+	// beyond the plate's edge without burying the feature passes on it.
 	commands.spawn((
 		Terrain {
 			heightmap: rolling_heightmap(HEIGHTMAP),
 			heightmap_width: HEIGHTMAP,
 			heightmap_height: HEIGHTMAP,
 			world_size: TERRAIN_WORLD,
-			height_scale: 40.0,
+			height_scale: TERRAIN_HEIGHT,
 			tint: Color::rgb(0.45, 0.55, 0.35),
 			dirty: true,
 			..Terrain::default()
 		},
-		LocalTransform3d::default(),
+		LocalTransform3d::from_xyz(0.0, -TERRAIN_HEIGHT - 1.0, 0.0),
 		WorldTransform3d::default(),
 	));
 
-	// flat ground quad under the terrain edges.
+	// flat ground plate the ring and feature passes stand on.
 	let ground_mat = registry.add_material(MaterialData {
 		shading: ShadingModel::Pbr,
 		base_color: Color::rgb(0.4, 0.5, 0.3),
 		roughness: 0.95,
 		..MaterialData::default()
 	});
-	let ground_mesh = registry.add_mesh(primitives::quad_mesh(TERRAIN_WORLD * 0.5, TERRAIN_WORLD * 0.5));
+	let ground_mesh = registry.add_mesh(primitives::quad_mesh(PLATE_HALF, PLATE_HALF));
 	commands.spawn((
 		Mesh3dBundle::at(Vec3::new(0.0, 0.05, 0.0), ground_mesh, ground_mat),
 		StaticMesh,
@@ -86,11 +91,11 @@ fn spawn(mut commands: Commands, mut registry: ResMut<MeshRegistry>, mut assets:
 
 	// ── scene-content feature passes ─────────────────────────────────────────
 	// water: a pond in front of the ring (gerstner waves + refraction of the scene)
-	let pond = registry.add_mesh(primitives::quad_mesh(40.0, 40.0));
+	let pond = registry.add_mesh(primitives::quad_mesh(14.0, 10.0));
 	commands.spawn((
 		Water::default(),
 		Mesh3d(pond),
-		LocalTransform3d::from_xyz(0.0, 1.5, 60.0),
+		LocalTransform3d::from_xyz(0.0, 0.4, 48.0),
 		WorldTransform3d::default(),
 	));
 
