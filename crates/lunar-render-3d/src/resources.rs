@@ -642,7 +642,12 @@ impl RenderEngine3d {
 	) {
 		let qw = (width / 2).max(1);
 		let qh = (height / 2).max(1);
-		let needs_tex = self.contact_shadow_tex.is_none();
+		// recreate on size change too: gating on is_none() alone kept the target at the
+		// first frame's size after every resize, stretched over the frame in composite
+		let needs_tex = self.contact_shadow_tex.as_ref().is_none_or(|tex| {
+			let size = tex.size();
+			(size.width, size.height) != (qw, qh)
+		});
 		if needs_tex {
 			let tex = self.device.create_texture(&wgpu::TextureDescriptor {
 				label: Some("[contact shadow] tex"),

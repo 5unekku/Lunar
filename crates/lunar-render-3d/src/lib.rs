@@ -2824,4 +2824,19 @@ mod headless_tests {
 			.poll(wgpu::PollType::wait_indefinitely())
 			.unwrap();
 	}
+
+	/// corr-24: the contact-shadow target was only created when missing, so after a
+	/// resize it stayed at the original resolution and was stretched over the frame.
+	#[test]
+	fn contact_shadow_target_follows_the_render_size() {
+		let instance = wgpu::Instance::default();
+		if pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).is_err() {
+			return;
+		}
+		let mut engine = RenderEngine3d::headless(&instance, &RenderConfig3d::default());
+		engine.ensure_contact_shadow_resources(256, 128, &Mat4::IDENTITY);
+		engine.ensure_contact_shadow_resources(640, 480, &Mat4::IDENTITY);
+		let size = engine.contact_shadow_tex.as_ref().unwrap().size();
+		assert_eq!((size.width, size.height), (320, 240), "half-res of the new size");
+	}
 }
