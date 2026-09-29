@@ -51,8 +51,10 @@ pub enum InputBinding {
 	Mouse(MouseButton),
 	/// a gamepad button (gamepad index, button)
 	GamepadButton(usize, GamepadButton),
-	/// a gamepad axis with a deadzone threshold (gamepad index, axis, threshold)
-	/// the action is considered "pressed" when the absolute axis value exceeds the threshold.
+	/// a gamepad axis with a signed threshold (gamepad index, axis, threshold).
+	/// the threshold's sign picks the direction: `0.5` is active once the axis is at or
+	/// past `0.5`, `-0.5` once it is at or past `-0.5` the other way. bind both signs
+	/// for "either direction".
 	GamepadAxis(usize, GamepadAxis, f32),
 }
 
@@ -236,8 +238,15 @@ impl Drop for ActionBuilder<'_> {
 }
 
 impl InputBinding {
+	/// signed: a negative threshold watches the negative direction. this compared
+	/// `value.abs() >= threshold.abs()`, so `-0.5` and `0.5` bindings on one stick
+	/// both fired whichever way it was pushed (move_left and move_right at once)
 	fn axis_active(value: f32, threshold: f32) -> bool {
-		value.abs() >= threshold.abs()
+		if threshold >= 0.0 {
+			value >= threshold
+		} else {
+			value <= threshold
+		}
 	}
 
 	fn is_held(&self, input: &InputState) -> bool {
@@ -748,6 +757,36 @@ impl InputState {
 	#[must_use]
 	pub fn gamepad(&self, index: usize) -> Option<&GamepadState> {
 		self.gamepads.get(index)
+	}
+
+	/// whether gamepad `index` is connected.
+	#[must_use]
+	pub fn is_gamepad_connected(&self, index: usize) -> bool {
+		index < self.gamepads.len()
+	}
+
+	/// whether `button` is held on gamepad `index` (false if it is not connected).
+	#[must_use]
+	pub fn is_gamepad_button_held(&self, index: usize, button: GamepadButton) -> bool {
+		self.gamepad(index).is_some_and(|pad| pad.is_button_held(button))
+	}
+
+	/// whether `button` went down on gamepad `index` this tick.
+	#[must_use]
+	pub fn is_gamepad_button_just_pressed(&self, index: usize, button: GamepadButton) -> bool {
+		self.gamepad(index).is_some_and(|pad| pad.is_button_just_pressed(button))
+	}
+
+	/// whether `button` came up on gamepad `index` this tick.
+	#[must_use]
+	pub fn is_gamepad_button_just_released(&self, index: usize, button: GamepadButton) -> bool {
+		self.gamepad(index).is_some_and(|pad| pad.is_button_just_released(button))
+	}
+
+	/// `axis` on gamepad `index` in -1.0..=1.0 (0.0 if it is not connected).
+	#[must_use]
+	pub fn gamepad_axis(&self, index: usize, axis: GamepadAxis) -> f32 {
+		self.gamepad(index).map_or(0.0, |pad| pad.axis(axis))
 	}
 
 	/// register a new gamepad, returns its index
@@ -1796,14 +1835,32 @@ mod tests {
 		let gp_index = input.add_gamepad();
 		actions.bind(
 			"move_left",
-			InputBinding::GamepadAxis(gp_index, GamepadAxis::LeftStickX, 0.5),
+			InputBinding::GamepadAxis(gp_index, GamepadAxis::LeftStickX, -0.5),
 		);
 
 		input.set_gamepad_axis(gp_index, GamepadAxis::LeftStickX, -0.8);
 		assert!(actions.is_action_held(&input, "move_left"));
 
-		input.set_gamepad_axis(gp_index, GamepadAxis::LeftStickX, 0.3);
+		input.set_gamepad_axis(gp_index, GamepadAxis::LeftStickX, -0.3);
 		assert!(!actions.is_action_held(&input, "move_left"));
+	}
+
+	/// corr-16: opposite-sign bindings on one axis must not both fire.
+	#[test]
+	fn action_map_gamepad_axis_is_directional() {
+		let mut input = make_input();
+		let mut actions = ActionMap::new();
+		let gp = input.add_gamepad();
+		actions.bind("left", InputBinding::GamepadAxis(gp, GamepadAxis::LeftStickX, -0.5));
+		actions.bind("right", InputBinding::GamepadAxis(gp, GamepadAxis::LeftStickX, 0.5));
+
+		input.set_gamepad_axis(gp, GamepadAxis::LeftStickX, -1.0);
+		assert!(actions.is_action_held(&input, "left"));
+		assert!(!actions.is_action_held(&input, "right"));
+
+		input.set_gamepad_axis(gp, GamepadAxis::LeftStickX, 1.0);
+		assert!(!actions.is_action_held(&input, "left"));
+		assert!(actions.is_action_held(&input, "right"));
 	}
 
 	#[test]
@@ -1837,5 +1894,20 @@ mod tests {
 		assert!(input.gamepad(0).is_some(), "lower indices get empty slots");
 		input.ensure_gamepad(MAX_GAMEPADS);
 		assert!(input.gamepad(MAX_GAMEPADS).is_none(), "out-of-range indices are ignored");
+	}
+
+	/// the index-based gamepad accessors docs/input.md documents
+	#[test]
+	fn gamepad_convenience_accessors() {
+		let mut input = make_input();
+		assert!(!input.is_gamepad_connected(0));
+		assert_eq!(input.gamepad_axis(0, GamepadAxis::LeftStickX), 0.0);
+		let gp = input.add_gamepad();
+		input.press_gamepad_button(gp, GamepadButton::South);
+		input.set_gamepad_axis(gp, GamepadAxis::LeftStickY, -0.75);
+		assert!(input.is_gamepad_connected(gp));
+		assert!(input.is_gamepad_button_held(gp, GamepadButton::South));
+		assert_eq!(input.gamepad_axis(gp, GamepadAxis::LeftStickY), -0.75);
+		assert!(!input.is_gamepad_button_held(gp + 1, GamepadButton::South));
 	}
 }

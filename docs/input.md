@@ -51,12 +51,12 @@ gamepad methods take an index (0 = first connected gamepad):
 ```rust
 input.is_gamepad_button_held(0, GamepadButton::South)
 input.is_gamepad_button_just_pressed(0, GamepadButton::East)
-input.gamepad_axis(0, GamepadAxis::LeftX)   // f32 in -1.0..=1.0
-input.gamepad_axis(0, GamepadAxis::LeftY)
+input.gamepad_axis(0, GamepadAxis::LeftStickX)   // f32 in -1.0..=1.0
+input.gamepad_axis(0, GamepadAxis::LeftStickY)
 input.is_gamepad_connected(0)               // bool
 ```
 
-`GamepadAxis` variants: `LeftX`, `LeftY`, `RightX`, `RightY`, `LeftTrigger`, `RightTrigger`.
+`GamepadAxis` variants: `LeftStickX`, `LeftStickY`, `RightStickX`, `RightStickY`, `LeftTrigger`, `RightTrigger`.
 
 `GamepadButton` variants: `South`, `East`, `West`, `North`, `L1`, `R1`, `L2`, `R2`,
 `Start`, `Select`, `DPadUp`, `DPadDown`, `DPadLeft`, `DPadRight`, `LeftStick`, `RightStick`.
@@ -85,7 +85,7 @@ fn setup_input(mut actions: ResMut<ActionMap>) {
     actions.action("move_right")
         .key(KeyCode::Right)
         .key(KeyCode::D)
-        .axis(GamepadAxis::LeftX, 0.3);  // axis with deadzone
+        .axis(GamepadAxis::LeftStickX, 0.3);  // stick pushed right past 0.3 (use -0.3 for left)
 }
 ```
 
