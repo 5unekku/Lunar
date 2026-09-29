@@ -474,6 +474,9 @@ pub struct RenderEngine {
 	frame_index: usize,
 	/// current write offset into the active vertex buffer
 	vertex_offset: usize,
+	/// persistent scratch: this frame's vertex bytes, uploaded in one write before
+	/// submit. one `write_buffer` per quad cost ~2x frame time at 20k sprites.
+	vertex_staging: Vec<u8>,
 	glyph_atlas: text::GlyphAtlas,
 	#[allow(dead_code)]
 	glyph_atlas_texture: Option<GpuTexture>,
@@ -904,6 +907,7 @@ impl RenderEngine {
 			overflow_flag: false,
 			frame_index: 0,
 			vertex_offset: 0,
+			vertex_staging: Vec::new(),
 			glyph_atlas: text::GlyphAtlas::new(2048, 1024),
 			glyph_atlas_texture: None,
 			render_passes: Vec::new(),
@@ -1696,6 +1700,7 @@ impl RenderEngine {
 			self.frame_index = (self.frame_index + 1) % VERTEX_BUFFER_COUNT;
 			// reset persistent vertex buffer offset for this frame
 			self.vertex_offset = 0;
+			self.vertex_staging.clear();
 
 			// single pass in sorted order: sprites and rects interleave correctly by layer.
 			// sort gives (layer, tex_id) where rects use u32::MAX, so within a layer sprites
@@ -1837,6 +1842,13 @@ impl RenderEngine {
 			pass.execute(&self.device, &self.queue, &mut custom_pass);
 		}
 
+		// one upload for the whole frame's vertices; queue writes land before the
+		// command buffer executes, so the draws recorded above see this data
+		if !self.vertex_staging.is_empty() {
+			self.queue
+				.write_buffer(&self.vertex_bufs[self.frame_index], 0, &self.vertex_staging);
+			self.vertex_staging.clear();
+		}
 		self.queue.submit(Some(encoder.finish()));
 		if let Some(frame) = surface_frame {
 			frame.present();
@@ -1923,9 +1935,7 @@ impl RenderEngine {
 		}
 
 		let bytes = bytemuck::cast_slice(&verts);
-		let buf = &self.vertex_bufs[self.frame_index];
-		self.queue
-			.write_buffer(buf, self.vertex_offset as u64, bytes);
+		self.vertex_staging.extend_from_slice(bytes);
 		self.vertex_offset += 6 * VERTEX_STRIDE;
 	}
 
@@ -1953,9 +1963,7 @@ impl RenderEngine {
 			verts[base + 4] = packed_color;
 		}
 		let bytes = bytemuck::cast_slice(&verts);
-		let buf = &self.vertex_bufs[self.frame_index];
-		self.queue
-			.write_buffer(buf, self.vertex_offset as u64, bytes);
+		self.vertex_staging.extend_from_slice(bytes);
 		self.vertex_offset += 6 * VERTEX_STRIDE;
 	}
 
@@ -1993,9 +2001,7 @@ impl RenderEngine {
 			verts[base + 4] = packed_color;
 		}
 		let bytes = bytemuck::cast_slice(&verts);
-		let buf = &self.vertex_bufs[self.frame_index];
-		self.queue
-			.write_buffer(buf, self.vertex_offset as u64, bytes);
+		self.vertex_staging.extend_from_slice(bytes);
 		self.vertex_offset += 6 * VERTEX_STRIDE;
 	}
 
@@ -2030,9 +2036,7 @@ impl RenderEngine {
 			verts[base + 4] = packed_color;
 		}
 		let bytes = bytemuck::cast_slice(&verts);
-		let buf = &self.vertex_bufs[self.frame_index];
-		self.queue
-			.write_buffer(buf, self.vertex_offset as u64, bytes);
+		self.vertex_staging.extend_from_slice(bytes);
 		self.vertex_offset += 6 * VERTEX_STRIDE;
 	}
 }
