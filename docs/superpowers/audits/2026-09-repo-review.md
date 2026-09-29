@@ -22,6 +22,32 @@ fixed. the single highest-leverage next step is still the backlog + baseline: ev
 perf item in the program is gated on "before/after harness numbers", and without a
 committed baseline nothing in wave 2 can land under the program's own rules.
 
+## fix-loop status (2026-09-29)
+
+every finding below was fixed test-first on this branch unless marked open. new
+findings from the fix loop are rev-13..rev-17.
+
+| id | finding | status |
+|---|---|---|
+| rev-01 | 2d per-quad `write_buffer` | fixed `55dc7f8` (sprite-storm ~2x on lavapipe, golden identical) |
+| rev-02 | pvs bake unaccelerated | fixed `54c1e84` (triangle bvh, bit-identical, 4901 → 171 ms; rng bug rev-15) |
+| rev-03 | 2d collision O(n²) | fixed `63f7ef8` (52.1 → 1.1 ms for 5k colliders, brute-force equivalence test) |
+| rev-04 | mips on main thread / srgb | threading fixed `1cabefe` (+ bc textures no longer box-filtered); **srgb-space averaging open**: color space is decided per use at upload, so a correct fix needs a color-space hint on the asset or gpu mip generation |
+| rev-05 | bevy_reflect pulled in | fixed `8309a05` |
+| rev-06 | 2d layer projections collapse | fixed `3f5ec2b` |
+| rev-07 | text overruns vertex buffer | fixed `0a5a6fb` |
+| rev-08 | self-despawn skips on_destroy | fixed `46c9996` |
+| rev-09 | bind groups built in several places | water bg0 consolidated in `d06909b`; composite / ssr / fog / decal / atmos / fxaa still duplicated (open, fold into arch-02) |
+| rev-10 | auto-trait overflow | fixed `f307f4b`; **cause corrected below** |
+| rev-11 | out-of-workspace tools | bake-pvs fixed `ddce8ea`; gen-lods disconnect open (capability) |
+| rev-12 | small items | docs fixed `2172328`; dead letterbox code removed in `3f5ec2b`; clippy clean `f307f4b` |
+| rt-02 / rt-03 | detail sprites, water abort | fixed `d06909b`; both back in feature-reel `d116de8` |
+| rev-13 | `Fog` ignored, volumetric fog hardcoded | fixed `df87264` |
+| rev-14 | terrain ignores the sun | fixed `7907982` |
+| rev-15 | pvs rng samples half of each leaf | fixed `54c1e84` |
+| rev-16 | ci never runs (actions policy) | ci.yml fixed `a7b5cad`; docs.yml needs a settings change |
+| rev-17 | gtao + ssr darken every max-quality frame | open (design; needs sign-off) |
+
 ---
 
 ## performance
@@ -212,7 +238,7 @@ drift. before the arch-02 per-feature split lands, a cheap step is one
 `fn build_<feature>_bg(&self) -> wgpu::BindGroup` per group, called from init, resize
 and msaa rebuild, so each group's layout is defined in exactly one place.
 
-### rev-10 — the render god-structs now overflow rustc's auto-trait check
+### rev-10 — auto-trait checks on the render engines overflow the recursion limit
 
 - **location:** crates/lunar-render-3d/src/lib.rs:1472, crates/lunar-render/src/lib.rs:430
   (plus the `Resource` bound sites in lunar/src/bootstrap.rs:111,
@@ -222,9 +248,13 @@ and msaa rebuild, so each group's layout is defined in exactly one place.
 
 clippy on current nightly warns "overflow evaluating the requirement
 `RenderEngine3d: Sync`" and the same for `RenderEngine` and the `Resource` bounds.
-the struct is large enough that auto-trait evaluation hits the recursion limit.
-concrete evidence for arch-02. `#![recursion_limit = "256"]` silences it in the
-meantime.
+
+**correction:** the first draft blamed the struct's size. the full diagnostic shows
+the depth comes from wgpu's own handle types (`TextureView` → `Texture` →
+`DispatchTexture` → `Arc<CoreTexture>` → `ContextWgpuCore` → `wgpu_core::Global` →
+hub registries), not from `RenderEngine3d`'s field count, so it is not evidence
+for arch-02. rustc flags it as a future hard error. fixed with
+`#![recursion_limit = "256"]` on the crates that check auto traits on those types.
 
 ### rev-11 — out-of-workspace tools duplicate engine types, and one pipeline is disconnected
 
@@ -266,6 +296,85 @@ meantime.
 
 ---
 
+## new findings from the fix loop
+
+### rev-13 — the public `Fog` resource was ignored; volumetric fog was hardcoded
+
+- **location:** crates/lunar-3d/src/fog.rs (api), crates/lunar-render-3d/src/post.rs
+  (volumetric fog pass)
+- **status:** fixed `df87264`
+
+`Fog` is exported in the prelude and documented as "insert as a resource to enable
+scene fog. without this resource, no fog is applied", but nothing in the renderer
+read it. volumetric fog instead ran with density 0.01, a 200-unit march and a
+sky-derived color whenever the tier and dev profile allowed, i.e. in every
+max-quality frame. at that density 86% of anything past ~200 units is replaced by
+dark fog, which is why the static-city and feature-reel golden frames were almost
+black (mean luminance ~15/255). the fog pass now derives its inputs from `Fog` and
+is skipped without it. **visual change:** scenes that relied on the implicit fog
+at mid+ tier lose it unless they insert a `Fog`.
+
+### rev-14 — clipmap terrain ignored the sun
+
+- **location:** crates/lunar-render-3d/src/passes.rs (terrain params upload)
+- **status:** fixed `7907982`
+
+terrain.wgsl expects `sun_dir` to point toward the sun, but got the light's
+travel direction (the fog code negates it; terrain did not), so every
+upward-facing texel had `dot(n, sun) < 0` and terrain only ever showed its 0.15
+ambient. the intensity was also raw lux, so fixing the sign alone would blow out
+to white; it now uses the main shader's 80 000-lux normalization.
+
+### rev-15 — the pvs bake's rng only sampled the lower half of each leaf
+
+- **location:** crates/lunar-bsp-build/src/pvs.rs (`Lcg::next_f32`)
+- **status:** fixed `54c1e84`
+
+`(x >> 33) as f32 / u32::MAX as f32` tops out at 0.5, so every sample point sat in
+the lower half of its leaf box; a sightline through the upper half (a window over
+a low wall) was never tried and the pair was marked hidden.
+
+### rev-16 — ci never ran any step
+
+- **location:** .github/workflows/ci.yml, docs.yml; repository actions policy
+- **status:** ci.yml fixed `a7b5cad`; docs.yml needs a settings change
+
+build-01 recorded 8/8 failed runs (the github api now shows 150 for ci). every
+job failed in "Set up job" in 1–2 s: "The actions actions/checkout@v6 and
+swatinem/rust-cache@v2 are not allowed in 5unekku/Lunar because all actions must
+be from a repository owned by 5unekku". ci.yml now checks out with plain git and
+runs without the cache action, and installs the x11 packages SDL3's from-source
+build hard-requires once `libegl-dev` brings in the x11 headers (xcursor first).
+docs.yml needs the pages actions, so it stays broken until the repo's actions
+policy allows github-owned actions. pushes from this session did not trigger a
+run, so the fixed workflow is unverified in ci itself; the checkout script and
+the sdl3 build were verified locally.
+
+### rev-17 — gtao and ssr darken every max-quality frame (open)
+
+- **location:** crates/lunar-render-3d/src/composite.wgsl:126-141, ssr.wgsl
+- **status:** open: a visual design change that needs sign-off per the program's
+  golden-frame rule
+
+with fog fixed, static-city at max quality still averages ~15/255 against ~38 with
+the classic profile. turning off gtao alone lifts it to ~25, ssr alone to ~21,
+both to ~35. two causes:
+
+- composite blends ssr as `mix(hdr, reflection, alpha * 0.3)` into **every**
+  surface. no roughness or F0 reaches the pass (there is no g-buffer channel for
+  it), so rough diffuse ground takes a 30% mirror blend of whatever it reflects.
+  ssr needs a roughness/specular weight, which means writing roughness in the
+  prepass.
+- composite multiplies the final hdr by ao (`hdr_color *= ao`), which darkens
+  direct sunlight as well as ambient. ao should scale only the ambient/indirect
+  term, i.e. be applied in the lighting shader, not after it.
+
+feature-reel also shows horizontal striping across flat ground and black metallic
+meshes (no environment to reflect); both are worth a look on the reference gpu
+before trusting lavapipe.
+
+---
+
 ## capabilities
 
 what a game can and cannot do today, judged against the README's claims and the
@@ -285,9 +394,10 @@ common baseline for a 2d+3d engine. "gap" means missing, not a bug.
 
 | capability | state | where |
 |---|---|---|
-| detail sprites / grass | crashes on first use | rt-02 |
-| water | crashes on first use | rt-03 |
-| 2d parallax layers | no effect | rev-06 |
+| detail sprites / grass | ~~crashes on first use~~ fixed | rt-02 |
+| water | ~~crashes on first use~~ fixed | rt-03 |
+| 2d parallax layers | ~~no effect~~ fixed | rev-06 |
+| scene fog (`Fog`) | ~~ignored~~ fixed | rev-13 |
 | skinned meshes | `SkinWeights` stored on `MeshData`, never uploaded; no skinning in any shader. `lunar-3d::animation` only animates rigid joint transforms | lunar-3d/src/mesh.rs:55-90, lunar-render-3d (no `skin` references) |
 | offline LOD pipeline | `gen-lods` output is never read | rev-11 |
 
