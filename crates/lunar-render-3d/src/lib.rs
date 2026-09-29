@@ -311,6 +311,8 @@ const CONTACT_SHADOW_PARAMS_SIZE: u64 = 96;
 
 /// one particle in the GPU storage buffer: position(12)+life(4)+vel(12)+maxlife(4)+col_s(16)+col_e(16)+size_s(4)+size_e(4)+pad×2 = 80 bytes.
 const PARTICLE_STRIDE: u64 = 80;
+// the upload copies size_of::<GpuParticle>() bytes per slot (sec-17)
+const _: () = assert!(std::mem::size_of::<GpuParticle>() as u64 == PARTICLE_STRIDE);
 
 /// decal params UBO: decal_inv_world(64)+inv_view_proj(64)+color(16)+decal_world(64)+misc(16) = 224 bytes.
 const DECAL_PARAMS_SIZE: u64 = 224;
@@ -371,7 +373,7 @@ struct GpuMesh {
 
 /// per-particle GPU layout: must match the WGSL Particle struct exactly.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GpuParticle {
 	position: [f32; 3],
 	lifetime: f32,

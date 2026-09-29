@@ -1026,14 +1026,8 @@ impl RenderEngine3d {
 				while j < self.particle_gpu_writes.len()
 					&& self.particle_gpu_writes[j].0 == expected
 				{
-					let gpu = &self.particle_gpu_writes[j].1;
-					let bytes = unsafe {
-						std::slice::from_raw_parts(
-							gpu as *const GpuParticle as *const u8,
-							PARTICLE_STRIDE as usize,
-						)
-					};
-					self.particle_upload_scratch.extend_from_slice(bytes);
+					self.particle_upload_scratch
+						.extend_from_slice(bytemuck::bytes_of(&self.particle_gpu_writes[j].1));
 					expected += 1;
 					j += 1;
 				}
