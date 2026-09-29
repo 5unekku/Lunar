@@ -1417,9 +1417,7 @@ impl RenderEngine3d {
 			// dirty detection: re-render all faces when any light position changes or draw count changes
 			let pt_draw_count = self.draw_scratch.len();
 			if pt_draw_count != self.point_shadow_last_draw_count {
-				for dirty in &mut self.point_shadow_dirty {
-					*dirty = [true; 6];
-				}
+				self.point_shadow_dirty.fill([true; 6]);
 				self.point_shadow_last_draw_count = pt_draw_count;
 			}
 			// ── phase A: compute face view-projections, upload per-face globals, ─

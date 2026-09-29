@@ -164,7 +164,7 @@ mod packer_tests {
 
 	fn image(w: u32, h: u32) -> Image {
 		let mut pixels = vec![0u8; (w * h * 4) as usize];
-		for (i, chunk) in pixels.chunks_exact_mut(4).enumerate() {
+		for (i, chunk) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
 			let t = (i * 8) as u8;
 			chunk.copy_from_slice(&[t, t, t, 255]);
 		}

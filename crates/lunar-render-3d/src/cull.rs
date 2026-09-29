@@ -8,8 +8,10 @@ use super::*;
 // mapped BufferView is not guaranteed u32-aligned, so read without cast
 fn mapped_u32s(bytes: &[u8]) -> Vec<u32> {
 	bytes
-		.chunks_exact(4)
-		.map(|c| u32::from_ne_bytes(c.try_into().unwrap()))
+		.as_chunks::<4>()
+		.0
+		.iter()
+		.map(|c| u32::from_ne_bytes(*c))
 		.collect()
 }
 
@@ -249,155 +251,153 @@ impl RenderEngine3d {
 		// dispatches this frame's occlusion compute for next frame's use.
 		// no CPU stall: the previous frame's compute completed while we were
 		// building the draw list.
-		if hzb_active {
-			if entity_count > 0 {
-				self.ensure_hzb_cull_buffers(entity_count);
+		if hzb_active && entity_count > 0 {
+			self.ensure_hzb_cull_buffers(entity_count);
 
-				// read previous frame's occlusion result: non-blocking
-				if self.hzb_staging_pending {
-					let _ = self.device.poll(wgpu::PollType::Poll);
-					if self.hzb_staging_ready.load(Ordering::Acquire) {
-						let prev = self.hzb_pending_entity_count;
-						if let Some(occ_staging) = self.hzb_occ_staging.as_ref() {
-							{
-								let slice = occ_staging.slice(0..(prev * 4) as u64);
-								let data = slice.get_mapped_range();
-								let flags = mapped_u32s(&data);
-								let soa = world.resource::<CullSoa>();
-								for (i, &entity) in soa.entities.iter().take(prev).enumerate() {
-									if i < flags.len() && flags[i] == 0 {
-										self.frustum_visible.remove(&entity);
-									}
+			// read previous frame's occlusion result: non-blocking
+			if self.hzb_staging_pending {
+				let _ = self.device.poll(wgpu::PollType::Poll);
+				if self.hzb_staging_ready.load(Ordering::Acquire) {
+					let prev = self.hzb_pending_entity_count;
+					if let Some(occ_staging) = self.hzb_occ_staging.as_ref() {
+						{
+							let slice = occ_staging.slice(0..(prev * 4) as u64);
+							let data = slice.get_mapped_range();
+							let flags = mapped_u32s(&data);
+							let soa = world.resource::<CullSoa>();
+							for (i, &entity) in soa.entities.iter().take(prev).enumerate() {
+								if i < flags.len() && flags[i] == 0 {
+									self.frustum_visible.remove(&entity);
 								}
 							}
-							occ_staging.unmap();
 						}
-						self.hzb_staging_ready.store(false, Ordering::Release);
-						self.hzb_staging_pending = false;
+						occ_staging.unmap();
 					}
-					// if not ready: skip hzb cull for this frame (frustum_visible unchanged)
+					self.hzb_staging_ready.store(false, Ordering::Release);
+					self.hzb_staging_pending = false;
+				}
+				// if not ready: skip hzb cull for this frame (frustum_visible unchanged)
+			}
+
+			// dispatch this frame's HZB occlusion compute. skipped while the previous
+			// readback is still in flight (a buffer with an outstanding map_async must
+			// not appear in a submit) and until the first HZB has actually been built,
+			// so the test never runs against a cleared depth pyramid
+			if !self.hzb_staging_pending && self.hzb_built {
+				// test against the view_proj snapshot taken when the HZB depth was
+				// drawn: testing last frame's depth with this frame's matrix falsely
+				// culled still-visible geometry whenever the camera moved
+				let vp_array = self.hzb_view_proj.to_cols_array();
+				let mut params_data = [0f32; 24];
+				params_data[..16].copy_from_slice(&vp_array);
+				// footprint-to-mip selection happens in HZB texel space, so the
+				// viewport is the HZB mip 0 size (not the display surface size)
+				params_data[16] = self.hzb_width as f32;
+				params_data[17] = self.hzb_height as f32;
+				params_data[18] = f32::from_bits(self.hzb_mip_count);
+				params_data[19] = f32::from_bits(entity_count as u32);
+
+				// seed occlusion flags from this frame's fresh CPU frustum result
+				self.hzb_seed_scratch.clear();
+				self.hzb_seed_scratch
+					.extend(self.frustum_flags_scratch.iter().map(|&flag| flag as u32));
+				self.queue.write_buffer(
+					self.hzb_occ_buf.as_ref().unwrap(),
+					0,
+					bytemuck::cast_slice(&self.hzb_seed_scratch),
+				);
+				self.queue.write_buffer(
+					self.hzb_cull_aabb_buf.as_ref().unwrap(),
+					0,
+					bytemuck::cast_slice(&self.cull_aabb_scratch),
+				);
+				self.queue.write_buffer(
+					self.hzb_cull_params_buf.as_ref().unwrap(),
+					0,
+					bytemuck::cast_slice(&params_data),
+				);
+
+				// (re)build the hzb-cull bind group only when its buffers regrew (reset to None
+				// in ensure_hzb_cull_buffers); the hzb src view is fixed-size so it never changes.
+				if self.hzb_cull_bg.is_none() {
+					self.hzb_cull_bg = Some(
+						self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+							label: Some("[hzb] cull bg"),
+							layout: self.hzb_cull_bgl.as_ref().unwrap(),
+							entries: &[
+								wgpu::BindGroupEntry {
+									binding: 0,
+									resource: self
+										.hzb_cull_aabb_buf
+										.as_ref()
+										.unwrap()
+										.as_entire_binding(),
+								},
+								wgpu::BindGroupEntry {
+									binding: 1,
+									resource: self
+										.hzb_cull_params_buf
+										.as_ref()
+										.unwrap()
+										.as_entire_binding(),
+								},
+								wgpu::BindGroupEntry {
+									binding: 2,
+									resource: self
+										.hzb_occ_buf
+										.as_ref()
+										.unwrap()
+										.as_entire_binding(),
+								},
+								wgpu::BindGroupEntry {
+									binding: 3,
+									resource: wgpu::BindingResource::TextureView(
+										self.hzb_src_view.as_ref().unwrap(),
+									),
+								},
+							],
+						}),
+					);
 				}
 
-				// dispatch this frame's HZB occlusion compute. skipped while the previous
-				// readback is still in flight (a buffer with an outstanding map_async must
-				// not appear in a submit) and until the first HZB has actually been built,
-				// so the test never runs against a cleared depth pyramid
-				if !self.hzb_staging_pending && self.hzb_built {
-					// test against the view_proj snapshot taken when the HZB depth was
-					// drawn: testing last frame's depth with this frame's matrix falsely
-					// culled still-visible geometry whenever the camera moved
-					let vp_array = self.hzb_view_proj.to_cols_array();
-					let mut params_data = [0f32; 24];
-					params_data[..16].copy_from_slice(&vp_array);
-					// footprint-to-mip selection happens in HZB texel space, so the
-					// viewport is the HZB mip 0 size (not the display surface size)
-					params_data[16] = self.hzb_width as f32;
-					params_data[17] = self.hzb_height as f32;
-					params_data[18] = f32::from_bits(self.hzb_mip_count);
-					params_data[19] = f32::from_bits(entity_count as u32);
+				let occ_buf = self.hzb_occ_buf.as_ref().unwrap();
+				let occ_staging = self.hzb_occ_staging.as_ref().unwrap();
+				let hzb_cull_bg = self.hzb_cull_bg.as_ref().unwrap();
 
-					// seed occlusion flags from this frame's fresh CPU frustum result
-					self.hzb_seed_scratch.clear();
-					self.hzb_seed_scratch
-						.extend(self.frustum_flags_scratch.iter().map(|&flag| flag as u32));
-					self.queue.write_buffer(
-						self.hzb_occ_buf.as_ref().unwrap(),
-						0,
-						bytemuck::cast_slice(&self.hzb_seed_scratch),
-					);
-					self.queue.write_buffer(
-						self.hzb_cull_aabb_buf.as_ref().unwrap(),
-						0,
-						bytemuck::cast_slice(&self.cull_aabb_scratch),
-					);
-					self.queue.write_buffer(
-						self.hzb_cull_params_buf.as_ref().unwrap(),
-						0,
-						bytemuck::cast_slice(&params_data),
-					);
-
-					// (re)build the hzb-cull bind group only when its buffers regrew (reset to None
-					// in ensure_hzb_cull_buffers); the hzb src view is fixed-size so it never changes.
-					if self.hzb_cull_bg.is_none() {
-						self.hzb_cull_bg = Some(
-							self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-								label: Some("[hzb] cull bg"),
-								layout: self.hzb_cull_bgl.as_ref().unwrap(),
-								entries: &[
-									wgpu::BindGroupEntry {
-										binding: 0,
-										resource: self
-											.hzb_cull_aabb_buf
-											.as_ref()
-											.unwrap()
-											.as_entire_binding(),
-									},
-									wgpu::BindGroupEntry {
-										binding: 1,
-										resource: self
-											.hzb_cull_params_buf
-											.as_ref()
-											.unwrap()
-											.as_entire_binding(),
-									},
-									wgpu::BindGroupEntry {
-										binding: 2,
-										resource: self
-											.hzb_occ_buf
-											.as_ref()
-											.unwrap()
-											.as_entire_binding(),
-									},
-									wgpu::BindGroupEntry {
-										binding: 3,
-										resource: wgpu::BindingResource::TextureView(
-											self.hzb_src_view.as_ref().unwrap(),
-										),
-									},
-								],
-							}),
-						);
-					}
-
-					let occ_buf = self.hzb_occ_buf.as_ref().unwrap();
-					let occ_staging = self.hzb_occ_staging.as_ref().unwrap();
-					let hzb_cull_bg = self.hzb_cull_bg.as_ref().unwrap();
-
-					let mut hzb_enc =
-						self.device
-							.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-								label: Some("[hzb] cull encoder"),
-							});
-					{
-						let mut cpass = hzb_enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-							label: Some("[hzb] cull pass"),
-							timestamp_writes: None,
+				let mut hzb_enc =
+					self.device
+						.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+							label: Some("[hzb] cull encoder"),
 						});
-						cpass.set_pipeline(self.hzb_cull_pipeline.as_ref().unwrap());
-						cpass.set_bind_group(0, hzb_cull_bg, &[]);
-						cpass.dispatch_workgroups((entity_count as u32).div_ceil(64), 1, 1);
-					}
-					hzb_enc.copy_buffer_to_buffer(
-						occ_buf,
-						0,
-						occ_staging,
-						0,
-						(entity_count * 4) as u64,
-					);
-					self.queue.submit([hzb_enc.finish()]);
-					let hzb_ready = self.hzb_staging_ready.clone();
-					hzb_ready.store(false, Ordering::Release);
-					occ_staging.slice(0..(entity_count * 4) as u64).map_async(
-						wgpu::MapMode::Read,
-						move |result| {
-							if result.is_ok() {
-								hzb_ready.store(true, Ordering::Release);
-							}
-						},
-					);
-					self.hzb_staging_pending = true;
-					self.hzb_pending_entity_count = entity_count;
+				{
+					let mut cpass = hzb_enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+						label: Some("[hzb] cull pass"),
+						timestamp_writes: None,
+					});
+					cpass.set_pipeline(self.hzb_cull_pipeline.as_ref().unwrap());
+					cpass.set_bind_group(0, hzb_cull_bg, &[]);
+					cpass.dispatch_workgroups((entity_count as u32).div_ceil(64), 1, 1);
 				}
+				hzb_enc.copy_buffer_to_buffer(
+					occ_buf,
+					0,
+					occ_staging,
+					0,
+					(entity_count * 4) as u64,
+				);
+				self.queue.submit([hzb_enc.finish()]);
+				let hzb_ready = self.hzb_staging_ready.clone();
+				hzb_ready.store(false, Ordering::Release);
+				occ_staging.slice(0..(entity_count * 4) as u64).map_async(
+					wgpu::MapMode::Read,
+					move |result| {
+						if result.is_ok() {
+							hzb_ready.store(true, Ordering::Release);
+						}
+					},
+				);
+				self.hzb_staging_pending = true;
+				self.hzb_pending_entity_count = entity_count;
 			}
 		}
 	}

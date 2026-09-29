@@ -15,6 +15,11 @@
 //!   --cache-probe        additionally measure pipeline-cache cold vs warm boot
 //!   --out <dir>          output directory (default docs/bench)
 
+// wgpu's handle types nest deeply enough (TextureView -> ... -> wgpu_core registries)
+// that proving `Send`/`Sync` for a struct holding them overflows the default limit of
+// 128; rustc warns today and will make it a hard error.
+#![recursion_limit = "256"]
+
 mod common;
 mod golden;
 mod harness;

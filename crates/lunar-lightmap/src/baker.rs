@@ -276,7 +276,9 @@ fn build_triangles(mesh: &MeshData) -> Vec<BakeTri> {
 	};
 	let verts = &mesh.vertices;
 	indices
-		.chunks_exact(3)
+		.as_chunks::<3>()
+		.0
+		.iter()
 		.map(|tri| {
 			let v0 = &verts[tri[0]];
 			let v1 = &verts[tri[1]];

@@ -4,6 +4,10 @@
 //! and surface. add [`RenderPlugin3d`] to your app and the renderer handles
 //! everything from there.
 
+// wgpu's handle types nest deeply enough (TextureView -> ... -> wgpu_core registries)
+// that proving `Send`/`Sync` for a struct holding them overflows the default limit of
+// 128; rustc warns today and will make it a hard error.
+#![recursion_limit = "256"]
 // on wasm, many native-only items (shadow shaders, mega-buffer constants, etc.)
 // have no callers since their use sites are #[cfg(not(wasm32))]. suppress the
 // resulting dead_code noise; the items are genuinely used on native.

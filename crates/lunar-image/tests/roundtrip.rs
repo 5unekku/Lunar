@@ -21,7 +21,7 @@ fn roundtrip_solid_color() {
 	let width = 32u32;
 	let height = 32u32;
 	let mut pixels = vec![0u8; (width * height * 4) as usize];
-	for chunk in pixels.chunks_exact_mut(4) {
+	for chunk in pixels.as_chunks_mut::<4>().0 {
 		chunk[0] = 255; // R
 		chunk[1] = 128; // G
 		chunk[2] = 64; // B
@@ -68,7 +68,7 @@ fn roundtrip_alpha() {
 	let width = 8u32;
 	let height = 8u32;
 	let mut pixels = vec![0u8; (width * height * 4) as usize];
-	for (i, chunk) in pixels.chunks_exact_mut(4).enumerate() {
+	for (i, chunk) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
 		chunk[0] = 255;
 		chunk[1] = 0;
 		chunk[2] = 0;

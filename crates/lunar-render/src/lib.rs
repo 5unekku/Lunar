@@ -1,4 +1,8 @@
 //! rendering subsystem via wgpu
+// wgpu's handle types nest deeply enough (TextureView -> ... -> wgpu_core registries)
+// that proving `Send`/`Sync` for a struct holding them overflows the default limit of
+// 128; rustc warns today and will make it a hard error.
+#![recursion_limit = "256"]
 #![allow(
 	clippy::cast_precision_loss,
 	clippy::cast_possible_truncation,
@@ -1296,7 +1300,7 @@ impl RenderEngine {
 			self.config.format,
 			wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
 		) {
-			for px in out.chunks_exact_mut(4) {
+			for px in out.as_chunks_mut::<4>().0 {
 				px.swap(0, 2);
 			}
 		}

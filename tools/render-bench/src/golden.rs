@@ -11,7 +11,7 @@ pub const CHANNEL_TOLERANCE: u8 = 2;
 /// the headless target reads back bgra; swap to rgba and force alpha opaque
 /// (alpha carries no color information in the composite output).
 pub fn bgra_to_rgba_in_place(bytes: &mut [u8]) {
-	for px in bytes.chunks_exact_mut(4) {
+	for px in bytes.as_chunks_mut::<4>().0 {
 		px.swap(0, 2);
 		px[3] = 0xff;
 	}
@@ -67,7 +67,7 @@ pub fn compare(reference: &[u8], candidate: &[u8]) -> GoldenDiff {
 	assert_eq!(reference.len(), candidate.len(), "golden image size mismatch");
 	let mut max_diff = 0u8;
 	let mut differing = 0usize;
-	for (r, c) in reference.chunks_exact(4).zip(candidate.chunks_exact(4)) {
+	for (r, c) in reference.as_chunks::<4>().0.iter().zip(candidate.as_chunks::<4>().0) {
 		let mut over = false;
 		for ch in 0..3 {
 			let d = r[ch].abs_diff(c[ch]);

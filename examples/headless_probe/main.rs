@@ -5,6 +5,11 @@
 //! inspect the dump with:
 //!   magick -size {w}x{h} -depth 8 rgba:/tmp/probe.rgba -alpha off /tmp/probe.png
 
+// wgpu's handle types nest deeply enough (TextureView -> ... -> wgpu_core registries)
+// that proving `Send`/`Sync` for a struct holding them overflows the default limit of
+// 128; rustc warns today and will make it a hard error.
+#![recursion_limit = "256"]
+
 use lunar::lunar_3d::scene_format_3d::{
 	CameraDef, DirectionalLightDef, EntityDefinition3d, MaterialDef, MeshRef, SceneDefinition3d,
 	SceneLoader3d,

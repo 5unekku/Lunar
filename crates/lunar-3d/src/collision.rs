@@ -605,8 +605,8 @@ fn raycast_mesh(
 	}
 
 	match indices {
-		crate::mesh::IndexBuffer::U16(idx) => test_tris!(idx.chunks_exact(3), usize),
-		crate::mesh::IndexBuffer::U32(idx) => test_tris!(idx.chunks_exact(3), usize),
+		crate::mesh::IndexBuffer::U16(idx) => test_tris!(idx.as_chunks::<3>().0.iter(), usize),
+		crate::mesh::IndexBuffer::U32(idx) => test_tris!(idx.as_chunks::<3>().0.iter(), usize),
 	}
 
 	if nearest_t == f32::MAX {

@@ -200,7 +200,7 @@ impl MeshData {
 		for vertex in &mut self.vertices {
 			vertex.normal = Vec3::ZERO;
 		}
-		for tri in indices.chunks_exact(3) {
+		for tri in indices.as_chunks::<3>().0 {
 			let a = self.vertices[tri[0]].position;
 			let b = self.vertices[tri[1]].position;
 			let c = self.vertices[tri[2]].position;

@@ -62,6 +62,10 @@
 //! - all game state lives in the ECS [`World`], never in global singletons
 //! - the ECS backend (bevy_ecs) is sealed behind this crate's prelude: game code never names it
 
+// wgpu's handle types nest deeply enough (TextureView -> ... -> wgpu_core registries)
+// that proving `Send`/`Sync` for a struct holding them overflows the default limit of
+// 128; rustc warns today and will make it a hard error.
+#![recursion_limit = "256"]
 #![warn(missing_docs)]
 
 // `__bevy_ecs` is the internal path the lunar-macros derives target. It

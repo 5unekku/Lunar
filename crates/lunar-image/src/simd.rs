@@ -212,7 +212,7 @@ pub fn premultiply_alpha(rgba: &mut [u8]) {
 		0,
 		"rgba buffer must be a multiple of 4 bytes"
 	);
-	for chunk in rgba.chunks_exact_mut(4) {
+	for chunk in rgba.as_chunks_mut::<4>().0 {
 		let a = chunk[3] as u32;
 		chunk[0] = ((chunk[0] as u32 * a + 127) / 255) as u8;
 		chunk[1] = ((chunk[1] as u32 * a + 127) / 255) as u8;
@@ -226,7 +226,7 @@ pub fn premultiply_alpha(rgba: &mut [u8]) {
 /// panics if the buffer length is not a multiple of 4.
 pub fn rgba_to_bgra(buf: &mut [u8]) {
 	assert_eq!(buf.len() % 4, 0, "buffer must be a multiple of 4 bytes");
-	for chunk in buf.chunks_exact_mut(4) {
+	for chunk in buf.as_chunks_mut::<4>().0 {
 		chunk.swap(0, 2);
 	}
 }

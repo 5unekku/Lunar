@@ -146,7 +146,7 @@ impl RenderEngine3d {
 
 		// per-vertex: remaining triangle count + list of triangle indices
 		let mut vert_tris: Vec<Vec<u32>> = vec![Vec::new(); vertex_count];
-		for (ti, chunk) in indices.chunks_exact(3).enumerate() {
+		for (ti, chunk) in indices.as_chunks::<3>().0.iter().enumerate() {
 			for &vi in chunk {
 				if (vi as usize) < vertex_count {
 					vert_tris[vi as usize].push(ti as u32);
