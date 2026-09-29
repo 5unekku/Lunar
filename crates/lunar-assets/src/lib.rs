@@ -2131,11 +2131,15 @@ impl bevy_ecs::message::Message for AssetChanged {}
 #[cfg(not(target_arch = "wasm32"))]
 pub fn dispatch_asset_changes(
 	watcher: Res<AssetWatcher>,
-	mut changed_writer: bevy_ecs::message::MessageWriter<AssetChanged>,
+	mut messages: ResMut<bevy_ecs::message::Messages<AssetChanged>>,
 ) {
+	// rotate the double buffer once per frame, so a change is readable for this frame
+	// and the next, then dropped. lunar has no bevy_app message-update system, and
+	// without this every AssetChanged stayed in memory for the life of the process
+	messages.update();
 	for path in watcher.drain_changes() {
 		log::info!("asset changed: {path}");
-		changed_writer.write(AssetChanged { path });
+		messages.write(AssetChanged { path });
 	}
 }
 
@@ -2460,5 +2464,22 @@ mod handle_tests {
 	fn bctex_rejects_overflowing_and_empty_dimensions() {
 		assert!(BctexLoader.load(bctex(7, 1, u32::MAX, u32::MAX, 16)).is_err());
 		assert!(BctexLoader.load(bctex(1, 1, 0, 64, 16)).is_err());
+	}
+
+	/// corr-28: nothing ever rotated the AssetChanged double buffer, so every change
+	/// event stayed in memory for the life of the process.
+	#[cfg(not(target_arch = "wasm32"))]
+	#[test]
+	fn asset_changed_messages_expire() {
+		use bevy_ecs::message::Messages;
+		use bevy_ecs::system::RunSystemOnce;
+		let mut world = World::new();
+		world.init_resource::<Messages<AssetChanged>>();
+		world.insert_resource(AssetWatcher::new("/nonexistent/lunar/assets"));
+		world.resource_mut::<Messages<AssetChanged>>().write(AssetChanged { path: "a.png".into() });
+		for _ in 0..3 {
+			world.run_system_once(dispatch_asset_changes).unwrap();
+		}
+		assert!(world.resource::<Messages<AssetChanged>>().is_empty(), "old messages must be dropped");
 	}
 }
