@@ -27,38 +27,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
-
-// local copies of the BspBlob structures so this tool has no engine dependency
-#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
-struct BspNode {
-	pub min: [f32; 3],
-	pub max: [f32; 3],
-	pub left_or_start: i32,
-	pub right_or_end: i32,
-	pub split_axis: u8,
-	pub split_value: f32,
-	pub leaf_index: u32,
-}
-
-#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
-struct PortalData {
-	pub area_a: u32,
-	pub area_b: u32,
-	pub center: [f32; 3],
-	pub half_extents: [f32; 3],
-}
-
-#[derive(Serialize, Deserialize)]
-struct BspBlob {
-	pub nodes: Vec<BspNode>,
-	pub leaf_triangles: Vec<u32>,
-	pub pvs: Vec<u64>,
-	pub pvs_stride: u32,
-	pub leaf_count: u32,
-	pub portals: Vec<PortalData>,
-	pub area_map: Vec<(u32, u32)>,
-}
+// the engine's own types, so the tool can never drift from the runtime's bincode layout
+use lunar_bsp::{BspBlob, PortalData};
 
 /// build area adjacency: area_id → set of directly adjacent area_ids
 fn build_area_adjacency(portals: &[PortalData]) -> HashMap<u32, HashSet<u32>> {
@@ -115,7 +85,7 @@ fn bake(blob: &mut BspBlob) {
 		.map(|&(leaf, area)| (leaf, area))
 		.collect();
 
-	let pvs_stride = (leaf_count + 63) / 64;
+	let pvs_stride = leaf_count.div_ceil(64);
 	let mut pvs = vec![0u64; leaf_count * pvs_stride];
 
 	let mut leaves_without_area = 0u32;
@@ -163,10 +133,15 @@ fn main() {
 	}
 
 	let input_path = PathBuf::from(&args[0]);
-	let output_path = if let Some(pos) = args.iter().position(|a| a == "--out") {
-		PathBuf::from(&args[pos + 1])
-	} else {
-		input_path.clone()
+	let output_path = match args.iter().position(|a| a == "--out") {
+		Some(pos) => match args.get(pos + 1) {
+			Some(out) => PathBuf::from(out),
+			None => {
+				eprintln!("--out needs a path");
+				std::process::exit(1);
+			}
+		},
+		None => input_path.clone(),
 	};
 
 	let bytes =
@@ -199,4 +174,57 @@ fn main() {
 		output_path.display(),
 		out_bytes.len()
 	);
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn portal(area_a: u32, area_b: u32) -> PortalData {
+		PortalData {
+			area_a,
+			area_b,
+			center: [0.0; 3],
+			half_extents: [1.0; 3],
+		}
+	}
+
+	/// areas 0 <-> 1 are joined by a portal, area 2 is sealed off. leaves 0,1 are in
+	/// area 0, leaf 2 in area 1, leaf 3 in area 2, leaf 4 has no area.
+	fn blob() -> BspBlob {
+		BspBlob {
+			nodes: Vec::new(),
+			leaf_triangles: Vec::new(),
+			pvs: Vec::new(),
+			pvs_stride: 0,
+			leaf_count: 5,
+			portals: vec![portal(0, 1)],
+			area_map: vec![(0, 0), (1, 0), (2, 1), (3, 2)],
+		}
+	}
+
+	fn visible(blob: &BspBlob, from: usize) -> Vec<usize> {
+		let row = &blob.pvs[from * blob.pvs_stride as usize..][..blob.pvs_stride as usize];
+		(0..blob.leaf_count as usize).filter(|&j| row[j / 64] & (1 << (j % 64)) != 0).collect()
+	}
+
+	#[test]
+	fn flood_marks_leaves_reachable_through_portals() {
+		let mut blob = blob();
+		bake(&mut blob);
+		assert_eq!(visible(&blob, 0), [0, 1, 2]);
+		assert_eq!(visible(&blob, 2), [0, 1, 2]);
+		assert_eq!(visible(&blob, 3), [3], "sealed area sees only itself");
+		assert_eq!(visible(&blob, 4), [4], "leaf without an area sees only itself");
+	}
+
+	#[test]
+	fn baked_blob_loads_in_the_engine() {
+		let mut blob = blob();
+		bake(&mut blob);
+		let bytes = bincode::serialize(&blob).unwrap();
+		let level = lunar_bsp::BspLevel::from_binary(&bytes).expect("engine must read the tool's output");
+		assert!(level.is_loaded());
+		assert_eq!(level.visible_leaves(0), [0, 1, 2]);
+	}
 }

@@ -28,6 +28,7 @@ members = [
 	"crates/lunar-dotnet-host",
 		"xtask",
 		"tests/api_seal",
+	"tools/bake-pvs",
 	"tools/navmesh-bench",
 	"tools/render-bench",
 ]
