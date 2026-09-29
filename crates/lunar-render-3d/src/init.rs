@@ -528,7 +528,10 @@ impl RenderEngine3d {
 			sample_count: 1,
 			dimension: wgpu::TextureDimension::D2,
 			format: wgpu::TextureFormat::Depth32Float,
-			usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+			// COPY_SRC: lets tests read a cascade back to check it holds caster depth
+			usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+				| wgpu::TextureUsages::TEXTURE_BINDING
+				| wgpu::TextureUsages::COPY_SRC,
 			view_formats: &[],
 		});
 		// full-array view for shader sampling
@@ -3775,9 +3778,7 @@ impl RenderEngine3d {
 			shadow_globals_bg,
 			shadow_pipeline,
 			shadow_cascade_views,
-			shadow_cascade_dirty: [true; 3],
-			shadow_last_dir: Vec3::ZERO,
-			shadow_last_draw_count: 0,
+			shadow_cascade_live: [false; 3],
 			shadow_entities_scratch: HashSet::default(),
 			shadow_list_scratch: Vec::new(),
 			point_shadow_tex,

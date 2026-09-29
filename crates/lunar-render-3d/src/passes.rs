@@ -1387,7 +1387,6 @@ impl RenderEngine3d {
 		&mut self,
 		world: &mut World,
 		encoder: &mut wgpu::CommandEncoder,
-		dir_direction: Vec3,
 		dir_enabled: u32,
 		dir_casts_shadows: bool,
 	) {
@@ -1426,20 +1425,6 @@ impl RenderEngine3d {
 		}
 		self.shadow_list_scratch
 			.sort_unstable_by_key(|&(mesh_id, _)| mesh_id);
-
-		// ── dirty-flag shadow cascade invalidation ────────────────────────
-		// cascades are re-rendered only when something relevant changed.
-		// triggers: light direction changed, draw list size changed (entity added/removed),
-		// or any shadow-casting entity's mesh_id changed (proxy for transform change).
-		{
-			let dir_changed = (dir_direction - self.shadow_last_dir).length_squared() > 1e-6;
-			let draw_changed = self.shadow_list_scratch.len() != self.shadow_last_draw_count;
-			if dir_changed || draw_changed {
-				self.shadow_cascade_dirty = [true; 3];
-				self.shadow_last_dir = dir_direction;
-				self.shadow_last_draw_count = self.shadow_list_scratch.len();
-			}
-		}
 
 		// ── point light shadow pass ──────────────────────────────────────
 		// for each light with casts_shadows=true (up to MAX_POINT_SHADOW_LIGHTS),
@@ -1676,22 +1661,22 @@ impl RenderEngine3d {
 		// SAFETY: closures share a read-only &RenderEngine3d (no writes to self state
 		// in the parallel section). each closure writes to a disjoint CommandEncoder.
 		{
-			// rebuild at most 1 dirty cascade per frame (prioritise cascade 0, nearest/highest detail).
-			// remaining dirty cascades stay dirty and are rebuilt on subsequent frames, spreading
-			// the spike across frames. a stale cascade 2 (far, low detail) is imperceptible for 1-2 frames.
-			let dirty_cascade: Option<usize> = (0..NUM_CASCADES as usize).find(|&c| {
-				dir_enabled != 0
-					&& dir_casts_shadows
-					&& dev_shadows && c < dev_max_cascades
-					&& self.shadow_cascade_dirty[c]
+			// every active cascade is re-rendered every frame. cascades are fit to the
+			// camera frustum and their matrices are rebuilt each frame, so depth rendered
+			// under an earlier frame's matrix cannot be reused once the camera moves.
+			// (the old scheme rendered one "dirty" cascade per frame, only on light or
+			// caster-count changes, and cleared every other cascade, so in steady state
+			// no cascade held any caster.)
+			let active: [bool; NUM_CASCADES as usize] = std::array::from_fn(|c| {
+				dir_enabled != 0 && dir_casts_shadows && dev_shadows && c < dev_max_cascades
 			});
-			if let Some(c) = dirty_cascade {
-				self.shadow_cascade_dirty[c] = false;
-			}
 
-			// clear skipped cascades on the main encoder (no content change, just clear)
+			// a cascade that just went inactive still holds last frame's casters: clear it
+			// once so the lighting pass samples an empty (fully lit) map
 			for cascade in 0..NUM_CASCADES as usize {
-				if dirty_cascade != Some(cascade) {
+				let stale = !active[cascade] && self.shadow_cascade_live[cascade];
+				self.shadow_cascade_live[cascade] = active[cascade];
+				if stale {
 					let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 						label: Some(SHADOW_CASCADE_LABELS[cascade]),
 						color_attachments: &[],
@@ -1714,11 +1699,11 @@ impl RenderEngine3d {
 			#[cfg(not(target_arch = "wasm32"))]
 			let parallel_cmds = {
 				use rayon::prelude::*;
-				// at most 2 tasks: the dirty cascade + z-prepass (usize::MAX sentinel)
+				// one task per active cascade + the z-prepass (usize::MAX sentinel)
 				let needs_zprepass = self.render_tier != RenderTier::LowGles;
-				let mut tasks = [0usize; 2];
+				let mut tasks = [0usize; NUM_CASCADES as usize + 1];
 				let mut task_count = 0usize;
-				if let Some(c) = dirty_cascade {
+				for (c, _) in active.iter().enumerate().filter(|(_, on)| **on) {
 					tasks[task_count] = c;
 					task_count += 1;
 				}
@@ -1972,7 +1957,7 @@ impl RenderEngine3d {
 			#[cfg(target_arch = "wasm32")]
 			{
 				let shadow_list = &self.shadow_list_scratch;
-				if let Some(cascade) = dirty_cascade {
+				for cascade in (0..NUM_CASCADES as usize).filter(|&c| active[c]) {
 					let mut sp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 						label: Some(SHADOW_CASCADE_LABELS[cascade]),
 						color_attachments: &[],

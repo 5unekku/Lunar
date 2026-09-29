@@ -1913,7 +1913,7 @@ impl RenderEngine3d {
 				shadow_atlas_view: &self.shadow_map_view,
 			});
 		} else {
-			self.record_shadows(world, &mut encoder, dir_direction, dir_enabled, dir_casts_shadows);
+			self.record_shadows(world, &mut encoder, dir_enabled, dir_casts_shadows);
 		}
 
 		// ── HZB build (high tier only) ───────────────────────────────────
@@ -2286,14 +2286,73 @@ impl RenderEngine3d {
 		let (min_x, max_x) = (cx - half_x, cx + half_x);
 		let (min_y, max_y) = (cy - half_y, cy + half_y);
 
+		// the rh projection takes near/far as positive distances along the view's -z,
+		// while light-view z of points in front of the light is negative: the nearest
+		// corner has the largest z. passing the raw z values put every corner at
+		// ndc depth > 1, clipping all casters out of the shadow map.
 		let light_proj = camera_rh::proj::directx::orthographic(
 			min_x,
 			max_x,
 			min_y,
 			max_y,
-			min_z - z_extend,
-			max_z + z_extend,
+			-(max_z + z_extend),
+			-(min_z - z_extend),
 		);
 		light_proj * light_view
+	}
+}
+
+#[cfg(test)]
+mod cascade_tests {
+	use super::*;
+
+	/// every corner of a cascade's camera slice must land inside the light's clip
+	/// volume, depth included ([0, 1] for the directx/webgpu projection). when it
+	/// does not, casters are clipped out of the shadow map and receivers compare
+	/// against the cleared far plane.
+	#[test]
+	fn cascade_light_space_contains_its_slice() {
+		let light_dirs = [
+			Vec3::new(0.0, -1.0, 0.0),
+			Vec3::new(0.3, -0.8, -0.5).normalize(),
+			Vec3::new(-0.6, -0.4, 0.7).normalize(),
+		];
+		let (near, far) = (2.0, 30.0);
+		for light_dir in light_dirs {
+			let m = RenderEngine3d::cascade_light_space(
+				Vec3::new(5.0, 3.0, 8.0),
+				Vec3::NEG_Z,
+				Vec3::Y,
+				Vec3::X,
+				1.0,
+				16.0 / 9.0,
+				light_dir,
+				near,
+				far,
+			);
+			let tan_half = 0.5f32.tan();
+			for depth in [near, far] {
+				for sy in [-1.0f32, 1.0] {
+					for sx in [-1.0f32, 1.0] {
+						let h = tan_half * depth;
+						let corner = Vec3::new(5.0, 3.0, 8.0)
+							+ Vec3::NEG_Z * depth
+							+ Vec3::Y * sy * h
+							+ Vec3::X * sx * h * 16.0 / 9.0;
+						let clip = m * corner.extend(1.0);
+						let ndc = clip.truncate() / clip.w;
+						assert!(
+							ndc.x.abs() <= 1.001 && ndc.y.abs() <= 1.001,
+							"corner {corner:?} outside the cascade's xy for light {light_dir:?}: {ndc:?}"
+						);
+						assert!(
+							(0.0..=1.0).contains(&ndc.z),
+							"corner {corner:?} depth {} outside [0, 1] for light {light_dir:?}",
+							ndc.z
+						);
+					}
+				}
+			}
+		}
 	}
 }

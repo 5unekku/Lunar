@@ -1558,11 +1558,8 @@ pub struct RenderEngine3d {
 	shadow_pipeline: wgpu::RenderPipeline,
 	shadow_cascade_views: [wgpu::TextureView; 3], // per-cascade render attachment views
 
-	// dirty-flag shadow cascade re-rendering.
-	// cascade N is only re-rendered when shadow_cascade_dirty[N] is true.
-	shadow_cascade_dirty: [bool; 3],
-	shadow_last_dir: Vec3,
-	shadow_last_draw_count: usize,
+	// cascade N held caster depth last frame; cleared once when it goes inactive
+	shadow_cascade_live: [bool; 3],
 	// reused shadow-caster scratch: visible casters set + (mesh_id, draw index) list, refilled each frame
 	shadow_entities_scratch: HashSet<Entity>,
 	shadow_list_scratch: Vec<(u32, usize)>,
@@ -2602,5 +2599,82 @@ mod headless_tests {
 			));
 		}
 		render_frames(&mut engine, &mut world, 3);
+	}
+
+	/// texels of shadow cascade `layer` nearer than the far plane (i.e. covered by a caster).
+	fn cascade_covered_texels(engine: &RenderEngine3d, layer: u32) -> usize {
+		let size = SHADOW_MAP_SIZE;
+		let row = size * 4; // Depth32Float, already 256-aligned at 1024 px
+		let staging = engine.device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("cascade readback"),
+			size: u64::from(row) * u64::from(size),
+			usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+			mapped_at_creation: false,
+		});
+		let mut encoder = engine
+			.device
+			.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+		encoder.copy_texture_to_buffer(
+			wgpu::TexelCopyTextureInfo {
+				texture: &engine.shadow_map,
+				mip_level: 0,
+				origin: wgpu::Origin3d { x: 0, y: 0, z: layer },
+				aspect: wgpu::TextureAspect::DepthOnly,
+			},
+			wgpu::TexelCopyBufferInfo {
+				buffer: &staging,
+				layout: wgpu::TexelCopyBufferLayout {
+					offset: 0,
+					bytes_per_row: Some(row),
+					rows_per_image: Some(size),
+				},
+			},
+			wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+		);
+		engine.queue.submit([encoder.finish()]);
+		let slice = staging.slice(..);
+		let (sender, receiver) = std::sync::mpsc::channel();
+		slice.map_async(wgpu::MapMode::Read, move |r| sender.send(r).unwrap());
+		engine.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+		receiver.recv().unwrap().unwrap();
+		let data = slice.get_mapped_range();
+		bytemuck::cast_slice::<u8, f32>(&data).iter().filter(|&&d| d < 0.999).count()
+	}
+
+	/// directional shadows must persist in steady state. the cascade pass used to
+	/// re-render only "dirty" cascades (light direction / caster count changed) and
+	/// clear every other cascade to depth 1.0 each frame, so from the second frame
+	/// on the nearest cascade held no caster and nothing cast a shadow.
+	#[test]
+	fn shadow_cascade_keeps_caster_depth_in_steady_state() {
+		let Some((mut engine, mut world, _quad, material)) = feature_test_setup() else {
+			return;
+		};
+		// closed mesh: the shadow pipeline culls front faces, so a one-sided quad
+		// facing the light would never reach the shadow map
+		let ball = world.resource_mut::<MeshRegistry>().add_mesh(sphere_mesh(1.0, 16, 12));
+		world.spawn((
+			Mesh3d(ball),
+			Material3d(material),
+			WorldTransform3d {
+				translation: Vec3::new(0.0, 0.0, -5.0),
+				..WorldTransform3d::new()
+			},
+			ComputedVisibility(true),
+			ShadowCaster,
+		));
+		world.spawn((
+			DirectionalLight { casts_shadows: true, ..DirectionalLight::default() },
+			WorldTransform3d {
+				rotation: lunar_math::Quat::from_rotation_x(-1.0),
+				..WorldTransform3d::new()
+			},
+		));
+		render_frames(&mut engine, &mut world, 1);
+		let first = cascade_covered_texels(&engine, 0);
+		render_frames(&mut engine, &mut world, 5);
+		let steady = cascade_covered_texels(&engine, 0);
+		assert!(first > 0, "the caster must land in cascade 0 on the first frame");
+		assert_eq!(steady, first, "cascade 0 must still hold the caster after 5 more frames");
 	}
 }
