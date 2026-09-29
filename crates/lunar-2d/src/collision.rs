@@ -780,5 +780,4 @@ mod tests {
 			assert_eq!(fast, brute, "query_rect differs at {p:?} {half:?}");
 		}
 	}
-
 }
