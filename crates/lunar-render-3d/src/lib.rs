@@ -2252,7 +2252,9 @@ impl GamePlugin for RenderPlugin3d {
 			render_3d_system
 				.after(lunar_3d::propagate_transforms_3d)
 				.after(lunar_3d::update_frustum)
-				.after(lunar_3d::build_cull_soa),
+				.after(lunar_3d::build_cull_soa)
+				// reads VisibleAreas; a no-op edge when PortalPlugin is not added
+				.after(lunar_bsp::portal::cull_portals),
 		);
 		log::info!("RenderPlugin3d: 3d render system registered");
 	}

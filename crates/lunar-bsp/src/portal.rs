@@ -17,6 +17,7 @@
 //! sides). multiple portals can connect the same pair of areas (e.g. two windows).
 
 use bevy_ecs::prelude::*;
+use bevy_ecs::schedule::IntoScheduleConfigs;
 use lunar_3d::{ActiveCamera3d, WorldTransform3d};
 use lunar_math::Vec3;
 use rustc_hash::FxHashSet as HashSet;
@@ -210,6 +211,13 @@ impl GamePlugin for PortalPlugin {
 	fn build(&mut self, app: &mut App) {
 		app.insert_resource(VisibleAreas::default())
 			.insert_resource(PortalCulling::default());
-		app.add_system_to_stage(UpdateStage::Render, cull_portals);
+		// explicit edges (the Render stage is multithreaded): this frame's transforms
+		// and active camera must be in place
+		app.add_system_to_stage(
+			UpdateStage::Render,
+			cull_portals
+				.after(lunar_3d::propagate_transforms_3d)
+				.after(lunar_3d::update_active_camera),
+		);
 	}
 }

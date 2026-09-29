@@ -11,6 +11,7 @@
 //! range of entity indices in a separate sorted entity list.
 
 use bevy_ecs::prelude::*;
+use bevy_ecs::schedule::IntoScheduleConfigs;
 use lunar_3d::{Aabb3d, ComputedVisibility, Frustum, WorldTransform3d};
 use lunar_core::{App, GamePlugin, UpdateStage};
 use lunar_math::{Vec3, Vec3A};
@@ -205,7 +206,14 @@ impl GamePlugin for BvhPlugin {
 		app.insert_resource(Bvh::default())
 			.insert_resource(BvhVisible::default());
 		// run after transform propagation so WorldTransform3d is current
-		app.add_system_to_stage(UpdateStage::Render, build_bvh_visible);
+		// explicit edges (the Render stage is multithreaded): this frame's transforms
+		// and frustum must be in place; registration order is not an ordering guarantee
+		app.add_system_to_stage(
+			UpdateStage::Render,
+			build_bvh_visible
+				.after(lunar_3d::propagate_transforms_3d)
+				.after(lunar_3d::update_frustum),
+		);
 	}
 }
 
