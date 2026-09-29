@@ -2056,18 +2056,27 @@ impl AssetWatcher {
 		let (sender, receiver) = std::sync::mpsc::channel::<String>();
 		let mut watcher =
 			notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
-				if let Ok(event) = res {
-					for path in event.paths {
-						if let Some(p) = path.to_str() {
-							// a send error just means the receiver was dropped (shutdown)
-							let _ = sender.send(p.to_string());
+				match res {
+					Ok(event) => {
+						for path in event.paths {
+							if let Some(p) = path.to_str() {
+								// a send error just means the receiver was dropped (shutdown)
+								let _ = sender.send(p.to_string());
+							}
 						}
 					}
+					Err(error) => log::warn!("asset watcher: {error}"),
 				}
 			})
+			.map_err(|error| {
+				log::warn!("asset watcher: could not start ({error}); hot reload is off");
+			})
 			.ok();
-		if let Some(ref mut w) = watcher {
-			let _ = w.watch(std::path::Path::new(watch_dir), RecursiveMode::Recursive);
+		if let Some(ref mut w) = watcher
+			&& let Err(error) = w.watch(std::path::Path::new(watch_dir), RecursiveMode::Recursive)
+		{
+			log::warn!("asset watcher: cannot watch '{watch_dir}' ({error}); hot reload is off");
+			watcher = None;
 		}
 		Self {
 			watcher,
@@ -2151,7 +2160,10 @@ impl GamePlugin for AssetWatcherPlugin {
 		app.insert_resource(AssetWatcher::new("assets/"));
 		bevy_ecs::message::MessageRegistry::register_message::<AssetChanged>(app.world_mut());
 		app.add_system(dispatch_asset_changes);
-		log::info!("AssetWatcherPlugin: asset watcher registered");
+		let active = app.world_mut().resource::<AssetWatcher>().watcher.is_some();
+		if active {
+			log::info!("AssetWatcherPlugin: watching assets/ for hot reload");
+		}
 	}
 }
 
