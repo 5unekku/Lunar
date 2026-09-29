@@ -2721,13 +2721,6 @@ impl RenderEngine3d {
 
 		// ── water rendering: Gerstner waves + refraction ─────────────────
 
-		let water_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
-			label: Some("[water] params buffer"),
-			size: WATER_PARAMS_SIZE,
-			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-			mapped_at_creation: false,
-		});
-
 		let water_bgl0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("[water] bgl0"),
 			entries: &[
@@ -2778,7 +2771,7 @@ impl RenderEngine3d {
 				visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
 				ty: wgpu::BindingType::Buffer {
 					ty: wgpu::BufferBindingType::Uniform,
-					has_dynamic_offset: false,
+					has_dynamic_offset: true,
 					min_binding_size: wgpu::BufferSize::new(WATER_PARAMS_SIZE),
 				},
 				count: None,
@@ -2828,14 +2821,8 @@ impl RenderEngine3d {
 			],
 		});
 
-		let water_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-			label: Some("[water] bg1"),
-			layout: &water_bgl1,
-			entries: &[wgpu::BindGroupEntry {
-				binding: 0,
-				resource: water_params_buf.as_entire_binding(),
-			}],
-		});
+		let (water_params_buf, water_bg1) =
+			Self::make_param_slots(&device, &water_bgl1, "[water]", WATER_PARAMS_SIZE, 1);
 
 		let water_shader = make_shader!(device, shader_passthrough, "[water] shader", WATER_SHADER_SRC, "water.spv");
 		let water_pipeline_layout =
@@ -2885,13 +2872,6 @@ impl RenderEngine3d {
 
 		// ── decal system: box-projected, depth-sampled ───────────────────
 
-		let decal_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
-			label: Some("[decal] params buffer"),
-			size: DECAL_PARAMS_SIZE,
-			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-			mapped_at_creation: false,
-		});
-
 		let decal_bgl0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("[decal] bgl0"),
 			entries: &[
@@ -2925,21 +2905,15 @@ impl RenderEngine3d {
 				visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
 				ty: wgpu::BindingType::Buffer {
 					ty: wgpu::BufferBindingType::Uniform,
-					has_dynamic_offset: false,
+					has_dynamic_offset: true,
 					min_binding_size: wgpu::BufferSize::new(DECAL_PARAMS_SIZE),
 				},
 				count: None,
 			}],
 		});
 
-		let decal_bg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-			label: Some("[decal] bg1"),
-			layout: &decal_bgl1,
-			entries: &[wgpu::BindGroupEntry {
-				binding: 0,
-				resource: decal_params_buf.as_entire_binding(),
-			}],
-		});
+		let (decal_params_buf, decal_bg1) =
+			Self::make_param_slots(&device, &decal_bgl1, "[decal]", DECAL_PARAMS_SIZE, 1);
 
 		let decal_shader = make_shader!(device, shader_passthrough, "[decal] shader", DECAL_SHADER_SRC, "decal.spv");
 		let decal_pipeline_layout =
@@ -3956,12 +3930,14 @@ impl RenderEngine3d {
 			water_bgl1,
 			water_bg0,
 			water_bg1,
+			water_param_slots: 1,
 			water_pipeline,
 			decal_params_buf,
 			decal_bgl0,
 			decal_bgl1,
 			decal_bg0,
 			decal_bg1,
+			decal_param_slots: 1,
 			decal_pipeline,
 			particles_enabled,
 			particle_cap,

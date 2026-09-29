@@ -2203,12 +2203,9 @@ impl DrawKind {
 /// world-y key instead of the texture id, text groups under the glyph atlas
 /// bind id, and untextured primitives sort last within their layer.
 fn draw_sort_key(command: &DrawCommand) -> (i32, i64) {
-	let layer = match &command.kind {
-		DrawKind::Sprite { layer, .. }
-		| DrawKind::Rect { layer, .. }
-		| DrawKind::Line { layer, .. }
-		| DrawKind::Text { layer, .. } => *layer,
-	};
+	// the same layer the draw loop and upload_layer_projections read, so sort order
+	// and projection-slot order cannot disagree
+	let layer = command.kind.layer();
 	let secondary: i64 = match &command.kind {
 		DrawKind::Sprite {
 			sort_key: Some(key), ..

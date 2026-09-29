@@ -33,7 +33,7 @@ small, friendly public API.
 - **engine owns all memory**: game code holds typed `Handle<T>` references; the engine
   evicts CPU-side mesh/texture data after GPU upload
 - **fixed tick rate decoupled from frame cap**: logic ticks at a fixed 30 / 60 / 120 / 240 Hz
-  (accumulator-based; a 250 ms per-frame catch-up clamp bounds the burst without dropping ticks); rendering runs uncapped or at a chosen
+  (accumulator-based; a 250 ms per-frame catch-up clamp bounds the burst, so only stalls longer than that lose sim time); rendering runs uncapped or at a chosen
   frame cap, with a render interpolation alpha for smooth sub-tick motion
 - **parallel by default**: non-conflicting ECS systems run concurrently on a thread pool
   (single-threaded fallback on WASM)

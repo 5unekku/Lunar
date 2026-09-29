@@ -209,9 +209,11 @@ impl CollisionWorld {
 		// entries sorted by min_x. an entry whose min_x is more than the widest
 		// collider's width left of qmin_x ends before qmin_x; stop at the first entry
 		// entirely to the right
-		let start = self
-			.entries
-			.partition_point(|e| e.min_x < qmin_x - self.max_width);
+		// padded by a few ulps of the operands so rounding in `max_x - min_x` or in the
+		// subtraction can never prune an entry that touches the query's left edge
+		let bound = qmin_x - self.max_width;
+		let bound = bound - (bound.abs() + self.max_width) * (4.0 * f32::EPSILON);
+		let start = self.entries.partition_point(|e| e.min_x < bound);
 		let end = self.entries.partition_point(|e| e.min_x <= qmax_x);
 		&self.entries[start..end.max(start)]
 	}
@@ -720,6 +722,17 @@ mod tests {
 	/// around colliders much wider than their neighbours (the left-side prune bound).
 	#[test]
 	fn pruned_queries_match_brute_force() {
+		check_pruned_queries_against_brute_force(0.0);
+	}
+
+	/// far from the origin f32 spacing is coarse (1/128 at 1e5): the left prune bound
+	/// must not round an overlapping entry away.
+	#[test]
+	fn pruned_queries_match_brute_force_far_from_origin() {
+		check_pruned_queries_against_brute_force(100_000.0);
+	}
+
+	fn check_pruned_queries_against_brute_force(offset: f32) {
 		let mut world = World::new();
 		world.insert_resource(CollisionWorld::default());
 		let mut seed: u32 = 0x1234_5678;
@@ -728,7 +741,7 @@ mod tests {
 			(seed >> 8) as f32 / (1u32 << 24) as f32
 		};
 		for i in 0..300 {
-			let pos = Vec2::new(next() * 1000.0 - 500.0, next() * 1000.0 - 500.0);
+			let pos = Vec2::new(offset + next() * 1000.0 - 500.0, next() * 1000.0 - 500.0);
 			let collider = match i % 10 {
 				// a few very wide walls
 				0 => Collider::aabb(Vec2::new(200.0 + next() * 200.0, 10.0)),
@@ -755,8 +768,20 @@ mod tests {
 			);
 			assert_eq!(fast, brute, "overlapping() differs for {:?}", entry.entity);
 		}
+		for entry in &cw.entries {
+			let p = Vec2::new(entry.max_x, entry.position.y);
+			let fast = sorted(cw.query_point(p).collect());
+			let brute = sorted(
+				cw.entries
+					.iter()
+					.filter(|e| point_in_shape(p, e.position, &e.shape))
+					.map(|e| e.entity)
+					.collect(),
+			);
+			assert_eq!(fast, brute, "query_point on a right edge differs at {p:?}");
+		}
 		for _ in 0..200 {
-			let p = Vec2::new(next() * 1000.0 - 500.0, next() * 1000.0 - 500.0);
+			let p = Vec2::new(offset + next() * 1000.0 - 500.0, next() * 1000.0 - 500.0);
 			let fast = sorted(cw.query_point(p).collect());
 			let brute = sorted(
 				cw.entries

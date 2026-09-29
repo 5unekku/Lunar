@@ -317,6 +317,10 @@ const DECAL_PARAMS_SIZE: u64 = 224;
 
 /// water params UBO: 4×wave(64)+model(64)+water_color(16)+deep_color(16)+misc(32) = 192 bytes.
 const WATER_PARAMS_SIZE: u64 = 192;
+/// byte stride between per-draw uniform param slots: wgpu's default
+/// `min_uniform_buffer_offset_alignment`, and >= every params block that uses it.
+const DRAW_SLOT_STRIDE: u64 = 256;
+const _: () = assert!(WATER_PARAMS_SIZE <= DRAW_SLOT_STRIDE && DECAL_PARAMS_SIZE <= DRAW_SLOT_STRIDE);
 
 /// terrain params UBO per ring: ring_origin(16)+terrain_origin(16)+misc(16)+tint(16)+sun_dir(16)+ambient_pad(16) = 96 bytes.
 const TERRAIN_PARAMS_SIZE: u64 = 96;
@@ -1791,7 +1795,9 @@ pub struct RenderEngine3d {
 	water_bgl0: wgpu::BindGroupLayout,
 	water_bgl1: wgpu::BindGroupLayout,
 	water_bg0: wgpu::BindGroup,
+	// one params slot per water entity drawn this frame (dynamic offset)
 	water_bg1: wgpu::BindGroup,
+	water_param_slots: usize,
 	water_pipeline: wgpu::RenderPipeline,
 
 	// decal system: box-projected decals rendered after opaques (uses scene depth)
@@ -1799,7 +1805,9 @@ pub struct RenderEngine3d {
 	decal_bgl0: wgpu::BindGroupLayout,
 	decal_bgl1: wgpu::BindGroupLayout,
 	decal_bg0: wgpu::BindGroup,
+	// one params slot per decal drawn this frame (dynamic offset)
 	decal_bg1: wgpu::BindGroup,
+	decal_param_slots: usize,
 	decal_pipeline: wgpu::RenderPipeline,
 
 	// terrain rendering: geometry clipmap heightmap (all tiers, LOD level varies)
@@ -2561,6 +2569,38 @@ mod headless_tests {
 			},
 			ComputedVisibility(true),
 		));
+		render_frames(&mut engine, &mut world, 3);
+	}
+
+	/// several water planes and decals in one frame: each draw binds its own params
+	/// slot through a dynamic offset, and the slot buffers grow past their initial
+	/// single slot. a wrong offset or window size is a validation error (fatal).
+	#[test]
+	fn headless_multiple_waters_and_decals_render_without_validation_errors() {
+		let Some((mut engine, mut world, quad, material)) = feature_test_setup() else {
+			return;
+		};
+		for x in [-3.0, 3.0] {
+			world.spawn((
+				lunar_3d::Water::default(),
+				Mesh3d(quad),
+				Material3d(material),
+				WorldTransform3d {
+					translation: Vec3::new(x, -1.0, -6.0),
+					..WorldTransform3d::new()
+				},
+				ComputedVisibility(true),
+			));
+		}
+		for x in [-2.0, 0.0, 2.0] {
+			world.spawn((
+				lunar_3d::Decal::default(),
+				WorldTransform3d {
+					translation: Vec3::new(x, -1.0, -5.0),
+					..WorldTransform3d::new()
+				},
+			));
+		}
 		render_frames(&mut engine, &mut world, 3);
 	}
 }

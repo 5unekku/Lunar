@@ -1122,6 +1122,38 @@ impl RenderEngine3d {
 		let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
 		(tex, view)
 	}
+	/// a uniform buffer of `slots` per-draw param slots `DRAW_SLOT_STRIDE` apart, and a
+	/// bind group exposing one `slot_size` window of it (moved per draw with a dynamic
+	/// offset). each entity drawn in a frame writes its own slot: one shared slot
+	/// rewritten per draw would leave every draw with the last entity's params, since
+	/// queue writes all land before the command buffer runs.
+	pub(crate) fn make_param_slots(
+		device: &wgpu::Device,
+		layout: &wgpu::BindGroupLayout,
+		label: &str,
+		slot_size: u64,
+		slots: usize,
+	) -> (wgpu::Buffer, wgpu::BindGroup) {
+		let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some(&format!("{label} params slots")),
+			size: DRAW_SLOT_STRIDE * slots as u64,
+			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+			mapped_at_creation: false,
+		});
+		let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+			label: Some(&format!("{label} bg1")),
+			layout,
+			entries: &[wgpu::BindGroupEntry {
+				binding: 0,
+				resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+					buffer: &buffer,
+					offset: 0,
+					size: wgpu::BufferSize::new(slot_size),
+				}),
+			}],
+		});
+		(buffer, bind_group)
+	}
 	pub(crate) fn make_water_refract_texture(
 		device: &wgpu::Device,
 		width: u32,

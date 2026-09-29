@@ -6,7 +6,9 @@
 use super::*;
 
 /// illuminance that maps to directional irradiance 1.0; mirrors the `/ 80000.0`
-/// normalization in shader.wgsl so terrain and pbr surfaces agree on sun strength.
+/// normalization in shader.wgsl. terrain.wgsl still lacks that shader's lambert `/π`
+/// and `LIT_EXPOSURE` scale (and uses a fixed 0.15 ambient), so clipmap terrain
+/// renders darker than pbr meshes under the same sun.
 pub(crate) const SUN_REFERENCE_LUX: f32 = 80_000.0;
 
 /// terrain.wgsl's `sun_dir` uniform: xyz points *toward* the sun, w is the normalized
@@ -781,7 +783,19 @@ impl RenderEngine3d {
 				);
 			}
 
-			for (water_comp, mesh_id, wt) in &self.water_scratch {
+			if self.water_scratch.len() > self.water_param_slots {
+				self.water_param_slots = self.water_scratch.len().next_power_of_two();
+				(self.water_params_buf, self.water_bg1) = Self::make_param_slots(
+					&self.device,
+					&self.water_bgl1,
+					"[water]",
+					WATER_PARAMS_SIZE,
+					self.water_param_slots,
+				);
+			}
+
+			for (slot, (water_comp, mesh_id, wt)) in self.water_scratch.iter().enumerate() {
+				let slot_offset = slot as u64 * DRAW_SLOT_STRIDE;
 				let Some(gpu_mesh) = self.mesh_gpu.get(mesh_id) else {
 					continue;
 				};
@@ -825,7 +839,8 @@ impl RenderEngine3d {
 					0.0,
 				];
 				data[160..192].copy_from_slice(bytemuck::cast_slice(&misc));
-				self.queue.write_buffer(&self.water_params_buf, 0, &data);
+				self.queue
+					.write_buffer(&self.water_params_buf, slot_offset, &data);
 
 				let (color_target, resolve_target) = match &self.msaa_color_view {
 					Some(msaa) => (
@@ -849,7 +864,8 @@ impl RenderEngine3d {
 						view: &self.depth_view,
 						depth_ops: Some(wgpu::Operations {
 							load: wgpu::LoadOp::Load,
-							store: wgpu::StoreOp::Discard,
+							// later passes load it and post copies it for gtao / ssr / fog
+							store: wgpu::StoreOp::Store,
 						}),
 						stencil_ops: None,
 					}),
@@ -859,7 +875,7 @@ impl RenderEngine3d {
 				});
 				pass.set_pipeline(&self.water_pipeline);
 				pass.set_bind_group(0, &self.water_bg0, &[]);
-				pass.set_bind_group(1, &self.water_bg1, &[]);
+				pass.set_bind_group(1, &self.water_bg1, &[slot_offset as u32]);
 				pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
 				pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
 				pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
@@ -883,7 +899,19 @@ impl RenderEngine3d {
 				}
 			}
 
-			for (decal, wt) in &self.decal_scratch {
+			if self.decal_scratch.len() > self.decal_param_slots {
+				self.decal_param_slots = self.decal_scratch.len().next_power_of_two();
+				(self.decal_params_buf, self.decal_bg1) = Self::make_param_slots(
+					&self.device,
+					&self.decal_bgl1,
+					"[decal]",
+					DECAL_PARAMS_SIZE,
+					self.decal_param_slots,
+				);
+			}
+
+			for (slot, (decal, wt)) in self.decal_scratch.iter().enumerate() {
+				let slot_offset = slot as u64 * DRAW_SLOT_STRIDE;
 				let decal_world_mat = wt.to_matrix();
 				let decal_inv_world = decal_world_mat.inverse();
 				let decal_world_cols = decal_world_mat.to_cols_array();
@@ -899,7 +927,8 @@ impl RenderEngine3d {
 				let _ = vp_cols; // available if needed by future extensions
 				let misc: [f32; 4] = [width, height, 0.0, 0.0];
 				data[208..224].copy_from_slice(bytemuck::cast_slice(&misc));
-				self.queue.write_buffer(&self.decal_params_buf, 0, &data);
+				self.queue
+					.write_buffer(&self.decal_params_buf, slot_offset, &data);
 
 				let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 					label: Some("[decal] pass"),
@@ -919,7 +948,7 @@ impl RenderEngine3d {
 				});
 				pass.set_pipeline(&self.decal_pipeline);
 				pass.set_bind_group(0, &self.decal_bg0, &[]);
-				pass.set_bind_group(1, &self.decal_bg1, &[]);
+				pass.set_bind_group(1, &self.decal_bg1, &[slot_offset as u32]);
 				pass.draw(0..36, 0..1);
 				draw_calls += 1;
 			}
@@ -1061,7 +1090,8 @@ impl RenderEngine3d {
 						view: &self.depth_view,
 						depth_ops: Some(wgpu::Operations {
 							load: wgpu::LoadOp::Load,
-							store: wgpu::StoreOp::Discard,
+							// later passes load it and post copies it for gtao / ssr / fog
+							store: wgpu::StoreOp::Store,
 						}),
 						stencil_ops: None,
 					}),
@@ -1284,7 +1314,8 @@ impl RenderEngine3d {
 									view: &self.depth_view,
 									depth_ops: Some(wgpu::Operations {
 										load: wgpu::LoadOp::Load,
-										store: wgpu::StoreOp::Discard,
+										// later passes load it and post copies it for gtao / ssr / fog
+										store: wgpu::StoreOp::Store,
 									}),
 									stencil_ops: None,
 								},

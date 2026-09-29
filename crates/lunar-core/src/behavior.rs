@@ -248,9 +248,15 @@ fn run_entity_hooks(
 		}
 		None => false,
 	};
-	// a destroy pass is already on its way to despawning the entity
-	if pending_despawn && stage != BehaviorStage::Destroy {
-		despawn_with_behaviors(world, entity);
+	if pending_despawn {
+		if stage == BehaviorStage::Destroy {
+			// on_destroy already ran for every behavior: despawn without re-running it
+			if let Ok(entity_mut) = world.get_entity_mut(entity) {
+				entity_mut.despawn();
+			}
+		} else {
+			despawn_with_behaviors(world, entity);
+		}
 	}
 }
 
@@ -735,5 +741,42 @@ mod tests {
 		dispatch_behaviors(&mut world, BehaviorStage::Update);
 		let ids: Vec<&str> = world.get::<Behaviors>(entity).unwrap().ids().collect();
 		assert_eq!(ids, ["Spawner", "Counter"], "the behavior added mid-hook must survive");
+	}
+
+	/// on_destroy despawns its own entity (e.g. a teardown pass driven through the
+	/// public `dispatch_behaviors(world, Destroy)`).
+	struct DespawnOnDestroy;
+	impl ExportedFields for DespawnOnDestroy {
+		fn fields(&self) -> Vec<FieldSchema> {
+			Vec::new()
+		}
+		fn get_field(&self, _name: &str) -> Option<FieldValue> {
+			None
+		}
+		fn set_field(&mut self, _name: &str, _value: FieldValue) {}
+	}
+	impl Behavior for DespawnOnDestroy {
+		fn on_destroy(&mut self, ctx: &mut BehaviorContext) {
+			if let Some(mut log) = ctx.world.get_resource_mut::<TickLog>() {
+				log.0 += 1;
+			}
+			despawn_with_behaviors(ctx.world, ctx.entity);
+		}
+	}
+
+	#[test]
+	fn self_despawn_from_on_destroy_despawns_once() {
+		let mut world = World::new();
+		world.insert_resource(TickLog::default());
+		let mut behaviors = Behaviors::default();
+		behaviors.push(AttachedBehavior {
+			id: "DespawnOnDestroy".into(),
+			behavior: Box::new(DespawnOnDestroy),
+			started: true,
+		});
+		let entity = world.spawn(behaviors).id();
+		dispatch_behaviors(&mut world, BehaviorStage::Destroy);
+		assert!(world.get_entity(entity).is_err(), "the deferred despawn must still happen");
+		assert_eq!(world.resource::<TickLog>().0, 1, "on_destroy must not run twice");
 	}
 }

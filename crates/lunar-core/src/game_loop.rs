@@ -11,8 +11,9 @@
 //! logic always see a constant `time.delta_seconds()` equal to `1 / tick_hz`.
 //! if a frame takes longer than the tick interval, multiple ticks run that frame.
 //! the time fed to the accumulator is capped at 250 ms per frame, which bounds the
-//! catch-up burst (and prevents a spiral of death) without ever dropping ticks: at
-//! 60 hz that is at most 15 ticks, at 240 hz 60. wall-clock elapsed time per render
+//! catch-up burst and prevents a spiral of death: at 60 hz that is at most 15 ticks,
+//! at 240 hz 60. ordinary frame drops lose no sim time; a stall longer than 250 ms
+//! (level load, alt-tab, breakpoint) drops the excess. wall-clock elapsed time per render
 //! frame is available via `time.real_delta_seconds()` for animation blending.
 
 use std::time::{Duration, Instant};
