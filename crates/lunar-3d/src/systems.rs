@@ -41,6 +41,9 @@ pub struct TransformScratch3d {
 	// change-detection state for the early-out: count of transform/visibility entities at the
 	// last run, and whether we've run at least once (the first run must always execute).
 	last_count: usize,
+	/// entities with a `Parent` last run: removing a Parent changes neither
+	/// `last_count` nor any `Changed<>` filter, but it does change this
+	last_parent_count: usize,
 	initialized: bool,
 }
 
@@ -75,11 +78,17 @@ pub fn propagate_transforms_3d(world: &mut World) {
 			.iter(world)
 			.next()
 			.is_some();
-		if scratch.initialized && count == scratch.last_count && !any_changed {
+		let parent_count = world.query_filtered::<(), With<Parent>>().iter(world).count();
+		if scratch.initialized
+			&& count == scratch.last_count
+			&& parent_count == scratch.last_parent_count
+			&& !any_changed
+		{
 			world.insert_resource(scratch);
 			return;
 		}
 		scratch.last_count = count;
+		scratch.last_parent_count = parent_count;
 		scratch.initialized = true;
 	}
 
@@ -349,6 +358,25 @@ mod tests {
 		for e in [a, b, loner] {
 			assert!(world.get::<WorldTransform3d>(e).unwrap().translation.is_finite());
 		}
+	}
+
+	// corr-26: removing Parent changes neither the entity count nor a Changed<>
+	// filter, so the early-out skipped the run and the child kept its old parent's
+	// transform.
+	#[test]
+	fn unparenting_recomputes_the_child() {
+		let mut world = World::new();
+		world.init_resource::<TransformScratch3d>();
+		let parent = world.spawn(LocalTransform3d::from_xyz(10.0, 0.0, 0.0)).id();
+		let child = world
+			.spawn((LocalTransform3d::from_xyz(1.0, 0.0, 0.0), Parent(parent)))
+			.id();
+		propagate_transforms_3d(&mut world);
+		world.clear_trackers();
+		world.entity_mut(child).remove::<Parent>();
+		propagate_transforms_3d(&mut world);
+		let cw = world.get::<WorldTransform3d>(child).unwrap();
+		assert!(close(cw.translation, Vec3::new(1.0, 0.0, 0.0)), "got {:?}", cw.translation);
 	}
 
 	// child world transform composes with its parent's.
