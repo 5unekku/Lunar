@@ -371,6 +371,20 @@ pub fn snapshot_behavior_fields(world: &mut World) -> Vec<EntityBehaviorSnapshot
 	out
 }
 
+/// remove every entity's `Behaviors`, dropping the instances without running
+/// `on_destroy`. hot reload calls this between the snapshot and the plugin swap so
+/// instances owned by the outgoing plugin (managed GCHandles on CoreCLR) are freed
+/// while its code is still loaded, and the old AssemblyLoadContext can be collected.
+pub fn drop_all_behaviors(world: &mut World) {
+	let entities: Vec<Entity> = world
+		.query_filtered::<Entity, bevy_ecs::prelude::With<Behaviors>>()
+		.iter(world)
+		.collect();
+	for entity in entities {
+		world.entity_mut(entity).remove::<Behaviors>();
+	}
+}
+
 /// re-create behaviors from the (freshly re-registered) `BehaviorRegistry` and restore
 /// the snapshotted field values. the entity-to-id mapping survives via the snapshot, so
 /// identity is preserved across the reload. behaviors whose id is no longer registered
@@ -661,6 +675,52 @@ mod tests {
 		let world = app.world_mut();
 		assert!(world.entity(entity).get::<Behaviors>().is_some());
 		assert!(world.entity(entity).get::<PendingBehaviors>().is_none());
+	}
+
+	/// corr-40: the reload path drops every live behavior (freeing managed
+	/// handles) before the old assembly unloads, then restores from the snapshot.
+	#[test]
+	fn drop_all_behaviors_releases_instances_before_restore() {
+		use std::sync::atomic::{AtomicUsize, Ordering};
+		static DROPS: AtomicUsize = AtomicUsize::new(0);
+		struct Tracked;
+		impl Drop for Tracked {
+			fn drop(&mut self) {
+				DROPS.fetch_add(1, Ordering::SeqCst);
+			}
+		}
+		impl ExportedFields for Tracked {
+			fn fields(&self) -> Vec<FieldSchema> {
+				Vec::new()
+			}
+			fn get_field(&self, _name: &str) -> Option<FieldValue> {
+				None
+			}
+			fn set_field(&mut self, _name: &str, _value: FieldValue) {}
+		}
+		impl Behavior for Tracked {}
+
+		let mut world = World::new();
+		let mut registry = BehaviorRegistry::default();
+		registry.register("Tracked", || Box::new(Tracked));
+		world.insert_resource(registry);
+		let mut behaviors = Behaviors::default();
+		behaviors.push(AttachedBehavior {
+			id: "Tracked".into(),
+			behavior: Box::new(Tracked),
+			started: true,
+		});
+		let entity = world.spawn(behaviors).id();
+
+		let snapshot = snapshot_behavior_fields(&mut world);
+		drop_all_behaviors(&mut world);
+		assert_eq!(DROPS.load(Ordering::SeqCst), 1);
+		assert!(world.entity(entity).get::<Behaviors>().is_none());
+
+		reinstantiate_behaviors(&mut world, snapshot);
+		let restored = world.entity(entity).get::<Behaviors>().unwrap();
+		assert_eq!(restored.items().len(), 1);
+		assert_eq!(DROPS.load(Ordering::SeqCst), 1);
 	}
 
 	/// corr-34: a behavior instantiated from PendingBehaviors must run on_update in
