@@ -47,6 +47,12 @@ findings from the fix loop are rev-13..rev-17.
 | rev-15 | pvs rng samples half of each leaf | fixed `54c1e84` |
 | rev-16 | ci never runs (actions policy) | ci.yml fixed `a7b5cad`; docs.yml needs a settings change |
 | rev-17 | gtao + ssr darken every max-quality frame | open (design; needs sign-off) |
+| rev-18 | directional shadows never held a caster | fixed `ac83446` (cascade ortho near/far sign; per-frame cascade rendering) |
+| rev-19 | z-prepass / colour-pass depth mismatch drops pixel rows | fixed `3ab32dd` |
+| rev-20 | point shadows ignore moving casters | fixed `af53dab`; off-screen casters still cast nothing (open) |
+| rev-21 | water / particles / detail sprites discard scene depth | fixed `ba70282` |
+| rev-22 | water / decal params last-write-wins across entities | fixed `ba70282` |
+| rev-23 | terrain lacks pbr exposure (darker than meshes) | open (visual; needs sign-off) |
 
 ---
 
@@ -372,6 +378,44 @@ both to ~35. two causes:
 feature-reel also shows horizontal striping across flat ground and black metallic
 meshes (no environment to reflect); both are worth a look on the reference gpu
 before trusting lavapipe.
+
+### rev-18 — directional shadows never held a caster
+
+- **location:** crates/lunar-render-3d/src/frame.rs (`cascade_light_space`),
+  passes.rs (`record_shadows`)
+- **status:** fixed `ac83446`
+
+two independent bugs. (1) the cascade ortho got light-view z values (negative in
+a right-handed view) as near/far, while glam's rh projection takes positive
+distances: every slice corner landed at ndc depth > 1, so casters were clipped
+out and receivers compared against the far plane (the straight-edged half-plane
+"shadow" in the feature-reel golden). (2) at most one "dirty" cascade was
+rendered per frame and every other cascade was cleared each frame, so in steady
+state no cascade held anything; since cascades follow the camera, the caching
+could not have been valid anyway. all active cascades now render every frame.
+design limit noted: the shadow pipeline culls front faces, so one-sided meshes
+lit from their front never cast.
+
+### rev-19 — z-prepass and colour pass disagreed on depth
+
+- **location:** crates/lunar-render-3d/src/shader.wgsl (`vs_depth`)
+- **status:** fixed `3ab32dd`
+
+`vs_depth` computed `view_proj * model * p` (matrix product first) and `vs_main`
+`view_proj * (model * p)`. the rounding difference made the `LessEqual` colour
+pass drop pixels in stair-stepped rows across large surfaces at mid/high tier.
+same operation order now, positions `@invariant`. on lavapipe the raw
+feature-reel frame went from mostly clear-colour rows to fully shaded.
+
+### rev-20 — point shadows ignored moving casters
+
+- **location:** crates/lunar-render-3d/src/passes.rs (point shadow dirty check)
+- **status:** fixed `af53dab`; one limit open
+
+faces re-rendered only when a light moved or the draw count changed. the check
+now hashes the draw list's entity, mesh and model matrix. still open: point
+shadows draw from the camera-visible list, so casters outside the view frustum
+cast no point shadow onto visible receivers.
 
 ---
 
