@@ -246,6 +246,11 @@ struct AssetEntry<T: Asset> {
 /// a typed asset store that holds loaded resources
 struct AssetStore<T: Asset> {
 	entries: Vec<Option<AssetEntry<T>>>,
+	/// generation of each slot's current (or most recent) occupant. kept when a slot
+	/// is freed so the next occupant gets a new generation and stale handles miss
+	generations: Vec<u16>,
+	/// freed slot ids, reused before the store grows
+	free: Vec<u32>,
 	path_index: HashMap<String, u32>,
 }
 
@@ -254,6 +259,8 @@ impl<T: Asset> AssetStore<T> {
 	fn new() -> Self {
 		Self {
 			entries: Vec::new(),
+			generations: Vec::new(),
+			free: Vec::new(),
 			path_index: HashMap::default(),
 		}
 	}
@@ -268,22 +275,20 @@ impl<T: Asset> AssetStore<T> {
 			return Handle::new(id, entry.generation);
 		}
 
-		// find a free slot or append
-		#[allow(clippy::cast_possible_truncation)]
-		let id = self
-			.entries
-			.iter()
-			.position(std::option::Option::is_none)
-			.unwrap_or(self.entries.len()) as u32;
-		let generation = self
-			.entries
-			.get(id as usize)
-			.and_then(|e| e.as_ref())
-			.map_or(0u16, |e| e.generation.wrapping_add(1));
-
-		if id as usize == self.entries.len() {
+		// reuse a freed slot under a new generation, or append. the entry itself is
+		// dropped on remove, so the generation has to live in its own array: reading it
+		// from the (empty) entry always gave 0 and stale handles matched the new asset
+		let (id, generation) = if let Some(id) = self.free.pop() {
+			let generation = self.generations[id as usize].wrapping_add(1);
+			self.generations[id as usize] = generation;
+			(id, generation)
+		} else {
+			#[allow(clippy::cast_possible_truncation)]
+			let id = self.entries.len() as u32;
 			self.entries.push(None);
-		}
+			self.generations.push(0);
+			(id, 0)
+		};
 
 		self.entries[id as usize] = Some(AssetEntry {
 			data: None,
@@ -444,6 +449,7 @@ impl<T: Asset> AssetStore<T> {
 			&& let Some(entry) = slot.take()
 		{
 			self.path_index.remove(&entry.path);
+			self.free.push(id);
 		}
 	}
 }
@@ -2143,10 +2149,30 @@ mod handle_tests {
 	#[test]
 	fn asset_store_generation_increments_on_reuse() {
 		let mut store = AssetStore::<TestAsset>::new();
-		let h1 = store.allocate_slot("a".into());
-		// nested allocate_slot with a different path reuses slot, not directly testable
-		// but we can verify basic generation tracking works
-		assert_eq!(h1.generation(), 0);
+		let a = store.allocate_slot("a".into());
+		store.insert(a.id(), TestAsset);
+		store.remove(a.id());
+		let b = store.allocate_slot("b".into());
+		store.insert(b.id(), TestAsset);
+		assert_eq!(b.id(), a.id(), "the freed slot is reused");
+		assert_ne!(b.generation(), a.generation(), "reuse must bump the generation");
+		// corr-02: the stale handle used to resolve to the unrelated asset in its old slot
+		assert!(store.get(a).is_none(), "a handle to a released asset must not resolve");
+		assert!(!store.is_ready(a));
+		assert!(store.get(b).is_some());
+	}
+
+	#[test]
+	fn asset_store_reuses_freed_slots_without_growing() {
+		let mut store = AssetStore::<TestAsset>::new();
+		let handles: Vec<_> = (0..8).map(|i| store.allocate_slot(format!("{i}"))).collect();
+		for h in &handles {
+			store.remove(h.id());
+		}
+		for i in 0..8 {
+			store.allocate_slot(format!("again {i}"));
+		}
+		assert_eq!(store.entries.len(), 8);
 	}
 
 	#[test]
