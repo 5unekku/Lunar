@@ -58,8 +58,10 @@ jobs:
       - run: eval "$CHECKOUT"
         env:
           GH_TOKEN: ${{ github.token }}
-      # lunar-game covers the full facade plus both bins (lunar is wasm-gated, lunar-web is the wasm entry)
-      - run: cargo build --target wasm32-unknown-unknown --package lunar-game
+      # lunar-game covers the full facade plus both bins (lunar is wasm-gated, lunar-web is the wasm entry).
+      # llvm because [profile.dev] pins cranelift, which has no wasm32 backend
+      # ("can't compile for wasm32-unknown-unknown" in lunar-math)
+      - run: cargo build --target wasm32-unknown-unknown --package lunar-game --config 'profile.dev.codegen-backend="llvm"'
 
   smoke:
     runs-on: ubuntu-latest
