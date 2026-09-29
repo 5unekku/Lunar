@@ -9,6 +9,10 @@ pub const MAGIC: [u8; 4] = *b"LIF\0";
 /// current format version. only version 1 is supported.
 pub const VERSION: u16 = 1;
 
+/// largest width or height a .li image may declare (matches the asset
+/// pipeline's texture limit).
+pub const MAX_DIMENSION: u32 = 16_384;
+
 /// size of the file header in bytes.
 pub const HEADER_SIZE: usize = 16;
 
@@ -109,6 +113,16 @@ impl Header {
 
 		let width = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
 		let height = u32::from_le_bytes([data[12], data[13], data[14], data[15]]);
+		// untrusted: everything downstream sizes buffers from width * height * 4,
+		// so bound it here (sec-06, sec-12, sec-13). at the cap that is 1 GiB,
+		// which also fits a 32-bit usize without wrapping.
+		if width > MAX_DIMENSION || height > MAX_DIMENSION {
+			return Err(DecodeError::DimensionsTooLarge {
+				width,
+				height,
+				max: MAX_DIMENSION,
+			});
+		}
 
 		Ok(Self {
 			version,

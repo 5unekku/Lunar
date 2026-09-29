@@ -52,6 +52,9 @@ pub fn encode_with_opts(
 	rgba: &[u8],
 	opts: &EncodeOptions,
 ) -> Result<Vec<u8>, EncodeError> {
+	if width > format::MAX_DIMENSION || height > format::MAX_DIMENSION {
+		return Err(EncodeError::DimensionsTooLarge { width, height });
+	}
 	let expected_bytes = (width as usize) * (height as usize) * 4;
 	if rgba.len() != expected_bytes {
 		return Err(EncodeError::BufferSizeMismatch {

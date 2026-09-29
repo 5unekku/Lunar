@@ -168,3 +168,25 @@ fn get_set_pixel() {
 	let px = img.get_pixel(1, 0);
 	assert_eq!(px, [255, 128, 64, 200]);
 }
+
+/// sec-06 / sec-12 / sec-13: header dimensions are untrusted. a real file with its
+/// header patched to 65535x65535 must be rejected before anything is sized from
+/// width * height (it used to reserve ~17 GB for zstd and abort).
+#[test]
+fn oversized_header_dimensions_are_rejected() {
+	let mut bytes = encode(2, 2, &[7u8; 16]).unwrap();
+	bytes[8..12].copy_from_slice(&65535u32.to_le_bytes());
+	bytes[12..16].copy_from_slice(&65535u32.to_le_bytes());
+	assert!(matches!(
+		decode(&bytes),
+		Err(lunar_image::DecodeError::DimensionsTooLarge { .. })
+	));
+}
+
+#[test]
+fn encode_rejects_oversized_dimensions() {
+	assert!(matches!(
+		encode(1 << 20, 1 << 20, &[]),
+		Err(lunar_image::EncodeError::DimensionsTooLarge { .. })
+	));
+}

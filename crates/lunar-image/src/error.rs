@@ -31,6 +31,9 @@ pub enum DecodeError {
 
 	#[error("unexpected end of file")]
 	TruncatedChunk,
+
+	#[error("image dimensions too large: {width}x{height} (max {max} per side)")]
+	DimensionsTooLarge { width: u32, height: u32, max: u32 },
 }
 
 /// errors that can occur when encoding a .li image.
