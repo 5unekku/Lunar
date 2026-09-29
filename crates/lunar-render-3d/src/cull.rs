@@ -525,20 +525,12 @@ impl RenderEngine3d {
 							return; // skip mesh draw
 						}
 
-						// normal mesh draw: GPU LOD index (1-frame pipelined) or CPU dist fallback
-						let mesh_id = if let Some(&gpu_lod) = self.gpu_lod_indices.get(&entity) {
-							lod.and_then(|l| {
-								if gpu_lod == 0 {
-									None
-								} else {
-									l.levels.get((gpu_lod - 1) as usize).map(|(_, h)| *h)
-								}
-							})
-							.unwrap_or(mesh.0)
-						} else {
-							lod.and_then(|l| l.select(dist_sq)).unwrap_or(mesh.0)
-						}
-						.id();
+						// normal mesh draw: the entity's own MeshLod thresholds. the gpu lod pass
+						// (high tier) buckets distances by four global thresholds, so using its
+						// bucket as an index into `levels` ignored authored switch distances and,
+						// past the end of a short list, fell back to the finest mesh where
+						// MeshLod::select falls back to the coarsest. dist_sq is already here.
+						let mesh_id = lod.and_then(|l| l.select(dist_sq)).unwrap_or(mesh.0).id();
 						let lm_id = lightmap
 							.map(|lm| lm.texture.id())
 							.or_else(|| dir_lightmap.map(|dlm| dlm.irradiance.id()))
