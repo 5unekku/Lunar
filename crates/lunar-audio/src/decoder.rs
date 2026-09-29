@@ -100,6 +100,10 @@ impl AudioSource for DecodedSource {
 }
 
 /// decode `sound` bytes into interleaved stereo f32 at [`SAMPLE_RATE`] Hz.
+/// lowest and highest sample rates accepted from a file.
+const MIN_SOURCE_RATE: u32 = 1_000;
+const MAX_SOURCE_RATE: u32 = 384_000;
+
 fn decode(sound: &Sound) -> Result<Vec<f32>, String> {
     let cursor = std::io::Cursor::new(sound.data.clone());
     let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
@@ -129,6 +133,13 @@ fn decode(sound: &Sound) -> Result<Vec<f32>, String> {
         .map(|c| c.count())
         .unwrap_or(2);
     let source_rate = track.codec_params.sample_rate.unwrap_or(SAMPLE_RATE);
+    // the declared rate is untrusted (symphonia's wav reader passes it through) and
+    // sizes the resampler's output: bound it to real-world rates (sec-11)
+    if !(MIN_SOURCE_RATE..=MAX_SOURCE_RATE).contains(&source_rate) {
+        return Err(format!(
+            "unsupported sample rate {source_rate} Hz (expected {MIN_SOURCE_RATE}..={MAX_SOURCE_RATE})"
+        ));
+    }
     let track_id = track.id;
 
     let mut decoder = symphonia::default::get_codecs()
@@ -172,7 +183,7 @@ fn decode(sound: &Sound) -> Result<Vec<f32>, String> {
 
     // decode runs once per sound and the result is cached, so the resample
     // cost is load-time only
-    if source_rate != SAMPLE_RATE && source_rate > 0 {
+    if source_rate != SAMPLE_RATE {
         return Ok(resample_stereo(&stereo, source_rate, SAMPLE_RATE));
     }
 
@@ -258,6 +269,21 @@ mod tests {
         let pcm = decode(&sound).expect("pcm wav must decode");
         assert_eq!(pcm.len(), 480 * 2);
         assert!(pcm.iter().all(|&s| (s - 0.5).abs() < 0.01));
+    }
+
+    /// sec-11: the wav demuxer passes the declared rate through unchecked; a rate of
+    /// 1 made the resampler reserve frames * 48000 (tens of GB from a small file).
+    #[test]
+    fn rejects_absurd_sample_rates() {
+        let mut data = pcm_wav(100_000, 0);
+        data[24..28].copy_from_slice(&1u32.to_le_bytes());
+        data[28..32].copy_from_slice(&4u32.to_le_bytes());
+        let sound = Sound {
+            data,
+            format: AudioFormat::Wav,
+            decoded_pcm: Default::default(),
+        };
+        assert!(decode(&sound).is_err());
     }
 
     /// corr-31: zero channels panicked in chunks(0); a partial frame indexed past its end
