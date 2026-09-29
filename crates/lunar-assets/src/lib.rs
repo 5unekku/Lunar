@@ -879,6 +879,12 @@ pub struct CompressedSoundLoader {
 
 impl SoundLoaderTrait for CompressedSoundLoader {
 	fn load(&self, bytes: Vec<u8>) -> Result<Sound, String> {
+		// the pinned symphonia (0.5) demuxes ogg-opus but has no opus decoder, so an
+		// .opus asset could only fail later, silently, at first play. fail the load
+		// instead, with a message that says what to do
+		if self.format == AudioFormat::OggOpus {
+			return Err("opus audio is not supported (no opus decoder); re-encode as ogg vorbis, flac or wav".into());
+		}
 		Ok(Sound {
 			data: bytes,
 			format: self.format,
@@ -2343,6 +2349,14 @@ mod handle_tests {
 		assert!(!server.is_texture_ready(&handle));
 		let entry = server.texture_store.entries[handle.id() as usize].as_ref().unwrap();
 		assert_eq!(entry.state, LoadState::Failed);
+	}
+
+	/// corr-12: opus used to load fine and then fail silently at first play.
+	#[test]
+	fn opus_sounds_fail_at_load() {
+		let loader = sound_loader_for("music/theme.opus");
+		assert!(loader.load(vec![0; 64]).is_err());
+		assert!(sound_loader_for("music/theme.ogg").load(vec![0; 64]).is_ok());
 	}
 
 	#[test]

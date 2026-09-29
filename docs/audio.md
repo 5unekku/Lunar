@@ -33,7 +33,7 @@ fn setup(mut assets: ResMut<AssetServer>) {
 }
 ```
 
-supported formats: OGG Vorbis, OGG Opus, WAV, FLAC.
+supported formats: OGG Vorbis, WAV, FLAC. `.opus` files fail to load: the audio decoder has no Opus codec, so re-encode Opus as OGG Vorbis.
 
 store handles in a resource so they're accessible from other systems:
 
