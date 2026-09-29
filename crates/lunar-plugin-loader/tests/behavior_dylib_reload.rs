@@ -54,7 +54,8 @@ fn dylib_load_and_reload_preserves_fields() {
     let mut loader = BehaviorDylibLoader::new();
 
     // load the dylib, which registers the "Mover" behavior
-    loader.load(&mut world, &path).expect("load fixture dylib");
+    // SAFETY: the fixture is built from this workspace's lunar-core
+    unsafe { loader.load(&mut world, &path) }.expect("load fixture dylib");
     assert!(
         world.resource::<BehaviorRegistry>().create("Mover").is_some(),
         "Mover registered after load"
@@ -80,7 +81,8 @@ fn dylib_load_and_reload_preserves_fields() {
     assert_eq!(snapshot.len(), 1);
 
     // reload the same dylib; field value must survive
-    loader.reload(&mut world, &path).expect("reload fixture dylib");
+    // SAFETY: as above
+    unsafe { loader.reload(&mut world, &path) }.expect("reload fixture dylib");
     let behaviors = world.entity(entity).get::<Behaviors>().unwrap();
     assert_eq!(behaviors.len(), 1);
     assert_eq!(

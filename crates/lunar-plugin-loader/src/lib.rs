@@ -454,7 +454,13 @@ impl BehaviorDylibLoader {
 
     /// load a behavior dylib and register its behaviors into the world's
     /// `BehaviorRegistry` (inserted if absent).
-    pub fn load(&mut self, world: &mut World, path: &Path) -> Result<(), LoadError> {
+    ///
+    /// # Safety
+    /// runs the library's initializers and `lunar_register_behaviors`, which gets a
+    /// `*mut BehaviorRegistry` (not `repr(C)`; see [`RegisterBehaviorsFn`]). the
+    /// library must be trusted code built from this exact `lunar-core`, with the same
+    /// toolchain and profile, or the registry is read with the wrong layout (sec-14).
+    pub unsafe fn load(&mut self, world: &mut World, path: &Path) -> Result<(), LoadError> {
         world.get_resource_or_insert_with(BehaviorRegistry::default);
         log::info!("behavior-dylib: loading {}", path.display());
         // SAFETY: loading arbitrary code; the dylib must export the registration ABI
@@ -474,11 +480,15 @@ impl BehaviorDylibLoader {
     /// reload a behavior dylib, preserving exported field values across the swap:
     /// snapshot live field values, load the new dylib (overwriting factories),
     /// then re-create every behavior from the new factories and restore the values.
-    pub fn reload(&mut self, world: &mut World, path: &Path) -> Result<(), LoadError> {
+    ///
+    /// # Safety
+    /// same contract as [`load`](Self::load).
+    pub unsafe fn reload(&mut self, world: &mut World, path: &Path) -> Result<(), LoadError> {
         let snapshot = snapshot_behavior_fields(world);
         // load a versioned copy so dlopen returns a fresh mapping (same trick as C#)
         let versioned = versioned_plugin_copy(path, self.libs.len())?;
-        self.load(world, &versioned)?;
+        // SAFETY: forwarded from this fn's contract
+        unsafe { self.load(world, &versioned)? };
         reinstantiate_behaviors(world, snapshot);
         log::info!("behavior-dylib: reload done");
         Ok(())
