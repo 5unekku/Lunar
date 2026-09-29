@@ -45,7 +45,14 @@ keywords = ["game-engine", "gamedev", "ecs", "wgpu", "2d"]
 categories = ["game-engines", "graphics", "wasm"]
 
 [workspace.dependencies]
-bevy_ecs = { version = "0.18", features = ["multi_threaded"] }
+# default features minus bevy_reflect: nothing in the workspace uses reflection, and it
+# pulls a proc-macro tree into every build plus dead code into the binary.
+bevy_ecs = { version = "0.18", default-features = false, features = [
+	"std",
+	"async_executor",
+	"backtrace",
+	"multi_threaded",
+] }
 glam = "0.33"
 wgpu = { version = "29.0.3", default-features = false }
 raw-window-handle = "0.6"
