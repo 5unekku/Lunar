@@ -8,7 +8,8 @@ method: read the six 2026-07 audits and the harness runtime-bug doc first, then
 reviewed the code for issues those documents do **not** already cover. every finding
 below was checked against the source at the cited lines. `cargo clippy --workspace
 --all-targets` was run on the current nightly (results in "tooling signals"). the
-2d upload finding was measured with render-bench on lavapipe (see rev-01).
+2d upload finding was measured with render-bench on lavapipe (see rev-01), and
+rev-06 was reproduced with a headless pixel test.
 
 this doc does not repeat audit findings. where a new finding shares a root cause
 with an existing id, the id is cited.
@@ -45,7 +46,18 @@ per frame.
 measured (render-bench `--scene sprite-storm`, lavapipe/llvmpipe, 1280x720,
 3 runs x 500 frames, lto off / 16 cgu for both builds):
 
-_numbers pending: the lavapipe before/after run is in progress and will be added here._
+| build | mean (ms) | p50 (ms) | p99 (ms) |
+|---|---|---|---|
+| current (per-quad writes) | 87.3 / 93.1 | 82.2 | 145.4 / 166.5 |
+| batched (one write per frame) | 43.8 / 46.1 | — | 56.1 / 64.6 |
+
+(two runs each, interleaved; p50 from the first run's table.) roughly **2× lower
+frame time and ~2.5× lower p99**. the golden-frame check passed: a frame captured
+with the current build matches the batched build pixel for pixel within tolerance.
+lavapipe exaggerates cpu-side costs compared with a discrete gpu, so rerun on the
+reference machine before claiming a number, but the direction is not in doubt. the
+patch is about 15 lines (replace the four `write_buffer` calls with
+`cpu_verts.extend_from_slice`, flush once before submit).
 
 follow-up once batched: 6 vertices x 20 bytes per quad could become one 32–48 byte
 instance with a 4-vertex strip, cutting upload bandwidth ~3x.
@@ -142,6 +154,10 @@ draw in the frame sees the **last** projection written. consequences:
   switches the whole frame, world sprites included, to screen-space projection
 - the letterboxed viewport projection is applied or lost depending on which layer is
   drawn last
+
+confirmed with a throwaway headless test (not committed): a red layer-0 rect covering
+pixel (8,8) reads `[255,0,0]` alone, and `[75,75,75]` (the clear color) once a single
+4×4 POST_PROCESS rect is added to the same frame.
 
 fix: one 256-byte-aligned slot per distinct layer in a uniform buffer with a dynamic
 offset, written once before the pass; `set_bind_group(0, globals_bg, &[slot])` per
