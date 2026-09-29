@@ -493,6 +493,19 @@ trait TextureLoaderTrait: Send + Sync {
 	fn load(&self, bytes: Vec<u8>) -> Result<Texture, String>;
 }
 
+/// wraps a texture loader so the mip chain is built inside `load`, i.e. on the io
+/// worker thread, instead of in `AssetServer::update` on the game thread (a 4k
+/// texture's chain is tens of milliseconds of work).
+struct MipmappingLoader(Arc<dyn TextureLoaderTrait>);
+
+impl TextureLoaderTrait for MipmappingLoader {
+	fn load(&self, bytes: Vec<u8>) -> Result<Texture, String> {
+		let mut texture = self.0.load(bytes)?;
+		texture.generate_mipmaps();
+		Ok(texture)
+	}
+}
+
 /// trait for sound loaders (object-safe for dynamic dispatch)
 trait SoundLoaderTrait: Send + Sync {
 	fn load(&self, bytes: Vec<u8>) -> Result<Sound, String>;
@@ -1140,7 +1153,10 @@ impl AssetServer {
 			TextureSource::Path(path) => {
 				let resolved = resolve_asset_path(path);
 				let handle = self.texture_store.allocate_slot(resolved.clone());
-				let loader = self.resolve_texture_loader(&resolved);
+				let mut loader = self.resolve_texture_loader(&resolved);
+				if self.mip_config.generate_mipmaps {
+					loader = Arc::new(MipmappingLoader(loader));
+				}
 				self.io_pool.load_texture(resolved, handle.id(), loader);
 				handle
 			}
@@ -1523,7 +1539,8 @@ impl AssetServer {
 	/// process completed load results from io threads.
 	/// call this once per frame from the asset plugin's system.
 	pub fn update(&mut self) {
-		// drain texture results: auto-generate mips if config is set
+		// drain texture results. path loads already built their mips on the io worker
+		// (MipmappingLoader); this catches the rest, and is a no-op for chains that exist
 		let gen_mips = self.mip_config.generate_mipmaps;
 		for result in self.io_pool.drain_texture_results() {
 			match result.data {
@@ -1669,7 +1686,11 @@ impl Texture {
 	/// each mip halves both dimensions (minimum 1×1).
 	/// no-op if mips are already populated or the image is 1×1.
 	pub fn generate_mipmaps(&mut self) {
-		if !self.mips.is_empty() || (self.width <= 1 && self.height <= 1) {
+		// block-compressed data is not rgba pixels; its mips come from the offline tool
+		if self.compression != TextureCompression::None
+			|| !self.mips.is_empty()
+			|| (self.width <= 1 && self.height <= 1)
+		{
 			return;
 		}
 		let mut prev_pixels = &self.pixels;
@@ -2250,5 +2271,28 @@ mod handle_tests {
 		assert_eq!(texture.compression, TextureCompression::Bc1);
 		assert_eq!(texture.pixels, block);
 		assert_eq!(server.drain_new_texture_ids(), vec![handle.id()]);
+	}
+
+	/// a raw-rgba loader standing in for the image decoders
+	struct SolidLoader;
+	impl TextureLoaderTrait for SolidLoader {
+		fn load(&self, _bytes: Vec<u8>) -> Result<Texture, String> {
+			Ok(Texture::new(8, 8, vec![200; 8 * 8 * 4]))
+		}
+	}
+
+	#[test]
+	fn mipmapping_loader_builds_the_chain_during_load() {
+		let loader = MipmappingLoader(Arc::new(SolidLoader));
+		let texture = loader.load(Vec::new()).unwrap();
+		assert_eq!(texture.mips.len(), 3, "8x8 -> 4x4, 2x2, 1x1");
+	}
+
+	#[test]
+	fn generate_mipmaps_leaves_block_compressed_data_alone() {
+		let mut texture = Texture::new(8, 8, vec![0xAB; 32]);
+		texture.compression = TextureCompression::Bc1;
+		texture.generate_mipmaps();
+		assert!(texture.mips.is_empty(), "bc blocks are not rgba pixels; box-filtering them corrupts the texture");
 	}
 }
