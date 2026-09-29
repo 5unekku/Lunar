@@ -1,20 +1,13 @@
 //! feature-reel: the "mixed everything" 3d scene that anchors the golden-frame
-//! gate. it turns on the passes that are known to render cleanly today — clipmap
-//! terrain, atmospheric sky, mixed pbr meshes, cascade + point shadows, and a
-//! full directional/point light rig.
-//!
-//! several feature passes are deliberately left out because they currently crash
-//! the engine the moment they render (each is a discovered runtime bug the bench
-//! surfaced; re-add as the fixes land):
-//!   - DetailDensity → shader binds @group(1) but the render layout and bind site
-//!     use group 0 (rt-02)
-//!   - Water → `[water] bg0` samples `[hdr] color attachment` while the water pass
-//!     renders into it (rt-03)
-//!
-//! Decal and ParticleEmitter were removed alongside Water but are not implicated in
-//! rt-03; see docs/superpowers/audits/2026-07-harness-runtime-bugs.md.
+//! gate. alongside clipmap terrain, atmospheric sky, mixed pbr meshes, cascade +
+//! point shadows and a full light rig, it spawns every scene-content feature pass
+//! the other scenes never draw: water, decals, particle emitters and detail sprites.
+//! (water and detail sprites were left out while rt-02 / rt-03 aborted the engine;
+//! see docs/superpowers/audits/2026-07-harness-runtime-bugs.md.)
 
-use lunar::lunar_3d::{Aabb3d, Terrain};
+use lunar::lunar_3d::{
+	Aabb3d, ComputedVisibility, Decal, DetailDensity, ParticleEmitter, Terrain, Visibility, Water,
+};
 use lunar::lunar_math::Vec3A;
 use lunar::lunar_render_3d::AtmosphericScattering;
 use lunar::prelude::*;
@@ -90,6 +83,64 @@ fn spawn(mut commands: Commands, mut registry: ResMut<MeshRegistry>, mut assets:
 			StaticMesh,
 		));
 	}
+
+	// ── scene-content feature passes ─────────────────────────────────────────
+	// water: a pond in front of the ring (gerstner waves + refraction of the scene)
+	let pond = registry.add_mesh(primitives::quad_mesh(40.0, 40.0));
+	commands.spawn((
+		Water::default(),
+		Mesh3d(pond),
+		LocalTransform3d::from_xyz(0.0, 1.5, 60.0),
+		WorldTransform3d::default(),
+	));
+
+	// decals: projected onto the ground inside the ring
+	for i in 0..4 {
+		let angle = i as f32 / 4.0 * std::f32::consts::TAU;
+		commands.spawn((
+			Decal::default(),
+			LocalTransform3d {
+				translation: Vec3::new(angle.cos() * 12.0, 0.5, angle.sin() * 12.0),
+				scale: Vec3::new(6.0, 2.0, 6.0),
+				..LocalTransform3d::default()
+			},
+			WorldTransform3d::default(),
+		));
+	}
+
+	// particle emitters: two fountains (spawn accumulation is tick-deterministic)
+	for x in [-20.0, 20.0] {
+		commands.spawn((
+			ParticleEmitter::default(),
+			LocalTransform3d {
+				translation: Vec3::new(x, 2.0, 30.0),
+				rotation: Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+				..LocalTransform3d::default()
+			},
+			WorldTransform3d::default(),
+		));
+	}
+
+	// detail sprites: ground cover around the ring, driven by a checker density map
+	let grass_atlas = checker_texture(&mut assets, 64, 16, [90, 150, 60, 255], [60, 110, 40, 255]);
+	let grass_density = checker_texture(&mut assets, 64, 8, [255, 0, 0, 255], [96, 0, 0, 255]);
+	commands.spawn((
+		DetailDensity {
+			texture: grass_atlas,
+			density_map: grass_density,
+			world_origin: Vec2::new(-50.0, -50.0),
+			world_size: Vec2::new(100.0, 100.0),
+			max_dist: 120.0,
+			size_range: [0.3, 0.7],
+			variant_count: 4,
+			density_scale: 2.0,
+			grid_step: 0.5,
+		},
+		LocalTransform3d::from_xyz(0.0, 0.1, 0.0),
+		WorldTransform3d::default(),
+		Visibility::Visible,
+		ComputedVisibility(true),
+	));
 
 	// ── lights ───────────────────────────────────────────────────────────────
 	commands.spawn(DirectionalLightBundle {
