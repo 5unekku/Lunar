@@ -5,6 +5,22 @@
 
 use super::*;
 
+/// illuminance that maps to directional irradiance 1.0; mirrors the `/ 80000.0`
+/// normalization in shader.wgsl so terrain and pbr surfaces agree on sun strength.
+pub(crate) const SUN_REFERENCE_LUX: f32 = 80_000.0;
+
+/// terrain.wgsl's `sun_dir` uniform: xyz points *toward* the sun, w is the normalized
+/// irradiance. `dir_direction` is the light's travel direction (the camera-forward of
+/// the light entity), so it is negated here, as the main shader does with
+/// `-lights.dir_direction`. without a directional light, a soft overhead sun is used.
+pub(crate) fn terrain_sun(dir_enabled: bool, dir_direction: Vec3, dir_illuminance: f32) -> [f32; 4] {
+	if !dir_enabled {
+		return [0.0, 1.0, 0.0, 1.0];
+	}
+	let toward_sun = (-dir_direction).normalize_or(Vec3::Y);
+	[toward_sun.x, toward_sun.y, toward_sun.z, dir_illuminance / SUN_REFERENCE_LUX]
+}
+
 /// static pass labels indexed by cascade: avoids per-frame format! allocations
 const SHADOW_CASCADE_LABELS: [&str; NUM_CASCADES as usize] = [
 	"[shadow] cascade-0",
@@ -677,14 +693,7 @@ impl RenderEngine3d {
 					let ring_origin_z =
 						(cam_pos.z / lod_cell_size).floor() * lod_cell_size - ring_half;
 
-					// sun direction from directional light (default to overhead if none)
-					let sun_d = if dir_enabled != 0 {
-						dir_direction
-					} else {
-						Vec3::Y
-					};
-					let (sun_dx, sun_dy, sun_dz, sun_int) =
-						(sun_d.x, sun_d.y, sun_d.z, dir_illuminance.max(1.0));
+					let sun = terrain_sun(dir_enabled != 0, dir_direction, dir_illuminance);
 
 					let tint = [snap.tint.r, snap.tint.g, snap.tint.b, snap.tint.a];
 
@@ -702,7 +711,6 @@ impl RenderEngine3d {
 					// tint (vec4)
 					data[48..64].copy_from_slice(bytemuck::cast_slice(&tint));
 					// sun_dir (vec4)
-					let sun: [f32; 4] = [sun_dx, sun_dy, sun_dz, sun_int];
 					data[64..80].copy_from_slice(bytemuck::cast_slice(&sun));
 					// ambient + pad
 					let amb: [f32; 4] = [0.15, 0.0, 0.0, 0.0];
@@ -2090,5 +2098,31 @@ impl RenderEngine3d {
 				}
 			}
 		}
+	}
+}
+
+#[cfg(test)]
+mod terrain_sun_tests {
+	use super::*;
+
+	#[test]
+	fn overhead_sun_lights_upward_terrain() {
+		// a sun shining straight down travels along -y, so it lies toward +y
+		let [x, y, z, intensity] = terrain_sun(true, Vec3::NEG_Y, SUN_REFERENCE_LUX);
+		assert!((Vec3::new(x, y, z) - Vec3::Y).length() < 1e-6, "sun must point toward the light");
+		assert!((intensity - 1.0).abs() < 1e-6, "reference sun maps to irradiance 1, like shader.wgsl");
+	}
+
+	#[test]
+	fn illuminance_is_normalized_like_the_main_shader() {
+		let [.., intensity] = terrain_sun(true, Vec3::NEG_Y, 20_000.0);
+		assert!((intensity - 0.25).abs() < 1e-6);
+	}
+
+	#[test]
+	fn no_directional_light_falls_back_to_a_soft_overhead_sun() {
+		let [x, y, z, intensity] = terrain_sun(false, Vec3::NEG_Y, 0.0);
+		assert_eq!(Vec3::new(x, y, z), Vec3::Y);
+		assert!(intensity > 0.0 && intensity <= 1.0);
 	}
 }
