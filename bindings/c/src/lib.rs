@@ -14,8 +14,10 @@
 //!
 //! every `extern "C"` function here receives a `*mut LunarWorld` that is an
 //! alias for the engine's `bevy_ecs::world::World`. pointers to component data
-//! returned by `lunar_component_get[_mut]` are only valid until the system
-//! callback that received the world pointer returns.
+//! returned by `lunar_component_get[_mut]` are valid until the first of: the
+//! system callback returning, or any structural change to the world (spawn,
+//! despawn, component insert or remove, through any `lunar_*` call). structural
+//! changes can move or reallocate component storage (sec-01).
 
 use std::{
     alloc::Layout,
@@ -502,13 +504,14 @@ pub unsafe extern "C" fn lunar_component_has(
 
 /// return a read-only pointer to the component, or null if not present.
 ///
-/// the pointer is only valid until the current system callback returns.
-/// for `LocalTransform3d` / `WorldTransform3d`, prefer the typed accessors.
+/// the pointer is valid until the current system callback returns or the world
+/// changes structurally (spawn, despawn, component insert or remove), whichever
+/// comes first. for `LocalTransform3d` / `WorldTransform3d`, prefer the typed accessors.
 ///
 /// # Safety
 /// `world` must be the non-null live world pointer from the current system
-/// callback. the returned pointer borrows engine-owned storage and must not
-/// be read after the current system callback returns.
+/// callback. the returned pointer borrows engine-owned storage and must not be
+/// read after the callback returns or after any structural world change.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_component_get(
     world:        *mut LunarWorld,
@@ -530,12 +533,14 @@ pub unsafe extern "C" fn lunar_component_get(
 
 /// return a mutable pointer to the component, or null if not present.
 ///
-/// the pointer is only valid until the current system callback returns.
+/// the pointer is valid until the current system callback returns or the world
+/// changes structurally (spawn, despawn, component insert or remove), whichever
+/// comes first.
 ///
 /// # Safety
 /// `world` must be the non-null live world pointer from the current system
-/// callback. the returned pointer borrows engine-owned storage mutably and
-/// must not be used after the current system callback returns.
+/// callback. the returned pointer borrows engine-owned storage mutably and must
+/// not be used after the callback returns or after any structural world change.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lunar_component_get_mut(
     world:        *mut LunarWorld,

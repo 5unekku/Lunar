@@ -68,12 +68,23 @@ public unsafe ref struct World
     public bool Has(Entity entity, ComponentId id) =>
         LunarNative.LunarComponentHas(_handle, entity.Id, id.Id);
 
+    /// <summary>
+    /// reference to a component in engine storage. check <see cref="Has"/> first: a
+    /// missing component yields a null reference. the reference is only valid until
+    /// the system callback returns or the world changes structurally (spawn, despawn,
+    /// insert, remove), which can move component storage; copy the value out if you
+    /// need it across such calls.
+    /// </summary>
     public ref readonly T Get<T>(Entity entity, ComponentId id) where T : unmanaged
     {
         var ptr = (T*)LunarNative.LunarComponentGet(_handle, entity.Id, id.Id);
         return ref System.Runtime.CompilerServices.Unsafe.AsRef<T>(ptr);
     }
 
+    /// <summary>
+    /// mutable reference to a component in engine storage; same validity rules as
+    /// <see cref="Get{T}"/>: don't hold it across spawn, despawn, insert or remove.
+    /// </summary>
     public ref T GetMut<T>(Entity entity, ComponentId id) where T : unmanaged
     {
         var ptr = (T*)LunarNative.LunarComponentGetMut(_handle, entity.Id, id.Id);
