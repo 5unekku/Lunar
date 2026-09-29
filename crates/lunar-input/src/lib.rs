@@ -35,6 +35,8 @@ use rustc_hash::FxHashMap as HashMap;
 
 /// size of the fast-path key array (covers common keys 0-127)
 const KEY_ARRAY_SIZE: usize = 128;
+/// highest gamepad index [`InputState::ensure_gamepad`] will register (exclusive)
+pub const MAX_GAMEPADS: usize = 16;
 /// number of distinct `MouseButton` variants
 const MOUSE_BUTTON_COUNT: usize = 4;
 
@@ -755,6 +757,17 @@ impl InputState {
 		index
 	}
 
+	/// make sure a gamepad slot exists at `index`, registering empty ones up to it.
+	/// platforms that report pads by a fixed index (the browser gamepad api) call this
+	/// before applying events; indices past [`MAX_GAMEPADS`] are ignored.
+	pub fn ensure_gamepad(&mut self, index: usize) {
+		if index < MAX_GAMEPADS {
+			while self.gamepads.len() <= index {
+				self.gamepads.push(GamepadState::new());
+			}
+		}
+	}
+
 	/// remove a gamepad by index
 	pub fn remove_gamepad(&mut self, index: usize) {
 		if index < self.gamepads.len() {
@@ -1326,16 +1339,21 @@ mod web_input {
 						input.add_mouse_delta(delta_x, delta_y);
 						input.set_mouse_position(x, y);
 					}
+					// the browser api reports pads by index and nothing registers them
+					// (sdl's device-added event is native-only), so without this every
+					// web gamepad event hit an empty gamepad list and was dropped
 					WebEvent::GamepadButtonPress {
 						gamepad_index,
 						button,
 					} => {
+						input.ensure_gamepad(gamepad_index);
 						input.press_gamepad_button(gamepad_index, button);
 					}
 					WebEvent::GamepadButtonRelease {
 						gamepad_index,
 						button,
 					} => {
+						input.ensure_gamepad(gamepad_index);
 						input.release_gamepad_button(gamepad_index, button);
 					}
 					WebEvent::GamepadAxisMove {
@@ -1343,6 +1361,7 @@ mod web_input {
 						axis,
 						value,
 					} => {
+						input.ensure_gamepad(gamepad_index);
 						input.set_gamepad_axis(gamepad_index, axis, value);
 					}
 				}
@@ -1805,5 +1824,18 @@ mod tests {
 		assert!(actions.is_action_just_released(&input, "jump"));
 		// the press edge did not survive into the second tick
 		assert!(!actions.is_action_just_pressed(&input, "jump"));
+	}
+
+	/// corr-04: web gamepads are reported by index and never registered, so every
+	/// event was dropped. ensure_gamepad registers the slot the event names.
+	#[test]
+	fn ensure_gamepad_registers_slots_up_to_the_index() {
+		let mut input = InputState::default();
+		input.ensure_gamepad(1);
+		input.press_gamepad_button(1, GamepadButton::South);
+		assert!(input.gamepad(1).is_some_and(|g| g.is_button_held(GamepadButton::South)));
+		assert!(input.gamepad(0).is_some(), "lower indices get empty slots");
+		input.ensure_gamepad(MAX_GAMEPADS);
+		assert!(input.gamepad(MAX_GAMEPADS).is_none(), "out-of-range indices are ignored");
 	}
 }
