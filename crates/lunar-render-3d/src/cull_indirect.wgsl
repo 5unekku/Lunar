@@ -3,8 +3,13 @@
 // extends cs_cull (cull.wgsl) with draw command output for multi_draw_indexed_indirect_count.
 // active on high tier when INDIRECT_FIRST_INSTANCE is available.
 //
-// for each visible entity, atomically appends one DrawIndexedIndirect entry to indirect_out.
-// the CPU issues one multi_draw_indexed_indirect_count call per frame.
+// every entity owns slot i of indirect_out; a culled one gets instance_count 0. the
+// draw count is one past the last visible slot (atomicMax, order-independent). an
+// atomicAdd append made draw order depend on workgroup scheduling, so fragments tied
+// at exactly equal depth (building bases on the ground) resolved differently from
+// frame to frame and run to run under the prepass's Equal test: shimmer, and
+// capture-unstable golden frames. the CPU issues one
+// multi_draw_indexed_indirect_count call per frame.
 
 struct AabbEntry {
     center:      vec3<f32>,
@@ -53,17 +58,19 @@ fn cs_cull(@builtin(global_invocation_id) gid: vec3<u32>) {
     let center = aabbs[i].center;
     let he     = aabbs[i].half_extent;
 
+    var visible = 1u;
     for (var p: u32 = 0u; p < 6u; p++) {
         let plane = params.planes[p];
         let signed_radius = abs(plane.x) * he.x + abs(plane.y) * he.y + abs(plane.z) * he.z;
         if dot(plane.xyz, center) + plane.w + signed_radius < 0.0 {
-            visible_flags[i] = 0u;
-            return;
+            visible = 0u;
+            break;
         }
     }
-    visible_flags[i] = 1u;
-    // append draw command for this visible entity
-    let slot = atomicAdd(&indirect_count, 1u);
+    visible_flags[i] = visible;
     let dp = draw_params[i];
-    indirect_out[slot] = DrawIndirectArgs(dp.index_count, 1u, dp.first_index, bitcast<i32>(dp.base_vertex), dp.first_instance);
+    indirect_out[i] = DrawIndirectArgs(dp.index_count, visible, dp.first_index, bitcast<i32>(dp.base_vertex), dp.first_instance);
+    if visible == 1u {
+        atomicMax(&indirect_count, i + 1u);
+    }
 }
