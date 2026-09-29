@@ -2134,6 +2134,7 @@ name = "lunar-lightmap"
 version = "1.0.0"
 dependencies = [
  "bevy_ecs",
+ "log",
  "lunar-3d",
  "lunar-assets",
  "lunar-math",

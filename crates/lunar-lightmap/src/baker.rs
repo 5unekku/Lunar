@@ -275,15 +275,24 @@ fn build_triangles(mesh: &MeshData) -> Vec<BakeTri> {
 		IndexBuffer::U32(v) => v.iter().map(|&i| i as usize).collect(),
 	};
 	let verts = &mesh.vertices;
-	indices
-		.as_chunks::<3>()
-		.0
+	let tris = indices.as_chunks::<3>().0;
+	// MeshData's fields are public and unchecked, so an index past the vertex
+	// array is a caller bug; skip those triangles rather than panic (corr-39)
+	let skipped = tris
 		.iter()
-		.map(|tri| {
-			let v0 = &verts[tri[0]];
-			let v1 = &verts[tri[1]];
-			let v2 = &verts[tri[2]];
-			BakeTri {
+		.filter(|tri| tri.iter().any(|&i| i >= verts.len()))
+		.count();
+	if skipped > 0 {
+		log::warn!(
+			"lightmap bake: skipped {skipped} triangle(s) indexing past {} vertices",
+			verts.len()
+		);
+	}
+	tris.iter()
+		.filter_map(|tri| {
+			let [v0, v1, v2] = tri.map(|i| verts.get(i));
+			let (v0, v1, v2) = (v0?, v1?, v2?);
+			Some(BakeTri {
 				uv0: v0.uv_lightmap,
 				uv1: v1.uv_lightmap,
 				uv2: v2.uv_lightmap,
@@ -293,7 +302,7 @@ fn build_triangles(mesh: &MeshData) -> Vec<BakeTri> {
 				n0: v0.normal,
 				n1: v1.normal,
 				n2: v2.normal,
-			}
+			})
 		})
 		.collect()
 }
@@ -520,5 +529,36 @@ fn dilate(result: &mut BakeResult, radius: u32) {
 		}
 		// update work buffer for the next pass so we propagate from newly filled texels
 		work.copy_from_slice(pixels);
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use lunar_3d::Vertex3d;
+
+	fn vertex(x: f32, y: f32) -> Vertex3d {
+		let mut v = Vertex3d::new(
+			Vec3::new(x, 0.0, y),
+			Vec3::Y,
+			[1.0, 0.0, 0.0, 1.0],
+			Vec2::new(x, y),
+		);
+		v.uv_lightmap = Vec2::new(x, y);
+		v
+	}
+
+	/// corr-39: an index past the vertex array skips that triangle instead of
+	/// panicking inside the public bake entry points.
+	#[test]
+	fn out_of_range_index_skips_triangle() {
+		let mesh = MeshData::new(
+			vec![vertex(0.0, 0.0), vertex(1.0, 0.0), vertex(0.0, 1.0)],
+			IndexBuffer::U16(vec![0, 1, 2, 0, 2, 9]),
+		);
+		assert_eq!(build_triangles(&mesh).len(), 1);
+		let baker = LightmapBaker::new().with_resolution(4).with_samples(1);
+		let result = baker.bake(&mesh);
+		assert_eq!(result.width, 4);
 	}
 }
