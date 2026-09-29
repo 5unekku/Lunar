@@ -161,6 +161,11 @@ struct RegisteredSystem {
     user_data: *mut c_void,
 }
 
+// SAFETY: FfiRegistry is a bevy Resource, so it must be Send + Sync, and it stores
+// these. the engine never touches `user_data` itself; it only hands it back to
+// `callback`, and dispatch_systems runs every callback serially from the thread
+// holding &mut World, so no two threads use one user_data at once. whether the
+// pointee may move between threads is the registering plugin's contract (sec-15).
 unsafe impl Send for RegisteredSystem {}
 unsafe impl Sync for RegisteredSystem {}
 
@@ -414,6 +419,12 @@ pub unsafe extern "C" fn lunar_component_insert(
     data:         *const c_void,
     size:         usize,
 ) {
+    // a null `data` gets the same warn-and-return as every other bad argument here
+    // instead of reaching NonNull::new_unchecked (sec-07, sec-16)
+    let Some(data) = NonNull::new(data as *mut u8) else {
+        log::warn!("ffi: lunar_component_insert: null data for component id {component_id}");
+        return;
+    };
     let world = unsafe { world_from_ffi(world) };
 
     let comp_id = {
@@ -441,7 +452,7 @@ pub unsafe extern "C" fn lunar_component_insert(
 
     // SAFETY: data is a valid pointer to a value matching the component layout.
     // the ECS copies the bytes via copy_nonoverlapping into its own storage.
-    let ptr = unsafe { OwningPtr::new(NonNull::new_unchecked(data as *mut u8)) };
+    let ptr = unsafe { OwningPtr::new(data) };
     unsafe { entity_mut.insert_by_id(comp_id, ptr) };
 }
 
@@ -670,15 +681,19 @@ pub unsafe extern "C" fn lunar_query_foreach(
     let Some(callback) = callback else { return };
     let world = unsafe { world_from_ffi(world) };
 
+    // SAFETY: per the contract, a non-null pointer covers `count` ids. (null, 0) is
+    // documented as legal but from_raw_parts needs non-null even for empty slices
+    // (sec-08, sec-09), so null maps to an empty slice without touching it.
+    let ids = |ptr: *const LunarComponentId, count: usize| -> &[LunarComponentId] {
+        if ptr.is_null() || count == 0 { &[] } else { unsafe { std::slice::from_raw_parts(ptr, count) } }
+    };
     let include_ids: Vec<ComponentId> = {
-        let slice = unsafe { std::slice::from_raw_parts(include, include_count) };
         let reg = world.resource::<FfiRegistry>();
-        slice.iter().filter_map(|id| reg.component_ids.get(id).copied()).collect()
+        ids(include, include_count).iter().filter_map(|id| reg.component_ids.get(id).copied()).collect()
     };
     let exclude_ids: Vec<ComponentId> = {
-        let slice = unsafe { std::slice::from_raw_parts(exclude, exclude_count) };
         let reg = world.resource::<FfiRegistry>();
-        slice.iter().filter_map(|id| reg.component_ids.get(id).copied()).collect()
+        ids(exclude, exclude_count).iter().filter_map(|id| reg.component_ids.get(id).copied()).collect()
     };
 
     // collect matching entity indices before calling callbacks (avoids borrow conflicts)
@@ -1842,3 +1857,59 @@ pub unsafe extern "C" fn lunar_event_clear(world: *mut LunarWorld, channel: *con
 // is not a dependency of lunar-ffi in this worktree, so the apply-force / velocity /
 // raycast FFI cannot wrap it here without adding that crate. left as a follow-up;
 // the event channel above is the general, dependency-free half of task 12.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ffi_world() -> World {
+        let mut world = World::new();
+        init_registry(&mut world);
+        world
+    }
+
+    fn world_ptr(world: &mut World) -> *mut LunarWorld {
+        world as *mut World as *mut LunarWorld
+    }
+
+    unsafe extern "C" fn count_match(_entity: LunarEntity, user_data: *mut c_void) {
+        unsafe { *(user_data as *mut usize) += 1 };
+    }
+
+    /// sec-08 / sec-09: the documented (null, 0) include/exclude form must not
+    /// reach slice::from_raw_parts, which requires a non-null pointer.
+    #[test]
+    fn query_foreach_accepts_null_empty_filters() {
+        let mut world = ffi_world();
+        world.spawn_empty();
+        world.spawn_empty();
+        let mut matches = 0usize;
+        unsafe {
+            lunar_query_foreach(
+                world_ptr(&mut world),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                Some(count_match),
+                &mut matches as *mut usize as *mut c_void,
+            );
+        }
+        assert!(matches >= 2);
+    }
+
+    /// sec-07 / sec-16: a null `data` is warned about and ignored like every
+    /// other bad argument, not handed to NonNull::new_unchecked.
+    #[test]
+    fn component_insert_ignores_null_data() {
+        let mut world = ffi_world();
+        let ptr = world_ptr(&mut world);
+        let id = unsafe { lunar_component_register(ptr, c"Health".as_ptr(), 4, 4) };
+        let entity = unsafe { lunar_spawn(ptr) };
+        unsafe { lunar_component_insert(ptr, entity, id, std::ptr::null(), 4) };
+        let value = 7u32;
+        unsafe {
+            lunar_component_insert(ptr, entity, id, &value as *const u32 as *const c_void, 4)
+        };
+    }
+}
