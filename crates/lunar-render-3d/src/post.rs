@@ -5,6 +5,46 @@
 
 use super::*;
 
+/// optical depth at which the ray march counts as opaque: exp(-3) ≈ 5% transmittance.
+const FOG_OPAQUE_DEPTH: f32 = 3.0;
+/// upper bound on the march length so very thin fog does not stretch the 16 steps thin.
+const FOG_MAX_MARCH: f32 = 2000.0;
+
+/// volumetric fog inputs derived from the scene's [`lunar_3d::Fog`] resource.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct VolumetricFogParams {
+	/// extinction coefficient per world unit (the march is exponential)
+	pub(crate) density: f32,
+	/// march length: where the fog is ~95% opaque, capped at [`FOG_MAX_MARCH`]
+	pub(crate) max_distance: f32,
+	/// linear ambient in-scatter color
+	pub(crate) color: [f32; 3],
+}
+
+/// map the scene's `Fog` resource onto the volumetric march. `Fog`'s documented contract
+/// is "without this resource, no fog is applied", so `None` disables volumetric fog.
+/// the march integrates exponential extinction, so linear and exponential-squared
+/// falloffs are mapped to the density that reaches ~95% opacity at the same distance
+/// (the linear `start` offset is not representable and is ignored).
+pub(crate) fn volumetric_fog_params(fog: Option<&lunar_3d::Fog>) -> Option<VolumetricFogParams> {
+	use lunar_3d::FogFalloff;
+	let fog = fog?;
+	let opaque_at = match fog.falloff {
+		FogFalloff::Exponential { density } => FOG_OPAQUE_DEPTH / density,
+		// 1 - exp(-(d·x)^2) reaches 95% at d·x = sqrt(3)
+		FogFalloff::ExponentialSquared { density } => FOG_OPAQUE_DEPTH.sqrt() / density,
+		FogFalloff::Linear { end, .. } => end,
+	};
+	if !opaque_at.is_finite() || opaque_at <= 0.0 {
+		return None;
+	}
+	Some(VolumetricFogParams {
+		density: FOG_OPAQUE_DEPTH / opaque_at,
+		max_distance: opaque_at.min(FOG_MAX_MARCH),
+		color: [fog.color.r, fog.color.g, fog.color.b],
+	})
+}
+
 impl RenderEngine3d {
 	/// readies the panorama sky for the main color pass: caches the texture
 	/// bind group and uploads mapping params. returns true when the sky can be
@@ -135,9 +175,9 @@ impl RenderEngine3d {
 			upscale_mode,
 			dir_color,
 			dir_direction,
-			sky_color,
 			..
 		} = fc;
+		let vol_fog = volumetric_fog_params(world.get_resource::<lunar_3d::Fog>());
 		// ── bloom passes ─────────────────────────────────────────────────
 		if self.bloom_enabled && dev_bloom && !self.bloom_mip_views.is_empty() {
 			let n = self.bloom_mip_views.len();
@@ -312,8 +352,11 @@ impl RenderEngine3d {
 			pass.draw(0..3, 0..1);
 		}
 
-		// ── volumetric fog pass (mid+ tier) ──────────────────────────────
-		if self.fog_enabled && dev_fog {
+		// ── volumetric fog pass (mid+ tier, only when the scene has a `Fog`) ─
+		if self.fog_enabled
+			&& dev_fog
+			&& let Some(vol_fog) = vol_fog
+		{
 			let width = self.render_w as f32;
 			let height = self.render_h as f32;
 			let inv_vp = view_proj.inverse();
@@ -327,7 +370,7 @@ impl RenderEngine3d {
 			let step_count: u32 = 16;
 			// sun_dir points towards sun (negate scene light direction)
 			let sun_dir: [f32; 3] = [-dir_d.x, -dir_d.y, -dir_d.z];
-			let fog_color: [f32; 3] = [sky_color.r * 0.5, sky_color.g * 0.5, sky_color.b * 0.7];
+			let fog_color = vol_fog.color;
 			let rest: [f32; 16] = [
 				sun_dir[0],
 				sun_dir[1],
@@ -336,11 +379,11 @@ impl RenderEngine3d {
 				dir_color.r,
 				dir_color.g,
 				dir_color.b,
-				0.01_f32, // density
+				vol_fog.density,
 				fog_color[0],
 				fog_color[1],
 				fog_color[2],
-				200.0_f32, // max_distance
+				vol_fog.max_distance,
 				2.0_f32,
 				0.6_f32,
 				width,
@@ -540,7 +583,7 @@ impl RenderEngine3d {
 					if dev_ssr {
 						f |= 32;
 					}
-					if self.fog_enabled && dev_fog && q.volumetric_fog {
+					if self.fog_enabled && dev_fog && q.volumetric_fog && vol_fog.is_some() {
 						f |= 64;
 					}
 					if dev_contact_shadows && self.contact_shadow_tex.is_some() {
@@ -1335,5 +1378,51 @@ impl RenderEngine3d {
 				}
 			}
 		}
+	}
+}
+
+#[cfg(test)]
+mod volumetric_fog_tests {
+	use super::*;
+	use lunar_3d::Fog;
+
+	#[test]
+	fn no_fog_resource_means_no_volumetric_fog() {
+		assert_eq!(volumetric_fog_params(None), None);
+	}
+
+	#[test]
+	fn exponential_fog_drives_density_and_color() {
+		let fog = Fog::exponential(Color::rgb(0.2, 0.3, 0.4), 0.02);
+		let p = volumetric_fog_params(Some(&fog)).expect("exponential fog is active");
+		assert!((p.density - 0.02).abs() < 1e-6);
+		assert_eq!(p.color, [0.2, 0.3, 0.4]);
+		// 95% extinction at 3 / density
+		assert!((p.max_distance - 150.0).abs() < 1e-3);
+	}
+
+	#[test]
+	fn linear_fog_reaches_near_full_extinction_at_end() {
+		let fog = Fog::linear(Color::WHITE, 50.0, 300.0);
+		let p = volumetric_fog_params(Some(&fog)).expect("linear fog is active");
+		assert!((p.max_distance - 300.0).abs() < 1e-3);
+		let transmittance_at_end = (-p.density * p.max_distance).exp();
+		assert!(transmittance_at_end < 0.06, "linear fog must be ~opaque at `end`");
+	}
+
+	#[test]
+	fn exponential_squared_matches_its_95_percent_distance() {
+		let fog = Fog::exponential_squared(Color::WHITE, 0.01);
+		let p = volumetric_fog_params(Some(&fog)).expect("exp2 fog is active");
+		// factor(d) = 1 - exp(-(0.01 d)^2) reaches 0.95 at d = sqrt(3) / 0.01
+		assert!((p.max_distance - 3f32.sqrt() / 0.01).abs() < 1e-2);
+		assert!((fog.factor(p.max_distance) - 0.95).abs() < 1e-3);
+	}
+
+	#[test]
+	fn degenerate_fog_is_treated_as_none() {
+		assert_eq!(volumetric_fog_params(Some(&Fog::exponential(Color::WHITE, 0.0))), None);
+		assert_eq!(volumetric_fog_params(Some(&Fog::linear(Color::WHITE, 0.0, 0.0))), None);
+		assert_eq!(volumetric_fog_params(Some(&Fog::exponential(Color::WHITE, f32::NAN))), None);
 	}
 }
