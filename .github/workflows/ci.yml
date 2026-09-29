@@ -9,35 +9,55 @@ env:
   RUST_BACKTRACE: 1
   # opt into node 24 early — forced default on 2026-06-16
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # build deps shared by every job. libegl-dev pulls in the x11 headers, so SDL3's
+  # from-source build enables its x11 backend and then hard-requires xcursor and
+  # friends (configure fails with "Couldn't find dependency package for XCURSOR").
+  SYS_DEPS: >-
+    git ca-certificates build-essential cmake pkg-config libssl-dev clang
+    libwayland-dev libxkbcommon-dev libegl-dev
+    libx11-dev libxext-dev libxcursor-dev libxi-dev libxrandr-dev libxss-dev
+    libxtst-dev libxfixes-dev
+  # the repo's actions policy only allows actions owned by 5unekku, so
+  # actions/checkout and Swatinem/rust-cache are rejected at "Set up job" (every
+  # run since 2026-06 died there). jobs check out with plain git instead.
+  CHECKOUT: |
+    git init -q .
+    git config --global --add safe.directory "$PWD"
+    auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+    git -c http.extraheader="AUTHORIZATION: basic $auth" fetch -q --depth 1 "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$GITHUB_SHA"
+    git checkout -q FETCH_HEAD
 
 jobs:
   clippy:
     runs-on: ubuntu-latest
     container: rust:slim-trixie
     steps:
-      - uses: actions/checkout@v6
-      - uses: Swatinem/rust-cache@v2
-      - run: apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev clang
+      - run: apt-get update -qq && apt-get install -y -qq $SYS_DEPS
+      - run: eval "$CHECKOUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
     runs-on: ubuntu-latest
     container: rust:slim-trixie
     steps:
-      - uses: actions/checkout@v6
-      - uses: Swatinem/rust-cache@v2
       # mesa-vulkan-drivers ships lavapipe so the headless gpu tests actually
       # run here instead of skipping for lack of an adapter
-      - run: apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev clang mesa-vulkan-drivers libvulkan1
+      - run: apt-get update -qq && apt-get install -y -qq $SYS_DEPS mesa-vulkan-drivers libvulkan1
+      - run: eval "$CHECKOUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
       - run: cargo test --workspace
 
   build-wasm:
     runs-on: ubuntu-latest
     container: rust:slim-trixie
     steps:
-      - uses: actions/checkout@v6
-      - uses: Swatinem/rust-cache@v2
-      - run: apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev clang
+      - run: apt-get update -qq && apt-get install -y -qq $SYS_DEPS
+      - run: eval "$CHECKOUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
       # lunar-game covers the full facade plus both bins (lunar is wasm-gated, lunar-web is the wasm entry)
       - run: cargo build --target wasm32-unknown-unknown --package lunar-game
 
@@ -45,9 +65,10 @@ jobs:
     runs-on: ubuntu-latest
     container: rust:slim-trixie
     steps:
-      - uses: actions/checkout@v6
-      - uses: Swatinem/rust-cache@v2
-      - run: apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev clang xvfb mesa-vulkan-drivers libvulkan1 libx11-dev libxext-dev libxi-dev libxrandr-dev
+      - run: apt-get update -qq && apt-get install -y -qq $SYS_DEPS xvfb mesa-vulkan-drivers libvulkan1
+      - run: eval "$CHECKOUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
       # SDL_VIDEODRIVER=x11 prevents SDL3 from trying Wayland (unavailable in container)
       - run: SDL_VIDEODRIVER=x11 WGPU_BACKEND=vulkan xvfb-run -a cargo run --example platform_demo -- --smoke
 
@@ -77,11 +98,10 @@ jobs:
           - { target: i686-pc-windows-gnu, full: false }
           - { target: aarch64-pc-windows-gnullvm, full: false }
     steps:
-      - uses: actions/checkout@v6
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: cross-${{ matrix.target }}
-      - run: apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev python3-pip
+      - run: apt-get update -qq && apt-get install -y -qq $SYS_DEPS python3-pip
+      - run: eval "$CHECKOUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
       - run: rustup target add ${{ matrix.target }}
       - run: pip install cargo-zigbuild --break-system-packages
       - run: |
