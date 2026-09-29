@@ -1169,6 +1169,12 @@ impl RenderEngine {
 
 	/// resize the render surface
 	pub fn resize(&mut self, width: u32, height: u32) {
+		// a minimized window reports 0x0: configuring a surface with a zero area is a
+		// fatal wgpu error, and a zero size would also divide by zero in the layer
+		// projections. keep the last real size until the window comes back
+		if width == 0 || height == 0 {
+			return;
+		}
 		self.config.width = width;
 		self.config.height = height;
 		if let Some(surface) = &self.surface {
@@ -3944,5 +3950,29 @@ mod tests {
 		engine.render(&commands, Some(&camera), &mut render_info);
 		engine.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
 		assert!(!engine.overflow_flag, "grown buffer must fit the whole frame");
+	}
+
+	/// corr-06: resize(0, 0) (window minimized) reached surface.configure, which
+	/// panics on a zero area. the engine must keep its last real size instead.
+	#[test]
+	fn resize_to_zero_keeps_the_last_size() {
+		let instance = wgpu::Instance::default();
+		if pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).is_err() {
+			return;
+		}
+		let mut engine = RenderEngine::headless(
+			&instance,
+			RenderConfig {
+				width: 64,
+				height: 48,
+				..RenderConfig::default()
+			},
+		);
+		engine.resize(0, 0);
+		assert_eq!(engine.surface_size(), (64, 48));
+		engine.resize(80, 0);
+		assert_eq!(engine.surface_size(), (64, 48));
+		engine.resize(80, 60);
+		assert_eq!(engine.surface_size(), (80, 60));
 	}
 }
