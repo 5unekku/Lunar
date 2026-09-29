@@ -193,23 +193,34 @@ fn shapes_overlap(
 /// ```
 #[derive(Debug, Default, Resource)]
 pub struct CollisionWorld {
+	/// sorted by `min_x`
 	entries: Vec<ColliderEntry>,
+	/// entity → position in `entries`, for `overlapping`
+	index: bevy_ecs::entity::EntityHashMap<usize>,
+	/// widest collider's x extent: bounds how far left of a query an overlapping
+	/// entry's `min_x` can start
+	max_width: f32,
 }
 
 impl CollisionWorld {
 	/// sweep-and-prune range for a query span `[qmin_x, qmax_x]`.
 	/// returns a slice of entries that could overlap along X: use as a pre-filter.
-	fn x_candidates(&self, _qmin_x: f32, qmax_x: f32) -> &[ColliderEntry] {
-		// entries sorted by min_x; stop at the first entry entirely to the right
+	fn x_candidates(&self, qmin_x: f32, qmax_x: f32) -> &[ColliderEntry] {
+		// entries sorted by min_x. an entry whose min_x is more than the widest
+		// collider's width left of qmin_x ends before qmin_x; stop at the first entry
+		// entirely to the right
+		let start = self
+			.entries
+			.partition_point(|e| e.min_x < qmin_x - self.max_width);
 		let end = self.entries.partition_point(|e| e.min_x <= qmax_x);
-		&self.entries[..end]
+		&self.entries[start..end.max(start)]
 	}
 
 	/// iterator over all entities that overlap `entity` this frame, filtered by layer/mask.
 	///
 	/// uses sweep-and-prune on X to skip entries that can't possibly overlap.
 	pub fn overlapping(&self, entity: Entity) -> impl Iterator<Item = Entity> + '_ {
-		let target = self.entries.iter().find(|e| e.entity == entity).cloned();
+		let target = self.index.get(&entity).map(|&i| self.entries[i].clone());
 		let candidates = target
 			.as_ref()
 			.map_or(&[] as &[_], |t| self.x_candidates(t.min_x, t.max_x));
@@ -226,7 +237,7 @@ impl CollisionWorld {
 
 	/// iterator over all entities whose collider contains `point`.
 	pub fn query_point(&self, point: Vec2) -> impl Iterator<Item = Entity> + '_ {
-		self.entries.iter().filter_map(move |entry| {
+		self.x_candidates(point.x, point.x).iter().filter_map(move |entry| {
 			point_in_shape(point, entry.position, &entry.shape).then_some(entry.entity)
 		})
 	}
@@ -299,9 +310,16 @@ pub fn build_collision_world(
 			collider.mask,
 		));
 	}
+	let collision_world = &mut *collision_world;
 	collision_world
 		.entries
 		.sort_unstable_by(|a, b| a.min_x.total_cmp(&b.min_x));
+	collision_world.index.clear();
+	collision_world.max_width = 0.0;
+	for (i, entry) in collision_world.entries.iter().enumerate() {
+		collision_world.index.insert(entry.entity, i);
+		collision_world.max_width = collision_world.max_width.max(entry.max_x - entry.min_x);
+	}
 }
 
 /// result of a successful ray cast.
@@ -610,7 +628,10 @@ mod tests {
 				ColliderEntry::new(entity, position, shape, 1, 1)
 			})
 			.collect();
-		CollisionWorld { entries }
+		CollisionWorld {
+			entries,
+			..CollisionWorld::default()
+		}
 	}
 
 	#[test]
@@ -694,4 +715,70 @@ mod tests {
 		assert!((hit.distance - 40.0).abs() < 0.1);
 		assert!((hit.normal.x - (-1.0)).abs() < 0.01);
 	}
+
+	/// the pruned queries must return exactly what a brute-force scan returns, including
+	/// around colliders much wider than their neighbours (the left-side prune bound).
+	#[test]
+	fn pruned_queries_match_brute_force() {
+		let mut world = World::new();
+		world.insert_resource(CollisionWorld::default());
+		let mut seed: u32 = 0x1234_5678;
+		let mut next = || {
+			seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+			(seed >> 8) as f32 / (1u32 << 24) as f32
+		};
+		for i in 0..300 {
+			let pos = Vec2::new(next() * 1000.0 - 500.0, next() * 1000.0 - 500.0);
+			let collider = match i % 10 {
+				// a few very wide walls
+				0 => Collider::aabb(Vec2::new(200.0 + next() * 200.0, 10.0)),
+				1..=4 => Collider::circle(2.0 + next() * 20.0),
+				_ => Collider::aabb(Vec2::new(2.0 + next() * 30.0, 2.0 + next() * 30.0)),
+			};
+			world.spawn((Transform::from_xy(pos.x, pos.y), collider));
+		}
+		run_build(&mut world);
+		let cw = world.resource::<CollisionWorld>();
+
+		let sorted = |mut v: Vec<Entity>| {
+			v.sort();
+			v
+		};
+		for entry in &cw.entries {
+			let fast = sorted(cw.overlapping(entry.entity).collect());
+			let brute = sorted(
+				cw.entries
+					.iter()
+					.filter(|o| o.entity != entry.entity && entry.overlaps(o))
+					.map(|o| o.entity)
+					.collect(),
+			);
+			assert_eq!(fast, brute, "overlapping() differs for {:?}", entry.entity);
+		}
+		for _ in 0..200 {
+			let p = Vec2::new(next() * 1000.0 - 500.0, next() * 1000.0 - 500.0);
+			let fast = sorted(cw.query_point(p).collect());
+			let brute = sorted(
+				cw.entries
+					.iter()
+					.filter(|e| point_in_shape(p, e.position, &e.shape))
+					.map(|e| e.entity)
+					.collect(),
+			);
+			assert_eq!(fast, brute, "query_point differs at {p:?}");
+
+			let half = Vec2::new(next() * 60.0, next() * 60.0);
+			let rect = ColliderShape::Aabb { half_extents: half };
+			let fast = sorted(cw.query_rect(p, half).collect());
+			let brute = sorted(
+				cw.entries
+					.iter()
+					.filter(|e| shapes_overlap(p, &rect, e.position, &e.shape))
+					.map(|e| e.entity)
+					.collect(),
+			);
+			assert_eq!(fast, brute, "query_rect differs at {p:?} {half:?}");
+		}
+	}
+
 }
