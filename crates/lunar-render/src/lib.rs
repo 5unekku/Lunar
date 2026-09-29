@@ -412,6 +412,13 @@ impl RenderConfig {
 /// so this is a tunable starting point, never a ceiling.
 /// vertex format: [pos.x, pos.y, u, v] (16 bytes) + [`color_u32`] (4 bytes) = 20 bytes per vertex
 const INITIAL_VERTEX_CAPACITY: usize = 65536;
+/// byte stride between per-layer projection slots in the globals uniform buffer.
+/// 256 is wgpu's default `min_uniform_buffer_offset_alignment`.
+const PROJ_SLOT_STRIDE: usize = 256;
+/// projection size within a slot (one column-major 4x4 f32 matrix).
+const PROJ_SIZE: u64 = 64;
+/// projection slots allocated up front; grows by doubling when a frame draws more layers.
+const INITIAL_PROJ_SLOTS: usize = 8;
 
 /// bind group key reserved for the glyph atlas texture used by text draws.
 /// regular sprite textures use their asset ID; the white placeholder uses `u32::MAX`.
@@ -437,8 +444,17 @@ pub struct RenderEngine {
 	config: wgpu::SurfaceConfiguration,
 	render_config: RenderConfig,
 	sprite_pipeline: wgpu::RenderPipeline,
+	/// one 256-byte projection slot per layer drawn this frame, bound with a dynamic
+	/// offset. all slots are written once before the pass: queue writes land before
+	/// the command buffer runs, so a single slot rewritten per layer would leave every
+	/// draw with the last layer's projection.
 	uniform_buf: wgpu::Buffer,
-	// group 0: view-global (projection uniform): set once per layer change
+	/// number of projection slots `uniform_buf` holds
+	proj_slot_capacity: usize,
+	/// persistent scratch: this frame's per-layer projection slots, uploaded in one write
+	proj_staging: Vec<u8>,
+	globals_bgl: wgpu::BindGroupLayout,
+	// group 0: view-global (projection uniform): offset switched per layer
 	globals_bg: wgpu::BindGroup,
 	// group 1: material (texture + sampler): set per texture batch
 	material_bgl: wgpu::BindGroupLayout,
@@ -658,13 +674,8 @@ impl RenderEngine {
 			surface.configure(device, &surface_config);
 		}
 
-		// projection matrix uniform (4x4 f32 = 64 bytes)
-		let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-			label: Some("uniform buffer"),
-			size: 64,
-			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-			mapped_at_creation: false,
-		});
+		// per-layer projection slots (4x4 f32 = 64 bytes each, 256-byte stride)
+		let uniform_buf = Self::create_projection_buffer(device, INITIAL_PROJ_SLOTS);
 
 		let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
 			label: Some("sprite sampler"),
@@ -676,7 +687,7 @@ impl RenderEngine {
 			..Default::default()
 		});
 
-		// group 0: view-global (projection uniform only): set once per layer
+		// group 0: view-global (projection uniform only): dynamic offset selects the layer's slot
 		let globals_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("[globals] bgl"),
 			entries: &[wgpu::BindGroupLayoutEntry {
@@ -684,8 +695,8 @@ impl RenderEngine {
 				visibility: wgpu::ShaderStages::VERTEX,
 				ty: wgpu::BindingType::Buffer {
 					ty: wgpu::BufferBindingType::Uniform,
-					has_dynamic_offset: false,
-					min_binding_size: None,
+					has_dynamic_offset: true,
+					min_binding_size: wgpu::BufferSize::new(PROJ_SIZE),
 				},
 				count: None,
 			}],
@@ -714,14 +725,7 @@ impl RenderEngine {
 			],
 		});
 
-		let globals_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-			label: Some("[globals] bg"),
-			layout: &globals_bgl,
-			entries: &[wgpu::BindGroupEntry {
-				binding: 0,
-				resource: uniform_buf.as_entire_binding(),
-			}],
-		});
+		let globals_bg = Self::create_globals_bg(device, &globals_bgl, &uniform_buf);
 
 		// 1x1 white texture used for untextured draws (rects, lines, text)
 		let placeholder_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -883,6 +887,9 @@ impl RenderEngine {
 			render_config: config,
 			sprite_pipeline,
 			uniform_buf,
+			proj_slot_capacity: INITIAL_PROJ_SLOTS,
+			proj_staging: Vec::new(),
+			globals_bgl,
 			globals_bg,
 			material_bgl,
 			sampler,
@@ -917,9 +924,68 @@ impl RenderEngine {
 		&self.adapter_info
 	}
 
-	/// update the uniform buffer with the projection matrix for a specific layer.
+	fn create_projection_buffer(device: &wgpu::Device, slots: usize) -> wgpu::Buffer {
+		device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("[globals] projection slots"),
+			size: (slots * PROJ_SLOT_STRIDE) as u64,
+			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+			mapped_at_creation: false,
+		})
+	}
+
+	/// bind a single 64-byte window; the per-layer dynamic offset slides it along the
+	/// buffer (a whole-buffer binding would let the last offset run past the end).
+	fn create_globals_bg(
+		device: &wgpu::Device,
+		layout: &wgpu::BindGroupLayout,
+		uniform_buf: &wgpu::Buffer,
+	) -> wgpu::BindGroup {
+		device.create_bind_group(&wgpu::BindGroupDescriptor {
+			label: Some("[globals] bg"),
+			layout,
+			entries: &[wgpu::BindGroupEntry {
+				binding: 0,
+				resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+					buffer: uniform_buf,
+					offset: 0,
+					size: wgpu::BufferSize::new(PROJ_SIZE),
+				}),
+			}],
+		})
+	}
+
+	/// build one projection slot per distinct layer, in draw order, and upload them
+	/// in a single write. `sorted_indices` must already be sorted by layer, so each
+	/// layer change in the draw loop advances to the next slot.
+	fn upload_layer_projections(&mut self, commands: &[DrawCommand], camera: Option<&Camera>) {
+		self.proj_staging.clear();
+		let mut current_layer = None;
+		for &i in &self.sorted_indices {
+			let layer = commands[i].kind.layer();
+			if current_layer != Some(layer) {
+				current_layer = Some(layer);
+				let projection = self.projection_for_layer(layer, camera);
+				let start = self.proj_staging.len();
+				self.proj_staging.resize(start + PROJ_SLOT_STRIDE, 0);
+				self.proj_staging[start..start + PROJ_SIZE as usize]
+					.copy_from_slice(bytemuck::cast_slice(&projection));
+			}
+		}
+		if self.proj_staging.is_empty() {
+			return;
+		}
+		let slots = self.proj_staging.len() / PROJ_SLOT_STRIDE;
+		if slots > self.proj_slot_capacity {
+			self.proj_slot_capacity = slots.next_power_of_two();
+			self.uniform_buf = Self::create_projection_buffer(&self.device, self.proj_slot_capacity);
+			self.globals_bg = Self::create_globals_bg(&self.device, &self.globals_bgl, &self.uniform_buf);
+		}
+		self.queue.write_buffer(&self.uniform_buf, 0, &self.proj_staging);
+	}
+
+	/// the projection matrix for a specific layer.
 	/// applies per-layer parallax offset from the camera if present.
-	fn update_projection_for_layer(&mut self, layer: i32, camera: Option<&Camera>) {
+	fn projection_for_layer(&self, layer: i32, camera: Option<&Camera>) -> [f32; 16] {
 		let (surface_w, surface_h) = (self.config.width as f32, self.config.height as f32);
 
 		// POST_PROCESS layer always uses screen-space projection (ignores camera)
@@ -942,14 +1008,12 @@ impl RenderEngine {
 				0.0,
 				1.0,
 			];
-			self.queue
-				.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&projection));
-			return;
+			return projection;
 		}
 
 		// if camera has a viewport, compute a letterboxed projection that fits
 		// the viewport into the surface while preserving aspect ratio
-		let projection = if let Some(cam) = camera
+		if let Some(cam) = camera
 			&& let Some((vp_w, vp_h)) = cam.viewport
 		{
 			let (vp_w, vp_h) = (vp_w as f32, vp_h as f32);
@@ -965,17 +1029,10 @@ impl RenderEngine {
 			// build a custom orthographic projection:
 			// maps world (cam_x - vp_w/2, cam_y - vp_h/2) .. (cam_x + vp_w/2, cam_y + vp_h/2)
 			// to a centered letterboxed region of clip space
-			let _sx = (vp_w_scaled / surface_w) * 2.0 / vp_w;
-			let _sy = -(vp_h_scaled / surface_h) * 2.0 / vp_h;
 			let pos = cam.position;
 			let tx = pos.x;
 			let ty = pos.y;
 
-			// clip_x = sx * (world_x - tx) + (sx * tx - 1 + offset_x)
-			//        = sx * world_x + (sx * tx - 1 + offset_x - sx * tx)
-			//        = sx * world_x - 1 + offset_x
-
-			// Actually simpler: compute clip directly
 			let left = -1.0 + offset_x;
 			let right = 1.0 - offset_x;
 			let bottom = -1.0 + offset_y;
@@ -1030,9 +1087,7 @@ impl RenderEngine {
 				0.0,
 				1.0,
 			]
-		};
-		self.queue
-			.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&projection));
+		}
 	}
 
 	/// load the vulkan pipeline cache from disk if it exists.
@@ -1594,8 +1649,9 @@ impl RenderEngine {
 			}
 		}
 
-		// track current layer for parallax: updated as we iterate sorted commands
+		// track current layer and its projection slot: updated as we iterate sorted commands
 		let mut current_layer: Option<i32> = None;
+		let mut proj_slot: u32 = 0;
 
 		// sort by (layer, texture_id): same-texture commands are contiguous, no HashMap needed.
 		// reuse the persistent Vec; clear() retains capacity from previous frames.
@@ -1603,6 +1659,7 @@ impl RenderEngine {
 		self.sorted_indices.extend(0..commands.len());
 		self.sorted_indices
 			.sort_unstable_by_key(|&i| draw_sort_key(&commands[i]));
+		self.upload_layer_projections(commands, camera);
 
 		let mut encoder = self
 			.device
@@ -1649,12 +1706,7 @@ impl RenderEngine {
 			for i in 0..self.sorted_indices.len() {
 				let orig_idx = self.sorted_indices[i];
 				let command = &commands[orig_idx];
-				let layer = match &command.kind {
-					DrawKind::Sprite { layer, .. }
-					| DrawKind::Rect { layer, .. }
-					| DrawKind::Line { layer, .. }
-					| DrawKind::Text { layer, .. } => *layer,
-				};
+				let layer = command.kind.layer();
 
 				let tex_id = match &command.kind {
 					DrawKind::Sprite {
@@ -1664,17 +1716,20 @@ impl RenderEngine {
 					_ => u32::MAX,
 				};
 
-				// update projection if layer changed (parallax)
+				// advance to the layer's projection slot when the layer changes (parallax,
+				// screen-space POST_PROCESS); slots were uploaded in the same order
 				if current_layer != Some(layer) {
 					if self.vertex_offset > batch_start
 						&& let Some(prev_tex) = current_tex
 					{
 						let vertex_count = (self.vertex_offset - batch_start) / VERTEX_STRIDE;
-						self.draw_vertex_batch(&mut pass, prev_tex, batch_start, vertex_count);
+						self.draw_vertex_batch(&mut pass, prev_tex, batch_start, vertex_count, proj_slot);
 						draw_calls += 1;
 					}
 					batch_start = self.vertex_offset;
-					self.update_projection_for_layer(layer, camera);
+					if current_layer.is_some() {
+						proj_slot += 1;
+					}
 					current_layer = Some(layer);
 				}
 
@@ -1684,7 +1739,7 @@ impl RenderEngine {
 						&& let Some(prev_tex) = current_tex
 					{
 						let vertex_count = (self.vertex_offset - batch_start) / VERTEX_STRIDE;
-						self.draw_vertex_batch(&mut pass, prev_tex, batch_start, vertex_count);
+						self.draw_vertex_batch(&mut pass, prev_tex, batch_start, vertex_count, proj_slot);
 						draw_calls += 1;
 					}
 					batch_start = self.vertex_offset;
@@ -1751,7 +1806,7 @@ impl RenderEngine {
 				&& let Some(tex_id) = current_tex
 			{
 				let vertex_count = (self.vertex_offset - batch_start) / VERTEX_STRIDE;
-				self.draw_vertex_batch(&mut pass, tex_id, batch_start, vertex_count);
+				self.draw_vertex_batch(&mut pass, tex_id, batch_start, vertex_count, proj_slot);
 				draw_calls += 1;
 			}
 		}
@@ -1795,11 +1850,12 @@ impl RenderEngine {
 		tex_id: u32,
 		offset: usize,
 		vertex_count: usize,
+		proj_slot: u32,
 	) {
 		let Some(material_bg) = self.material_bgs.get(&tex_id) else {
 			return;
 		};
-		pass.set_bind_group(0, &self.globals_bg, &[]);
+		pass.set_bind_group(0, &self.globals_bg, &[proj_slot * PROJ_SLOT_STRIDE as u32]);
 		pass.set_bind_group(1, material_bg, &[]);
 		let buf = &self.vertex_bufs[self.frame_index];
 		pass.set_vertex_buffer(
@@ -2113,6 +2169,18 @@ pub enum DrawKind {
 		/// line spacing when wrap_width is set; 0.0 = font_size * 1.25
 		line_height: f32,
 	},
+}
+
+impl DrawKind {
+	/// the draw layer this primitive belongs to.
+	const fn layer(&self) -> i32 {
+		match self {
+			Self::Sprite { layer, .. }
+			| Self::Rect { layer, .. }
+			| Self::Line { layer, .. }
+			| Self::Text { layer, .. } => *layer,
+		}
+	}
 }
 
 /// batching sort key for a draw command.
@@ -3718,6 +3786,99 @@ mod tests {
 		assert!(
 			clear_r > 40 && clear_r < 120 && clear_r == clear_g && clear_g == clear_b,
 			"expected neutral clear-color pixel at (40,40), got ({clear_r}, {clear_g}, {clear_b})"
+		);
+	}
+
+	/// boot a 64×64 headless engine, render `commands` through `camera` into an
+	/// offscreen target, and return the rgba readback. `None` when no adapter exists.
+	fn render_headless_64(commands: &[DrawCommand], mut camera: Camera) -> Option<Vec<u8>> {
+		let instance = wgpu::Instance::default();
+		if pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).is_err() {
+			eprintln!("skipping headless render test: no gpu adapter available");
+			return None;
+		}
+		let mut engine = RenderEngine::headless(
+			&instance,
+			RenderConfig {
+				width: 64,
+				height: 64,
+				..RenderConfig::default()
+			},
+		);
+		let mut store = RenderTargetStore::default();
+		let (rt_id, _texture_handle) = engine.create_render_target(&mut store, 64, 64);
+		camera.target = Some(rt_id);
+		let mut render_info = RenderInfo::new();
+		engine.render(commands, Some(&camera), &mut render_info);
+		engine.read_target_rgba(rt_id).map(|(bytes, _, _)| bytes)
+	}
+
+	fn rgb_at(rgba: &[u8], x: usize, y: usize) -> (u8, u8, u8) {
+		let i = (y * 64 + x) * 4;
+		(rgba[i], rgba[i + 1], rgba[i + 2])
+	}
+
+	fn colored_rect(position: Vec2, size: Vec2, color: Color, layer: i32) -> DrawCommand {
+		DrawCommand {
+			kind: DrawKind::Rect {
+				position,
+				size,
+				color,
+				layer,
+			},
+		}
+	}
+
+	/// every layer's projection must reach its own draws. a single shared uniform
+	/// rewritten mid-pass let the last layer's projection win for the whole frame, so
+	/// adding one screen-space overlay moved every world sprite into screen space.
+	#[test]
+	fn post_process_draw_does_not_move_world_draws() {
+		// the default camera sees world [-32,32]²; this rect covers the top-left quadrant
+		let world = colored_rect(Vec2::new(-32.0, -32.0), Vec2::new(32.0, 32.0), Color::RED, 0);
+		let overlay = colored_rect(
+			Vec2::new(60.0, 60.0),
+			Vec2::new(4.0, 4.0),
+			Color::GREEN,
+			layers::POST_PROCESS,
+		);
+		let Some(rgba) = render_headless_64(&[world, overlay], Camera::new()) else {
+			return;
+		};
+		let (r, g, b) = rgb_at(&rgba, 8, 8);
+		assert!(
+			r > 200 && g < 60 && b < 60,
+			"world rect must stay in world space next to a POST_PROCESS draw, got ({r}, {g}, {b}) at (8,8)"
+		);
+		let (r, g, b) = rgb_at(&rgba, 62, 62);
+		assert!(
+			g > 200 && r < 60 && b < 60,
+			"POST_PROCESS rect must land in screen space at (60..64), got ({r}, {g}, {b}) at (62,62)"
+		);
+	}
+
+	/// a parallax offset on one layer must not shift the other layers.
+	#[test]
+	fn layer_parallax_applies_per_layer() {
+		let mut camera = Camera::new();
+		camera.set_layer_parallax(1, Vec2::new(100.0, 0.0));
+		// layer 0: no parallax, top-left quadrant
+		let near = colored_rect(Vec2::new(-32.0, -32.0), Vec2::new(32.0, 32.0), Color::RED, 0);
+		// layer 1: effective camera at (-100, 0), so world (-100,0)..(-68,32) is the
+		// bottom-right quadrant of the target
+		let far = colored_rect(Vec2::new(-100.0, 0.0), Vec2::new(32.0, 32.0), Color::GREEN, 1);
+		let Some(rgba) = render_headless_64(&[near, far], camera) else {
+			return;
+		};
+		let (r, g, b) = rgb_at(&rgba, 8, 8);
+		assert!(
+			r > 200 && g < 60 && b < 60,
+			"layer 0 must ignore layer 1's parallax, got ({r}, {g}, {b}) at (8,8)"
+		);
+		let (r, g, b) = rgb_at(&rgba, 48, 48);
+		assert!(
+			g > 200 && r < 60 && b < 60,
+			"layer 1 must use its parallax offset, got ({r}, {g}, {b}) at (48,48)"
 		);
 	}
 }
