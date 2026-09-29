@@ -795,6 +795,10 @@ impl TextureLoaderTrait for LiTextureLoader {
 /// width u32, height u32, then raw BC block data for base + each mip level.
 pub struct BctexLoader;
 
+/// largest texture side accepted from a file header (wgpu's `max_texture_dimension_2d`
+/// on desktop is 8192-16384); anything bigger is corrupt or hostile.
+const MAX_TEXTURE_DIM: u32 = 16_384;
+
 impl TextureLoaderTrait for BctexLoader {
 	fn load(&self, bytes: Vec<u8>) -> Result<Texture, String> {
 		if bytes.len() < 16 {
@@ -815,17 +819,31 @@ impl TextureLoaderTrait for BctexLoader {
 			7 => (TextureCompression::Bc7, 16u32),
 			_ => return Err(format!("bctex: unknown format byte {format_byte}")),
 		};
-		let base_size = width.div_ceil(4) * height.div_ceil(4) * block_bytes;
+		// every size below comes from the file header: validate before slicing. a
+		// panic here would be on the io worker, which aborts under panic = "abort"
+		if width == 0 || height == 0 || width > MAX_TEXTURE_DIM || height > MAX_TEXTURE_DIM {
+			return Err(format!("bctex: bad dimensions {width}x{height}"));
+		}
+		let level_size = |w: u32, h: u32| {
+			(u64::from(w.div_ceil(4)) * u64::from(h.div_ceil(4)) * u64::from(block_bytes)) as usize
+		};
+		let base_size = level_size(width, height);
 		let mut offset = 16usize;
-		let pixels = bytes[offset..offset + base_size as usize].to_vec();
-		offset += base_size as usize;
+		let Some(pixels) = bytes.get(offset..offset + base_size) else {
+			return Err(format!(
+				"bctex: truncated: {width}x{height} needs {base_size} bytes, file has {}",
+				bytes.len() - offset
+			));
+		};
+		let pixels = pixels.to_vec();
+		offset += base_size;
 		let mut mips: Vec<Vec<u8>> = Vec::new();
 		let mut mip_w = width;
 		let mut mip_h = height;
 		for _ in 1..mip_count {
 			mip_w = (mip_w / 2).max(1);
 			mip_h = (mip_h / 2).max(1);
-			let mip_size = (mip_w.div_ceil(4) * mip_h.div_ceil(4) * block_bytes) as usize;
+			let mip_size = level_size(mip_w, mip_h);
 			if offset + mip_size > bytes.len() {
 				break;
 			}
@@ -2320,5 +2338,36 @@ mod handle_tests {
 		texture.compression = TextureCompression::Bc1;
 		texture.generate_mipmaps();
 		assert!(texture.mips.is_empty(), "bc blocks are not rgba pixels; box-filtering them corrupts the texture");
+	}
+
+	fn bctex(format: u8, mips: u16, width: u32, height: u32, body: usize) -> Vec<u8> {
+		let mut bytes = b"BCTX".to_vec();
+		bytes.push(0);
+		bytes.push(format);
+		bytes.extend_from_slice(&mips.to_le_bytes());
+		bytes.extend_from_slice(&width.to_le_bytes());
+		bytes.extend_from_slice(&height.to_le_bytes());
+		bytes.resize(16 + body, 0xAB);
+		bytes
+	}
+
+	#[test]
+	fn bctex_loads_a_well_formed_file() {
+		// 8x8 bc1: 2x2 blocks x 8 bytes = 32, plus a 4x4 mip (8 bytes)
+		let t = BctexLoader.load(bctex(1, 2, 8, 8, 40)).unwrap();
+		assert_eq!((t.width, t.height, t.pixels.len(), t.mips.len()), (8, 8, 32, 1));
+	}
+
+	/// corr-03: a truncated body sliced past the buffer end and panicked on the io
+	/// worker, which aborts the process under panic = "abort".
+	#[test]
+	fn bctex_rejects_a_truncated_body() {
+		assert!(BctexLoader.load(bctex(1, 1, 64, 64, 10)).is_err());
+	}
+
+	#[test]
+	fn bctex_rejects_overflowing_and_empty_dimensions() {
+		assert!(BctexLoader.load(bctex(7, 1, u32::MAX, u32::MAX, 16)).is_err());
+		assert!(BctexLoader.load(bctex(1, 1, 0, 64, 16)).is_err());
 	}
 }
