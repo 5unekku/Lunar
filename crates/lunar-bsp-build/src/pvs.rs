@@ -2,10 +2,13 @@
 //!
 //! for each pair of leaves, `pvs_samples` random ray pairs are cast between
 //! random points in each leaf's AABB. if any ray passes through unblocked, the
-//! leaves mark each other as mutually visible. this is a conservative approximation:
-//! false positives (over-visible) are safe; false negatives would cause pop-in.
+//! leaves mark each other as mutually visible.
 //!
-//! rayon parallelises across leaf pairs for performance.
+//! this is a sampled estimate, not a conservative bound: a sightline narrower than
+//! the sample spacing can be missed (a false negative, i.e. possible pop-in), and
+//! `skip_distance_sq` marks far pairs hidden by design. raise `pvs_samples` for
+//! levels with thin openings. rays are tested against a triangle bvh, and rayon
+//! parallelises across leaf rows.
 
 use lunar_math::Vec3;
 use rayon::prelude::*;
@@ -41,6 +44,7 @@ pub fn compute_pvs(
 
 	let stride = leaf_count.div_ceil(64);
 	let total_words = leaf_count * stride;
+	let bvh = TriBvh::build(triangles);
 
 	// compute pvs in parallel: each row (camera leaf) as an independent unit
 	let rows: Vec<Vec<u64>> = (0..leaf_count)
@@ -75,7 +79,7 @@ pub fn compute_pvs(
 				if leaves_see_each_other(
 					leaf_aabbs[leaf_a],
 					leaf_aabbs[leaf_b],
-					triangles,
+					&bvh,
 					samples,
 					leaf_a as u64,
 				) {
@@ -122,7 +126,7 @@ fn leaf_centroid(aabb: ([f32; 3], [f32; 3])) -> Vec3 {
 fn leaves_see_each_other(
 	aabb_a: ([f32; 3], [f32; 3]),
 	aabb_b: ([f32; 3], [f32; 3]),
-	triangles: &[[Vec3; 3]],
+	bvh: &TriBvh<'_>,
 	samples: usize,
 	seed: u64,
 ) -> bool {
@@ -136,7 +140,7 @@ fn leaves_see_each_other(
 			continue;
 		}
 		let dir_norm = dir / dist;
-		if !ray_hits_any(origin, dir_norm, dist, triangles) {
+		if !bvh.any_hit(origin, dir_norm, dist) {
 			return true;
 		}
 	}
@@ -151,15 +155,158 @@ fn random_point_in_aabb(rng: &mut Lcg, aabb: ([f32; 3], [f32; 3])) -> Vec3 {
 	)
 }
 
+/// linear-scan any-hit; the reference the bvh is tested against.
+#[cfg(test)]
 fn ray_hits_any(origin: Vec3, dir: Vec3, max_dist: f32, triangles: &[[Vec3; 3]]) -> bool {
-	for tri in triangles {
-		if let Some(t) = ray_triangle(origin, dir, tri[0], tri[1], tri[2])
-			&& t < max_dist - 1e-4
-		{
-			return true;
+	triangles.iter().any(|tri| segment_hits(origin, dir, max_dist, tri))
+}
+
+/// whether the segment `origin + dir * t`, `t < max_dist`, hits `tri`.
+fn segment_hits(origin: Vec3, dir: Vec3, max_dist: f32, tri: &[Vec3; 3]) -> bool {
+	ray_triangle(origin, dir, tri[0], tri[1], tri[2]).is_some_and(|t| t < max_dist - 1e-4)
+}
+
+/// triangles per bvh leaf
+const BVH_LEAF_SIZE: usize = 4;
+
+struct BvhNode {
+	min: Vec3,
+	max: Vec3,
+	/// leaf: first index into `order`. internal: index of the right child (the left
+	/// child is always the next node)
+	start_or_right: u32,
+	/// leaf: triangle count (> 0). internal: 0
+	count: u32,
+}
+
+/// bounding volume hierarchy over the level triangles, for any-hit segment queries.
+/// median split on the longest centroid axis; a flat node array in depth-first order.
+struct TriBvh<'a> {
+	triangles: &'a [[Vec3; 3]],
+	order: Vec<u32>,
+	nodes: Vec<BvhNode>,
+}
+
+impl<'a> TriBvh<'a> {
+	fn build(triangles: &'a [[Vec3; 3]]) -> Self {
+		let mut bvh = Self {
+			triangles,
+			order: (0..triangles.len() as u32).collect(),
+			nodes: Vec::with_capacity(2 * triangles.len().div_ceil(BVH_LEAF_SIZE)),
+		};
+		if !triangles.is_empty() {
+			bvh.build_node(0, triangles.len());
+		}
+		bvh
+	}
+
+	fn build_node(&mut self, start: usize, end: usize) -> usize {
+		let (mut min, mut max) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+		let (mut cmin, mut cmax) = (min, max);
+		for &i in &self.order[start..end] {
+			let tri = &self.triangles[i as usize];
+			for v in tri {
+				min = min.min(*v);
+				max = max.max(*v);
+			}
+			let c = (tri[0] + tri[1] + tri[2]) / 3.0;
+			cmin = cmin.min(c);
+			cmax = cmax.max(c);
+		}
+		let node = self.nodes.len();
+		self.nodes.push(BvhNode {
+			min,
+			max,
+			start_or_right: start as u32,
+			count: (end - start) as u32,
+		});
+		if end - start <= BVH_LEAF_SIZE {
+			return node;
+		}
+
+		let extent = cmax - cmin;
+		let axis = if extent.x >= extent.y && extent.x >= extent.z {
+			0
+		} else if extent.y >= extent.z {
+			1
+		} else {
+			2
+		};
+		let mid = start + (end - start) / 2;
+		let triangles = self.triangles;
+		let key = |i: &u32| {
+			let tri = &triangles[*i as usize];
+			(tri[0][axis] + tri[1][axis] + tri[2][axis]) / 3.0
+		};
+		self.order[start..end].select_nth_unstable_by(mid - start, |a, b| key(a).total_cmp(&key(b)));
+
+		self.build_node(start, mid);
+		let right = self.build_node(mid, end);
+		self.nodes[node].start_or_right = right as u32;
+		self.nodes[node].count = 0;
+		node
+	}
+
+	/// whether the segment `origin + dir * t`, `t < max_dist`, hits any triangle.
+	fn any_hit(&self, origin: Vec3, dir: Vec3, max_dist: f32) -> bool {
+		if self.nodes.is_empty() {
+			return false;
+		}
+		// depth-first; depth is ~log2(n / BVH_LEAF_SIZE), far below the stack size
+		let mut stack = [0u32; 64];
+		let mut top = 1;
+		while top > 0 {
+			top -= 1;
+			let index = stack[top] as usize;
+			let node = &self.nodes[index];
+			if !segment_overlaps_box(origin, dir, max_dist, node.min, node.max) {
+				continue;
+			}
+			if node.count > 0 {
+				let start = node.start_or_right as usize;
+				let tris = &self.order[start..start + node.count as usize];
+				if tris
+					.iter()
+					.any(|&i| segment_hits(origin, dir, max_dist, &self.triangles[i as usize]))
+				{
+					return true;
+				}
+			} else {
+				stack[top] = node.start_or_right;
+				stack[top + 1] = (index + 1) as u32;
+				top += 2;
+			}
+		}
+		false
+	}
+}
+
+/// slab test: whether the segment `origin + dir * t`, `t` in `[0, max_dist]`, touches
+/// the box. boxes are padded slightly so hits on a box face are never pruned.
+fn segment_overlaps_box(origin: Vec3, dir: Vec3, max_dist: f32, min: Vec3, max: Vec3) -> bool {
+	const PAD: f32 = 1e-3;
+	let (mut t0, mut t1) = (0.0f32, max_dist);
+	for axis in 0..3 {
+		let (o, d) = (origin[axis], dir[axis]);
+		let (lo, hi) = (min[axis] - PAD, max[axis] + PAD);
+		if d.abs() < 1e-12 {
+			if o < lo || o > hi {
+				return false;
+			}
+			continue;
+		}
+		let inv = 1.0 / d;
+		let (mut near, mut far) = ((lo - o) * inv, (hi - o) * inv);
+		if near > far {
+			std::mem::swap(&mut near, &mut far);
+		}
+		t0 = t0.max(near);
+		t1 = t1.min(far);
+		if t0 > t1 {
+			return false;
 		}
 	}
-	false
+	true
 }
 
 /// Möller-Trumbore ray-triangle intersection. returns distance along ray or None.
@@ -202,7 +349,82 @@ impl Lcg {
 		self.0
 	}
 
+	/// uniform in [0, 1): the top 24 bits over 2^24 (an f32's mantissa). the old
+	/// `(x >> 33) / u32::MAX` topped out at 0.5, so every sample landed in the lower
+	/// half of each leaf box.
 	fn next_f32(&mut self) -> f32 {
-		(self.next_u64() >> 33) as f32 / (u32::MAX as f32)
+		(self.next_u64() >> 40) as f32 / (1u64 << 24) as f32
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn lcg_samples_span_the_unit_interval() {
+		let mut rng = Lcg::new(42);
+		let (mut lo, mut hi) = (1.0f32, 0.0f32);
+		for _ in 0..10_000 {
+			let v = rng.next_f32();
+			assert!((0.0..=1.0).contains(&v));
+			lo = lo.min(v);
+			hi = hi.max(v);
+		}
+		assert!(lo < 0.01 && hi > 0.99, "samples must cover [0, 1], got [{lo}, {hi}]");
+	}
+
+	/// random triangle soup + random segments: the bvh any-hit must agree with a
+	/// linear scan on every query.
+	#[test]
+	fn bvh_any_hit_matches_linear_scan() {
+		let mut rng = Lcg::new(7);
+		let mut v = || Vec3::new(rng.next_f32(), rng.next_f32(), rng.next_f32()) * 100.0;
+		let triangles: Vec<[Vec3; 3]> = (0..500)
+			.map(|_| {
+				let base = v();
+				[base, base + v() * 0.1, base + v() * 0.1]
+			})
+			.collect();
+		let bvh = TriBvh::build(&triangles);
+		for _ in 0..2000 {
+			let origin = v();
+			let target = v();
+			let dir = target - origin;
+			let dist = dir.length();
+			if dist < 1e-3 {
+				continue;
+			}
+			let dir = dir / dist;
+			assert_eq!(
+				bvh.any_hit(origin, dir, dist),
+				ray_hits_any(origin, dir, dist, &triangles),
+				"bvh and linear scan disagree for {origin:?} -> {target:?}"
+			);
+		}
+	}
+
+	/// two unit-cube leaves side by side on x with a quad between them: sealed, they
+	/// cannot see each other; with a hole cut in the wall's upper half they can.
+	#[test]
+	fn wall_blocks_and_gap_reveals() {
+		let leaves = [([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]), ([2.0, 0.0, 0.0], [3.0, 1.0, 1.0])];
+		let quad = |y0: f32, y1: f32| {
+			let (a, b, c, d) = (
+				Vec3::new(1.5, y0, -1.0),
+				Vec3::new(1.5, y1, -1.0),
+				Vec3::new(1.5, y1, 2.0),
+				Vec3::new(1.5, y0, 2.0),
+			);
+			[[a, b, c], [a, c, d]]
+		};
+		let sealed: Vec<[Vec3; 3]> = quad(-1.0, 2.0).to_vec();
+		let pvs = compute_pvs(&leaves, &sealed, 64, 0.0);
+		assert_eq!(pvs.data[0] & 0b10, 0, "a full wall must hide leaf 1 from leaf 0");
+
+		// wall only covers the lower half: rays through the upper half get through
+		let low_wall: Vec<[Vec3; 3]> = quad(-1.0, 0.5).to_vec();
+		let pvs = compute_pvs(&leaves, &low_wall, 64, 0.0);
+		assert_ne!(pvs.data[0] & 0b10, 0, "leaf 1 is visible over a half-height wall");
 	}
 }
