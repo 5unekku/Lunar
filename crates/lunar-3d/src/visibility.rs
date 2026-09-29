@@ -95,9 +95,16 @@ pub struct Aabb3d {
 }
 
 impl Aabb3d {
-	/// compute a tight AABB from a slice of positions.
+	/// compute a tight AABB from a slice of positions. an empty slice gives a
+	/// zero-size box at the origin (corr-44: it used to give -inf half extents).
 	#[must_use]
 	pub fn from_positions(positions: &[Vec3]) -> Self {
+		if positions.is_empty() {
+			return Self {
+				center: Vec3A::ZERO,
+				half_extents: Vec3A::ZERO,
+			};
+		}
 		let mut min = Vec3A::splat(f32::MAX);
 		let mut max = Vec3A::splat(f32::MIN);
 		for &pos in positions {
@@ -128,7 +135,9 @@ pub struct Frustum {
 impl Frustum {
 	/// extract frustum planes from a combined view-projection matrix.
 	///
-	/// uses the Gribb/Hartmann method (column-major, right-handed clip space).
+	/// uses the Gribb/Hartmann method (column-major, right-handed clip space) for
+	/// the 0..1 depth range every engine projection uses (wgpu/directx), where the
+	/// near plane is row 2 alone; `r3 + r2` is the opengl -1..1 form (corr-43).
 	/// planes are not normalized: use for overlap tests only.
 	#[must_use]
 	pub fn from_view_proj(vp: Mat4) -> Self {
@@ -144,7 +153,7 @@ impl Frustum {
 				r3 - r0, // right
 				r3 + r1, // bottom
 				r3 - r1, // top
-				r3 + r2, // near
+				r2,      // near
 				r3 - r2, // far
 			],
 		}
@@ -523,5 +532,36 @@ pub fn build_cull_soa(
 		soa.half_x.push(world_half.x);
 		soa.half_y.push(world_half.y);
 		soa.half_z.push(world_half.z);
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use lunar_math::glam::camera::rh;
+
+	/// corr-43: the engine's projections map depth to 0..1 (wgpu), so the near
+	/// plane is row 2 alone. the opengl `r3 + r2` form let geometry down to about
+	/// half the near distance through.
+	#[test]
+	fn near_plane_matches_zero_to_one_depth() {
+		let near = 0.1;
+		let proj = rh::proj::directx::perspective(60_f32.to_radians(), 16.0 / 9.0, near, 500.0);
+		let frustum = Frustum::from_view_proj(proj);
+		let tiny = Vec3A::splat(0.001);
+		// between the true near plane and the buggy one
+		assert!(!frustum.intersects_aabb(Vec3A::new(0.0, 0.0, -0.07), tiny));
+		assert!(frustum.intersects_aabb(Vec3A::new(0.0, 0.0, -0.2), tiny));
+		assert!(frustum.intersects_aabb(Vec3A::new(0.0, 0.0, -499.0), tiny));
+		assert!(!frustum.intersects_aabb(Vec3A::new(0.0, 0.0, -501.0), tiny));
+	}
+
+	/// corr-44: an empty position slice produced -inf half extents, which made
+	/// `intersects_aabb` cull the box everywhere (or NaN, orientation-dependent).
+	#[test]
+	fn empty_positions_give_a_degenerate_point_box() {
+		let aabb = Aabb3d::from_positions(&[]);
+		assert_eq!(aabb.center, Vec3A::ZERO);
+		assert_eq!(aabb.half_extents, Vec3A::ZERO);
 	}
 }

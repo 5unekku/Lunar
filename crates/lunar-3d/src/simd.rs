@@ -459,7 +459,7 @@ mod tests {
 	}
 
 	fn test_frustum() -> Frustum {
-		// a realistic reverse-z perspective × look-at view, so the planes are non-trivial.
+		// a realistic perspective × look-at view, so the planes are non-trivial.
 		let proj = rh::proj::directx::perspective(60_f32.to_radians(), 16.0 / 9.0, 0.1, 500.0);
 		let view = rh::view::look_at_mat4(
 			lunar_math::Vec3::new(3.0, 4.0, 10.0),
