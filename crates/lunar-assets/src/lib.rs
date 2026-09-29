@@ -444,6 +444,13 @@ impl<T: Asset> AssetStore<T> {
 			})
 	}
 
+	/// a slot for a load that was refused before it started: handles to it report failed
+	fn failed_slot(&mut self, key: String) -> Handle<T> {
+		let handle = self.allocate_slot(key);
+		self.mark_failed(handle.id());
+		handle
+	}
+
 	fn remove(&mut self, id: u32) {
 		if let Some(slot) = self.entries.get_mut(id as usize)
 			&& let Some(entry) = slot.take()
@@ -894,17 +901,37 @@ impl FontLoaderTrait for TtfFontLoader {
 /// resolve an asset path relative to the game's assets directory.
 ///
 /// supports both "path" and "./path" formats. if the path doesn't start
-/// with "assets/", it's resolved relative to the assets/ directory.
-fn resolve_asset_path(path: &str) -> String {
+/// with "assets/", it's resolved relative to the assets/ directory. absolute paths
+/// pass through unchanged (an explicit choice by the caller).
+///
+/// relative paths are normalized lexically and may not climb out of the assets
+/// directory: paths arrive from data (scene files' `sprite_texture`, mods), and
+/// `"../../secret"` used to resolve to `assets/../../secret` and be read from
+/// anywhere on disk.
+fn resolve_asset_path(path: &str) -> Result<String, String> {
 	let cleaned = path.strip_prefix("./").unwrap_or(path);
-	if Path::new(cleaned).is_absolute() {
-		return cleaned.to_string();
+	if Path::new(cleaned).is_absolute() || cleaned.starts_with('/') {
+		return Ok(cleaned.to_string());
 	}
-	// check if already starts with assets/
-	if cleaned.starts_with("assets/") || cleaned.starts_with('/') {
-		return cleaned.to_string();
+	let mut parts: Vec<&str> = Vec::new();
+	for part in cleaned.split(['/', '\\']) {
+		match part {
+			"" | "." => {}
+			".." => {
+				if parts.pop().is_none() {
+					return Err(format!("asset path '{path}' escapes the assets directory"));
+				}
+			}
+			part => parts.push(part),
+		}
 	}
-	format!("assets/{cleaned}")
+	if parts.first() != Some(&"assets") {
+		parts.insert(0, "assets");
+	}
+	if parts.len() < 2 {
+		return Err(format!("asset path '{path}' names no file"));
+	}
+	Ok(parts.join("/"))
 }
 
 /// determine the appropriate texture loader for a file extension.
@@ -1175,7 +1202,13 @@ impl AssetServer {
 	pub fn load_texture<'a>(&mut self, source: impl Into<TextureSource<'a>>) -> Handle<Texture> {
 		match source.into() {
 			TextureSource::Path(path) => {
-				let resolved = resolve_asset_path(path);
+				let resolved = match resolve_asset_path(path) {
+					Ok(resolved) => resolved,
+					Err(err) => {
+						log::warn!("refusing to load texture: {err}");
+						return self.texture_store.failed_slot(path.to_string());
+					}
+				};
 				let handle = self.texture_store.allocate_slot(resolved.clone());
 				let mut loader = self.resolve_texture_loader(&resolved);
 				if self.mip_config.generate_mipmaps {
@@ -1211,7 +1244,13 @@ impl AssetServer {
 	/// the sound loads asynchronously in the background.
 	/// use [`is_sound_ready`](Self::is_sound_ready) to check when it's usable.
 	pub fn load_sound(&mut self, path: &str) -> Handle<Sound> {
-		let resolved = resolve_asset_path(path);
+		let resolved = match resolve_asset_path(path) {
+			Ok(resolved) => resolved,
+			Err(err) => {
+				log::warn!("refusing to load sound: {err}");
+				return self.sound_store.failed_slot(path.to_string());
+			}
+		};
 		let handle = self.sound_store.allocate_slot(resolved.clone());
 		let loader = self.resolve_sound_loader(&resolved);
 		self.io_pool.load_sound(resolved, handle.id(), loader);
@@ -1223,7 +1262,13 @@ impl AssetServer {
 	/// the font loads asynchronously in the background.
 	/// use [`is_font_ready`](Self::is_font_ready) to check when it's usable.
 	pub fn load_font(&mut self, path: &str) -> Handle<Font> {
-		let resolved = resolve_asset_path(path);
+		let resolved = match resolve_asset_path(path) {
+			Ok(resolved) => resolved,
+			Err(err) => {
+				log::warn!("refusing to load font: {err}");
+				return self.font_store.failed_slot(path.to_string());
+			}
+		};
 		let handle = self.font_store.allocate_slot(resolved.clone());
 		let loader = self.resolve_font_loader(&resolved);
 		self.io_pool.load_font(resolved, handle.id(), loader);
@@ -2259,7 +2304,7 @@ mod handle_tests {
 	#[test]
 	fn resolve_asset_path_relative() {
 		assert_eq!(
-			resolve_asset_path("sprites/player.png"),
+			resolve_asset_path("sprites/player.png").unwrap(),
 			"assets/sprites/player.png"
 		);
 	}
@@ -2267,7 +2312,7 @@ mod handle_tests {
 	#[test]
 	fn resolve_asset_path_already_assets() {
 		assert_eq!(
-			resolve_asset_path("assets/sprites/player.png"),
+			resolve_asset_path("assets/sprites/player.png").unwrap(),
 			"assets/sprites/player.png"
 		);
 	}
@@ -2275,15 +2320,35 @@ mod handle_tests {
 	#[test]
 	fn resolve_asset_path_dot_slash() {
 		assert_eq!(
-			resolve_asset_path("./sprites/player.png"),
+			resolve_asset_path("./sprites/player.png").unwrap(),
 			"assets/sprites/player.png"
 		);
+	}
+
+	/// corr-10: data-driven relative paths must not escape the assets directory.
+	#[test]
+	fn resolve_asset_path_rejects_traversal() {
+		assert!(resolve_asset_path("../../secret.png").is_err());
+		assert!(resolve_asset_path("assets/../../secret.png").is_err());
+		assert!(resolve_asset_path("sprites/../../../etc/passwd").is_err());
+		assert!(resolve_asset_path("..\\..\\secret.png").is_err());
+		assert_eq!(resolve_asset_path("sprites/../ui/x.png").unwrap(), "assets/ui/x.png");
+		assert_eq!(resolve_asset_path("./a/./b.png").unwrap(), "assets/a/b.png");
+	}
+
+	#[test]
+	fn refused_paths_give_failed_handles() {
+		let mut server = AssetServer::new(1);
+		let handle = server.load_texture("../../secret.png");
+		assert!(!server.is_texture_ready(&handle));
+		let entry = server.texture_store.entries[handle.id() as usize].as_ref().unwrap();
+		assert_eq!(entry.state, LoadState::Failed);
 	}
 
 	#[test]
 	fn resolve_asset_path_absolute_unchanged() {
 		assert_eq!(
-			resolve_asset_path("/absolute/path.png"),
+			resolve_asset_path("/absolute/path.png").unwrap(),
 			"/absolute/path.png"
 		);
 	}
