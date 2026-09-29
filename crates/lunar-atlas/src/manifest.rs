@@ -128,8 +128,14 @@ impl AtlasManifest {
 			.map_err(|_| ManifestError::Truncated)?;
 		let region_count = u32::from_le_bytes(count_buf);
 
-		let mut regions =
-			HashMap::with_capacity_and_hasher(region_count as usize, Default::default());
+		// the count is untrusted: reserve at most a modest amount up front and let
+		// the map grow as regions actually arrive, so a lying header fails as
+		// Truncated instead of aborting on a huge allocation (sec-03)
+		const MAX_PRERESERVE: u32 = 4096;
+		let mut regions = HashMap::with_capacity_and_hasher(
+			region_count.min(MAX_PRERESERVE) as usize,
+			Default::default(),
+		);
 		for _ in 0..region_count {
 			let mut name_len_buf = [0u8; 2];
 			reader
@@ -256,6 +262,22 @@ mod manifest_tests {
 			atlas_height: 64,
 			regions,
 		}
+	}
+
+	/// sec-03: a header claiming u32::MAX regions must fail as truncated, not
+	/// pre-allocate a map sized from the untrusted count.
+	#[test]
+	fn huge_region_count_is_truncated_not_allocated() {
+		let mut bytes = Vec::new();
+		bytes.extend_from_slice(&MAGIC);
+		bytes.extend_from_slice(&VERSION.to_le_bytes());
+		bytes.extend_from_slice(&64u32.to_le_bytes());
+		bytes.extend_from_slice(&64u32.to_le_bytes());
+		bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+		assert!(matches!(
+			AtlasManifest::from_bytes(&bytes),
+			Err(ManifestError::Truncated)
+		));
 	}
 
 	#[test]
