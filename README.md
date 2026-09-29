@@ -19,7 +19,7 @@ small, friendly public API.
   only where it is a genuine performance win (e.g. NEON pixel processing), with
   documented safety invariants.
 - **Crossplatform and multiarch.** The same game code runs on Linux, Windows, macOS, and
-  the web (WebGPU + WASM). `scripts/build_all.go` cross-compiles 12 target triples.
+  the web (WebGPU + WASM). `scripts/build_all.go` cross-compiles 13 target triples.
 
 ## non-goals
 
@@ -33,7 +33,7 @@ small, friendly public API.
 - **engine owns all memory**: game code holds typed `Handle<T>` references; the engine
   evicts CPU-side mesh/texture data after GPU upload
 - **fixed tick rate decoupled from frame cap**: logic ticks at a fixed 30 / 60 / 120 / 240 Hz
-  (accumulator-based, capped at 5 ticks/frame); rendering runs uncapped or at a chosen
+  (accumulator-based; a 250 ms per-frame catch-up clamp bounds the burst without dropping ticks); rendering runs uncapped or at a chosen
   frame cap, with a render interpolation alpha for smooth sub-tick motion
 - **parallel by default**: non-conflicting ECS systems run concurrently on a thread pool
   (single-threaded fallback on WASM)
@@ -59,7 +59,6 @@ Game code depends only on `lunar`. The rest are internal or opt-in.
 |-------|---------|
 | `lunar-2d` / `lunar-render` | 2D ECS components + wgpu sprite/text/camera/layer pipeline |
 | `lunar-3d` / `lunar-render-3d` | 3D scene components + clustered-forward PBR renderer (CSM, GTAO, SSR, STAA, FXAA, bloom, volumetric fog, contact shadows, decals, atmosphere) |
-| `lunar-camera-3d` | spring-arm / orbit camera |
 
 **asset pipeline**
 
@@ -76,7 +75,7 @@ Game code depends only on `lunar`. The rest are internal or opt-in.
 
 All live in the [`lunar-plugins`](https://gitlab.com/5unekku/lunar-plugins) workspace.
 
-`lunar-plugin-nav`, `lunar-plugin-pathfinding-rt`,
+`lunar-plugin-camera-3d`, `lunar-plugin-nav`, `lunar-plugin-pathfinding-rt`,
 `lunar-plugin-pathfinding-pre`, `lunar-plugin-physics-2d`, `lunar-plugin-physics-3d`,
 `lunar-plugin-particles`, `lunar-plugin-ai`, `lunar-plugin-spline`, `lunar-plugin-timeline`,
 `lunar-plugin-animation`, `lunar-plugin-tilemap`, `lunar-plugin-dialogue`, `lunar-plugin-ui`,
@@ -107,7 +106,7 @@ requirements:
 ### cross-compiling all targets
 
 ```bash
-go run scripts/build_all.go --release           # all 12 triples (needs cargo-zigbuild)
+go run scripts/build_all.go --release           # all 13 triples (needs cargo-zigbuild)
 go run scripts/build_all.go --target x86_64-unknown-linux-musl
 ```
 

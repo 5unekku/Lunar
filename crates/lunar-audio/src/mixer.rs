@@ -51,7 +51,7 @@ impl Mixer {
             }
         }
 
-        // soft clamp: avoids hard distortion on loud overlapping sources
+        // hard clip to [-1, 1] so loud overlapping sources cannot exceed full scale
         for sample in output.iter_mut() {
             *sample = sample.clamp(-1.0, 1.0);
         }

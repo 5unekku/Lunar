@@ -9,8 +9,10 @@
 //!
 //! the game loop uses an accumulator-based fixed timestep so physics and game
 //! logic always see a constant `time.delta_seconds()` equal to `1 / tick_hz`.
-//! if a frame takes longer than the tick interval, multiple ticks run that frame
-//! (capped at 5 to prevent spiral of death). wall-clock elapsed time per render
+//! if a frame takes longer than the tick interval, multiple ticks run that frame.
+//! the time fed to the accumulator is capped at 250 ms per frame, which bounds the
+//! catch-up burst (and prevents a spiral of death) without ever dropping ticks: at
+//! 60 hz that is at most 15 ticks, at 240 hz 60. wall-clock elapsed time per render
 //! frame is available via `time.real_delta_seconds()` for animation blending.
 
 use std::time::{Duration, Instant};
@@ -58,7 +60,7 @@ impl TickRate {
 /// game loop state: manages the fixed-step accumulator and frame rate limiting.
 ///
 /// call [`GameLoop::tick`] each render frame to get:
-/// - how many logic ticks to run (0-5)
+/// - how many logic ticks to run (0 or more; bounded by the 250 ms catch-up clamp)
 /// - the wall-clock time since the last render frame (for rendering interpolation)
 ///
 /// then advance `Time` by `tick_rate.delta_seconds()` per tick.
