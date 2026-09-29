@@ -309,6 +309,21 @@ impl<T: Asset> AssetStore<T> {
 		}
 	}
 
+	/// complete an async load, unless the slot was released and reused since the
+	/// load started (the result would land on an unrelated asset)
+	fn insert_for(&mut self, id: u32, generation: u16, data: T) {
+		if self.generations.get(id as usize) == Some(&generation) {
+			self.insert(id, data);
+		}
+	}
+
+	/// fail an async load, unless the slot has a newer occupant
+	fn mark_failed_for(&mut self, id: u32, generation: u16) {
+		if self.generations.get(id as usize) == Some(&generation) {
+			self.mark_failed(id);
+		}
+	}
+
 	fn mark_failed(&mut self, id: u32) {
 		if let Some(entry) = &mut self.entries[id as usize] {
 			entry.state = LoadState::Failed;
@@ -464,6 +479,9 @@ impl<T: Asset> AssetStore<T> {
 /// result of an async load operation, sent from worker threads back to the main thread
 struct LoadResult<T: Asset> {
 	id: u32,
+	/// generation of the slot occupant that requested the load: a result for a slot
+	/// that was released and reused meanwhile must not land on the new occupant
+	generation: u16,
 	path: String,
 	data: Result<T, String>,
 }
@@ -487,16 +505,19 @@ enum LoadTask {
 	Texture {
 		path: String,
 		id: u32,
+		generation: u16,
 		loader: Arc<dyn TextureLoaderTrait>,
 	},
 	Sound {
 		path: String,
 		id: u32,
+		generation: u16,
 		loader: Arc<dyn SoundLoaderTrait>,
 	},
 	Font {
 		path: String,
 		id: u32,
+		generation: u16,
 		loader: Arc<dyn FontLoaderTrait>,
 	},
 }
@@ -550,35 +571,38 @@ impl IoTaskPool {
 			thread::spawn(move || {
 				while let Ok(task) = task_recv.recv() {
 					match task {
-						LoadTask::Texture { path, id, loader } => {
+						LoadTask::Texture { path, id, generation, loader } => {
 							let result = std::fs::read(&path)
 								.map_err(|e| format!("failed to read file: {e}"))
 								.and_then(|bytes| loader.load(bytes));
 
 							let _ = texture_send.send(LoadResult {
 								id,
+								generation,
 								path,
 								data: result,
 							});
 						}
-						LoadTask::Sound { path, id, loader } => {
+						LoadTask::Sound { path, id, generation, loader } => {
 							let result = std::fs::read(&path)
 								.map_err(|e| format!("failed to read file: {e}"))
 								.and_then(|bytes| loader.load(bytes));
 
 							let _ = sound_send.send(LoadResult {
 								id,
+								generation,
 								path,
 								data: result,
 							});
 						}
-						LoadTask::Font { path, id, loader } => {
+						LoadTask::Font { path, id, generation, loader } => {
 							let result = std::fs::read(&path)
 								.map_err(|e| format!("failed to read file: {e}"))
 								.and_then(|bytes| loader.load(bytes));
 
 							let _ = font_send.send(LoadResult {
 								id,
+								generation,
 								path,
 								data: result,
 							});
@@ -597,18 +621,51 @@ impl IoTaskPool {
 	}
 
 	/// submit a texture load task
-	fn load_texture(&self, path: String, id: u32, loader: Arc<dyn TextureLoaderTrait>) {
-		let _ = self.sender.send(LoadTask::Texture { path, id, loader });
+	fn load_texture(
+		&self,
+		path: String,
+		id: u32,
+		generation: u16,
+		loader: Arc<dyn TextureLoaderTrait>,
+	) {
+		let _ = self.sender.send(LoadTask::Texture {
+			path,
+			id,
+			generation,
+			loader,
+		});
 	}
 
 	/// submit a sound load task
-	fn load_sound(&self, path: String, id: u32, loader: Arc<dyn SoundLoaderTrait>) {
-		let _ = self.sender.send(LoadTask::Sound { path, id, loader });
+	fn load_sound(
+		&self,
+		path: String,
+		id: u32,
+		generation: u16,
+		loader: Arc<dyn SoundLoaderTrait>,
+	) {
+		let _ = self.sender.send(LoadTask::Sound {
+			path,
+			id,
+			generation,
+			loader,
+		});
 	}
 
 	/// submit a font load task
-	fn load_font(&self, path: String, id: u32, loader: Arc<dyn FontLoaderTrait>) {
-		let _ = self.sender.send(LoadTask::Font { path, id, loader });
+	fn load_font(
+		&self,
+		path: String,
+		id: u32,
+		generation: u16,
+		loader: Arc<dyn FontLoaderTrait>,
+	) {
+		let _ = self.sender.send(LoadTask::Font {
+			path,
+			id,
+			generation,
+			loader,
+		});
 	}
 
 	/// drain all completed texture results
@@ -686,7 +743,13 @@ impl IoTaskPool {
 	}
 
 	/// submit a texture load task, checks bundled assets first, then falls back to fetch.
-	fn load_texture(&self, path: String, id: u32, loader: Arc<dyn TextureLoaderTrait>) {
+	fn load_texture(
+		&self,
+		path: String,
+		id: u32,
+		generation: u16,
+		loader: Arc<dyn TextureLoaderTrait>,
+	) {
 		let send = self.texture_send.clone();
 		wasm_bindgen_futures::spawn_local(async move {
 			let bytes_result = if crate::bundled::contains(&path) {
@@ -695,12 +758,18 @@ impl IoTaskPool {
 				crate::web_fetch::fetch_bytes(&path).await
 			};
 			let data = bytes_result.and_then(|bytes| loader.load(bytes));
-			let _ = send.send(LoadResult { id, path, data });
+			let _ = send.send(LoadResult { id, generation, path, data });
 		});
 	}
 
 	/// submit a sound load task, checks bundled assets first, then falls back to fetch.
-	fn load_sound(&self, path: String, id: u32, loader: Arc<dyn SoundLoaderTrait>) {
+	fn load_sound(
+		&self,
+		path: String,
+		id: u32,
+		generation: u16,
+		loader: Arc<dyn SoundLoaderTrait>,
+	) {
 		let send = self.sound_send.clone();
 		wasm_bindgen_futures::spawn_local(async move {
 			let bytes_result = if crate::bundled::contains(&path) {
@@ -709,12 +778,18 @@ impl IoTaskPool {
 				crate::web_fetch::fetch_bytes(&path).await
 			};
 			let data = bytes_result.and_then(|bytes| loader.load(bytes));
-			let _ = send.send(LoadResult { id, path, data });
+			let _ = send.send(LoadResult { id, generation, path, data });
 		});
 	}
 
 	/// submit a font load task, checks bundled assets first, then falls back to fetch.
-	fn load_font(&self, path: String, id: u32, loader: Arc<dyn FontLoaderTrait>) {
+	fn load_font(
+		&self,
+		path: String,
+		id: u32,
+		generation: u16,
+		loader: Arc<dyn FontLoaderTrait>,
+	) {
 		let send = self.font_send.clone();
 		wasm_bindgen_futures::spawn_local(async move {
 			let bytes_result = if crate::bundled::contains(&path) {
@@ -723,7 +798,7 @@ impl IoTaskPool {
 				crate::web_fetch::fetch_bytes(&path).await
 			};
 			let data = bytes_result.and_then(|bytes| loader.load(bytes));
-			let _ = send.send(LoadResult { id, path, data });
+			let _ = send.send(LoadResult { id, generation, path, data });
 		});
 	}
 
@@ -1220,7 +1295,8 @@ impl AssetServer {
 				if self.mip_config.generate_mipmaps {
 					loader = Arc::new(MipmappingLoader(loader));
 				}
-				self.io_pool.load_texture(resolved, handle.id(), loader);
+				self.io_pool
+					.load_texture(resolved, handle.id(), handle.generation(), loader);
 				handle
 			}
 			TextureSource::Embedded(bytes) => {
@@ -1259,7 +1335,8 @@ impl AssetServer {
 		};
 		let handle = self.sound_store.allocate_slot(resolved.clone());
 		let loader = self.resolve_sound_loader(&resolved);
-		self.io_pool.load_sound(resolved, handle.id(), loader);
+		self.io_pool
+			.load_sound(resolved, handle.id(), handle.generation(), loader);
 		handle
 	}
 
@@ -1277,7 +1354,8 @@ impl AssetServer {
 		};
 		let handle = self.font_store.allocate_slot(resolved.clone());
 		let loader = self.resolve_font_loader(&resolved);
-		self.io_pool.load_font(resolved, handle.id(), loader);
+		self.io_pool
+			.load_font(resolved, handle.id(), handle.generation(), loader);
 		handle
 	}
 
@@ -1623,12 +1701,12 @@ impl AssetServer {
 					if gen_mips {
 						data.generate_mipmaps();
 					}
-					self.texture_store.insert(result.id, data);
+					self.texture_store.insert_for(result.id, result.generation, data);
 					self.pending_texture_ids.push(result.id);
 				}
 				Err(err) => {
 					log::warn!("failed to load texture '{}': {}", result.path, err);
-					self.texture_store.mark_failed(result.id);
+					self.texture_store.mark_failed_for(result.id, result.generation);
 				}
 			}
 		}
@@ -1637,11 +1715,11 @@ impl AssetServer {
 		for result in self.io_pool.drain_sound_results() {
 			match result.data {
 				Ok(data) => {
-					self.sound_store.insert(result.id, data);
+					self.sound_store.insert_for(result.id, result.generation, data);
 				}
 				Err(err) => {
 					log::warn!("failed to load sound '{}': {}", result.path, err);
-					self.sound_store.mark_failed(result.id);
+					self.sound_store.mark_failed_for(result.id, result.generation);
 				}
 			}
 		}
@@ -1650,12 +1728,12 @@ impl AssetServer {
 		for result in self.io_pool.drain_font_results() {
 			match result.data {
 				Ok(data) => {
-					self.font_store.insert(result.id, data);
+					self.font_store.insert_for(result.id, result.generation, data);
 					self.pending_font_ids.push(result.id);
 				}
 				Err(err) => {
 					log::warn!("failed to load font '{}': {}", result.path, err);
-					self.font_store.mark_failed(result.id);
+					self.font_store.mark_failed_for(result.id, result.generation);
 				}
 			}
 		}
@@ -2481,5 +2559,22 @@ mod handle_tests {
 			world.run_system_once(dispatch_asset_changes).unwrap();
 		}
 		assert!(world.resource::<Messages<AssetChanged>>().is_empty(), "old messages must be dropped");
+	}
+
+	/// corr-29: a load result for a released-and-reused slot used to overwrite the
+	/// new occupant (results were matched by slot id only).
+	#[test]
+	fn stale_load_results_do_not_land_on_a_reused_slot() {
+		let mut store = AssetStore::<TestAsset>::new();
+		let first = store.allocate_slot("first".into());
+		store.remove(first.id());
+		let second = store.allocate_slot("second".into());
+		assert_eq!(first.id(), second.id());
+		// the first load finishes late: it must be ignored
+		store.insert_for(first.id(), first.generation(), TestAsset);
+		assert!(!store.is_ready(second));
+		store.mark_failed_for(first.id(), first.generation());
+		store.insert_for(second.id(), second.generation(), TestAsset);
+		assert!(store.is_ready(second));
 	}
 }
