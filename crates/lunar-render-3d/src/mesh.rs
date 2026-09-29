@@ -176,12 +176,14 @@ impl RenderEngine3d {
 			.map(|v| valence_score(vert_remaining[v]) + cache_score(CACHE_SIZE))
 			.collect();
 
-		// per-triangle: sum of vertex scores; u32::MAX = already emitted
+		// per-triangle: sum of vertex scores; u32::MAX = already emitted. an index past
+		// vertex_count (stale / hand-built index buffer, nothing validates it upstream)
+		// scores 0 instead of panicking the upload, like the vert_tris build above
 		let mut tri_score: Vec<f32> = (0..tri_count)
 			.map(|ti| {
 				indices[ti * 3..ti * 3 + 3]
 					.iter()
-					.map(|&vi| vert_score[vi as usize])
+					.map(|&vi| vert_score.get(vi as usize).copied().unwrap_or(0.0))
 					.sum()
 			})
 			.collect();
@@ -279,7 +281,7 @@ impl RenderEngine3d {
 			for &ti in &tris_to_update {
 				tri_score[ti] = indices[ti * 3..ti * 3 + 3]
 					.iter()
-					.map(|&vi| vert_score[vi as usize])
+					.map(|&vi| vert_score.get(vi as usize).copied().unwrap_or(0.0))
 					.sum();
 				if tri_score[ti] > best_score {
 					best_score = tri_score[ti];
@@ -531,6 +533,17 @@ impl RenderEngine3d {
 
 #[cfg(test)]
 mod packing_tests {
+	/// corr-22: out-of-range indices (a stale or hand-built index buffer) indexed the
+	/// per-vertex score table directly and panicked the upload.
+	#[test]
+	fn forsyth_tolerates_out_of_range_indices() {
+		let out = RenderEngine3d::forsyth_optimize(&[0, 1, 99, 1, 2, 0], 3);
+		assert_eq!(out.len(), 6);
+		let mut sorted = out.clone();
+		sorted.sort_unstable();
+		assert_eq!(sorted, [0, 0, 1, 1, 2, 99], "every index is kept, just reordered");
+	}
+
 	use super::*;
 	use lunar_math::{Mat4, Quat, Vec3};
 	use rayon::prelude::*;
