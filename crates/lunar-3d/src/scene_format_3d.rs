@@ -341,6 +341,10 @@ pub struct SceneTags3d(pub Vec<String>);
 /// spawns entities from a [`SceneDefinition3d`] into the ECS world.
 pub struct SceneLoader3d;
 
+/// deepest sub-scene nesting the loader expands. with cycles already cut this only
+/// bounds legitimately deep (or adversarially wide-and-deep) registries.
+const MAX_SUB_SCENE_DEPTH: usize = 32;
+
 impl SceneLoader3d {
     /// spawn all entities from a scene definition into the world.
     ///
@@ -352,7 +356,7 @@ impl SceneLoader3d {
         scene: &SceneDefinition3d,
         scene_registry: Option<&HashMap<String, SceneDefinition3d>>,
     ) -> HashMap<String, Entity> {
-        Self::spawn_internal(commands, registry, scene, scene_registry, None)
+        Self::spawn_internal(commands, registry, scene, scene_registry, None, &mut Vec::new())
     }
 
     /// load a scene from a `.ls3` file and spawn it into the world.
@@ -374,6 +378,8 @@ impl SceneLoader3d {
         scene: &SceneDefinition3d,
         scene_registry: Option<&HashMap<String, SceneDefinition3d>>,
         parent_entity: Option<Entity>,
+        // registry keys of the sub-scenes currently being expanded (sec-10)
+        chain: &mut Vec<String>,
     ) -> HashMap<String, Entity> {
         let mut id_map: HashMap<String, Entity> = HashMap::default();
         let mut parent_refs: Vec<(Entity, String)> = Vec::new();
@@ -516,16 +522,32 @@ impl SceneLoader3d {
 
         // third pass: resolve sub-scene instances
         for (entity, sub_name) in sub_scene_roots {
+            if chain.contains(&sub_name) {
+                log::warn!(
+                    "SceneLoader3d: sub-scene cycle {} -> {sub_name}, not expanding",
+                    chain.join(" -> ")
+                );
+                continue;
+            }
+            if chain.len() >= MAX_SUB_SCENE_DEPTH {
+                log::warn!(
+                    "SceneLoader3d: sub-scene '{sub_name}' nested deeper than {MAX_SUB_SCENE_DEPTH}, not expanding"
+                );
+                continue;
+            }
             if let Some(registry_map) = scene_registry
                 && let Some(sub_scene) = registry_map.get(&sub_name)
             {
+                chain.push(sub_name.clone());
                 let sub_map = Self::spawn_internal(
                     commands,
                     registry,
                     sub_scene,
                     Some(registry_map),
                     Some(entity),
+                    chain,
                 );
+                chain.pop();
                 let sub_children: Vec<Entity> = sub_map.values().copied().collect();
                 for &child in &sub_children {
                     commands.entity(child).insert(Parent(entity));
@@ -652,6 +674,36 @@ mod tests {
             back.entities[0].behaviors[0].fields[0].1,
             FieldValueRon::Float(2.5)
         );
+    }
+
+    /// sec-10: sub-scene chains a -> b -> a used to recurse until the stack
+    /// overflowed; the cycle is now cut where it closes.
+    #[test]
+    fn sub_scene_cycle_terminates() {
+        use bevy_ecs::world::CommandQueue;
+        let scene_with_sub = |name: &str, sub: &str| SceneDefinition3d {
+            name: name.into(),
+            entities: vec![EntityDefinition3d {
+                id: Some(format!("{name}_root")),
+                sub_scene: Some(sub.into()),
+                ..Default::default()
+            }],
+        };
+        let mut scenes = HashMap::default();
+        scenes.insert("a".to_string(), scene_with_sub("a", "b"));
+        scenes.insert("b".to_string(), scene_with_sub("b", "a"));
+        let mut world = World::new();
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            let mut mesh_registry = MeshRegistry::default();
+            SceneLoader3d::spawn_scene(&mut commands, &mut mesh_registry, &scenes["a"], Some(&scenes));
+        }
+        queue.apply(&mut world);
+        // a_root, b expanded (b_root), a expanded (a_root); that a's "b" closes
+        // the chain b -> a -> b and is cut
+        let spawned = world.query::<&SceneEntity3d>().iter(&world).count();
+        assert_eq!(spawned, 3);
     }
 
     #[test]

@@ -357,6 +357,10 @@ pub struct SceneInstance {
 #[derive(Debug, Clone, Component)]
 pub struct SceneData(pub Option<serde_json::Value>);
 
+/// deepest sub-scene nesting the loader expands. with cycles already cut this only
+/// bounds legitimately deep (or adversarially wide-and-deep) registries.
+const MAX_SUB_SCENE_DEPTH: usize = 32;
+
 impl SceneLoader {
 	/// spawn all entities from a scene definition into the world.
 	/// returns a map of entity ids (from the scene file) to spawned [`Entity`] handles.
@@ -366,7 +370,7 @@ impl SceneLoader {
 		scene: &SceneDefinition,
 		scene_registry: Option<&HashMap<String, SceneDefinition>>,
 	) -> HashMap<String, Entity> {
-		Self::spawn_scene_internal(commands, scene, scene_registry, None)
+		Self::spawn_scene_internal(commands, scene, scene_registry, None, &mut Vec::new())
 	}
 
 	fn spawn_scene_internal(
@@ -374,6 +378,8 @@ impl SceneLoader {
 		scene: &SceneDefinition,
 		scene_registry: Option<&HashMap<String, SceneDefinition>>,
 		parent_entity: Option<Entity>,
+		// registry keys of the sub-scenes currently being expanded (sec-10)
+		chain: &mut Vec<String>,
 	) -> HashMap<String, Entity> {
 		let mut id_map: HashMap<String, Entity> = HashMap::default();
 		let mut parent_refs: Vec<(Entity, String)> = Vec::new();
@@ -459,14 +465,34 @@ impl SceneLoader {
 
 		// third pass: resolve sub-scene instances
 		for (entity, sub_scene_name) in sub_scene_roots {
+			if chain.contains(&sub_scene_name) {
+				log::warn!(
+					"SceneLoader: sub-scene cycle {} -> {sub_scene_name}, not expanding",
+					chain.join(" -> ")
+				);
+				continue;
+			}
+			if chain.len() >= MAX_SUB_SCENE_DEPTH {
+				log::warn!(
+					"SceneLoader: sub-scene '{sub_scene_name}' nested deeper than {MAX_SUB_SCENE_DEPTH}, not expanding"
+				);
+				continue;
+			}
 			if let Some(registry) = scene_registry
 				&& let Some(sub_scene) = registry.get(&sub_scene_name)
 			{
 				commands.entity(entity).insert(SceneInstance {
 					scene_path: sub_scene_name.clone(),
 				});
-				let sub_id_map =
-					Self::spawn_scene_internal(commands, sub_scene, Some(registry), Some(entity));
+				chain.push(sub_scene_name.clone());
+				let sub_id_map = Self::spawn_scene_internal(
+					commands,
+					sub_scene,
+					Some(registry),
+					Some(entity),
+					chain,
+				);
+				chain.pop();
 				// parent all sub-scene root entities under this entity in one Children insert
 				let mut sub_children: smallvec::SmallVec<[Entity; 4]> = smallvec::SmallVec::new();
 				for sub_entity in sub_id_map.values() {
@@ -576,6 +602,29 @@ fn parse_hex_color(hex: &str) -> Option<Color> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	/// sec-10: a sub-scene that references itself (directly or via a chain) used
+	/// to recurse until the stack overflowed. the cycle is skipped instead.
+	#[test]
+	fn self_referencing_sub_scene_terminates() {
+		use bevy_ecs::world::{CommandQueue, World};
+		let scene = SceneDefinition::from_ron(
+			r#"Scene(name: "a", entities: [(id: Some("loop"), sub_scene: Some("a"))])"#,
+		)
+		.unwrap();
+		let mut registry = HashMap::default();
+		registry.insert("a".to_string(), scene.clone());
+		let mut world = World::new();
+		let mut queue = CommandQueue::default();
+		{
+			let mut commands = Commands::new(&mut queue, &world);
+			SceneLoader::spawn_scene(&mut commands, &scene, Some(&registry));
+		}
+		queue.apply(&mut world);
+		// the root plus one expansion of "a"; the second "a" is the cycle
+		let spawned = world.query::<&SceneEntity>().iter(&world).count();
+		assert_eq!(spawned, 2);
+	}
 
 	#[test]
 	fn parse_empty_scene() {
