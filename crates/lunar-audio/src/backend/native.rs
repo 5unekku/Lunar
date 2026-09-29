@@ -12,6 +12,8 @@ use sdl3::audio::{AudioCallback, AudioFormat, AudioSpec, AudioStream, AudioStrea
 struct MixerCallback {
     mixer: Mixer,
     scratch: Vec<f32>, // resized lazily, mirrors the old cubeb `flat` buffer
+    /// the last put_data error was logged; reset once a write succeeds again
+    write_failing: bool,
 }
 
 impl AudioCallback<f32> for MixerCallback {
@@ -22,7 +24,16 @@ impl AudioCallback<f32> for MixerCallback {
         let needed = requested.max(0) as usize;
         self.scratch.resize(needed, 0.0);
         self.mixer.fill(&mut self.scratch);
-        stream.put_data_f32(&self.scratch).ok();
+        // a failed write (allocation failure, unplugged device) drops this buffer; log
+        // the first failure of a run rather than every callback on the audio thread
+        match stream.put_data_f32(&self.scratch) {
+            Ok(()) => self.write_failing = false,
+            Err(error) if !self.write_failing => {
+                log::error!("lunar-audio: writing to the output stream failed: {error}");
+                self.write_failing = true;
+            }
+            Err(_) => {}
+        }
     }
 }
 
@@ -63,7 +74,7 @@ impl Sdl3Backend {
         let mixer = Mixer::new(receiver);
 
         let stream = audio_subsystem
-            .open_playback_stream(&spec, MixerCallback { mixer, scratch: Vec::new() })?;
+            .open_playback_stream(&spec, MixerCallback { mixer, scratch: Vec::new(), write_failing: false })?;
         // the device begins paused: skipping this means silent, errorless no sound.
         stream.resume()?;
 

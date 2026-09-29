@@ -168,15 +168,7 @@ fn decode(sound: &Sound) -> Result<Vec<f32>, String> {
         raw.extend_from_slice(sbuf.samples());
     }
 
-    // upmix mono to stereo; downmix >2 channels to stereo
-    let stereo: Vec<f32> = match channels {
-        1 => raw.iter().flat_map(|&s| [s, s]).collect(),
-        2 => raw,
-        n => raw
-            .chunks(n)
-            .flat_map(|frame| [frame[0], frame[1]])
-            .collect(),
-    };
+    let stereo = to_stereo(raw, channels)?;
 
     // decode runs once per sound and the result is cached, so the resample
     // cost is load-time only
@@ -185,6 +177,22 @@ fn decode(sound: &Sound) -> Result<Vec<f32>, String> {
     }
 
     Ok(stereo)
+}
+
+/// upmix mono to stereo; downmix >2 channels to stereo (keeping front left/right).
+/// a crafted wav (WAVE_FORMAT_EXTENSIBLE with zero channels and a zero mask) passes
+/// symphonia with 0 channels: `chunks(0)` panicked, and a short trailing frame
+/// indexed out of bounds, so 0 is rejected and a partial last frame is dropped.
+fn to_stereo(raw: Vec<f32>, channels: usize) -> Result<Vec<f32>, String> {
+    Ok(match channels {
+        0 => return Err("audio stream reports zero channels".into()),
+        1 => raw.iter().flat_map(|&s| [s, s]).collect(),
+        2 => raw,
+        n => raw
+            .chunks_exact(n)
+            .flat_map(|frame| [frame[0], frame[1]])
+            .collect(),
+    })
 }
 
 /// linearly resample interleaved stereo f32 PCM from `source_rate` to `target_rate`.
@@ -250,6 +258,15 @@ mod tests {
         let pcm = decode(&sound).expect("pcm wav must decode");
         assert_eq!(pcm.len(), 480 * 2);
         assert!(pcm.iter().all(|&s| (s - 0.5).abs() < 0.01));
+    }
+
+    /// corr-31: zero channels panicked in chunks(0); a partial frame indexed past its end
+    #[test]
+    fn channel_conversion_rejects_zero_and_drops_partial_frames() {
+        assert!(to_stereo(vec![0.1; 6], 0).is_err());
+        assert_eq!(to_stereo(vec![0.5], 1).unwrap(), [0.5, 0.5]);
+        // 3 channels, one full frame plus a 1-sample tail
+        assert_eq!(to_stereo(vec![1.0, 2.0, 3.0, 4.0], 3).unwrap(), [1.0, 2.0]);
     }
 
     #[test]
