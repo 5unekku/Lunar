@@ -53,6 +53,15 @@ findings from the fix loop are rev-13..rev-17.
 | rev-21 | water / particles / detail sprites discard scene depth | fixed `ba70282` |
 | rev-22 | water / decal params last-write-wins across entities | fixed `ba70282` |
 | rev-23 | terrain lacks pbr exposure (darker than meshes) | open (visual; needs sign-off) |
+| rev-24 | gpu indirect cull appends draws with `atomicAdd`: draw order follows workgroup scheduling, so exactly-tied depths (building bases) flip frame to frame; static-city golden was capture-unstable | fixed `46c9eb2` (slot-stable draws, `atomicMax` count; stable in and across processes, perf neutral 353.4 → 345.9 ms) |
+| rev-25 | ci build-wasm used the dev profile, which pins cranelift (no wasm32 backend) | fixed `7261cce` (llvm override, as build-cross does) |
+
+### 2026-07 audit findings fixed on this branch
+
+corr-01..08, corr-10..14, corr-16..40, corr-43, corr-44 and sec-04 are fixed
+test-first, one commit each (`git log --grep corr-`). corr-15 (scene-loader parent
+cycles) is covered by the cycle-safe hierarchy walk from corr-01. still open:
+corr-09 (spot lights never rendered, L), and the sec / perf / arch sets.
 
 ---
 
