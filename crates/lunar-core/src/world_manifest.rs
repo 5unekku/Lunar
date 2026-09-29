@@ -497,18 +497,41 @@ pub mod builtin_components {
 }
 
 impl EntityData {
-	/// get a component value by name, deserializing from json.
-	pub fn get_component<T: serde::de::DeserializeOwned>(&self, name: &str) -> Option<T> {
+	/// get a component value by name, deserializing from json. `Ok(None)` means
+	/// the component is absent; `Err` means it is present but has the wrong shape.
+	pub fn try_get_component<T: serde::de::DeserializeOwned>(
+		&self,
+		name: &str,
+	) -> Result<Option<T>, serde_json::Error> {
 		self.components
 			.get(name)
-			.and_then(|v| serde_json::from_value(v.clone()).ok())
+			.map(|v| T::deserialize(v))
+			.transpose()
 	}
 
-	/// set a component value by name, serializing to json.
-	pub fn set_component<T: serde::Serialize>(&mut self, name: &str, value: &T) {
-		if let Ok(json) = serde_json::to_value(value) {
-			self.components.insert(name.to_string(), json);
-		}
+	/// get a component value by name, deserializing from json. a present
+	/// component with the wrong shape is logged and returned as `None`; use
+	/// [`try_get_component`](Self::try_get_component) to handle it.
+	pub fn get_component<T: serde::de::DeserializeOwned>(&self, name: &str) -> Option<T> {
+		self.try_get_component(name).unwrap_or_else(|e| {
+			log::warn!(
+				"entity {:?}: component '{name}' has the wrong shape: {e}",
+				self.id
+			);
+			None
+		})
+	}
+
+	/// set a component value by name, serializing to json. on error the
+	/// component map is left unchanged.
+	pub fn set_component<T: serde::Serialize>(
+		&mut self,
+		name: &str,
+		value: &T,
+	) -> Result<(), serde_json::Error> {
+		let json = serde_json::to_value(value)?;
+		self.components.insert(name.to_string(), json);
+		Ok(())
 	}
 
 	/// check if this entity has a specific component.
@@ -959,12 +982,33 @@ mod tests {
 			components: HashMap::default(),
 		};
 
-		entity.set_component(builtin_components::LAYER, &1);
+		entity.set_component(builtin_components::LAYER, &1).unwrap();
 		assert!(entity.has_component(builtin_components::LAYER));
 		assert_eq!(
 			entity.get_component::<i32>(builtin_components::LAYER),
 			Some(1)
 		);
+	}
+
+	/// corr-35: a present component with the wrong json shape is an error, not
+	/// indistinguishable from an absent one, and failed serialization is reported.
+	#[test]
+	fn entity_data_component_errors_surface() {
+		let mut entity = EntityData {
+			id: None,
+			parent: None,
+			components: HashMap::default(),
+		};
+		entity
+			.components
+			.insert("layer".into(), serde_json::json!("not a number"));
+		assert!(entity.try_get_component::<i32>("layer").is_err());
+		assert_eq!(entity.try_get_component::<i32>("missing").unwrap(), None);
+
+		// maps with non-string keys can't serialize to json
+		let bad = std::collections::BTreeMap::from([((1, 2), 3)]);
+		assert!(entity.set_component("bad", &bad).is_err());
+		assert!(!entity.has_component("bad"));
 	}
 
 	#[test]
