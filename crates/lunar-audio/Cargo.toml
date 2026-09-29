@@ -16,8 +16,10 @@ bevy_ecs     = { workspace = true }
 log          = { workspace = true }
 crossbeam-channel = "0.5"
 
+# "wav" is only the riff demuxer; "pcm" is the codec that decodes the samples
+# inside it (without it every .wav failed with "unsupported codec")
 symphonia = { version = "0.5", default-features = false, features = [
-    "ogg", "vorbis", "wav", "flac",
+    "ogg", "vorbis", "wav", "pcm", "flac",
 ] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

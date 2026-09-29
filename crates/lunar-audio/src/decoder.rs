@@ -216,6 +216,42 @@ fn resample_stereo(input: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32
 mod tests {
     use super::*;
 
+    /// a 16-bit stereo pcm wav, 48 kHz, `frames` frames of a constant sample
+    fn pcm_wav(frames: u32, sample: i16) -> Vec<u8> {
+        let data_len = frames * 4;
+        let mut b = Vec::new();
+        b.extend_from_slice(b"RIFF");
+        b.extend_from_slice(&(36 + data_len).to_le_bytes());
+        b.extend_from_slice(b"WAVEfmt ");
+        b.extend_from_slice(&16u32.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes()); // WAVE_FORMAT_PCM
+        b.extend_from_slice(&2u16.to_le_bytes()); // channels
+        b.extend_from_slice(&48_000u32.to_le_bytes());
+        b.extend_from_slice(&(48_000u32 * 4).to_le_bytes());
+        b.extend_from_slice(&4u16.to_le_bytes());
+        b.extend_from_slice(&16u16.to_le_bytes());
+        b.extend_from_slice(b"data");
+        b.extend_from_slice(&data_len.to_le_bytes());
+        for _ in 0..frames * 2 {
+            b.extend_from_slice(&sample.to_le_bytes());
+        }
+        b
+    }
+
+    /// corr-11: only symphonia's wav demuxer was enabled, not the pcm codec, so
+    /// every .wav failed with "unsupported codec" and was silently dropped.
+    #[test]
+    fn decodes_pcm_wav() {
+        let sound = Sound {
+            data: pcm_wav(480, i16::MAX / 2),
+            format: AudioFormat::Wav,
+            decoded_pcm: Default::default(),
+        };
+        let pcm = decode(&sound).expect("pcm wav must decode");
+        assert_eq!(pcm.len(), 480 * 2);
+        assert!(pcm.iter().all(|&s| (s - 0.5).abs() < 0.01));
+    }
+
     #[test]
     fn resample_scales_frame_count_by_rate_ratio() {
         // 441 frames at 44.1kHz → 480 frames at 48kHz
