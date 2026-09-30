@@ -205,20 +205,33 @@ pub struct ColliderEntryRef<'a> {
 #[derive(Debug, Default, Resource)]
 pub struct CollisionWorld3d {
 	entries: Vec<ColliderEntry>,
+	/// entity -> index into `entries`, so `overlapping` doesn't scan for its target
+	index: bevy_ecs::entity::EntityHashMap<usize>,
+	/// widest collider's x extent: bounds how far left of a query an overlapping
+	/// entry's `min_x` can start
+	max_width: f32,
 }
 
 impl CollisionWorld3d {
-	/// sweep-and-prune range for X span `[qmin_x, qmax_x]`.
-	fn x_candidates(&self, _qmin_x: f32, qmax_x: f32) -> &[ColliderEntry] {
+	/// sweep-and-prune range for X span `[qmin_x, qmax_x]`. entries are sorted by
+	/// `min_x`; one starting more than the widest collider's width left of `qmin_x`
+	/// ends before it. the lower bound was ignored, so every query walked the whole
+	/// left side of the world (same fix as the 2d world's rev-03).
+	fn x_candidates(&self, qmin_x: f32, qmax_x: f32) -> &[ColliderEntry] {
+		// padded by a few ulps so rounding in `max_x - min_x` or the subtraction can
+		// never prune an entry that touches the query's left edge
+		let bound = qmin_x - self.max_width;
+		let bound = bound - (bound.abs() + self.max_width) * (4.0 * f32::EPSILON);
+		let start = self.entries.partition_point(|e| e.min_x < bound);
 		let end = self.entries.partition_point(|e| e.min_x <= qmax_x);
-		&self.entries[..end]
+		&self.entries[start..end.max(start)]
 	}
 
 	/// iterator over all entities that overlap `entity` this frame, filtered by layer/mask.
 	///
 	/// uses sweep-and-prune on X to skip entries that can't possibly overlap.
 	pub fn overlapping(&self, entity: Entity) -> impl Iterator<Item = Entity> + '_ {
-		let target = self.entries.iter().find(|e| e.entity == entity).cloned();
+		let target = self.index.get(&entity).map(|&i| self.entries[i].clone());
 		let candidates = target
 			.as_ref()
 			.map_or(&[] as &[_], |t| self.x_candidates(t.min_x, t.max_x));
@@ -640,14 +653,27 @@ fn raycast_mesh(
 	})
 }
 
+/// colliders whose transform or shape changed since the last rebuild
+type ColliderChanged = (
+	With<Collider3d>,
+	Or<(Changed<WorldTransform3d>, Changed<Collider3d>)>,
+);
+
 /// system that rebuilds [`CollisionWorld3d`] from all entities with `Collider3d + WorldTransform3d`.
 ///
 /// entries are sorted by `min_x` after insertion to enable sweep-and-prune in `all_overlaps`.
 /// runs in the Physics stage so `CollisionWorld3d` is ready for Update systems.
 pub fn build_collision_world_3d(
 	query: Query<(Entity, &WorldTransform3d, &Collider3d)>,
+	changed: Query<(), ColliderChanged>,
 	mut collision_world: ResMut<CollisionWorld3d>,
 ) {
+	// quiet tick: no collider moved or changed and none was added or removed (a
+	// removal changes the count; an add is Changed). skip the rebuild and sort,
+	// which also runs once per fixed step under catch-up (perf-03)
+	if changed.is_empty() && query.iter().len() == collision_world.entries.len() {
+		return;
+	}
 	collision_world.entries.clear();
 	for (entity, transform, collider) in &query {
 		collision_world.entries.push(ColliderEntry::new(
@@ -661,6 +687,13 @@ pub fn build_collision_world_3d(
 	collision_world
 		.entries
 		.sort_unstable_by(|a, b| a.min_x.total_cmp(&b.min_x));
+	let collision_world = &mut *collision_world;
+	collision_world.index.clear();
+	collision_world.max_width = 0.0;
+	for (i, entry) in collision_world.entries.iter().enumerate() {
+		collision_world.index.insert(entry.entity, i);
+		collision_world.max_width = collision_world.max_width.max(entry.max_x - entry.min_x);
+	}
 }
 
 #[cfg(test)]
@@ -800,6 +833,160 @@ mod tests {
 		let mut system = IntoSystem::into_system(build_collision_world_3d);
 		system.initialize(world);
 		let _ = system.run((), world);
+	}
+
+	fn spawn_scattered(world: &mut World, count: usize, offset: f32, spread: f32) {
+		let mut seed: u32 = 0x1234_5678;
+		let mut next = || {
+			seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+			(seed >> 8) as f32 / (1u32 << 24) as f32
+		};
+		for i in 0..count {
+			let pos = Vec3::new(
+				offset + (next() - 0.5) * spread,
+				next() * 40.0,
+				(next() - 0.5) * spread,
+			);
+			let collider = match i % 10 {
+				// a few very wide walls exercise the left-side prune bound
+				0 => Collider3d::aabb(Vec3::new(400.0 + next() * 400.0, 20.0, 20.0)),
+				1..=4 => Collider3d::sphere(2.0 + next() * 20.0),
+				_ => Collider3d::aabb(Vec3::splat(4.0 + next() * 60.0)),
+			};
+			world.spawn((
+				WorldTransform3d {
+					translation: pos,
+					..WorldTransform3d::new()
+				},
+				collider,
+			));
+		}
+	}
+
+	fn check_pruned_queries_against_brute_force(offset: f32) {
+		let mut world = World::new();
+		world.insert_resource(CollisionWorld3d::default());
+		spawn_scattered(&mut world, 300, offset, 1000.0);
+		run_build(&mut world);
+		let cw = world.resource::<CollisionWorld3d>();
+		let sorted = |mut v: Vec<Entity>| {
+			v.sort();
+			v
+		};
+		for entry in &cw.entries {
+			let fast = sorted(cw.overlapping(entry.entity).collect());
+			let brute = sorted(
+				cw.entries
+					.iter()
+					.filter(|o| o.entity != entry.entity && entry.overlaps(o))
+					.map(|o| o.entity)
+					.collect(),
+			);
+			assert_eq!(fast, brute, "overlapping() differs for {:?}", entry.entity);
+
+			let centre = Vec3::new(entry.max_x, entry.position.y, entry.position.z);
+			let fast = sorted(cw.query_sphere(centre, 5.0).collect());
+			let sphere = ColliderShape3d::Sphere { radius: 5.0 };
+			let brute = sorted(
+				cw.entries
+					.iter()
+					.filter(|e| shapes_overlap(centre, sphere, e.position, e.shape))
+					.map(|e| e.entity)
+					.collect(),
+			);
+			assert_eq!(fast, brute, "query_sphere() differs at {centre:?}");
+		}
+		let mut fast: Vec<_> = cw.all_overlaps().map(|(a, b)| (a.min(b), a.max(b))).collect();
+		fast.sort();
+		let mut brute = Vec::new();
+		for (i, a) in cw.entries.iter().enumerate() {
+			for b in &cw.entries[i + 1..] {
+				if a.overlaps(b) {
+					brute.push((a.entity.min(b.entity), a.entity.max(b.entity)));
+				}
+			}
+		}
+		brute.sort();
+		assert_eq!(fast, brute, "all_overlaps() differs");
+	}
+
+	/// the pruned sweep-and-prune queries must return exactly what a brute-force
+	/// scan returns, including around colliders far wider than their neighbours.
+	#[test]
+	fn pruned_queries_match_brute_force() {
+		check_pruned_queries_against_brute_force(0.0);
+	}
+
+	/// far from the origin f32 spacing is coarse: the left prune bound must not
+	/// round an overlapping entry away.
+	#[test]
+	fn pruned_queries_match_brute_force_far_from_origin() {
+		check_pruned_queries_against_brute_force(100_000.0);
+	}
+
+	/// perf-03: the rebuild is skipped on quiet ticks, so moves, despawns and
+	/// collider removals must still reach the world on the next run.
+	#[test]
+	fn gated_rebuild_tracks_moves_and_removals() {
+		let mut world = World::new();
+		world.insert_resource(CollisionWorld3d::default());
+		let mut system = IntoSystem::into_system(build_collision_world_3d);
+		system.initialize(&mut world);
+		let a = spawn_aabb(&mut world, Vec3::ZERO, Vec3::splat(2.0));
+		let b = spawn_aabb(&mut world, Vec3::new(10.0, 0.0, 0.0), Vec3::splat(2.0));
+		let c = spawn_aabb(&mut world, Vec3::new(-10.0, 0.0, 0.0), Vec3::splat(2.0));
+		let _ = system.run((), &mut world);
+		assert_eq!(world.resource::<CollisionWorld3d>().overlapping(a).count(), 0);
+		// quiet tick
+		let _ = system.run((), &mut world);
+		assert_eq!(world.resource::<CollisionWorld3d>().entries.len(), 3);
+
+		world.get_mut::<WorldTransform3d>(b).unwrap().translation = Vec3::new(1.0, 0.0, 0.0);
+		let _ = system.run((), &mut world);
+		assert_eq!(world.resource::<CollisionWorld3d>().overlapping(a).collect::<Vec<_>>(), [b]);
+
+		world.despawn(b);
+		let _ = system.run((), &mut world);
+		assert_eq!(world.resource::<CollisionWorld3d>().overlapping(a).count(), 0);
+
+		world.entity_mut(c).remove::<Collider3d>();
+		let _ = system.run((), &mut world);
+		assert_eq!(world.resource::<CollisionWorld3d>().entries.len(), 1);
+	}
+
+	/// timing for the 3d broad phase: every collider asks for its overlaps once.
+	/// `cargo test --release -p lunar-3d overlap_timing -- --ignored --nocapture`
+	#[test]
+	#[ignore]
+	fn overlap_timing() {
+		let mut world = World::new();
+		world.insert_resource(CollisionWorld3d::default());
+		spawn_scattered(&mut world, 5000, 0.0, 10_000.0);
+		run_build(&mut world);
+		let entities: Vec<Entity> = world
+			.resource::<CollisionWorld3d>()
+			.entries
+			.iter()
+			.map(|e| e.entity)
+			.collect();
+		let start = std::time::Instant::now();
+		let mut hits = 0usize;
+		for _ in 0..5 {
+			let cw = world.resource::<CollisionWorld3d>();
+			for &e in &entities {
+				hits += cw.overlapping(e).count();
+			}
+		}
+		let per_pass = start.elapsed().as_secs_f64() * 1000.0 / 5.0;
+		let mut system = IntoSystem::into_system(build_collision_world_3d);
+		system.initialize(&mut world);
+		let _ = system.run((), &mut world);
+		let start = std::time::Instant::now();
+		for _ in 0..5 {
+			let _ = system.run((), &mut world);
+		}
+		let build = start.elapsed().as_secs_f64() * 1000.0 / 5.0;
+		println!("5000 colliders: overlapping() for all {per_pass:.2} ms, rebuild {build:.3} ms ({hits} hits)");
 	}
 
 	#[test]
