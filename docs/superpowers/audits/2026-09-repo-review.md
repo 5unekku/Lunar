@@ -89,9 +89,9 @@ performance (before -> after):
 
 | perf-01 | terrain: per-ring params slots + one pass per terrain. every ring had drawn with the last ring's params (the rev-22 bug, still live for terrain) | feature-reel 308 -> 265 ms/frame, golden pixel-identical |
 
-water/decals still open one pass per entity; feature-reel has one of each, so
-there is no bench to show a gain yet. perf-02 (L) and perf-08..13 (low, below
-lavapipe noise) are open.
+| perf-01 | water and decals: one pass per stage (they already had per-entity slots) | headless 8 waters + 32 decals 21.5 -> 10.4 ms/frame; feature-reel golden unchanged |
+
+perf-02 (L) and perf-08..13 (low, below lavapipe noise) are open.
 
 architecture:
 
