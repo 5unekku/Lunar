@@ -1389,19 +1389,24 @@ impl RenderEngine3d {
 		encoder: &mut wgpu::CommandEncoder,
 		dir_enabled: u32,
 		dir_casts_shadows: bool,
+		// false while a ShadowProvider hook owns the shadow maps: only the z-prepass
+		// is recorded (arch-01)
+		builtin_shadows: bool,
 	) {
-		let dev_shadows = world
-			.get_resource::<DevRenderProfile>()
-			.map(|d| d.shadows)
-			.unwrap_or(true);
+		let dev_shadows = builtin_shadows
+			&& world
+				.get_resource::<DevRenderProfile>()
+				.map(|d| d.shadows)
+				.unwrap_or(true);
 		let dev_max_cascades = world
 			.get_resource::<DevRenderProfile>()
 			.map(|d| d.max_shadow_cascades as usize)
 			.unwrap_or(NUM_CASCADES as usize);
-		let dev_point_shadows = world
-			.get_resource::<DevRenderProfile>()
-			.map(|d| d.point_light_shadows)
-			.unwrap_or(true);
+		let dev_point_shadows = builtin_shadows
+			&& world
+				.get_resource::<DevRenderProfile>()
+				.map(|d| d.point_light_shadows)
+				.unwrap_or(true);
 
 		// ── collect shadow casters ────────────────────────────────────────
 		// shadow_list: (mesh_id, draw_scratch_index) for all visible shadow casters.
@@ -1690,8 +1695,9 @@ impl RenderEngine3d {
 			});
 
 			// a cascade that just went inactive still holds last frame's casters: clear it
-			// once so the lighting pass samples an empty (fully lit) map
-			for cascade in 0..NUM_CASCADES as usize {
+			// once so the lighting pass samples an empty (fully lit) map. a shadow hook
+			// owns the maps and has already written them this frame: leave them be
+			for cascade in (0..NUM_CASCADES as usize).filter(|_| builtin_shadows) {
 				let stale = !active[cascade] && self.shadow_cascade_live[cascade];
 				self.shadow_cascade_live[cascade] = active[cascade];
 				if stale {

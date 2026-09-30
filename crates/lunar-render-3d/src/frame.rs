@@ -1943,6 +1943,10 @@ impl RenderEngine3d {
 			}
 		}
 
+		// a shadow hook replaces the built-in shadow maps only. record_shadows still
+		// runs for the z-prepass, the sole writer of scene depth on mid/high: skipping
+		// it left the opaque pass depth-testing against an empty buffer (arch-01)
+		let hooked = self.shadow_hook.is_some();
 		if let Some(hook) = self.shadow_hook.as_mut() {
 			hook.0.render_shadows(crate::hooks::ShadowCtx {
 				world,
@@ -1951,9 +1955,8 @@ impl RenderEngine3d {
 				shadow_atlas: &self.shadow_map,
 				shadow_atlas_view: &self.shadow_map_view,
 			});
-		} else {
-			self.record_shadows(world, &mut encoder, dir_enabled, dir_casts_shadows);
 		}
+		self.record_shadows(world, &mut encoder, dir_enabled, dir_casts_shadows, !hooked);
 
 		// ── HZB build (high tier only) ───────────────────────────────────
 		// builds a hierarchical min-depth buffer from the z-prepass result.

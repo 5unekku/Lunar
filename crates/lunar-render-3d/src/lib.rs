@@ -2858,6 +2858,44 @@ mod headless_tests {
 		assert_ne!(before, after, "the +x face must be re-rendered after the caster moved");
 	}
 
+	/// arch-01: a ShadowProvider hook replaced record_shadows wholesale, and the
+	/// z-prepass (the only writer of scene depth on mid/high) lives there, so with
+	/// any hook installed the opaque pass tested against an empty depth buffer.
+	#[test]
+	fn shadow_hook_keeps_the_z_prepass() {
+		struct NoShadows;
+		impl crate::hooks::ShadowProvider for NoShadows {
+			fn render_shadows(&mut self, _context: crate::hooks::ShadowCtx<'_>) {}
+		}
+		let Some((mut engine, mut world, _quad, _)) = feature_test_setup() else {
+			return;
+		};
+		engine.set_shadow_provider(NoShadows);
+		let ball = world.resource_mut::<MeshRegistry>().add_mesh(sphere_mesh(1.0, 16, 12));
+		let unlit = world.resource_mut::<MeshRegistry>().add_material(lunar_3d::MaterialData {
+			shading: lunar_3d::ShadingModel::Unlit,
+			base_color: lunar_math::Color::WHITE,
+			..lunar_3d::MaterialData::default()
+		});
+		world.spawn((
+			Mesh3d(ball),
+			Material3d(unlit),
+			WorldTransform3d {
+				translation: Vec3::new(0.0, 0.0, -6.0),
+				..WorldTransform3d::new()
+			},
+			ComputedVisibility(true),
+		));
+		render_frames(&mut engine, &mut world, 3);
+		let (rgba, w, h) = engine.read_headless_rgba().expect("headless readback");
+		let centre = ((h / 2 * w + w / 2) * 4) as usize;
+		assert!(
+			rgba[centre..centre + 3].iter().all(|&c| c > 200),
+			"the sphere must still draw with a shadow hook installed, centre {:?}",
+			&rgba[centre..centre + 4]
+		);
+	}
+
 	/// perf-01 (terrain half): every clipmap ring wrote the one shared params
 	/// uniform, and all queued writes land before the frame's commands run, so each
 	/// ring drew with the last (coarsest) ring's origin and cell size. each ring now

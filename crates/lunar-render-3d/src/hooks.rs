@@ -32,17 +32,19 @@ pub struct ShadowCtx<'a> {
     pub world:             &'a World,
     pub device:            &'a wgpu::Device,
     pub queue:             &'a wgpu::Queue,
-    /// the shadow atlas that the shading pass samples.
+    /// the directional cascade shadow map that the shading pass samples.
     /// must be filled by the custom provider before returning.
-    /// format: `Depth32Float`, `2DArray`, slices = 3 cascades + MAX_POINT_SHADOW_LIGHTS * 6.
+    /// format: `Depth32Float`, `2DArray`, one slice per cascade (3). point-light
+    /// shadows live in a separate texture the hook does not replace.
     pub shadow_atlas:      &'a wgpu::Texture,
     /// full-array default view of [`shadow_atlas`].
     pub shadow_atlas_view: &'a wgpu::TextureView,
 }
 
-/// implement this to replace the built-in cascade + point-light shadow pass.
+/// implement this to replace the built-in shadow passes.
 ///
-/// the engine calls [`render_shadows`] in place of its own shadow recording.
+/// the engine calls [`render_shadows`] in place of its own cascade and point-light
+/// shadow recording; the z-prepass still runs.
 /// any wgpu work must be submitted before returning (use `context.queue.submit`).
 pub trait ShadowProvider: Send + Sync + 'static {
     fn render_shadows(&mut self, context: ShadowCtx<'_>);
