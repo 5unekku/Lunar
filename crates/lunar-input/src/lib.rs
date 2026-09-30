@@ -1720,6 +1720,10 @@ mod web_input {
 #[cfg(target_arch = "wasm32")]
 pub fn process_events(_event_pump: &mut (), world: &mut bevy_ecs::prelude::World) {
 	if let Some(mut input) = world.get_resource_mut::<InputState>() {
+		// same order as the native pump: gamepad edges are per frame, and without
+		// this they were never cleared on web (a pressed button stayed "just
+		// pressed" forever) and axis-binding edges had no previous frame to compare
+		input.begin_frame();
 		web_input::drain_to_input(&mut input);
 		poll_gamepads(&mut input);
 	}
