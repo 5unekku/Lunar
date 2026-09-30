@@ -295,7 +295,9 @@ pub unsafe extern "C" fn lunar_spawn(world: *mut LunarWorld) -> LunarEntity {
 pub unsafe extern "C" fn lunar_despawn(world: *mut LunarWorld, entity: LunarEntity) {
     let world = unsafe { world_from_ffi(world) };
     let Some(e) = entity_from_index(world, entity) else { return };
-    world.despawn(e);
+    // through the behavior-aware route so on_destroy runs (and a despawn from an
+    // entity's own hook is deferred until its hooks return)
+    lunar_core::behavior::despawn_with_behaviors(world, e);
 }
 
 /// return true if the entity is alive in this world.
@@ -1879,6 +1881,37 @@ mod tests {
 
     unsafe extern "C" fn count_match(_entity: LunarEntity, user_data: *mut c_void) {
         unsafe { *(user_data as *mut usize) += 1 };
+    }
+
+    /// lunar_despawn despawned directly, so on_destroy never ran for entities
+    /// despawned from C# or C, although behavior.rs documents that the FFI route
+    /// goes through despawn_with_behaviors.
+    #[test]
+    fn despawn_runs_on_destroy() {
+        use lunar_core::behavior::{
+            AttachedBehavior, Behavior, BehaviorContext, Behaviors, ExportedFields, FieldSchema,
+            FieldValue,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DESTROYED: AtomicUsize = AtomicUsize::new(0);
+        struct Watch;
+        impl ExportedFields for Watch {
+            fn fields(&self) -> Vec<FieldSchema> { Vec::new() }
+            fn get_field(&self, _: &str) -> Option<FieldValue> { None }
+            fn set_field(&mut self, _: &str, _: FieldValue) {}
+        }
+        impl Behavior for Watch {
+            fn on_destroy(&mut self, _ctx: &mut BehaviorContext) {
+                DESTROYED.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let mut world = ffi_world();
+        let mut behaviors = Behaviors::default();
+        behaviors.push(AttachedBehavior { id: "Watch".into(), behavior: Box::new(Watch), started: true });
+        let entity = world.spawn(behaviors).id();
+        unsafe { lunar_despawn(world_ptr(&mut world), entity.index_u32()) };
+        assert_eq!(DESTROYED.load(Ordering::SeqCst), 1);
+        assert!(world.get_entity(entity).is_err());
     }
 
     /// sec-08 / sec-09: the documented (null, 0) include/exclude form must not
