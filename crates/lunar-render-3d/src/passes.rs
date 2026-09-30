@@ -669,7 +669,7 @@ impl RenderEngine3d {
 
 				let terrain_origin = snap.translation;
 				let world_size = snap.world_size;
-				let rings = snap.clipmap_rings.clamp(1, 8);
+				let rings = snap.clipmap_rings.clamp(1, MAX_TERRAIN_RINGS);
 				let resolution = snap.ring_resolution.clamp(4, 256) as f32;
 
 				// on low tier render a single LOD-0 patch covering the whole terrain
@@ -677,13 +677,18 @@ impl RenderEngine3d {
 					1
 				} else {
 					rings
-				};
+				} as usize;
 
-				for ring in 0..effective_rings as usize {
-					let Some(ring_mesh) = gpu.ring_meshes.get(ring) else {
-						continue;
-					};
-
+				// every ring gets its own params slot, written in one upload and bound by
+				// dynamic offset. a single shared uniform rewritten per ring left every
+				// ring drawing with the last ring's params (all writes land before the
+				// frame's commands run), and a pass per ring paid a load/store (and msaa
+				// resolve) each time (perf-01)
+				let sun = terrain_sun(dir_enabled != 0, dir_direction, dir_illuminance);
+				let tint = [snap.tint.r, snap.tint.g, snap.tint.b, snap.tint.a];
+				let stride = DRAW_SLOT_STRIDE as usize;
+				let mut data = vec![0u8; stride * effective_rings];
+				for ring in 0..effective_rings {
 					// each ring is 2× coarser than the previous
 					let base_cell = world_size / (resolution * (1 << rings) as f32);
 					let lod_cell_size = base_cell * (1u32 << ring) as f32;
@@ -695,63 +700,64 @@ impl RenderEngine3d {
 					let ring_origin_z =
 						(cam_pos.z / lod_cell_size).floor() * lod_cell_size - ring_half;
 
-					let sun = terrain_sun(dir_enabled != 0, dir_direction, dir_illuminance);
-
-					let tint = [snap.tint.r, snap.tint.g, snap.tint.b, snap.tint.a];
-
-					let mut data = [0u8; TERRAIN_PARAMS_SIZE as usize];
+					let slot = &mut data[ring * stride..ring * stride + TERRAIN_PARAMS_SIZE as usize];
 					// ring_origin (vec4)
 					let ro: [f32; 4] = [ring_origin_x, 0.0, ring_origin_z, 0.0];
-					data[0..16].copy_from_slice(bytemuck::cast_slice(&ro));
+					slot[0..16].copy_from_slice(bytemuck::cast_slice(&ro));
 					// terrain_origin (vec4)
 					let to_arr: [f32; 4] =
 						[terrain_origin.x, terrain_origin.y, terrain_origin.z, 0.0];
-					data[16..32].copy_from_slice(bytemuck::cast_slice(&to_arr));
+					slot[16..32].copy_from_slice(bytemuck::cast_slice(&to_arr));
 					// misc: lod_cell_size, world_size, height_scale, ring_resolution
 					let misc: [f32; 4] = [lod_cell_size, world_size, snap.height_scale, resolution];
-					data[32..48].copy_from_slice(bytemuck::cast_slice(&misc));
+					slot[32..48].copy_from_slice(bytemuck::cast_slice(&misc));
 					// tint (vec4)
-					data[48..64].copy_from_slice(bytemuck::cast_slice(&tint));
+					slot[48..64].copy_from_slice(bytemuck::cast_slice(&tint));
 					// sun_dir (vec4)
-					data[64..80].copy_from_slice(bytemuck::cast_slice(&sun));
+					slot[64..80].copy_from_slice(bytemuck::cast_slice(&sun));
 					// ambient + pad
 					let amb: [f32; 4] = [0.15, 0.0, 0.0, 0.0];
-					data[80..96].copy_from_slice(bytemuck::cast_slice(&amb));
-					self.queue.write_buffer(&gpu.params_buf, 0, &data);
+					slot[80..96].copy_from_slice(bytemuck::cast_slice(&amb));
+				}
+				self.queue.write_buffer(&gpu.params_buf, 0, &data);
 
-					let (color_target, resolve_target) = match &self.msaa_color_view {
-						Some(msaa) => (
-							msaa as &wgpu::TextureView,
-							Some(&self.hdr_view as &wgpu::TextureView),
-						),
-						None => (&self.hdr_view as &wgpu::TextureView, None),
-					};
-					let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-						label: Some("[terrain] pass"),
-						color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-							view: color_target,
-							resolve_target,
-							ops: wgpu::Operations {
-								load: wgpu::LoadOp::Load,
-								store: wgpu::StoreOp::Store,
-							},
-							depth_slice: None,
-						})],
-						depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-							view: &self.depth_view,
-							depth_ops: Some(wgpu::Operations {
-								load: wgpu::LoadOp::Load,
-								store: wgpu::StoreOp::Store,
-							}),
-							stencil_ops: None,
+				let (color_target, resolve_target) = match &self.msaa_color_view {
+					Some(msaa) => (
+						msaa as &wgpu::TextureView,
+						Some(&self.hdr_view as &wgpu::TextureView),
+					),
+					None => (&self.hdr_view as &wgpu::TextureView, None),
+				};
+				let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+					label: Some("[terrain] pass"),
+					color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+						view: color_target,
+						resolve_target,
+						ops: wgpu::Operations {
+							load: wgpu::LoadOp::Load,
+							store: wgpu::StoreOp::Store,
+						},
+						depth_slice: None,
+					})],
+					depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+						view: &self.depth_view,
+						depth_ops: Some(wgpu::Operations {
+							load: wgpu::LoadOp::Load,
+							store: wgpu::StoreOp::Store,
 						}),
-						timestamp_writes: None,
-						occlusion_query_set: None,
-						multiview_mask: None,
-					});
-					pass.set_pipeline(&self.terrain_pipeline);
-					pass.set_bind_group(0, &self.terrain_globals_bg, &[]);
-					pass.set_bind_group(1, &gpu.params_bg, &[]);
+						stencil_ops: None,
+					}),
+					timestamp_writes: None,
+					occlusion_query_set: None,
+					multiview_mask: None,
+				});
+				pass.set_pipeline(&self.terrain_pipeline);
+				pass.set_bind_group(0, &self.terrain_globals_bg, &[]);
+				for ring in 0..effective_rings {
+					let Some(ring_mesh) = gpu.ring_meshes.get(ring) else {
+						continue;
+					};
+					pass.set_bind_group(1, &gpu.params_bg, &[(ring * stride) as u32]);
 					pass.set_vertex_buffer(0, ring_mesh.vbuf.slice(..));
 					pass.set_index_buffer(ring_mesh.ibuf.slice(..), ring_mesh.index_fmt);
 					pass.draw_indexed(0..ring_mesh.index_count, 0, 0..1);

@@ -326,6 +326,8 @@ const _: () = assert!(WATER_PARAMS_SIZE <= DRAW_SLOT_STRIDE && DECAL_PARAMS_SIZE
 
 /// terrain params UBO per ring: ring_origin(16)+terrain_origin(16)+misc(16)+tint(16)+sun_dir(16)+ambient_pad(16) = 96 bytes.
 const TERRAIN_PARAMS_SIZE: u64 = 96;
+/// clipmap rings per terrain; each gets its own DRAW_SLOT_STRIDE params slot
+const MAX_TERRAIN_RINGS: u32 = 8;
 
 /// stride for dynamic UBO slots: must be ≥ min_uniform_buffer_offset_alignment (256).
 const UNIFORM_STRIDE: u64 = 256;
@@ -2854,6 +2856,60 @@ mod headless_tests {
 		let after = covered_footprint(&engine, &engine.point_shadow_tex, 0);
 		assert!(after.2 > 0);
 		assert_ne!(before, after, "the +x face must be re-rendered after the caster moved");
+	}
+
+	/// perf-01 (terrain half): every clipmap ring wrote the one shared params
+	/// uniform, and all queued writes land before the frame's commands run, so each
+	/// ring drew with the last (coarsest) ring's origin and cell size. each ring now
+	/// has its own dynamic-offset slot.
+	#[test]
+	fn terrain_rings_keep_their_own_params() {
+		let Some((mut engine, mut world, _quad, _)) = feature_test_setup() else {
+			return;
+		};
+		let size = 64u32;
+		let terrain = world
+			.spawn((
+				lunar_3d::Terrain {
+					heightmap: vec![0u8; (size * size * 2) as usize],
+					heightmap_width: size,
+					heightmap_height: size,
+					world_size: 256.0,
+					clipmap_rings: 4,
+					ring_resolution: 16,
+					..lunar_3d::Terrain::default()
+				},
+				WorldTransform3d::new(),
+			))
+			.id();
+		render_frames(&mut engine, &mut world, 1);
+		let buf = &engine.terrain_gpu[&terrain].params_buf;
+		let size_bytes = buf.size();
+		let staging = engine.device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("terrain params readback"),
+			size: size_bytes,
+			usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+			mapped_at_creation: false,
+		});
+		let mut encoder = engine
+			.device
+			.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+		encoder.copy_buffer_to_buffer(buf, 0, &staging, 0, size_bytes);
+		engine.queue.submit([encoder.finish()]);
+		staging.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+		engine.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+		let bytes = staging.slice(..).get_mapped_range().to_vec();
+		// misc.x (bytes 32..36 of each slot) is the ring's lod cell size, doubling per ring
+		let cell = |ring: usize| {
+			let at = ring * DRAW_SLOT_STRIDE as usize + 32;
+			assert!(at + 4 <= bytes.len(), "no params slot for ring {ring}");
+			f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+		};
+		let base = cell(0);
+		assert!(base > 0.0);
+		for ring in 1..4 {
+			assert_eq!(cell(ring), base * (1 << ring) as f32, "ring {ring} params");
+		}
 	}
 
 	/// corr-09: SpotLight was authorable (component, bundle, .ls3 field, docs) but

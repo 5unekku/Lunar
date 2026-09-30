@@ -2990,13 +2990,13 @@ impl RenderEngine3d {
 			device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 				label: Some("[terrain] params bgl"),
 				entries: &[
-					// binding 0: TerrainParams uniform
+					// binding 0: TerrainParams uniform, one DRAW_SLOT_STRIDE slot per ring
 					wgpu::BindGroupLayoutEntry {
 						binding: 0,
 						visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
 						ty: wgpu::BindingType::Buffer {
 							ty: wgpu::BufferBindingType::Uniform,
-							has_dynamic_offset: false,
+							has_dynamic_offset: true,
 							min_binding_size: wgpu::BufferSize::new(TERRAIN_PARAMS_SIZE),
 						},
 						count: None,

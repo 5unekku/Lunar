@@ -396,7 +396,7 @@ impl RenderEngine3d {
 		terrain: &Terrain,
 	) -> TerrainGpu {
 		// build ring meshes: center patch + (clipmap_rings - 1) outer rings
-		let rings = terrain.clipmap_rings.clamp(1, 8);
+		let rings = terrain.clipmap_rings.clamp(1, MAX_TERRAIN_RINGS);
 		let resolution = terrain.ring_resolution.clamp(4, 256);
 		let mut ring_meshes = Vec::with_capacity(rings as usize);
 		for _ in 0..rings {
@@ -422,8 +422,12 @@ impl RenderEngine3d {
 
 		let params_buf = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("[terrain] params buffer"),
-			size: TERRAIN_PARAMS_SIZE,
-			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+			// one slot per clipmap ring (rings are clamped to MAX_TERRAIN_RINGS)
+			size: DRAW_SLOT_STRIDE * MAX_TERRAIN_RINGS as u64,
+			// COPY_SRC: headless tests read the per-ring slots back
+			usage: wgpu::BufferUsages::UNIFORM
+				| wgpu::BufferUsages::COPY_DST
+				| wgpu::BufferUsages::COPY_SRC,
 			mapped_at_creation: false,
 		});
 
@@ -433,7 +437,11 @@ impl RenderEngine3d {
 			entries: &[
 				wgpu::BindGroupEntry {
 					binding: 0,
-					resource: params_buf.as_entire_binding(),
+					resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+						buffer: &params_buf,
+						offset: 0,
+						size: wgpu::BufferSize::new(TERRAIN_PARAMS_SIZE),
+					}),
 				},
 				wgpu::BindGroupEntry {
 					binding: 1,
