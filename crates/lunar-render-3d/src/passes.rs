@@ -1477,7 +1477,13 @@ impl RenderEngine3d {
 			self.point_shadow_layer_scratch.clear();
 			let mut pt_shadow_idx = 0usize;
 			for &(light_pos, _, _, light_radii, casts, _, _) in self.point_light_scratch.iter() {
-				if !casts || pt_shadow_idx >= MAX_POINT_SHADOW_LIGHTS {
+				// slots go to casting lights in list order, skipping non-casters, exactly
+				// as frame.rs assigns shadow_index: stopping at the first non-caster left
+				// every later caster's slot unrendered
+				if !casts {
+					continue;
+				}
+				if pt_shadow_idx >= MAX_POINT_SHADOW_LIGHTS {
 					break;
 				}
 				// shadows use the conservative max-axis sphere

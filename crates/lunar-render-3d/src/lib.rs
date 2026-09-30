@@ -3048,6 +3048,46 @@ mod headless_tests {
 		);
 	}
 
+	/// shadow slots go to casting lights in camera-distance order, skipping
+	/// non-casters, but the recording loop stopped at the first non-caster: a
+	/// non-casting light nearer the camera left every later caster's slot empty.
+	#[test]
+	fn non_casting_light_does_not_block_later_shadows() {
+		let Some((mut engine, mut world, _quad, material)) = feature_test_setup() else {
+			return;
+		};
+		let ball = world.resource_mut::<MeshRegistry>().add_mesh(sphere_mesh(0.5, 16, 12));
+		world.spawn((
+			Mesh3d(ball),
+			Material3d(material),
+			WorldTransform3d {
+				translation: Vec3::new(2.0, 0.0, -8.0),
+				..WorldTransform3d::new()
+			},
+			ComputedVisibility(true),
+			ShadowCaster,
+		));
+		// nearer the camera (at the origin), casts nothing
+		world.spawn((
+			PointLight { casts_shadows: false, radius: 20.0, ..PointLight::default() },
+			WorldTransform3d {
+				translation: Vec3::new(0.0, 0.0, -2.0),
+				..WorldTransform3d::new()
+			},
+		));
+		world.spawn((
+			PointLight { casts_shadows: true, radius: 20.0, ..PointLight::default() },
+			WorldTransform3d {
+				translation: Vec3::new(0.0, 0.0, -8.0),
+				..WorldTransform3d::new()
+			},
+		));
+		render_frames(&mut engine, &mut world, 2);
+		// +x face of shadow slot 0, which belongs to the casting light
+		let covered = covered_footprint(&engine, &engine.point_shadow_tex, 0).2;
+		assert!(covered > 0, "the casting light's shadow slot was never rendered");
+	}
+
 	/// perf-07: a slot left unused is cleared; when a light comes back to it at the
 	/// same position with the same draw list, nothing marked it dirty, so it kept
 	/// the cleared depth and cast no shadow.
