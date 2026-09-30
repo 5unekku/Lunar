@@ -344,8 +344,10 @@ pub struct Mesh3d(pub Handle<MeshData>);
 
 /// marker: this entity's mesh, material, and transform are immutable across frames.
 ///
-/// add to level geometry (walls, floors, ceilings) that never moves for a significant
-/// CPU-side rendering cost reduction. do NOT add to animated objects or physics bodies.
+/// add to level geometry (walls, floors, ceilings) that never moves; do NOT add to
+/// animated objects or physics bodies. the renderer currently draws static meshes
+/// like any other (its old RenderBundle path drew them a second time and was
+/// removed); the marker stays so batching and baking tools can key on it.
 #[derive(Debug, Clone, Copy, Default, Component)]
 pub struct StaticMesh;
 

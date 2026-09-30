@@ -558,8 +558,6 @@ impl RenderEngine3d {
 		self.msaa_color_view =
 			Self::make_msaa_color_view(&self.device, w, h, self.hdr_format, samples);
 		self.rebuild_msaa_pipelines();
-		// force static bundle rebuild next frame
-		self.static_bundle = None;
 		log::info!("msaa changed to {samples}x");
 	}
 	/// panorama sky pipeline: fullscreen triangle at far depth drawn inside the

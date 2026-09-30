@@ -422,48 +422,6 @@ impl RenderEngine3d {
 				);
 		}
 
-		// collect static entities and assign stable slot ids (reuses static_entities_scratch)
-		{
-			let q = &mut self.queries.as_mut().unwrap().static_meshes;
-			// fast unchanged-set check: one pass over StaticMesh. if every entity already owns a
-			// slot and the counts match, the set is identical to last frame (subset of equal size
-			// ⇒ equal set), so skip the hashset rebuild + retain + max-scan + slot assignment.
-			let mut count = 0usize;
-			let mut all_known = true;
-			for (e, _) in q.iter(world) {
-				count += 1;
-				if !self.static_entity_slots.contains_key(&e) {
-					all_known = false;
-					break;
-				}
-			}
-			if !(all_known && count == self.static_entity_slots.len()) {
-				// set changed (add / despawn / component removal): full rebuild
-				self.static_entities_scratch.clear();
-				for (e, _) in q.iter(world) {
-					self.static_entities_scratch.insert(e);
-				}
-				// remove slots for entities that are no longer in the world
-				self.static_entity_slots
-					.retain(|e, _| self.static_entities_scratch.contains(e));
-				// assign slots to new static entities (append after existing)
-				let mut next_slot = self
-					.static_entity_slots
-					.values()
-					.copied()
-					.max()
-					.map(|m| m + 1)
-					.unwrap_or(0);
-				for entity in &self.static_entities_scratch {
-					if !self.static_entity_slots.contains_key(entity) {
-						self.static_entity_slots.insert(*entity, next_slot);
-						next_slot += 1;
-					}
-				}
-				self.static_entity_count = next_slot;
-			}
-		}
-
 		self.draw_scratch.clear();
 		{
 			let registry = world.resource::<MeshRegistry>();

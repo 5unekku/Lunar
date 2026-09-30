@@ -174,114 +174,6 @@ impl RenderEngine3d {
 		// MSAA resolves into the non-MSAA HDR texture; no MSAA renders direct to HDR.
 		// composite pass reads the HDR texture and writes to swapchain.
 
-		// ── static RenderBundle recording ─────────────────────────────────
-		// rebuild when the static entity set changes or hdr_format/msaa_samples change.
-		// the comparison stays per-frame on purpose: the bundle bakes `ENTITY_SLOT_START + i`
-		// (draw_scratch index), and those indices shift whenever culling reorders draw_scratch,
-		// so a static-set-only dirty flag would leave stale slot bindings. we only avoid the
-		// per-frame heap churn here; build into a reused scratch vec and swap instead of clone.
-		{
-			self.static_list_scratch.clear();
-			for (i, entry) in self.draw_scratch.iter().enumerate() {
-				if self.static_entity_slots.contains_key(&entry.0) {
-					self.static_list_scratch
-						.push((entry.1, entry.2, entry.9, entry.10, i));
-				}
-			}
-			self.static_list_scratch.sort_unstable();
-			let format_changed = self.static_bundle_params != (self.hdr_format, self.msaa_samples);
-			let list_changed = self.static_list_scratch != self.static_draw_list;
-			// the bundle bakes material texture bind groups; async texture uploads
-			// grow the texset cache after the first record, so re-record when it does
-			let texsets_changed = self.mat_texset_bg_cache.len() != self.static_bundle_texset_count;
-			if (list_changed || format_changed || texsets_changed)
-				&& !self.static_list_scratch.is_empty()
-			{
-				self.static_bundle_params = (self.hdr_format, self.msaa_samples);
-				self.static_bundle_texset_count = self.mat_texset_bg_cache.len();
-				// adopt the freshly built list; scratch keeps the old vec's capacity for reuse
-				std::mem::swap(&mut self.static_draw_list, &mut self.static_list_scratch);
-				let new_static_list = &self.static_draw_list;
-				let mut benc = self.device.create_render_bundle_encoder(
-					&wgpu::RenderBundleEncoderDescriptor {
-						label: Some("[static] bundle encoder"),
-						color_formats: &[Some(self.hdr_format)],
-						depth_stencil: Some(wgpu::RenderBundleDepthStencil {
-							format: wgpu::TextureFormat::Depth32Float,
-							depth_read_only: false,
-							stencil_read_only: false,
-						}),
-						sample_count: self.msaa_samples,
-						multiview: None,
-					},
-				);
-				benc.set_pipeline(&self.opaque_pipeline);
-				benc.set_bind_group(0, &self.globals_bg, &[]);
-				benc.set_bind_group(1, &self.material_bg, &[]);
-				benc.set_bind_group(2, &self.entity_bg, &[]);
-				benc.set_bind_group(3, &self.lights_bg, &[]);
-				benc.set_bind_group(5, &self.cluster_bg_render, &[]);
-				benc.set_bind_group(6, &self.mat_tex_fallback_bg, &[]);
-				let mut last_mesh = u32::MAX;
-				let mut last_mat = u32::MAX;
-				let mut last_lm = u32::MAX;
-				let mut last_dir_lm = u32::MAX;
-				let mut group_start_j = 0usize;
-				let sn = new_static_list.len();
-				let mut j = 0;
-				while j <= sn {
-					let (cur_mesh, cur_mat, cur_lm, cur_dir_lm) = if j == sn {
-						(u32::MAX, u32::MAX, u32::MAX, u32::MAX)
-					} else {
-						let (m, mt, lm, dlm, _) = new_static_list[j];
-						(m, mt, lm, dlm)
-					};
-					let grp_changed = cur_mesh != last_mesh
-						|| cur_mat != last_mat
-						|| cur_lm != last_lm
-						|| cur_dir_lm != last_dir_lm;
-					if grp_changed && j > group_start_j {
-						let slot_i = new_static_list[group_start_j].4;
-						if let Some(gpu) = self.mesh_gpu.get(&last_mesh) {
-							let base = (ENTITY_SLOT_START + slot_i) as u32;
-							benc.draw_indexed(
-								0..gpu.index_count,
-								0,
-								base..base + (j - group_start_j) as u32,
-							);
-						}
-					}
-					if j == sn {
-						break;
-					}
-					if grp_changed && let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
-						let lm_bg = if cur_lm != u32::MAX {
-							self.lightmap_bg_cache
-								.get(&(cur_lm, cur_dir_lm))
-								.unwrap_or(&self.lightmap_fallback_bg)
-						} else {
-							&self.lightmap_fallback_bg
-						};
-						benc.set_bind_group(4, lm_bg, &[]);
-						benc.set_bind_group(6, self.mat_texset_bg(cur_mat), &[]);
-						benc.set_vertex_buffer(0, gpu.vbuf.slice(..));
-						benc.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
-						last_mesh = cur_mesh;
-						last_mat = cur_mat;
-						last_lm = cur_lm;
-						last_dir_lm = cur_dir_lm;
-						group_start_j = j;
-					}
-					j += 1;
-				}
-				self.static_bundle = Some(benc.finish(&wgpu::RenderBundleDescriptor {
-					label: Some("[static] bundle"),
-				}));
-			} else if self.static_list_scratch.is_empty() {
-				self.static_bundle = None;
-				self.static_draw_list.clear();
-			}
-		}
 
 		{
 			let (color_target, resolve_target) = match &self.msaa_color_view {
@@ -382,12 +274,9 @@ impl RenderEngine3d {
 				}
 			}
 
-			// static geometry via RenderBundle: near-zero CPU cost per frame
-			if let Some(ref bundle) = self.static_bundle {
-				pass.execute_bundles(std::iter::once(bundle));
-			}
-
-			// opaque PBR pass: execute_bundles resets all pass state per spec, so rebind everything
+			// opaque PBR pass: static meshes draw here like every other opaque entity.
+			// (a StaticMesh RenderBundle used to draw them first, but the passes below
+			// never excluded them, so every static mesh was drawn twice)
 			pass.set_pipeline(&self.opaque_pipeline);
 			pass.set_bind_group(0, &self.globals_bg, &[]);
 			pass.set_bind_group(1, &self.material_bg, &[]);

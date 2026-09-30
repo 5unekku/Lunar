@@ -56,7 +56,7 @@ use lunar_3d::{
 	Decal, DetailDensity, DirectionalLight, Frustum, IndexBuffer, IrradianceSH, Material3d, Mesh3d,
 	MeshData, MeshImpostor, MeshLod, MeshRegistry, Overlay, ParticleEmitter, PlanarReflector,
 	PointLight,
-	PrevWorldTransform3d, Projection, ShadowCaster, SkySurface, SpotLight, StaticMesh, SurfaceShader,
+	PrevWorldTransform3d, Projection, ShadowCaster, SkySurface, SpotLight, SurfaceShader,
 	Terrain, Vertex3d, ViewportAspect, ViewportRect, Water, WorldTransform3d,
 };
 use lunar_bsp::{Area, BspLevel, VisibleAreas};
@@ -1441,7 +1441,6 @@ pub(crate) struct FrameQueries {
 		Option<&'static DirectionalLightmap>,
 		Option<&'static PrevWorldTransform3d>,
 	)>,
-	pub(crate) static_meshes: QueryState<(Entity, &'static StaticMesh)>,
 	pub(crate) terrains: QueryState<(Entity, &'static Terrain, &'static WorldTransform3d)>,
 	pub(crate) waters: QueryState<(&'static Water, &'static Mesh3d, &'static WorldTransform3d)>,
 	pub(crate) decals: QueryState<(&'static Decal, &'static WorldTransform3d)>,
@@ -1468,7 +1467,6 @@ impl FrameQueries {
 			spot_lights: world.query(),
 			surface_shaders: world.query(),
 			cullables: world.query(),
-			static_meshes: world.query(),
 			terrains: world.query(),
 			waters: world.query(),
 			decals: world.query(),
@@ -1881,23 +1879,6 @@ pub struct RenderEngine3d {
 	#[cfg(not(target_arch = "wasm32"))]
 	staging_belt: wgpu::util::StagingBelt,
 
-	// RenderBundle for static geometry (entities with StaticMesh component).
-	// re-recorded when the static entity set changes or when hdr_format/msaa_samples changes.
-	// None until the first frame with any static entity.
-	static_bundle: Option<wgpu::RenderBundle>,
-	// sorted (mesh_id, mat_id, lm_id, entity_slot) list used to detect set changes
-	static_draw_list: Vec<(u32, u32, u32, u32, usize)>,
-	// reused scratch for building this frame's list before comparing to static_draw_list
-	static_list_scratch: Vec<(u32, u32, u32, u32, usize)>,
-	// (hdr_format, msaa_samples) the bundle was recorded with
-	static_bundle_params: (wgpu::TextureFormat, u32),
-	// texset bind-group count at last bundle record; growth forces a re-record
-	// (the bundle bakes texture bind groups, async uploads add them later)
-	static_bundle_texset_count: usize,
-	// number of entity slots reserved for static entities (slots 2..2+N)
-	static_entity_count: usize,
-	// stable entity→slot assignments for static entities
-	static_entity_slots: HashMap<Entity, usize>,
 
 	// lightmap bind group (group 4): irradiance tex + dir tex + sampler per entity
 	lightmap_bgl: wgpu::BindGroupLayout,
@@ -2005,8 +1986,6 @@ pub struct RenderEngine3d {
 	// portal visible-area snapshot, rebuilt each frame; `active` mirrors the old Option::Some
 	portal_visible_scratch: HashSet<u32>,
 	portal_visible_active: bool,
-	// static-mesh entity set, refilled each frame to diff against static_entity_slots
-	static_entities_scratch: HashSet<Entity>,
 	// per-entity AABB upload data (CullSoa order): built once, fed to both frustum + HZB cull
 	cull_aabb_scratch: Vec<f32>,
 	// packed point-light list bytes uploaded to light_list_buf
