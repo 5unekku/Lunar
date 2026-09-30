@@ -39,6 +39,20 @@ internal static unsafe class LunarHandles
     }
 
     /// <summary>
+    /// free every system handle. the CoreCLR host calls this by reflection right
+    /// before it unloads the plugin's load context on hot reload: this assembly is
+    /// loaded inside that context, and these strong handles are roots into it, so
+    /// without this the context (and a copy of the plugin) could never be collected.
+    /// the rust side has already cleared its system schedules by then.
+    /// </summary>
+    internal static void ReleaseAll()
+    {
+        foreach (var handle in s_handles.Values)
+            handle.Free();
+        s_handles.Clear();
+    }
+
+    /// <summary>
     /// single static trampoline for all ISystem implementations.
     /// [UnmanagedCallersOnly] gives a compile-time-constant function pointer in NativeAOT.
     /// </summary>

@@ -36,6 +36,7 @@ public static class PluginHost
         var path = Marshal.PtrToStringUTF8((nint)pluginPathUtf8)
             ?? throw new ArgumentNullException(nameof(pluginPathUtf8));
 
+        ReleaseSystemHandles();
         _context?.Unload();
         _context = null;
         // GC needs a few cycles to fully collect a WeakReference-tracked ALC
@@ -54,6 +55,22 @@ public static class PluginHost
     {
         _context?.Unload();
         _context = null;
+    }
+
+    /// <summary>
+    /// free the outgoing plugin's system GCHandles (held by the Lunar assembly loaded
+    /// inside its context) so the context can actually be collected on unload.
+    /// </summary>
+    static void ReleaseSystemHandles()
+    {
+        if (_context is null)
+            return;
+        foreach (var assembly in _context.Assemblies)
+        {
+            assembly.GetType("Lunar.Native.LunarHandles")
+                ?.GetMethod("ReleaseAll", BindingFlags.NonPublic | BindingFlags.Static)
+                ?.Invoke(null, null);
+        }
     }
 
     static void LoadInner(nint worldPtr, string pluginPath)
