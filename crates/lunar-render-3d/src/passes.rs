@@ -802,9 +802,10 @@ impl RenderEngine3d {
 
 			for (slot, (water_comp, mesh_id, wt)) in self.water_scratch.iter().enumerate() {
 				let slot_offset = slot as u64 * DRAW_SLOT_STRIDE;
-				let Some(gpu_mesh) = self.mesh_gpu.get(mesh_id) else {
+				// not uploaded yet: the draw loop below skips it too
+				if !self.mesh_gpu.contains_key(mesh_id) {
 					continue;
-				};
+				}
 
 				let model_cols = wt.to_matrix().to_cols_array();
 				// default 4-wave setup: two crossing ocean swells + two small chop waves
@@ -847,7 +848,11 @@ impl RenderEngine3d {
 				data[160..192].copy_from_slice(bytemuck::cast_slice(&misc));
 				self.queue
 					.write_buffer(&self.water_params_buf, slot_offset, &data);
+			}
 
+			// one pass for every water surface, each bound to its own params slot
+			// (perf-01: a pass per entity paid a load/store + msaa resolve each)
+			if !self.water_scratch.is_empty() {
 				let (color_target, resolve_target) = match &self.msaa_color_view {
 					Some(msaa) => (
 						msaa as &wgpu::TextureView,
@@ -881,11 +886,17 @@ impl RenderEngine3d {
 				});
 				pass.set_pipeline(&self.water_pipeline);
 				pass.set_bind_group(0, &self.water_bg0, &[]);
-				pass.set_bind_group(1, &self.water_bg1, &[slot_offset as u32]);
-				pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
-				pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
-				pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
-				draw_calls += 1;
+				for (slot, (_, mesh_id, _)) in self.water_scratch.iter().enumerate() {
+					let Some(gpu_mesh) = self.mesh_gpu.get(mesh_id) else {
+						continue;
+					};
+					let slot_offset = slot as u64 * DRAW_SLOT_STRIDE;
+					pass.set_bind_group(1, &self.water_bg1, &[slot_offset as u32]);
+					pass.set_vertex_buffer(0, gpu_mesh.vbuf.slice(..));
+					pass.set_index_buffer(gpu_mesh.ibuf.slice(..), gpu_mesh.index_fmt);
+					pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+					draw_calls += 1;
+				}
 			}
 		}
 
@@ -935,7 +946,10 @@ impl RenderEngine3d {
 				data[208..224].copy_from_slice(bytemuck::cast_slice(&misc));
 				self.queue
 					.write_buffer(&self.decal_params_buf, slot_offset, &data);
+			}
 
+			// one pass for every decal, each bound to its own params slot (perf-01)
+			if !self.decal_scratch.is_empty() {
 				let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 					label: Some("[decal] pass"),
 					color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -954,9 +968,12 @@ impl RenderEngine3d {
 				});
 				pass.set_pipeline(&self.decal_pipeline);
 				pass.set_bind_group(0, &self.decal_bg0, &[]);
-				pass.set_bind_group(1, &self.decal_bg1, &[slot_offset as u32]);
-				pass.draw(0..36, 0..1);
-				draw_calls += 1;
+				for slot in 0..self.decal_scratch.len() {
+					let slot_offset = slot as u64 * DRAW_SLOT_STRIDE;
+					pass.set_bind_group(1, &self.decal_bg1, &[slot_offset as u32]);
+					pass.draw(0..36, 0..1);
+					draw_calls += 1;
+				}
 			}
 		}
 

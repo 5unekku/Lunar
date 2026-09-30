@@ -2652,6 +2652,44 @@ mod headless_tests {
 		render_frames(&mut engine, &mut world, 3);
 	}
 
+	/// timing for the water / decal stages with many entities: each used to open
+	/// its own render pass (with an msaa resolve for water).
+	/// `cargo test --release -p lunar-render-3d water_decal_timing -- --ignored --nocapture`
+	#[test]
+	#[ignore]
+	fn water_decal_timing() {
+		let Some((mut engine, mut world, quad, material)) = feature_test_setup() else {
+			return;
+		};
+		for i in 0..8 {
+			world.spawn((
+				lunar_3d::Water::default(),
+				Mesh3d(quad),
+				Material3d(material),
+				WorldTransform3d {
+					translation: Vec3::new(i as f32 - 4.0, -1.0, -6.0),
+					..WorldTransform3d::new()
+				},
+				ComputedVisibility(true),
+			));
+		}
+		for i in 0..32 {
+			world.spawn((
+				lunar_3d::Decal::default(),
+				WorldTransform3d {
+					translation: Vec3::new((i % 8) as f32 - 4.0, -1.0, -5.0 - (i / 8) as f32),
+					..WorldTransform3d::new()
+				},
+			));
+		}
+		render_frames(&mut engine, &mut world, 5);
+		let frames = 40;
+		let start = std::time::Instant::now();
+		render_frames(&mut engine, &mut world, frames);
+		let ms = start.elapsed().as_secs_f64() * 1000.0 / frames as f64;
+		println!("8 waters + 32 decals: {ms:.2} ms/frame");
+	}
+
 	/// texels of shadow cascade `layer` nearer than the far plane (i.e. covered by a caster).
 	fn cascade_covered_texels(engine: &RenderEngine3d, layer: u32) -> usize {
 		let size = SHADOW_MAP_SIZE;
