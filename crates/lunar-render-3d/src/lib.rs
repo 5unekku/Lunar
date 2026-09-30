@@ -56,8 +56,8 @@ use lunar_3d::{
 	Decal, DetailDensity, DirectionalLight, Frustum, IndexBuffer, IrradianceSH, Material3d, Mesh3d,
 	MeshData, MeshImpostor, MeshLod, MeshRegistry, Overlay, ParticleEmitter, PlanarReflector,
 	PointLight,
-	PrevWorldTransform3d, Projection, ShadowCaster, SkySurface, StaticMesh, SurfaceShader, Terrain,
-	Vertex3d, ViewportAspect, ViewportRect, Water, WorldTransform3d,
+	PrevWorldTransform3d, Projection, ShadowCaster, SkySurface, SpotLight, StaticMesh, SurfaceShader,
+	Terrain, Vertex3d, ViewportAspect, ViewportRect, Water, WorldTransform3d,
 };
 use lunar_bsp::{Area, BspLevel, VisibleAreas};
 use lunar_core::{App, GamePlugin, UpdateStage};
@@ -369,6 +369,23 @@ struct GpuMesh {
 	ibuf: wgpu::Buffer,
 	index_count: u32,
 	index_fmt: wgpu::IndexFormat,
+}
+
+/// one point or spot light queued for this frame:
+/// (pos, color, intensity, radii, casts_shadows, dist_sq, spot). `spot` is
+/// `[dir.x, dir.y, dir.z, cone_scale, cone_offset]`; the shader's cone factor is
+/// `saturate(dot(-l, dir) * scale + offset)^2`, so [`NO_SPOT_CONE`] is exactly 1.
+/// bytes per entry in the clustered light list (PointLightGpu in shader.wgsl)
+pub(crate) const LIGHT_ENTRY_SIZE: usize = 80;
+pub(crate) type LocalLight = (Vec3, Color, f32, Vec3, bool, f32, [f32; 5]);
+pub(crate) const NO_SPOT_CONE: [f32; 5] = [0.0, 0.0, 0.0, 0.0, 1.0];
+
+/// cone term for a spot light facing `dir` with half-angles `inner` <= `outer`.
+pub(crate) fn spot_cone(dir: Vec3, inner: f32, outer: f32) -> [f32; 5] {
+	let cos_outer = outer.cos();
+	let cos_inner = inner.min(outer).cos();
+	let scale = 1.0 / (cos_inner - cos_outer).max(1e-4);
+	[dir.x, dir.y, dir.z, scale, -cos_outer * scale]
 }
 
 /// per-particle GPU layout: must match the WGSL Particle struct exactly.
@@ -1400,6 +1417,7 @@ struct DetailSpriteEntry {
 pub(crate) struct FrameQueries {
 	pub(crate) dir_lights: QueryState<(&'static DirectionalLight, &'static WorldTransform3d)>,
 	pub(crate) point_lights: QueryState<(&'static PointLight, &'static WorldTransform3d)>,
+	pub(crate) spot_lights: QueryState<(&'static SpotLight, &'static WorldTransform3d)>,
 	pub(crate) surface_shaders: QueryState<(
 		&'static Mesh3d,
 		&'static SurfaceShader,
@@ -1446,6 +1464,7 @@ impl FrameQueries {
 		Self {
 			dir_lights: world.query(),
 			point_lights: world.query(),
+			spot_lights: world.query(),
 			surface_shaders: world.query(),
 			cullables: world.query(),
 			static_meshes: world.query(),
@@ -1972,7 +1991,7 @@ pub struct RenderEngine3d {
 	#[allow(clippy::type_complexity)]
 	draw_sorted_scratch: Vec<(Entity, u32, u32, Color, f32, f32, Mat4, f32, u32, u32, u32)>,
 	uniform_staging: Vec<u8>,
-	point_light_scratch: Vec<(Vec3, Color, f32, Vec3, bool, f32)>, // (pos, color, intensity, radii, casts_shadows, dist_sq)
+	point_light_scratch: Vec<LocalLight>,
 	// feature-pass scratch buffers: cleared + refilled each frame, never reallocated in steady state
 	terrain_snap_scratch: Vec<TerrainSnap>,
 	water_scratch: Vec<(Water, u32, WorldTransform3d)>, // (water, mesh_id, transform)
@@ -2835,6 +2854,54 @@ mod headless_tests {
 		let after = covered_footprint(&engine, &engine.point_shadow_tex, 0);
 		assert!(after.2 > 0);
 		assert_ne!(before, after, "the +x face must be re-rendered after the caster moved");
+	}
+
+	/// corr-09: SpotLight was authorable (component, bundle, .ls3 field, docs) but
+	/// the renderer never gathered or shaded it, so spot lights lit nothing.
+	#[test]
+	fn spot_light_lights_its_cone_only() {
+		let Some((mut engine, mut world, _quad, material)) = feature_test_setup() else {
+			return;
+		};
+		let floor = world.resource_mut::<MeshRegistry>().add_mesh(quad_mesh(20.0, 20.0));
+		world.spawn((
+			Mesh3d(floor),
+			Material3d(material),
+			WorldTransform3d::new(),
+			ComputedVisibility(true),
+		));
+		let down = lunar_math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+		let camera = world.resource::<ActiveCamera3d>().entity.unwrap();
+		*world.get_mut::<WorldTransform3d>(camera).unwrap() = WorldTransform3d {
+			translation: Vec3::new(0.0, 6.0, 0.0),
+			rotation: down,
+			..WorldTransform3d::new()
+		};
+		world.spawn((
+			lunar_3d::SpotLight {
+				intensity: 2000.0,
+				inner_angle: 0.15,
+				outer_angle: 0.3,
+				..lunar_3d::SpotLight::default()
+			},
+			WorldTransform3d {
+				translation: Vec3::new(0.0, 5.0, 0.0),
+				rotation: down,
+				..WorldTransform3d::new()
+			},
+		));
+		render_frames(&mut engine, &mut world, 3);
+		let (rgba, w, h) = engine.read_headless_rgba().expect("headless readback");
+		let luma = |x: u32, y: u32| {
+			let i = ((y * w + x) * 4) as usize;
+			u32::from(rgba[i]) + u32::from(rgba[i + 1]) + u32::from(rgba[i + 2])
+		};
+		let centre = luma(w / 2, h / 2);
+		let corner = luma(w / 8, h / 8);
+		assert!(
+			centre > corner + 90,
+			"the cone's footprint must be lit well above the floor outside it: centre {centre}, corner {corner}"
+		);
 	}
 
 	/// perf-07: a slot left unused is cleared; when a light comes back to it at the

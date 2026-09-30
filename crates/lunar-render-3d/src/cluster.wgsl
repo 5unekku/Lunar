@@ -28,11 +28,21 @@ struct PointLightEntry {
     radius:      f32,
     shadow_index: u32,
     // scalar fields, not vec3: a vec3 pad aligns to 16 and inflates the wgsl
-    // stride to 64 while the buffer packs 48-byte entries. unused here; cluster
+    // stride while the buffer packs LIGHT_ENTRY_SIZE-byte entries. unused here; cluster
     // assignment stays a conservative sphere of radius (= max axis).
     inv_radius_x: f32,
     inv_radius_y: f32,
     inv_radius_z: f32,
+    // spot cone terms (see shader.wgsl PointLightGpu); unused for cluster
+    // assignment, which stays the conservative sphere. keeps the 80-byte stride.
+    spot_dir_x:  f32,
+    spot_dir_y:  f32,
+    spot_dir_z:  f32,
+    spot_scale:  f32,
+    spot_offset: f32,
+    _spot_pad0:  f32,
+    _spot_pad1:  f32,
+    _spot_pad2:  f32,
 }
 
 @group(0) @binding(0) var<uniform>             cluster_params:       ClusterParams;

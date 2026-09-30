@@ -1238,7 +1238,7 @@ impl RenderEngine3d {
 		// ── clustered forward lighting resources ─────────────────────────
 		// cluster_bgl_render was already created above (needed by pipeline_layout)
 		let cluster_bgl_render = cluster_bgl_render_early;
-		let light_entry_size: u64 = 48; // matches PointLightGpu in shader (48 bytes)
+		let light_entry_size = LIGHT_ENTRY_SIZE as u64; // matches PointLightGpu in shader.wgsl
 		let light_list_buf = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("[cluster] light list"),
 			size: MAX_CLUSTERED_LIGHTS as u64 * light_entry_size,

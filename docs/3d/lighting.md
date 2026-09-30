@@ -83,6 +83,10 @@ commands.spawn(SpotLightBundle {
 });
 ```
 
+spot lights share the point-light budget and clustering. a shadow-casting spot
+light takes one of the point-shadow slots and renders a full cube map around
+it, so it costs the same as a shadowed point light.
+
 ## shadows
 
 shadows are opt-in per light. enable `casts_shadows: true` on the light,

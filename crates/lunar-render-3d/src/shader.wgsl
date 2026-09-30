@@ -53,7 +53,17 @@ struct PointLightGpu {
     shadow_index: u32,        // offset 32  (0xffffffff = unshadowed)
     inv_radius_x: f32,        // offset 36  per-axis inverse radii for ellipsoid falloff
     inv_radius_y: f32,        // offset 40
-    inv_radius_z: f32,        // offset 44, total: 48 bytes
+    inv_radius_z: f32,        // offset 44
+    // spot cone: factor = saturate(dot(-l, spot_dir) * spot_scale + spot_offset)^2.
+    // point lights pack scale 0, offset 1 (factor 1). LIGHT_ENTRY_SIZE on the cpu.
+    spot_dir_x:  f32,         // offset 48
+    spot_dir_y:  f32,         // offset 52
+    spot_dir_z:  f32,         // offset 56
+    spot_scale:  f32,         // offset 60
+    spot_offset: f32,         // offset 64
+    _spot_pad0:  f32,
+    _spot_pad1:  f32,
+    _spot_pad2:  f32,         // total: 80 bytes
 }
 
 // lights uniform buffer layout (total 816 bytes):
@@ -516,7 +526,10 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
             let ndotl = max(dot(n, l), 0.0);
             if ndotl <= 0.0 { continue; }
             let window = clamp(1.0 - r * r * r * r, 0.0, 1.0);
-            let att   = window * window / (dist * dist + 1.0);
+            let spot_dir = vec3<f32>(light.spot_dir_x, light.spot_dir_y, light.spot_dir_z);
+            let cone = clamp(dot(-l, spot_dir) * light.spot_scale + light.spot_offset, 0.0, 1.0);
+            if cone <= 0.0 { continue; }
+            let att   = window * window * cone * cone / (dist * dist + 1.0);
             let irradiance = light.color * light.intensity * att;
             var shadow_fac = 1.0;
             if light.shadow_index != 0xffffffffu {

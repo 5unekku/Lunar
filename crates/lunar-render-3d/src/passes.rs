@@ -1448,7 +1448,7 @@ impl RenderEngine3d {
 			// and collect the depth-array layers that need re-recording this frame.
 			self.point_shadow_layer_scratch.clear();
 			let mut pt_shadow_idx = 0usize;
-			for &(light_pos, _, _, light_radii, casts, _) in self.point_light_scratch.iter() {
+			for &(light_pos, _, _, light_radii, casts, _, _) in self.point_light_scratch.iter() {
 				if !casts || pt_shadow_idx >= MAX_POINT_SHADOW_LIGHTS {
 					break;
 				}

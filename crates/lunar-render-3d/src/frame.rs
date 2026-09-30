@@ -369,12 +369,27 @@ impl RenderEngine3d {
 					radii,
 					pl.casts_shadows,
 					dist_sq,
+					NO_SPOT_CONE,
+				));
+			});
+			// spot lights ride the point-light path with a cone term (corr-09); their
+			// shadows use the omni cube, which is conservative for a cone
+			let sq = &mut self.queries.as_mut().unwrap().spot_lights;
+			sq.iter(world).for_each(|(sl, wt)| {
+				let dist_sq = (Vec3A::from(wt.translation) - cam_pos_a).length_squared();
+				self.point_light_scratch.push((
+					wt.translation,
+					sl.color,
+					sl.intensity,
+					Vec3::splat(sl.radius),
+					sl.casts_shadows,
+					dist_sq,
+					spot_cone(wt.forward(), sl.inner_angle, sl.outer_angle),
 				));
 			});
 		}
 		let max_lights = dev_max_point_lights.min(MAX_CLUSTERED_LIGHTS);
-		let cmp_dist = |a: &(Vec3, Color, f32, Vec3, bool, f32),
-		                b: &(Vec3, Color, f32, Vec3, bool, f32)| {
+		let cmp_dist = |a: &LocalLight, b: &LocalLight| {
 			a.5.partial_cmp(&b.5).unwrap_or(std::cmp::Ordering::Equal)
 		};
 		// partial sort: select the closest `max_lights` to the front, then order just those
@@ -1177,7 +1192,7 @@ impl RenderEngine3d {
 		// assign shadow slots to first MAX_POINT_SHADOW_LIGHTS lights with casts_shadows=true
 		let mut shadow_slot_idx: usize = 0;
 		self.shadow_indices_scratch.clear();
-		for &(_, _, _, _, casts, _) in &self.point_light_scratch {
+		for &(_, _, _, _, casts, _, _) in &self.point_light_scratch {
 			let idx = if casts && dev_point_shadows && shadow_slot_idx < MAX_POINT_SHADOW_LIGHTS {
 				let v = shadow_slot_idx as u32;
 				shadow_slot_idx += 1;
@@ -1197,7 +1212,12 @@ impl RenderEngine3d {
 			radius: f32,
 			shadow_index: u32,
 			inverse_radii: [f32; 3],
+			spot_dir: [f32; 3],
+			spot_scale: f32,
+			spot_offset: f32,
+			_pad: [f32; 3],
 		}
+		const _: () = assert!(std::mem::size_of::<PointLightGpuCpu>() == LIGHT_ENTRY_SIZE);
 
 		#[repr(C)]
 		#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1253,11 +1273,11 @@ impl RenderEngine3d {
 		let light_count = self.point_light_scratch.len();
 		if light_count > 0 {
 			self.light_data_scratch.clear();
-			self.light_data_scratch.resize(light_count * 48, 0);
-			for (i, &(pos, color, intensity, radii, _, _)) in
+			self.light_data_scratch.resize(light_count * LIGHT_ENTRY_SIZE, 0);
+			for (i, &(pos, color, intensity, radii, _, _, spot)) in
 				self.point_light_scratch.iter().enumerate()
 			{
-				let off = i * 48;
+				let off = i * LIGHT_ENTRY_SIZE;
 				let entry = PointLightGpuCpu {
 					position: [pos.x, pos.y, pos.z],
 					intensity,
@@ -1267,8 +1287,13 @@ impl RenderEngine3d {
 					shadow_index: self.shadow_indices_scratch[i],
 					// clamp so a zero axis cannot produce inf * 0 = NaN in the shader
 					inverse_radii: radii.max(Vec3::splat(1e-4)).recip().to_array(),
+					spot_dir: [spot[0], spot[1], spot[2]],
+					spot_scale: spot[3],
+					spot_offset: spot[4],
+					_pad: [0.0; 3],
 				};
-				self.light_data_scratch[off..off + 48].copy_from_slice(bytemuck::bytes_of(&entry));
+				self.light_data_scratch[off..off + LIGHT_ENTRY_SIZE]
+					.copy_from_slice(bytemuck::bytes_of(&entry));
 			}
 			self.queue
 				.write_buffer(&self.light_list_buf, 0, &self.light_data_scratch);
