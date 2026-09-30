@@ -1637,8 +1637,11 @@ impl RenderEngine3d {
 					}
 				}
 			}
-			// clear layers for unused shadow slots
-			for unused in pt_shadow_idx..MAX_POINT_SHADOW_LIGHTS {
+			// clear slots that just went unused (perf-07). the cleared slot's faces are
+			// marked dirty, so a light that later returns to it re-renders even when its
+			// position and the draw list are unchanged
+			for unused in pt_shadow_idx..self.point_shadow_used_slots {
+				self.point_shadow_dirty[unused] = [true; 6];
 				for face in 0..6usize {
 					let layer = unused * 6 + face;
 					let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1658,6 +1661,7 @@ impl RenderEngine3d {
 					});
 				}
 			}
+			self.point_shadow_used_slots = pt_shadow_idx;
 		}
 
 		// ── shadow + z-prepass: parallel command recording ───────────────

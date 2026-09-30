@@ -3794,6 +3794,8 @@ impl RenderEngine3d {
 			point_shadow_dirty: [[true; 6]; MAX_POINT_SHADOW_LIGHTS],
 			point_shadow_last_positions: [Vec3::ZERO; MAX_POINT_SHADOW_LIGHTS],
 			point_shadow_last_signature: 0,
+			// the texture starts zeroed (fully shadowed): clear every slot once
+			point_shadow_used_slots: MAX_POINT_SHADOW_LIGHTS,
 			cluster_shader_src_loaded: true,
 			cluster_bgl_compute,
 			cluster_bgl_render,

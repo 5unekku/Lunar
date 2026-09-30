@@ -1581,6 +1581,9 @@ pub struct RenderEngine3d {
 	point_shadow_last_positions: [Vec3; MAX_POINT_SHADOW_LIGHTS],
 	/// hash of the draw list (entity, mesh, model) the point shadow faces were last rendered from
 	point_shadow_last_signature: u64,
+	/// shadow slots in use last frame. slots past it are already cleared, so only a
+	/// used -> unused transition clears (it was 6 passes per idle slot, every frame)
+	point_shadow_used_slots: usize,
 
 	// clustered forward lighting (group 5)
 	cluster_shader_src_loaded: bool, // sentinel; real init happens on first use
@@ -2832,6 +2835,54 @@ mod headless_tests {
 		let after = covered_footprint(&engine, &engine.point_shadow_tex, 0);
 		assert!(after.2 > 0);
 		assert_ne!(before, after, "the +x face must be re-rendered after the caster moved");
+	}
+
+	/// perf-07: a slot left unused is cleared; when a light comes back to it at the
+	/// same position with the same draw list, nothing marked it dirty, so it kept
+	/// the cleared depth and cast no shadow.
+	#[test]
+	fn point_shadow_slot_rerenders_when_reused() {
+		let Some((mut engine, mut world, _quad, material)) = feature_test_setup() else {
+			return;
+		};
+		let ball = world.resource_mut::<MeshRegistry>().add_mesh(sphere_mesh(0.5, 16, 12));
+		world.spawn((
+			Mesh3d(ball),
+			Material3d(material),
+			WorldTransform3d {
+				translation: Vec3::new(2.0, 0.0, -5.0),
+				..WorldTransform3d::new()
+			},
+			ComputedVisibility(true),
+			ShadowCaster,
+		));
+		let light = (
+			PointLight {
+				casts_shadows: true,
+				radius: 20.0,
+				..PointLight::default()
+			},
+			WorldTransform3d {
+				translation: Vec3::new(0.0, 0.0, -5.0),
+				..WorldTransform3d::new()
+			},
+		);
+		let first = world.spawn(light).id();
+		render_frames(&mut engine, &mut world, 2);
+		let lit = covered_footprint(&engine, &engine.point_shadow_tex, 0);
+		assert!(lit.2 > 0, "the caster must land in the light's +x face");
+
+		world.despawn(first);
+		render_frames(&mut engine, &mut world, 2);
+		assert_eq!(covered_footprint(&engine, &engine.point_shadow_tex, 0).2, 0);
+
+		world.spawn(light);
+		render_frames(&mut engine, &mut world, 2);
+		assert_eq!(
+			covered_footprint(&engine, &engine.point_shadow_tex, 0),
+			lit,
+			"the returning light must re-render its slot"
+		);
 	}
 
 	/// corr-05: the bloom chain was sized width/2 x height/2 with no clamp, so a
