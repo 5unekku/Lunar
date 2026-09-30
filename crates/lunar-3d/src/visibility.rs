@@ -425,16 +425,49 @@ fn world_space_aabb(aabb: &Aabb3d, world: &WorldTransform3d) -> (Vec3A, Vec3A) {
 	(world_center, world_half)
 }
 
+/// cull inputs that changed since the last build: a moved or resized box, or a
+/// visibility flip (Added implies Changed, so spawns count too)
+type CullInputsChanged = (
+	With<Aabb3d>,
+	Or<(
+		Changed<Aabb3d>,
+		Changed<WorldTransform3d>,
+		Changed<ComputedVisibility>,
+	)>,
+);
+
+/// true when nothing feeding `CullSoa` changed since the last build, so the
+/// snapshot + rotate-expand can be skipped (perf-05). despawns and component
+/// removals are invisible to `Changed`, so the matching-entity count is compared
+/// too. propagate_transforms_3d rewrites every WorldTransform3d whenever it runs,
+/// so this fires on fully quiet frames (menus, pauses, static scenes).
+fn cull_soa_is_current(
+	query: &Query<(Entity, &Aabb3d, &WorldTransform3d, &ComputedVisibility)>,
+	changed: &Query<(), CullInputsChanged>,
+	last_count: &mut Option<usize>,
+) -> bool {
+	let count = query.iter().len();
+	let current = *last_count == Some(count) && changed.is_empty();
+	*last_count = Some(count);
+	current
+}
+
 /// native build: snapshot visible entities sequentially (cheap component copies), then
 /// rotate-expand each AABB in parallel over contiguous slices. order is preserved so the
 /// renderer's index-aligned `frustum_visible` / GPU readback stay consistent with `CullSoa`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn build_cull_soa(
 	query: Query<(Entity, &Aabb3d, &WorldTransform3d, &ComputedVisibility)>,
+	changed: Query<(), CullInputsChanged>,
+	mut last_count: Local<Option<usize>>,
 	mut soa: ResMut<CullSoa>,
 	mut scratch: Local<Vec<(Entity, Aabb3d, WorldTransform3d)>>,
 ) {
 	use rayon::prelude::*;
+
+	if cull_soa_is_current(&query, &changed, &mut last_count) {
+		return;
+	}
 
 	scratch.clear();
 	for (entity, aabb, world, vis) in query.iter() {
@@ -510,8 +543,13 @@ pub fn build_cull_soa(
 #[cfg(target_arch = "wasm32")]
 pub fn build_cull_soa(
 	query: Query<(Entity, &Aabb3d, &WorldTransform3d, &ComputedVisibility)>,
+	changed: Query<(), CullInputsChanged>,
+	mut last_count: Local<Option<usize>>,
 	mut soa: ResMut<CullSoa>,
 ) {
+	if cull_soa_is_current(&query, &changed, &mut last_count) {
+		return;
+	}
 	soa.entities.clear();
 	soa.center_x.clear();
 	soa.center_y.clear();
@@ -554,6 +592,69 @@ mod tests {
 		assert!(frustum.intersects_aabb(Vec3A::new(0.0, 0.0, -0.2), tiny));
 		assert!(frustum.intersects_aabb(Vec3A::new(0.0, 0.0, -499.0), tiny));
 		assert!(!frustum.intersects_aabb(Vec3A::new(0.0, 0.0, -501.0), tiny));
+	}
+
+	fn cull_world(n: usize) -> World {
+		let mut world = World::new();
+		world.insert_resource(CullSoa::default());
+		for i in 0..n {
+			world.spawn((
+				Aabb3d { center: Vec3A::ZERO, half_extents: Vec3A::splat(0.5) },
+				WorldTransform3d {
+					translation: Vec3::new(i as f32, 0.0, 0.0),
+					..WorldTransform3d::new()
+				},
+				ComputedVisibility(true),
+			));
+		}
+		world
+	}
+
+	/// perf-05: build_cull_soa skips quiet frames, so moves, visibility flips and
+	/// despawns must still land on the next run.
+	#[test]
+	fn cull_soa_tracks_changes_across_skipped_frames() {
+		use bevy_ecs::system::IntoSystem;
+		let mut world = cull_world(3);
+		let mut system = IntoSystem::into_system(build_cull_soa);
+		system.initialize(&mut world);
+		let _ = system.run((), &mut world);
+		let _ = system.run((), &mut world);
+		assert_eq!(world.resource::<CullSoa>().entities.len(), 3);
+
+		let e = world.resource::<CullSoa>().entities[0];
+		world.get_mut::<WorldTransform3d>(e).unwrap().translation.x = 50.0;
+		let _ = system.run((), &mut world);
+		let soa = world.resource::<CullSoa>();
+		let i = soa.entities.iter().position(|&x| x == e).unwrap();
+		assert_eq!(soa.center_x[i], 50.0);
+
+		world.get_mut::<ComputedVisibility>(e).unwrap().0 = false;
+		let _ = system.run((), &mut world);
+		assert!(!world.resource::<CullSoa>().entities.contains(&e));
+
+		let other = world.resource::<CullSoa>().entities[0];
+		world.despawn(other);
+		let _ = system.run((), &mut world);
+		assert_eq!(world.resource::<CullSoa>().entities.len(), 1);
+	}
+
+	/// `cargo test --release -p lunar-3d cull_soa_quiet_timing -- --ignored --nocapture`
+	#[test]
+	#[ignore]
+	fn cull_soa_quiet_timing() {
+		use bevy_ecs::system::IntoSystem;
+		let mut world = cull_world(10_000);
+		let mut system = IntoSystem::into_system(build_cull_soa);
+		system.initialize(&mut world);
+		let _ = system.run((), &mut world);
+		let runs = 500;
+		let start = std::time::Instant::now();
+		for _ in 0..runs {
+			let _ = system.run((), &mut world);
+		}
+		let us = start.elapsed().as_secs_f64() * 1e6 / f64::from(runs);
+		println!("quiet build_cull_soa over 10k boxes: {us:.2} us/frame");
 	}
 
 	/// corr-44: an empty position slice produced -inf half extents, which made
