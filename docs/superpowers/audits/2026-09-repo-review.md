@@ -76,6 +76,11 @@ findings from the fix loop are rev-13..rev-17.
 | rev-45 | `lunar_despawn` (FFI) skipped on_destroy | fixed |
 | rev-46 | scene `emissive` silently ignored (no emission in MaterialData) | documented + warned; emission itself is a capability gap |
 | rev-47 | the 16x exposure constant in shader.wgsl scales ambient and lightmaps too, and terrain/water/surface shaders don't get it | open (visual; ties into rev-23, needs sign-off) |
+| rev-48 | scene `parse_hex_color` (2d and 3d) panicked on a non-ascii string of the right byte length | fixed |
+| rev-49 | ffi query: an unregistered include id was dropped, so the query matched every entity | fixed |
+| rev-50 | ffi systems ran in hash-map order, not registration order | fixed (BTreeMap) |
+| rev-51 | C# FixedUpdate / Shutdown systems were accepted but never run; the engine had no shutdown stage | fixed (`App::add_shutdown_system`; FixedUpdate in the physics stage) |
+| rev-52 | coreclr hot reload: the old plugin's system GCHandles pinned its load context, leaking a copy per reload | fixed (host releases them before unload; not compiled here, no dotnet sdk) |
 | rev-25 | ci build-wasm used the dev profile, which pins cranelift (no wasm32 backend) | fixed `7261cce` (llvm override, as build-cross does) |
 
 ### 2026-07 audit findings fixed on this branch
