@@ -162,9 +162,10 @@ codegen-backend = "cranelift"
 opt-level       = 3
 codegen-backend = "llvm"
 
-# lunar-3d's SoA cull uses explicit avx2 intrinsics (llvm.x86.avx.cmp.ps.256)
-# that cranelift does not implement yet (rustc_codegen_cranelift issue 171), so
-# it must use llvm even in dev or its tests SIGABRT. targeted override, the rest
-# of the workspace keeps cranelift for fast iteration.
-[profile.dev.package.lunar-3d]
+# the SoA frustum cull (lunar_math::simd_cull) uses explicit avx2 intrinsics
+# (llvm.x86.avx.cmp.ps.256) that cranelift does not implement yet
+# (rustc_codegen_cranelift issue 171), so lunar-math must use llvm even in dev or
+# its callers SIGABRT. the kernel lives there, not in lunar-3d, so the much larger
+# and more often edited lunar-3d keeps cranelift (arch-05).
+[profile.dev.package.lunar-math]
 codegen-backend = "llvm"

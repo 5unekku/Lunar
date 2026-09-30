@@ -54,6 +54,7 @@ pub type Mat4 = glam::Mat4;
 pub type Quat = glam::Quat;
 
 mod macros;
+pub mod simd_cull;
 mod screen_rect;
 mod types;
 
