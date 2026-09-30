@@ -134,7 +134,14 @@ pub struct GlyphAtlas {
 	/// a glyph did not fit this frame; [`GlyphAtlas::flush_if_overflowed`] clears
 	/// the atlas before the next frame so it can be rasterized again
 	overflowed: bool,
+	/// frames since the last flush, and how many to wait before flushing again
+	frames_since_flush: u32,
+	flush_cooldown: u32,
 }
+
+/// frames to hold off after a flush that didn't help (the next frame overflowed
+/// again, so the text on screen alone exceeds the atlas)
+const FLUSH_BACKOFF_FRAMES: u32 = 120;
 
 impl GlyphAtlas {
 	/// create a new empty atlas.
@@ -157,6 +164,8 @@ impl GlyphAtlas {
 			scale: 1.0,
 			dirty: false,
 			overflowed: false,
+			frames_since_flush: u32::MAX,
+			flush_cooldown: 0,
 		}
 	}
 
@@ -176,13 +185,31 @@ impl GlyphAtlas {
 	/// glyphs in use re-pack from scratch. returns true when it flushed, in which
 	/// case cached text layouts must be invalidated. call between frames, never
 	/// mid-frame: quads already emitted this frame still point at the old layout.
+	///
+	/// when one frame's text alone overflows the atlas, flushing can't help and
+	/// would re-rasterize and re-upload the whole atlas every frame, so a flush
+	/// followed straight away by another overflow backs off for a while
+	/// (overflowing glyphs stay missing meanwhile).
 	pub fn flush_if_overflowed(&mut self) -> bool {
-		if self.overflowed {
-			self.reset();
-			true
-		} else {
-			false
+		self.frames_since_flush = self.frames_since_flush.saturating_add(1);
+		if !self.overflowed {
+			return false;
 		}
+		if self.frames_since_flush <= 1 && self.flush_cooldown == 0 {
+			log::warn!(
+				"glyph atlas ({}x{}) is too small for the text on screen; some glyphs will be missing",
+				self.width,
+				self.height
+			);
+			self.flush_cooldown = FLUSH_BACKOFF_FRAMES;
+		}
+		if self.flush_cooldown > 0 {
+			self.flush_cooldown -= 1;
+			return false;
+		}
+		self.reset();
+		self.frames_since_flush = 0;
+		true
 	}
 
 	/// update the rasterization scale. returns `true` if the scale changed.
@@ -554,6 +581,24 @@ mod tests {
 		assert!(!atlas.flush_if_overflowed(), "a flush clears the overflow");
 		layout_text_into(&mut atlas, FONT_ID, "L", 40.0, Vec2::ZERO, &mut out);
 		assert_eq!(out.len(), 1, "a glyph dropped on overflow must render after the flush");
+	}
+
+	/// if one frame's text needs more glyphs than the atlas holds, a flush can't
+	/// help: every frame would overflow, flush, re-rasterize and re-upload the whole
+	/// atlas. a flush that is immediately followed by another overflow backs off.
+	#[test]
+	fn flush_backs_off_when_the_frame_itself_does_not_fit() {
+		let mut atlas = GlyphAtlas::new(64, 64);
+		atlas.register_font(FONT_ID, FONT_BYTES);
+		let mut out = Vec::new();
+		let mut flushes = 0;
+		for _frame in 0..10 {
+			if atlas.flush_if_overflowed() {
+				flushes += 1;
+			}
+			layout_text_into(&mut atlas, FONT_ID, "ABCDEFGHIJKL", 40.0, Vec2::ZERO, &mut out);
+		}
+		assert!(flushes <= 2, "flushed {flushes} times in 10 frames");
 	}
 
 	#[test]
