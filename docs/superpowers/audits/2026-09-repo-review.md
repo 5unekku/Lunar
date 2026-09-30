@@ -71,6 +71,11 @@ findings from the fix loop are rev-13..rev-17.
 | rev-40 | render-bench 2d goldens had red/blue swapped (the bench swapped already-rgba 2d readback) | fixed (both engines' readbacks return rgba) |
 | rev-41 | per-tick `mouse_delta` read by per-frame (Render-stage) systems repeated on frames without a tick: mouse-look over-rotated ~2.4x at 144 hz | fixed (`frame_mouse_delta` / `frame_mouse_scroll`, demo + docs) |
 | rev-42 | web audio: a missing optional sidecar threw a js exception through wasm and aborted startup | fixed (init reports failure; game runs silent) |
+| rev-43 | sub-scene instancing reparented every id'd entity to the instance (overwriting in-sub-scene links), replaced the instance's own children, and skipped id-less roots | fixed |
+| rev-44 | BehaviorPlugin replaced an existing registry (wiping C#-registered behaviors); pending behaviors replaced already-attached ones | fixed |
+| rev-45 | `lunar_despawn` (FFI) skipped on_destroy | fixed |
+| rev-46 | scene `emissive` silently ignored (no emission in MaterialData) | documented + warned; emission itself is a capability gap |
+| rev-47 | the 16x exposure constant in shader.wgsl scales ambient and lightmaps too, and terrain/water/surface shaders don't get it | open (visual; ties into rev-23, needs sign-off) |
 | rev-25 | ci build-wasm used the dev profile, which pins cranelift (no wasm32 backend) | fixed `7261cce` (llvm override, as build-cross does) |
 
 ### 2026-07 audit findings fixed on this branch
