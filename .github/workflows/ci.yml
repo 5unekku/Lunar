@@ -37,6 +37,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # broken intra-doc links and stray html in doc comments
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
   test:
     runs-on: ubuntu-latest
@@ -62,6 +64,13 @@ jobs:
       # llvm because [profile.dev] pins cranelift, which has no wasm32 backend
       # ("can't compile for wasm32-unknown-unknown" in lunar-math)
       - run: cargo build --target wasm32-unknown-unknown --package lunar-game --config 'profile.dev.codegen-backend="llvm"'
+      # wasm-only code paths (web input, bootstrap_wasm, wasm render paths) only get
+      # linted here. native-only crates and tools are excluded.
+      - run: >-
+          cargo clippy --target wasm32-unknown-unknown --workspace
+          --exclude lunar-plugin-loader --exclude lunar-dotnet-host --exclude lunar-ffi
+          --exclude render-bench --exclude bake-pvs --exclude navmesh-bench
+          --config 'profile.dev.codegen-backend="llvm"' -- -D warnings
 
   smoke:
     runs-on: ubuntu-latest
