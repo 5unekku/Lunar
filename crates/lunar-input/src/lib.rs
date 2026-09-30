@@ -1537,6 +1537,34 @@ fn key_from_web(key: &str, code: &str) -> Option<KeyCode> {
 	})
 }
 
+/// pairs each browser key release with the KeyCode its press resolved to. letters
+/// resolve from the layout-dependent `key`, which can differ between keydown and
+/// keyup (a modifier pressed or released in between), so resolving the release
+/// on its own could release a different KeyCode and leave the pressed one held.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[derive(Default)]
+struct WebKeyTracker {
+	/// physical `code` -> KeyCode it resolved to on keydown
+	down: HashMap<String, KeyCode>,
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+impl WebKeyTracker {
+	fn key_down(&mut self, key: &str, code: &str) -> Option<KeyCode> {
+		// a repeat keydown keeps the original mapping
+		if let Some(&held) = self.down.get(code) {
+			return Some(held);
+		}
+		let resolved = key_from_web(key, code)?;
+		self.down.insert(code.to_string(), resolved);
+		Some(resolved)
+	}
+
+	fn key_up(&mut self, key: &str, code: &str) -> Option<KeyCode> {
+		self.down.remove(code).or_else(|| key_from_web(key, code))
+	}
+}
+
 /// what a browser standard-mapping gamepad button index drives. LT/RT (6, 7)
 /// are analog buttons, so they feed the trigger axes from `GamepadButton.value`
 /// rather than a digital button (corr-36).
@@ -1863,10 +1891,15 @@ pub fn setup_web_input(canvas: &web_sys::HtmlElement) {
 		let body = doc_body(&document);
 		let target: &EventTarget = body.as_ref();
 
+		// releases must match presses (see WebKeyTracker); shared by the three closures
+		let tracker = std::rc::Rc::new(std::cell::RefCell::new(WebKeyTracker::default()));
+
+		let down_tracker = tracker.clone();
 		let keydown_closure =
 			wasm_bindgen::closure::Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
 				event.prevent_default();
-				if let Some(code) = key_from_web(&event.key(), &event.code()) {
+				let resolved = down_tracker.borrow_mut().key_down(&event.key(), &event.code());
+				if let Some(code) = resolved {
 					web_input::push_key_down(code);
 				}
 			}) as Box<dyn FnMut(_)>);
@@ -1875,10 +1908,12 @@ pub fn setup_web_input(canvas: &web_sys::HtmlElement) {
 			.expect("failed to add keydown listener");
 		keydown_closure.forget();
 
+		let up_tracker = tracker.clone();
 		let keyup_closure =
 			wasm_bindgen::closure::Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
 				event.prevent_default();
-				if let Some(code) = key_from_web(&event.key(), &event.code()) {
+				let resolved = up_tracker.borrow_mut().key_up(&event.key(), &event.code());
+				if let Some(code) = resolved {
 					web_input::push_key_up(code);
 				}
 			}) as Box<dyn FnMut(_)>);
@@ -1886,6 +1921,19 @@ pub fn setup_web_input(canvas: &web_sys::HtmlElement) {
 			.add_event_listener_with_callback("keyup", keyup_closure.as_ref().unchecked_ref())
 			.expect("failed to add keyup listener");
 		keyup_closure.forget();
+
+		// keys released while the page is unfocused never send keyup: release
+		// everything still held when focus leaves, or it stays pressed
+		let blur_closure = wasm_bindgen::closure::Closure::wrap(Box::new(move || {
+			for (_, code) in tracker.borrow_mut().down.drain() {
+				web_input::push_key_up(code);
+			}
+		}) as Box<dyn FnMut()>);
+		let window_target: &EventTarget = window.as_ref();
+		window_target
+			.add_event_listener_with_callback("blur", blur_closure.as_ref().unchecked_ref())
+			.expect("failed to add blur listener");
+		blur_closure.forget();
 	}
 
 	// mouse events on canvas
@@ -2070,6 +2118,18 @@ mod tests {
 			assert_eq!(key_from_web(key, code), Some(expected), "{key:?}/{code:?}");
 		}
 		assert_eq!(key_from_web("Unidentified", "Lang1"), None);
+	}
+
+	/// a key must release the KeyCode it pressed: on azerty the physical Q key goes
+	/// down as "a" (KeyCode::A); released with altgr held it reports "æ", which
+	/// resolved to KeyQ, so A stayed held forever.
+	#[test]
+	fn web_key_release_matches_its_press() {
+		let mut keys = WebKeyTracker::default();
+		assert_eq!(keys.key_down("a", "KeyQ"), Some(KeyCode::A));
+		assert_eq!(keys.key_up("æ", "KeyQ"), Some(KeyCode::A));
+		// an up with no recorded down resolves on its own
+		assert_eq!(keys.key_up("b", "KeyB"), Some(KeyCode::B));
 	}
 
 	/// corr-36: the browser's analog LT/RT buttons drive the trigger axes.
