@@ -58,6 +58,8 @@ findings from the fix loop are rev-13..rev-17.
 | rev-27 | docs promised APIs that don't exist: `mouse_scroll_delta` (now implemented), `RenderTier::detect`, `RenderLayers::from_layers`, `get_single_mut`, and stale fields on `SpriteAnimation`, `CameraFollow2d` (a resource, shown as a component), `AmbientLight`, `Sky`, `RenderConfig3d` | fixed `6876ae9`, `8b91336` and the follow-up doc commit |
 | rev-28 | the gpu lod-select path was dead: its pipeline was never created, yet high-tier frames sized its buffers every frame | removed `56591d5` (-261 lines) |
 | rev-29 | the wasm cross-compile test (`tests/cross_compile.rs`) failed on the native-only render-bench | fixed `987466b` |
+| rev-30 | 2d glyph atlas: once full, every glyph that didn't fit was cached as "no glyph" forever, so new characters/sizes never rendered again | fixed `01bdc63` (flush between frames) |
+| rev-31 | 3d lightmap atlas: a lightmap with no atlas slot sampled the whole atlas as its lighting | fixed `1ea12a4` |
 | rev-25 | ci build-wasm used the dev profile, which pins cranelift (no wasm32 backend) | fixed `7261cce` (llvm override, as build-cross does) |
 
 ### 2026-07 audit findings fixed on this branch
