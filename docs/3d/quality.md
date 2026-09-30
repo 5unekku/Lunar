@@ -87,11 +87,12 @@ a quality slider and let players choose: don't auto-detect and assume.
 use lunar::lunar_render_3d::{AtmosphericScattering, Sky};
 
 fn setup(mut commands: Commands) {
+    // the sun disc is currently drawn straight overhead, not along the DirectionalLight
     commands.insert_resource(Sky {
-        sun_direction: Vec3::new(0.3, 0.8, 0.2).normalize(),
         sun_color: Color::rgba(1.0, 0.95, 0.8, 1.0),
-        sun_intensity: 10.0,
         sky_color: Color::rgba(0.4, 0.6, 1.0, 1.0),
+        show_sun: true,
+        ..Default::default()
     });
 
     // optional: physically-based Rayleigh/Mie scattering

@@ -54,6 +54,8 @@ findings from the fix loop are rev-13..rev-17.
 | rev-22 | water / decal params last-write-wins across entities | fixed `ba70282` |
 | rev-23 | terrain lacks pbr exposure (darker than meshes) | open (visual; needs sign-off) |
 | rev-24 | gpu indirect cull appends draws with `atomicAdd`: draw order follows workgroup scheduling, so exactly-tied depths (building bases) flip frame to frame; static-city golden was capture-unstable | fixed `46c9eb2` (slot-stable draws, `atomicMax` count; stable in and across processes, perf neutral 353.4 → 345.9 ms) |
+| rev-26 | the sky's sun disc is always drawn straight above the camera (`frame.rs` `sun_model`), ignoring the `DirectionalLight` direction, so the disc and the lighting disagree whenever the sun isn't at noon | open (visual; needs sign-off) |
+| rev-27 | docs promised APIs that don't exist: `mouse_scroll_delta` (now implemented), `RenderTier::detect`, `RenderLayers::from_layers`, `get_single_mut`, and stale fields on `SpriteAnimation`, `CameraFollow2d` (a resource, shown as a component), `AmbientLight`, `Sky`, `RenderConfig3d` | fixed `6876ae9`, `8b91336` and the follow-up doc commit |
 | rev-25 | ci build-wasm used the dev profile, which pins cranelift (no wasm32 backend) | fixed `7261cce` (llvm override, as build-cross does) |
 
 ### 2026-07 audit findings fixed on this branch

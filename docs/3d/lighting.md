@@ -9,7 +9,7 @@ without it, unlit areas are completely black.
 fn setup(mut commands: Commands) {
     commands.insert_resource(AmbientLight {
         color: Color::WHITE,
-        brightness: 0.1,   // 0.0 = pitch black, 1.0 = full white
+        intensity: 0.1,   // multiplier on color; default 0.05
     });
 }
 ```

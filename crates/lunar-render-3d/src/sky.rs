@@ -53,6 +53,7 @@ impl Default for AtmosphericScattering {
 ///     sky_color: Color::rgb(0.4, 0.6, 1.0),
 ///     sun_color: Color::rgb(1.0, 0.95, 0.8),
 ///     show_sun: true,
+///     ..Default::default()
 /// });
 /// ```
 #[derive(Resource, Clone, Copy)]

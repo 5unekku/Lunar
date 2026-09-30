@@ -52,7 +52,9 @@ window settings at startup are set by passing `WindowSettings::new` to the boots
 fn main() {
     lunar::bootstrap_3d::<MyGame>(
         lunar::lunar_render_3d::RenderConfig3d {
-            window: WindowSettings::new(1920, 1080, true),  // 1080p, vsync on
+            width: 1920,
+            height: 1080,
+            vsync: true,
             ..Default::default()
         }
     );

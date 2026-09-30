@@ -121,13 +121,16 @@ fn scroll_camera(mut camera: ResMut<Camera>, input: Res<InputState>) {
 
 ### camera follow
 
-attach `CameraFollow2d` to an entity to make the camera track it:
+insert the `CameraFollow2d` resource to make the camera track an entity:
 
 ```rust
-commands.spawn((
-    Camera::new(),
-    CameraFollow2d { target: player_entity, lerp: 0.1 },
-));
+commands.insert_resource(CameraFollow2d {
+    target: player_entity,
+    lead: Vec2::ZERO,                // look-ahead offset
+    deadzone: Vec2::new(32.0, 24.0), // target can move this far before the camera does
+    bounds: None,                    // Some(Rect) clamps the camera to the level
+    lerp_speed: 8.0,                 // higher = snappier
+});
 ```
 
 ## immediate mode drawing
