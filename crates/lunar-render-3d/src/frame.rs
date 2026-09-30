@@ -1801,8 +1801,22 @@ impl RenderEngine3d {
 				self.late_aabb_scratch.clear();
 				for i in 0..entity_count {
 					let entity = self.draw_scratch[i].0;
+					// cull_indirect.wgsl tests against the world-space frustum, so move the
+					// local Aabb3d into world space with the draw's own model matrix: centre
+					// through the affine transform, extents through |rotation * scale|
 					let (center, half) = match world.get::<Aabb3d>(entity) {
-						Some(aabb) => (Vec3::from(aabb.center), Vec3::from(aabb.half_extents)),
+						Some(aabb) => {
+							let model = self.draw_scratch[i].6;
+							let abs = lunar_math::Mat3::from_cols(
+								model.x_axis.truncate().abs(),
+								model.y_axis.truncate().abs(),
+								model.z_axis.truncate().abs(),
+							);
+							(
+								model.transform_point3(Vec3::from(aabb.center)),
+								abs * Vec3::from(aabb.half_extents),
+							)
+						}
 						None => (Vec3::ZERO, Vec3::splat(1e6)),
 					};
 					self.late_aabb_scratch.extend_from_slice(&[

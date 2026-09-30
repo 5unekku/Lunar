@@ -2693,6 +2693,54 @@ mod headless_tests {
 		assert_eq!(steady, first, "cascade 0 must still hold the caster after 5 more frames");
 	}
 
+	/// perf-06 (correctness half): the gpu late cull uploaded each entity's local-space
+	/// Aabb3d and tested it against the world-space frustum, so a mesh away from the
+	/// origin was culled whenever the origin itself was off screen.
+	#[test]
+	fn gpu_cull_tests_world_space_bounds() {
+		use bevy_ecs::system::RunSystemOnce;
+		let Some((mut engine, mut world, _quad, _)) = feature_test_setup() else {
+			return;
+		};
+		let ball = world.resource_mut::<MeshRegistry>().add_mesh(sphere_mesh(1.0, 16, 12));
+		let unlit = world.resource_mut::<MeshRegistry>().add_material(lunar_3d::MaterialData {
+			shading: lunar_3d::ShadingModel::Unlit,
+			base_color: lunar_math::Color::WHITE,
+			..lunar_3d::MaterialData::default()
+		});
+		let far = Vec3::new(200.0, 0.0, 0.0);
+		let camera = world.resource::<ActiveCamera3d>().entity.unwrap();
+		*world.get_mut::<WorldTransform3d>(camera).unwrap() = WorldTransform3d {
+			translation: far + Vec3::new(0.0, 0.0, 6.0),
+			..WorldTransform3d::new()
+		};
+		world.spawn((
+			Mesh3d(ball),
+			Material3d(unlit),
+			WorldTransform3d { translation: far, ..WorldTransform3d::new() },
+			Aabb3d { center: Vec3A::ZERO, half_extents: Vec3A::splat(1.0) },
+			ComputedVisibility(true),
+		));
+		world.run_system_once(lunar_3d::update_frustum).unwrap();
+		world.run_system_once(lunar_3d::build_cull_soa).unwrap();
+		render_frames(&mut engine, &mut world, 3);
+		if !engine.gpu_indirect_active() {
+			eprintln!(
+				"skipping: gpu indirect cull inactive (has_indirect {}, mdi-count {})",
+				engine.has_indirect,
+				engine.device.features().contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT)
+			);
+			return;
+		}
+		let (rgba, w, h) = engine.read_headless_rgba().expect("headless readback");
+		let centre = ((h / 2 * w + w / 2) * 4) as usize;
+		assert!(
+			rgba[centre..centre + 3].iter().all(|&c| c > 200),
+			"sphere in front of the camera must be drawn, centre pixel {:?}",
+			&rgba[centre..centre + 4]
+		);
+	}
+
 	/// (sum of x, sum of y, count) over texels of depth-array `layer` of `texture`
 	/// nearer than the far plane: a cheap fingerprint of where casters landed.
 	fn covered_footprint(engine: &RenderEngine3d, texture: &wgpu::Texture, layer: u32) -> (u64, u64, u64) {
