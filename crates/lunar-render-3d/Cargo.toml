@@ -23,7 +23,7 @@ lunar-core     = { path = "../lunar-core", version = "1.0.0" }
 lunar-lightmap = { path = "../lunar-lightmap", version = "1.0.0" }
 lunar-math     = { path = "../lunar-math", version = "1.0.0" }
 bevy_ecs    = { workspace = true }
-wgpu        = { workspace = true, features = ["wgsl", "spirv"] }
+wgpu        = { workspace = true, features = ["wgsl"] }
 log         = { workspace = true }
 bytemuck    = { workspace = true }
 
@@ -31,7 +31,9 @@ bytemuck    = { workspace = true }
 workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-wgpu     = { workspace = true, features = ["vulkan", "gles"] }
+# spirv: native release builds load build.rs's precompiled spirv (make_shader!);
+# wasm never does, and this feature alone pulled naga into the wasm graph
+wgpu     = { workspace = true, features = ["vulkan", "gles", "spirv"] }
 pollster = "0.4"
 
 [target.'cfg(target_os = "windows")'.dependencies]
