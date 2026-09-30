@@ -65,6 +65,8 @@ findings from the fix loop are rev-13..rev-17.
 | rev-34 | point-shadow recording stopped at the first non-casting light while slot assignment skipped it, leaving later casters' slots empty | fixed `423e083` |
 | rev-35 | lightmap uvs keyed on `has_indirect` instead of the draw path taken: atlas sub-rects leaked onto per-entity lightmaps, and (after rev-31) atlas-less lightmaps vanished on the per-batch path | fixed `d2bfb9a` |
 | rev-36 | a frame whose own text overflows the glyph atlas flushed and re-uploaded it every frame (rev-30 follow-up) | fixed `0524b22` (120-frame backoff) |
+| rev-37 | sub-scene fan-out: cycles and depth were bounded but acyclic fan-out was not (2^depth entities) | fixed `3c22618` (MAX_SCENE_ENTITIES per spawn) |
+| rev-38 | web keys: a release could resolve to a different KeyCode than its press (layout-dependent `key`), leaving keys held; keys released while unfocused never released | fixed `0811cc3` |
 | rev-25 | ci build-wasm used the dev profile, which pins cranelift (no wasm32 backend) | fixed `7261cce` (llvm override, as build-cross does) |
 
 ### 2026-07 audit findings fixed on this branch
