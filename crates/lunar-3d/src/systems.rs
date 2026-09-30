@@ -45,6 +45,18 @@ pub struct TransformScratch3d {
 	/// `last_count` nor any `Changed<>` filter, but it does change this
 	last_parent_count: usize,
 	initialized: bool,
+	/// cached early-out probes. building them with world.query_filtered every frame
+	/// re-matched every archetype and allocated, three times per quiet frame (perf-04)
+	probes: Option<EarlyOutProbes>,
+}
+
+type RelevantFilter = Or<(With<LocalTransform3d>, With<Visibility>)>;
+type RelevantChanged = Or<(Changed<LocalTransform3d>, Changed<Visibility>, Changed<Parent>)>;
+
+struct EarlyOutProbes {
+	relevant: QueryState<(), RelevantFilter>,
+	changed: QueryState<(), RelevantChanged>,
+	parented: QueryState<(), With<Parent>>,
 }
 
 /// propagate [`LocalTransform3d`] and [`Visibility`] through the entity hierarchy in one pass.
@@ -60,25 +72,21 @@ pub fn propagate_transforms_3d(world: &mut World) {
 
 	// ── change-detection early-out ────────────────────────────────────────
 	// skip the whole O(n) snapshot/sort/writeback when nothing relevant changed since the
-	// last run. `Changed<T>` covers mutations and spawns (Added implies Changed) and is
-	// near-free when idle (bevy skips archetypes whose change tick is older than last run).
+	// last run. `Changed<T>` covers mutations and spawns (Added implies Changed). it still
+	// checks each entity's change tick (bevy keeps no per-archetype tick), so a quiet
+	// frame costs ~12 us per 10k entities, far below the full pass.
 	// a relevant-entity count delta covers despawns and component removals, which `Changed`
 	// can't observe. conservative by construction: any ambiguity falls through to a full run.
 	{
-		let count = world
-			.query_filtered::<(), Or<(With<LocalTransform3d>, With<Visibility>)>>()
-			.iter(world)
-			.count();
-		let any_changed = world
-			.query_filtered::<(), Or<(
-				Changed<LocalTransform3d>,
-				Changed<Visibility>,
-				Changed<Parent>,
-			)>>()
-			.iter(world)
-			.next()
-			.is_some();
-		let parent_count = world.query_filtered::<(), With<Parent>>().iter(world).count();
+		let probes = scratch.probes.get_or_insert_with(|| EarlyOutProbes {
+			relevant: world.query_filtered(),
+			changed: world.query_filtered(),
+			parented: world.query_filtered(),
+		});
+		// archetype filters only: len() sums archetype sizes instead of walking entities
+		let count = probes.relevant.iter(world).len();
+		let any_changed = probes.changed.iter(world).next().is_some();
+		let parent_count = probes.parented.iter(world).len();
 		if scratch.initialized
 			&& count == scratch.last_count
 			&& parent_count == scratch.last_parent_count
@@ -456,6 +464,35 @@ mod tests {
 			world.get::<WorldTransform3d>(e).unwrap().translation,
 			Vec3::new(7.0, 8.0, 9.0)
 		));
+	}
+
+	/// perf-04 timing: cost of a quiet frame (the early-out path) over 10k static
+	/// entities with a few parent links.
+	/// `cargo test --release -p lunar-3d quiet_frame_timing -- --ignored --nocapture`
+	#[test]
+	#[ignore]
+	fn quiet_frame_timing() {
+		let mut world = World::new();
+		world.init_resource::<TransformScratch3d>();
+		let mut last = None;
+		for i in 0..10_000 {
+			let mut e = world.spawn(LocalTransform3d::from_xyz(i as f32, 0.0, 0.0));
+			if i % 10 != 0
+				&& let Some(parent) = last
+			{
+				e.insert(Parent(parent));
+			}
+			last = Some(e.id());
+		}
+		propagate_transforms_3d(&mut world);
+		let runs = 2000;
+		let start = std::time::Instant::now();
+		for _ in 0..runs {
+			world.clear_trackers();
+			propagate_transforms_3d(&mut world);
+		}
+		let us = start.elapsed().as_secs_f64() * 1e6 / f64::from(runs);
+		println!("quiet propagate_transforms_3d over 10k entities: {us:.2} us/frame");
 	}
 
 	// a despawn (which Changed can't see) is caught by the entity-count delta and re-runs.
