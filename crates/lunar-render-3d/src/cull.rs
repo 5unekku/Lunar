@@ -20,8 +20,8 @@ impl RenderEngine3d {
 	/// fresh CPU SIMD sweep every frame on every tier; high tier additionally
 	/// applies the previous frame's HZB occlusion result (1-frame pipelined,
 	/// tested against the view_proj snapshot the HZB was built with) and
-	/// dispatches this frame's occlusion + LOD compute. populates `self.frustum_visible`.
-	pub(crate) fn cull_entities(&mut self, world: &mut World, cam_pos: Vec3) {
+	/// dispatches this frame's occlusion compute. populates `self.frustum_visible`.
+	pub(crate) fn cull_entities(&mut self, world: &mut World) {
 		// ── frustum cull: CPU SIMD sweep, every tier ─────────────────────
 		// always this-frame correct. the old high-tier path gated visibility on
 		// a 1-frame-stale gpu readback: rotating the camera popped geometry at
@@ -97,10 +97,11 @@ impl RenderEngine3d {
 
 		let entity_count = world.resource::<CullSoa>().entities.len();
 
-		// per-entity AABB upload data (CullSoa order): built once, shared by the
-		// gpu LOD select and the HZB occlusion dispatch below
+		// per-entity AABB upload data (CullSoa order) for the HZB occlusion dispatch.
+		// (a gpu LOD-select pass used to share it; its result was never read once
+		// lod choice moved to each entity's own MeshLod thresholds, so it is gone)
 		let hzb_active = self.hzb_enabled && self.hzb_texture.is_some();
-		if (self.gpu_cull_enabled || hzb_active) && entity_count > 0 {
+		if hzb_active && entity_count > 0 {
 			self.cull_aabb_scratch.clear();
 			let soa = world.resource::<CullSoa>();
 			for i in 0..entity_count {
@@ -114,135 +115,6 @@ impl RenderEngine3d {
 					soa.half_z[i],
 					0.0,
 				]);
-			}
-		}
-
-		// ── gpu LOD selection (high tier, 1-frame pipelined) ─────────────
-		if self.gpu_cull_enabled && entity_count > 0 {
-			let _ = self.device.poll(wgpu::PollType::Poll); // fire completed map_async callbacks
-
-			// read previous frame's LOD staging result
-			if self.lod_staging_pending && self.lod_staging_ready.load(Ordering::Acquire) {
-				let prev_count = self.lod_pending_entity_count;
-				if let Some(staging) = self.lod_indices_staging.as_ref() {
-					{
-						let slice = staging.slice(0..(prev_count * 4) as u64);
-						let data = slice.get_mapped_range();
-						let indices = mapped_u32s(&data);
-						let soa = world.resource::<CullSoa>();
-						self.gpu_lod_indices.clear();
-						for (i, &entity) in soa.entities.iter().take(prev_count).enumerate() {
-							if i < indices.len() {
-								self.gpu_lod_indices.insert(entity, indices[i]);
-							}
-						}
-					}
-					staging.unmap();
-				}
-				self.lod_staging_ready.store(false, Ordering::Release);
-				self.lod_staging_pending = false;
-			}
-
-			self.ensure_gpu_cull_resources(entity_count);
-			self.ensure_lod_select_resources(entity_count);
-
-			// a staging buffer is only reusable once its previous map_async has been
-			// drained (pending cleared by the read block above or a buffer rebuild)
-			let lod_staging_free = !self.lod_staging_pending;
-
-			// (re)build the LOD bind group only when its backing buffers regrew;
-			// the ensure_* paths reset it to None on growth
-			if self.lod_select_bg.is_none()
-				&& let (Some(lod_bgl), Some(lod_params_buf), Some(lod_buf), Some(aabb_for_lod)) = (
-					self.lod_select_bgl.as_ref(),
-					self.lod_params_buf.as_ref(),
-					self.lod_indices_buf.as_ref(),
-					self.cull_aabb_buf.as_ref(),
-				) {
-				self.lod_select_bg =
-					Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-						label: Some("[lod select] bg"),
-						layout: lod_bgl,
-						entries: &[
-							wgpu::BindGroupEntry {
-								binding: 0,
-								resource: lod_params_buf.as_entire_binding(),
-							},
-							wgpu::BindGroupEntry {
-								binding: 1,
-								resource: aabb_for_lod.as_entire_binding(),
-							},
-							wgpu::BindGroupEntry {
-								binding: 2,
-								resource: lod_buf.as_entire_binding(),
-							},
-						],
-					}));
-			}
-
-			if let (Some(lod_pipeline), Some(lod_params_buf), Some(lod_buf), Some(lod_bg), Some(aabb_buf)) = (
-				self.lod_select_pipeline.as_ref(),
-				self.lod_params_buf.as_ref(),
-				self.lod_indices_buf.as_ref(),
-				self.lod_select_bg.as_ref(),
-				self.cull_aabb_buf.as_ref(),
-			) {
-				self.queue
-					.write_buffer(aabb_buf, 0, bytemuck::cast_slice(&self.cull_aabb_scratch));
-				let mut lod_params_data = [0u32; 8];
-				lod_params_data[0] = cam_pos.x.to_bits();
-				lod_params_data[1] = cam_pos.y.to_bits();
-				lod_params_data[2] = cam_pos.z.to_bits();
-				lod_params_data[3] = entity_count as u32;
-				// squared distance thresholds: [15²=225, 50²=2500, 150²=22500, 400²=160000]
-				lod_params_data[4] = 225.0f32.to_bits();
-				lod_params_data[5] = 2500.0f32.to_bits();
-				lod_params_data[6] = 22500.0f32.to_bits();
-				lod_params_data[7] = 160000.0f32.to_bits();
-				self.queue
-					.write_buffer(lod_params_buf, 0, bytemuck::cast_slice(&lod_params_data));
-				let mut lod_enc =
-					self.device
-						.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-							label: Some("[lod select] encoder"),
-						});
-				{
-					let mut lpass = lod_enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-						label: Some("[lod select] pass"),
-						timestamp_writes: None,
-					});
-					lpass.set_pipeline(lod_pipeline);
-					lpass.set_bind_group(0, lod_bg, &[]);
-					lpass.dispatch_workgroups((entity_count as u32).div_ceil(64), 1, 1);
-				}
-				// copy fresh indices out only while the staging buffer is free: a buffer
-				// with an outstanding map_async must not appear in a submit
-				if lod_staging_free && let Some(lod_staging) = self.lod_indices_staging.as_ref() {
-					lod_enc.copy_buffer_to_buffer(
-						lod_buf,
-						0,
-						lod_staging,
-						0,
-						(entity_count * 4) as u64,
-					);
-				}
-				self.queue.submit([lod_enc.finish()]);
-
-				// register LOD staging map_async for next frame
-				if lod_staging_free && let Some(lod_staging) = self.lod_indices_staging.as_ref() {
-					let lod_ready = self.lod_staging_ready.clone();
-					lod_ready.store(false, Ordering::Release);
-					lod_staging.slice(0..(entity_count * 4) as u64).map_async(
-						wgpu::MapMode::Read,
-						move |result| {
-							if result.is_ok() {
-								lod_ready.store(true, Ordering::Release);
-							}
-						},
-					);
-					self.lod_staging_pending = true;
-					self.lod_pending_entity_count = entity_count;
-				}
 			}
 		}
 

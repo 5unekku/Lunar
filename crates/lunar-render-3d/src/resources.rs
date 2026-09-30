@@ -227,7 +227,6 @@ impl RenderEngine3d {
 			self.cull_entity_capacity = cap;
 
 			// these buffers back the LOD + late-cull bind groups: force a rebuild of both
-			self.lod_select_bg = None;
 			self.late_cull_bg = None;
 
 			// aabb input buffer: 32 bytes per entry (center vec3+pad + half_extent vec3+pad)
@@ -933,109 +932,6 @@ impl RenderEngine3d {
 			},
 		));
 		self.detail_sprite_bgl = Some(render_bgl_0);
-	}
-	pub(crate) fn ensure_lod_select_resources(&mut self, entity_count: usize) {
-		if entity_count == 0 {
-			return;
-		}
-		let cap = entity_count.next_power_of_two().max(256);
-
-		let needs_rebuild = self.lod_indices_buf.is_none() || cap > self.cull_entity_capacity;
-		if needs_rebuild {
-			// lod indices buffer is rebuilt: the cached LOD bind group references it
-			self.lod_select_bg = None;
-			self.lod_indices_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-				label: Some("[lod] indices buf"),
-				size: (cap * 4) as u64,
-				usage: wgpu::BufferUsages::STORAGE
-					| wgpu::BufferUsages::COPY_SRC
-					| wgpu::BufferUsages::COPY_DST,
-				mapped_at_creation: false,
-			}));
-			self.lod_indices_staging = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-				label: Some("[lod] indices staging"),
-				size: (cap * 4) as u64,
-				usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-				mapped_at_creation: false,
-			}));
-			// old staging buffer (possibly still map-pending) was just dropped;
-			// reset readback state so the new buffer starts fresh
-			self.lod_staging_pending = false;
-			self.lod_staging_ready
-				.store(false, std::sync::atomic::Ordering::Release);
-		}
-
-		if self.lod_select_bgl.is_none() {
-			let uniform_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
-				binding,
-				visibility: wgpu::ShaderStages::COMPUTE,
-				ty: wgpu::BindingType::Buffer {
-					ty: wgpu::BufferBindingType::Uniform,
-					has_dynamic_offset: false,
-					min_binding_size: None,
-				},
-				count: None,
-			};
-			let storage_ro = |binding: u32| wgpu::BindGroupLayoutEntry {
-				binding,
-				visibility: wgpu::ShaderStages::COMPUTE,
-				ty: wgpu::BindingType::Buffer {
-					ty: wgpu::BufferBindingType::Storage { read_only: true },
-					has_dynamic_offset: false,
-					min_binding_size: None,
-				},
-				count: None,
-			};
-			let storage_rw = |binding: u32| wgpu::BindGroupLayoutEntry {
-				binding,
-				visibility: wgpu::ShaderStages::COMPUTE,
-				ty: wgpu::BindingType::Buffer {
-					ty: wgpu::BufferBindingType::Storage { read_only: false },
-					has_dynamic_offset: false,
-					min_binding_size: None,
-				},
-				count: None,
-			};
-			let bgl = self
-				.device
-				.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-					label: Some("[lod select] bgl"),
-					entries: &[uniform_entry(0), storage_ro(1), storage_rw(2)],
-				});
-			let layout = self
-				.device
-				.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-					label: Some("[lod select] layout"),
-					bind_group_layouts: &[Some(&bgl)],
-					immediate_size: 0,
-				});
-			// LOD selection compute shader (matches the external-file convention
-			// used by every other shader in this crate).
-			let lod_wgsl = include_str!("lod_select.wgsl");
-			let shader = self
-				.device
-				.create_shader_module(wgpu::ShaderModuleDescriptor {
-					label: Some("[lod select] shader"),
-					source: wgpu::ShaderSource::Wgsl(lod_wgsl.into()),
-				});
-			self.lod_select_pipeline = Some(self.device.create_compute_pipeline(
-				&wgpu::ComputePipelineDescriptor {
-					label: Some("[lod select] pipeline"),
-					layout: Some(&layout),
-					module: &shader,
-					entry_point: Some("cs_lod_select"),
-					compilation_options: wgpu::PipelineCompilationOptions::default(),
-					cache: None,
-				},
-			));
-			self.lod_select_bgl = Some(bgl);
-			self.lod_params_buf = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-				label: Some("[lod] params"),
-				size: 32,
-				usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-				mapped_at_creation: false,
-			}));
-		}
 	}
 	pub(crate) fn make_depth_view(
 		device: &wgpu::Device,

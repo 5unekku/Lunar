@@ -2145,20 +2145,8 @@ pub struct RenderEngine3d {
 	// see [`DetailSpriteEntry`]: instances_buf/count_buf/draw_buf/params_buf + compute & render BGs.
 	detail_sprite_cache: HashMap<u64, DetailSpriteEntry>,
 
-	// ── gpu lod selection ─────────────────────────────────────────────────
-	lod_select_bgl: Option<wgpu::BindGroupLayout>,
-	lod_select_pipeline: Option<wgpu::ComputePipeline>,
-	// cached LOD-select bind group; rebuilt when cull aabb buf or lod buffers regrow
-	lod_select_bg: Option<wgpu::BindGroup>,
 	// cached late-cull bind group; rebuilt when any backing cull/indirect buffer regrows
 	late_cull_bg: Option<wgpu::BindGroup>,
-	lod_params_buf: Option<wgpu::Buffer>,
-	lod_indices_buf: Option<wgpu::Buffer>,
-	lod_indices_staging: Option<wgpu::Buffer>,
-	gpu_lod_indices: HashMap<bevy_ecs::entity::Entity, u32>,
-	lod_staging_pending: bool,
-	lod_pending_entity_count: usize,
-	lod_staging_ready: Arc<AtomicBool>,
 
 	// ── render hooks ──────────────────────────────────────────────────────
 	shadow_hook: Option<crate::hooks::ShadowHook>,

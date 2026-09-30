@@ -453,7 +453,7 @@ impl RenderEngine3d {
 		};
 
 		// frustum + HZB occlusion culling (1-frame pipelined on high tier)
-		self.cull_entities(world, cam_pos);
+		self.cull_entities(world);
 		self.gather_draw_list(world, cam_pos);
 		// ── upload missing meshes ─────────────────────────────────────────
 		self.mesh_evict_scratch.clear();
