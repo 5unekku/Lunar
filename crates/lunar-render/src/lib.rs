@@ -1560,8 +1560,9 @@ impl RenderEngine {
 		} else {
 			1.0
 		};
-		if self.glyph_atlas.set_scale(text_scale) {
-			// UV coords changed: cached quads reference stale positions in the atlas
+		// a scale change or last frame's overflow re-packs the atlas: cached quads'
+		// uvs point into the old layout
+		if self.glyph_atlas.set_scale(text_scale) | self.glyph_atlas.flush_if_overflowed() {
 			self.text_layout_cache.clear();
 		}
 

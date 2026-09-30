@@ -131,6 +131,9 @@ pub struct GlyphAtlas {
 	pub scale: f32,
 	/// true when the cpu pixel buffer changed since last gpu upload.
 	pub dirty: bool,
+	/// a glyph did not fit this frame; [`GlyphAtlas::flush_if_overflowed`] clears
+	/// the atlas before the next frame so it can be rasterized again
+	overflowed: bool,
 }
 
 impl GlyphAtlas {
@@ -153,6 +156,32 @@ impl GlyphAtlas {
 			row_height: 0,
 			scale: 1.0,
 			dirty: false,
+			overflowed: false,
+		}
+	}
+
+	/// empty the atlas: every glyph re-rasterizes on next use. callers must drop
+	/// any cached quads, since their uvs point into the old layout.
+	fn reset(&mut self) {
+		self.entries.clear();
+		self.pixels.fill(0);
+		self.cursor_x = 0;
+		self.cursor_y = 0;
+		self.row_height = 0;
+		self.dirty = true;
+		self.overflowed = false;
+	}
+
+	/// if a glyph was dropped because the atlas was full, clear the atlas so the
+	/// glyphs in use re-pack from scratch. returns true when it flushed, in which
+	/// case cached text layouts must be invalidated. call between frames, never
+	/// mid-frame: quads already emitted this frame still point at the old layout.
+	pub fn flush_if_overflowed(&mut self) -> bool {
+		if self.overflowed {
+			self.reset();
+			true
+		} else {
+			false
 		}
 	}
 
@@ -162,13 +191,8 @@ impl GlyphAtlas {
 		let rounded = (clamped * 100.0).round() / 100.0;
 		if (self.scale - rounded).abs() > 0.005 {
 			self.scale = rounded;
-			self.entries.clear();
-			self.pixels.fill(0);
+			self.reset();
 			self.swash_cache = SwashCache::new();
-			self.cursor_x = 0;
-			self.cursor_y = 0;
-			self.row_height = 0;
-			self.dirty = true;
 			true
 		} else {
 			false
@@ -235,8 +259,12 @@ impl GlyphAtlas {
 			self.row_height = 0;
 		}
 		if self.cursor_y + gh > self.height {
-			log::warn!("glyph atlas full. glyph dropped. increase atlas dimensions.");
-			self.entries.insert(cache_key, None);
+			// drop it for this frame only: caching None here made the glyph vanish
+			// for good. the renderer flushes the atlas before the next frame
+			if !self.overflowed {
+				log::warn!("glyph atlas full: flushing it next frame");
+			}
+			self.overflowed = true;
 			return;
 		}
 
@@ -509,6 +537,23 @@ mod tests {
 		let mut atlas = GlyphAtlas::new(64, 64);
 		let mut out = Vec::new();
 		layout_text_into(&mut atlas, FONT_ID, "hi", 16.0, Vec2::ZERO, &mut out);
+	}
+
+	/// a full atlas used to cache each glyph that didn't fit as "no glyph" forever,
+	/// so text that needed it never rendered again. overflow now drops the glyph
+	/// for this frame only and flushes the atlas before the next one.
+	#[test]
+	fn overflowed_glyphs_come_back_after_a_flush() {
+		let mut atlas = GlyphAtlas::new(64, 64);
+		atlas.register_font(FONT_ID, FONT_BYTES);
+		let mut out = Vec::new();
+		// far more 40px glyphs than a 64x64 atlas holds
+		layout_text_into(&mut atlas, FONT_ID, "ABCDEFGHIJKL", 40.0, Vec2::ZERO, &mut out);
+		assert!(out.len() < 12, "the tiny atlas should have overflowed");
+		assert!(atlas.flush_if_overflowed());
+		assert!(!atlas.flush_if_overflowed(), "a flush clears the overflow");
+		layout_text_into(&mut atlas, FONT_ID, "L", 40.0, Vec2::ZERO, &mut out);
+		assert_eq!(out.len(), 1, "a glyph dropped on overflow must render after the flush");
 	}
 
 	#[test]
