@@ -14,21 +14,38 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+env:
+  # same build deps and plain-git checkout as ci.yml: the repo's actions policy
+  # rejects actions/checkout and Swatinem/rust-cache at "Set up job". the pages
+  # actions below are github-owned and still need that policy to allow them.
+  SYS_DEPS: >-
+    git ca-certificates build-essential cmake pkg-config libssl-dev clang
+    libwayland-dev libxkbcommon-dev libegl-dev
+    libx11-dev libxext-dev libxcursor-dev libxi-dev libxrandr-dev libxss-dev
+    libxtst-dev libxfixes-dev
+  CHECKOUT: |
+    git init -q .
+    git config --global --add safe.directory "$PWD"
+    auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+    git -c http.extraheader="AUTHORIZATION: basic $auth" fetch -q --depth 1 "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$GITHUB_SHA"
+    git checkout -q FETCH_HEAD
+
 jobs:
   build:
     runs-on: ubuntu-latest
     container: rust:slim-trixie
     steps:
-      - uses: actions/checkout@v6
-      - uses: Swatinem/rust-cache@v2
-      - run: apt-get update -qq && apt-get install -y -qq build-essential cmake pkg-config libssl-dev libwayland-dev libxkbcommon-dev libegl-dev clang
+      - run: apt-get update -qq && apt-get install -y -qq $SYS_DEPS
+      - run: eval "$CHECKOUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       # api docs — public items only (for game developers)
       - run: cargo doc --workspace --no-deps
       - run: |
           mkdir -p site/api
           cp -r target/doc/* site/api/
-          echo '<meta http-equiv="refresh" content="0; url=lunar_lib">' > site/api/index.html
+          echo '<meta http-equiv="refresh" content="0; url=lunar_engine">' > site/api/index.html
 
       # internal docs — all items including private (for contributors)
       # RUSTDOCFLAGS change is tracked by cargo's fingerprint, so rustdoc reruns
@@ -36,7 +53,7 @@ jobs:
       - run: |
           mkdir -p site/internal
           cp -r target/doc/* site/internal/
-          echo '<meta http-equiv="refresh" content="0; url=lunar_lib">' > site/internal/index.html
+          echo '<meta http-equiv="refresh" content="0; url=lunar_engine">' > site/internal/index.html
 
       - name: root index
         run: |
