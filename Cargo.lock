@@ -1946,7 +1946,6 @@ version = "1.0.0"
 dependencies = [
  "bevy_ecs",
  "log",
- "lunar-assets",
  "lunar-image",
  "lunar-math",
  "rustc-hash 2.1.3",

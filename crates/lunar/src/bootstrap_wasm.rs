@@ -70,7 +70,7 @@ pub async fn bootstrap_wasm<Plugin: lunar_core::GamePlugin + Default + 'static>(
 	// RAF fires at display refresh rate, so real elapsed time must be measured;
 	// a fixed per-callback delta would scale game speed with the monitor (2× at 120hz).
 	let app = Rc::new(RefCell::new(app));
-	let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+	let f = Rc::new(RefCell::new(None::<Closure<dyn FnMut()>>));
 	let g = f.clone();
 
 	let performance = web_sys::window()

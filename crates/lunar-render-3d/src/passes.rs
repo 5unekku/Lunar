@@ -1995,15 +1995,16 @@ impl RenderEngine3d {
 					for idx in 0..=sn {
 						let done = idx == sn;
 						let cur_mesh = if done { u32::MAX } else { shadow_list[idx].0 };
-						if cur_mesh != last_mesh && idx > gs_idx {
-							if let Some(gpu) = self.mesh_gpu.get(&last_mesh) {
-								let base = (ENTITY_SLOT_START + gs_slot) as u32;
-								sp.draw_indexed(
-									0..gpu.index_count,
-									0,
-									base..base + (idx - gs_idx) as u32,
-								);
-							}
+						if cur_mesh != last_mesh
+							&& idx > gs_idx
+							&& let Some(gpu) = self.mesh_gpu.get(&last_mesh)
+						{
+							let base = (ENTITY_SLOT_START + gs_slot) as u32;
+							sp.draw_indexed(
+								0..gpu.index_count,
+								0,
+								base..base + (idx - gs_idx) as u32,
+							);
 						}
 						if done {
 							break;
@@ -2054,15 +2055,16 @@ impl RenderEngine3d {
 						} else {
 							(self.draw_scratch[i].1, self.draw_scratch[i].2)
 						};
-						if (cur_mesh != last_mesh || cur_mat != last_mat) && i > group_start {
-							if let Some(gpu) = self.mesh_gpu.get(&last_mesh) {
-								let base = (ENTITY_SLOT_START + group_start) as u32;
-								zpass.draw_indexed(
-									0..gpu.index_count,
-									0,
-									base..base + (i - group_start) as u32,
-								);
-							}
+						if (cur_mesh != last_mesh || cur_mat != last_mat)
+							&& i > group_start
+							&& let Some(gpu) = self.mesh_gpu.get(&last_mesh)
+						{
+							let base = (ENTITY_SLOT_START + group_start) as u32;
+							zpass.draw_indexed(
+								0..gpu.index_count,
+								0,
+								base..base + (i - group_start) as u32,
+							);
 						}
 						if done {
 							break;

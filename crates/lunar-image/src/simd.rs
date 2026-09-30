@@ -107,7 +107,7 @@ fn deinterleave_scalar(rgba: &[u8], out: &mut [u8], n: usize) {
 	let (r, rest) = out.split_at_mut(n);
 	let (g, rest) = rest.split_at_mut(n);
 	let (b, a) = rest.split_at_mut(n);
-	for (i, px) in rgba.chunks_exact(4).enumerate() {
+	for (i, px) in rgba.as_chunks::<4>().0.iter().enumerate() {
 		r[i] = px[0];
 		g[i] = px[1];
 		b[i] = px[2];
@@ -120,7 +120,7 @@ fn reinterleave_scalar(planar: &[u8], out: &mut [u8], n: usize) {
 	let (r, rest) = planar.split_at(n);
 	let (g, rest) = rest.split_at(n);
 	let (b, a) = rest.split_at(n);
-	for (i, px) in out.chunks_exact_mut(4).enumerate() {
+	for (i, px) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
 		px[0] = r[i];
 		px[1] = g[i];
 		px[2] = b[i];

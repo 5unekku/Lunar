@@ -2165,14 +2165,11 @@ impl RenderEngine3d {
 			if let Some((texture, view)) = self.capture_target.as_ref() {
 				let texture = texture.clone();
 				let view = view.clone();
-				let handle = self
-					.wasm_capture_handle
-					.get_or_insert_with(|| {
-						world
-							.resource_mut::<lunar_assets::AssetServer>()
-							.create_texture(1, 1, vec![0, 0, 0, 255])
-					})
-					.clone();
+				let handle = *self.wasm_capture_handle.get_or_insert_with(|| {
+					world
+						.resource_mut::<lunar_assets::AssetServer>()
+						.create_texture(1, 1, vec![0, 0, 0, 255])
+				});
 				self.surface_tex_cache.insert(handle.id(), (texture, view));
 				world.insert_resource(CapturedFrame(handle));
 				world.remove_resource::<CaptureRequest>();

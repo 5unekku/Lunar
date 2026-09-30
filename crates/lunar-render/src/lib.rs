@@ -3259,7 +3259,7 @@ impl GamePlugin for RenderPlugin {
 #[cfg(target_arch = "wasm32")]
 thread_local! {
 	static WASM_RENDER_ENGINE: std::cell::RefCell<Option<RenderEngine>> =
-		std::cell::RefCell::new(None);
+		const { std::cell::RefCell::new(None) };
 }
 
 /// store the render engine for WASM rendering.

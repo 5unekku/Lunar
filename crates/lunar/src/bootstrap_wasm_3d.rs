@@ -79,7 +79,7 @@ pub async fn bootstrap_wasm_3d<Plugin: lunar_core::GamePlugin + Default + 'stati
 	app.add_plugin(Plugin::default());
 
 	let app = Rc::new(RefCell::new(app));
-	let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+	let f = Rc::new(RefCell::new(None::<Closure<dyn FnMut()>>));
 	let g = f.clone();
 
 	// RAF fires at display refresh rate, so real elapsed time must be measured;
