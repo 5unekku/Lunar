@@ -58,10 +58,33 @@ findings from the fix loop are rev-13..rev-17.
 
 ### 2026-07 audit findings fixed on this branch
 
-corr-01..08, corr-10..14, corr-16..40, corr-43, corr-44 and sec-04 are fixed
-test-first, one commit each (`git log --grep corr-`). corr-15 (scene-loader parent
-cycles) is covered by the cycle-safe hierarchy walk from corr-01. still open:
-corr-09 (spot lights never rendered, L), and the sec / perf / arch sets.
+corr-01..08, corr-10..14, corr-16..40, corr-43, corr-44 are fixed test-first, one
+commit each (`git log --grep corr-`). corr-15 (scene-loader parent cycles) is
+covered by the cycle-safe hierarchy walk from corr-01. still open: corr-09 (spot
+lights never rendered, L).
+
+security: all of sec-01..17 are addressed. sec-02 was covered by corr-03; sec-01
+and sec-15 are contract/doc fixes (component pointers die at structural changes;
+RegisteredSystem Send/Sync argument); sec-14 makes the rust dylib loader `unsafe`
+with a stated contract (the C-ABI shim is still the real fix); sec-05 is checked
+by a unit test plus a clean windows-gnu clippy, not on a windows host.
+
+performance (before -> after):
+
+| id | fix | numbers |
+|---|---|---|
+| perf-03 | 3d collision: left prune bound + entity index (the rev-03 shape again) + quiet-tick gate | 5000 colliders, overlapping() for all 22.4 -> 5.2 ms; quiet rebuild 0.219 -> 0.021 ms |
+| perf-04 | cached early-out probe queries | quiet frame, 10k entities 15.95 -> 12.17 us |
+| perf-05 | build_cull_soa change gate | quiet frame, 10k boxes 390 -> 19.6 us |
+| perf-06 | gpu late cull tested *local* aabbs against the world frustum: meshes vanished when the origin was off screen (correctness; the perf half is open) | goldens unchanged, timing within noise |
+| perf-07 | point-shadow slots cleared once on used -> unused, re-rendered when reused (a returning light used to keep a cleared slot) | feature-reel 322/319 -> 309 ms/frame |
+
+perf-01's correctness half was rev-22; its one-pass-per-draw cost, perf-02 (L),
+and perf-08..13 (low) are open. arch-01..13 are open.
+
+other fixes this round: rev-24 above; wasm32 `clippy -D warnings` is now clean
+for the engine crates (it never was; ci only builds wasm); unused deps removed
+(guillotiere, sdl3 in lunar-render, web-sys; lunar-atlas's lunar-assets).
 
 ---
 
