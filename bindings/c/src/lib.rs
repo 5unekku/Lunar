@@ -21,7 +21,7 @@
 
 use std::{
     alloc::Layout,
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     ffi::{CStr, CString, c_void, c_char},
     ptr::{NonNull, null, null_mut},
     sync::atomic::{AtomicU32, Ordering},
@@ -179,10 +179,12 @@ pub struct FfiRegistry {
     component_names:     HashMap<String, ComponentId>,
     component_ids:       HashMap<LunarComponentId, ComponentId>,
     next_system_id:      LunarSystemId,
-    startup_systems:     HashMap<LunarSystemId, RegisteredSystem>,
-    update_systems:      HashMap<LunarSystemId, RegisteredSystem>,
-    fixed_update_systems:HashMap<LunarSystemId, RegisteredSystem>,
-    shutdown_systems:    HashMap<LunarSystemId, RegisteredSystem>,
+    // BTreeMap: ids increase with registration, so iteration is registration
+    // order (a hash map ran systems in arbitrary order)
+    startup_systems:     BTreeMap<LunarSystemId, RegisteredSystem>,
+    update_systems:      BTreeMap<LunarSystemId, RegisteredSystem>,
+    fixed_update_systems:BTreeMap<LunarSystemId, RegisteredSystem>,
+    shutdown_systems:    BTreeMap<LunarSystemId, RegisteredSystem>,
     /// reusable snapshot buffer for [`dispatch_systems`] (kept to avoid a per-dispatch alloc)
     dispatch_scratch:    Vec<RegisteredSystem>,
     /// true while a hot-reload is in progress so C# Init can skip scene setup.
@@ -195,7 +197,7 @@ impl FfiRegistry {
         self.component_names.get(name).copied()
     }
 
-    fn systems(&self, schedule: LunarSchedule) -> &HashMap<LunarSystemId, RegisteredSystem> {
+    fn systems(&self, schedule: LunarSchedule) -> &BTreeMap<LunarSystemId, RegisteredSystem> {
         match schedule {
             LunarSchedule::Startup     => &self.startup_systems,
             LunarSchedule::Update      => &self.update_systems,
@@ -204,7 +206,7 @@ impl FfiRegistry {
         }
     }
 
-    fn systems_mut(&mut self, schedule: LunarSchedule) -> &mut HashMap<LunarSystemId, RegisteredSystem> {
+    fn systems_mut(&mut self, schedule: LunarSchedule) -> &mut BTreeMap<LunarSystemId, RegisteredSystem> {
         match schedule {
             LunarSchedule::Startup     => &mut self.startup_systems,
             LunarSchedule::Update      => &mut self.update_systems,
@@ -1941,6 +1943,26 @@ mod tests {
             );
         }
         assert!(matches >= 2);
+    }
+
+    /// systems ran in hash-map order, not registration order.
+    #[test]
+    fn systems_dispatch_in_registration_order() {
+        unsafe extern "C" fn record(_world: *mut LunarWorld, user_data: *mut c_void) {
+            // user_data carries the system's registration index
+            let index = user_data as usize;
+            ORDER.lock().unwrap().push(index);
+        }
+        static ORDER: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+        let mut world = ffi_world();
+        let ptr = world_ptr(&mut world);
+        for i in 0..20usize {
+            unsafe {
+                lunar_system_register(ptr, LunarSchedule::Update as u32, Some(record), i as *mut c_void)
+            };
+        }
+        dispatch_systems(&mut world, LunarSchedule::Update);
+        assert_eq!(*ORDER.lock().unwrap(), (0..20).collect::<Vec<_>>());
     }
 
     /// an include id that was never registered was dropped from the filter, so the
