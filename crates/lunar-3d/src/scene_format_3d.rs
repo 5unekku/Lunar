@@ -628,6 +628,10 @@ fn primitive_mesh(name: &str) -> Option<crate::mesh::MeshData> {
 
 fn parse_hex_color(hex: &str) -> Option<Color> {
     let hex = hex.trim_start_matches('#');
+    // the digits are sliced by byte offset: a non-ascii string would split a char
+    if !hex.is_ascii() {
+        return None;
+    }
     let (r, g, b, a) = match hex.len() {
         3 => {
             let r = u8::from_str_radix(&hex[0..1], 16).ok()?;
@@ -961,6 +965,13 @@ Scene3d(
         assert_eq!(e.tags, vec!["static"]);
         let light = e.directional_light.as_ref().unwrap();
         assert_eq!(light.illuminance, 50_000.0);
+    }
+
+    #[test]
+    fn parse_hex_color_rejects_non_ascii() {
+        // byte length 3 / 6 but not ascii: slicing by byte used to panic mid-char
+        assert!(parse_hex_color("é1").is_none());
+        assert!(parse_hex_color("#ffé1f").is_none());
     }
 
     #[test]
