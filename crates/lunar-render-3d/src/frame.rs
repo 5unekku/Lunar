@@ -1115,7 +1115,8 @@ impl RenderEngine3d {
 				if let Some(coeffs) = sh_coeffs {
 					Self::pack_sh_uniforms_at(uniform_slot, &coeffs);
 				}
-				let has_lightmap: u32 = if lm_id != u32::MAX { 1 } else { 0 };
+				let (has_lightmap, lm_uv_offset, lm_uv_scale) =
+					Self::lightmap_binding(lm_id, has_indirect, atlas_lm_uvs);
 				// bit 1 = has directional lightmap; only set when not in GPU indirect path (dir not atlased)
 				let dir_flag: u32 = if dir_lm_id != u32::MAX && !has_indirect {
 					2
@@ -1123,14 +1124,6 @@ impl RenderEngine3d {
 					0
 				};
 				let combined_flags = mat_flags | dir_flag;
-				let (lm_uv_offset, lm_uv_scale) = if lm_id != u32::MAX {
-					match atlas_lm_uvs.get(&lm_id) {
-						Some(&uvs) => ([uvs[0], uvs[1]], [uvs[2], uvs[3]]),
-						None => ([0.0f32, 0.0], [1.0f32, 1.0]),
-					}
-				} else {
-					([0.0f32, 0.0], [1.0f32, 1.0])
-				};
 				// bindless array slots: absent or still-loading maps use the fixed
 				// fallback slot for their channel (0 diffuse, 1 normal, 2 specular)
 				let texture_indices: [u32; 3] = if bindless_active {
@@ -2211,6 +2204,28 @@ impl RenderEngine3d {
 	}
 	/// update the EMA frame-time tracker and adjust resolution scale.
 	/// called by `render_3d_system` after each frame with the measured CPU frame time.
+	/// (has_lightmap, uv offset, uv scale) for an entity's lightmap `lm_id`. on the
+	/// atlas path (`has_indirect`) a lightmap is only present if it got an atlas
+	/// slot: one that didn't (atlas full, compressed, oversized, still loading)
+	/// used to fall back to offset 0 / scale 1 and sample the whole atlas.
+	pub(crate) fn lightmap_binding(
+		lm_id: u32,
+		has_indirect: bool,
+		atlas_uvs: &HashMap<u32, [f32; 4]>,
+	) -> (u32, [f32; 2], [f32; 2]) {
+		const WHOLE: ([f32; 2], [f32; 2]) = ([0.0, 0.0], [1.0, 1.0]);
+		if lm_id == u32::MAX {
+			return (0, WHOLE.0, WHOLE.1);
+		}
+		if !has_indirect {
+			return (1, WHOLE.0, WHOLE.1);
+		}
+		match atlas_uvs.get(&lm_id) {
+			Some(uv) => (1, [uv[0], uv[1]], [uv[2], uv[3]]),
+			None => (0, WHOLE.0, WHOLE.1),
+		}
+	}
+
 	pub fn tick_dynamic_resolution(&mut self, frame_time_ms: f32) -> f32 {
 		// EMA with α=0.1 (smooths over ~10 frames)
 		const ALPHA: f32 = 0.1;

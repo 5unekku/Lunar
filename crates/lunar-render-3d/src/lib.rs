@@ -2349,6 +2349,31 @@ mod visual_style_tests {
 	}
 }
 
+#[cfg(test)]
+mod lightmap_binding_tests {
+	use super::*;
+
+	/// on the atlas path a lightmap with no atlas slot (atlas full, compressed,
+	/// larger than the atlas, still loading) fell back to offset 0 / scale 1, so the
+	/// entity sampled the whole atlas as its lightmap. it now renders without one.
+	#[test]
+	fn missing_atlas_slot_means_no_lightmap() {
+		let mut uvs: HashMap<u32, [f32; 4]> = HashMap::default();
+		uvs.insert(7, [0.25, 0.5, 0.125, 0.125]);
+		assert_eq!(
+			RenderEngine3d::lightmap_binding(7, true, &uvs),
+			(1, [0.25, 0.5], [0.125, 0.125])
+		);
+		assert_eq!(RenderEngine3d::lightmap_binding(8, true, &uvs).0, 0);
+		// per-entity lightmap textures (no atlas): the whole texture is the lightmap
+		assert_eq!(
+			RenderEngine3d::lightmap_binding(8, false, &uvs),
+			(1, [0.0, 0.0], [1.0, 1.0])
+		);
+		assert_eq!(RenderEngine3d::lightmap_binding(u32::MAX, false, &uvs).0, 0);
+	}
+}
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod headless_tests {
 	use super::*;
