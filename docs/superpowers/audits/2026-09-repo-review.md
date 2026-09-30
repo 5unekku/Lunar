@@ -56,6 +56,8 @@ findings from the fix loop are rev-13..rev-17.
 | rev-24 | gpu indirect cull appends draws with `atomicAdd`: draw order follows workgroup scheduling, so exactly-tied depths (building bases) flip frame to frame; static-city golden was capture-unstable | fixed `46c9eb2` (slot-stable draws, `atomicMax` count; stable in and across processes, perf neutral 353.4 → 345.9 ms) |
 | rev-26 | the sky's sun disc is always drawn straight above the camera (`frame.rs` `sun_model`), ignoring the `DirectionalLight` direction, so the disc and the lighting disagree whenever the sun isn't at noon | open (visual; needs sign-off) |
 | rev-27 | docs promised APIs that don't exist: `mouse_scroll_delta` (now implemented), `RenderTier::detect`, `RenderLayers::from_layers`, `get_single_mut`, and stale fields on `SpriteAnimation`, `CameraFollow2d` (a resource, shown as a component), `AmbientLight`, `Sky`, `RenderConfig3d` | fixed `6876ae9`, `8b91336` and the follow-up doc commit |
+| rev-28 | the gpu lod-select path was dead: its pipeline was never created, yet high-tier frames sized its buffers every frame | removed `56591d5` (-261 lines) |
+| rev-29 | the wasm cross-compile test (`tests/cross_compile.rs`) failed on the native-only render-bench | fixed `987466b` |
 | rev-25 | ci build-wasm used the dev profile, which pins cranelift (no wasm32 backend) | fixed `7261cce` (llvm override, as build-cross does) |
 
 ### 2026-07 audit findings fixed on this branch
@@ -97,7 +99,9 @@ architecture:
 | arch-08 | render_graph docs no longer claim it drives pass order | doc only; kept as the arch-02 target |
 | arch-12 | wgpu `spirv` feature native-only | naga gone from the wasm32 dependency graph |
 
-arch-02/07/09 (L), arch-03/04/06/10/13 (M) and arch-11 (rename, churn) are open.
+arch-02/07/09 (L), arch-04/06/10/13 (M) and arch-11 (rename, churn) are open.
+arch-03 (make the facade's `2d` feature gate lunar-render) is ready to do but is a
+breaking change for 3d-only users of 2D types, so it waits on sign-off.
 
 other fixes this round: rev-24 above; wasm32 `clippy -D warnings` is now clean
 for the engine crates (it never was; ci only builds wasm); unused deps removed
