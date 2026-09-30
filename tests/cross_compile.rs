@@ -59,9 +59,17 @@ fn check_target(target: &str, label: &str) {
 	];
 	// lunar-dotnet-host (hostfxr) and lunar-plugin-loader (libloading) wrap
 	// native-only dynamic-loading facilities that do not exist on bare wasm, and
-	// the wasm runtime path does not use them. exclude them from the wasm check.
+	// the wasm runtime path does not use them. render-bench is a native headless
+	// harness (offscreen wgpu targets, sdl-free boot). exclude them from the wasm check.
 	if target.starts_with("wasm32") {
-		args.extend(["--exclude", "lunar-dotnet-host", "--exclude", "lunar-plugin-loader"]);
+		args.extend([
+			"--exclude",
+			"lunar-dotnet-host",
+			"--exclude",
+			"lunar-plugin-loader",
+			"--exclude",
+			"render-bench",
+		]);
 	}
 
 	let output = std::process::Command::new("cargo")
