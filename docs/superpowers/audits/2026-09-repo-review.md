@@ -82,8 +82,22 @@ performance (before -> after):
 | perf-06 | gpu late cull tested *local* aabbs against the world frustum: meshes vanished when the origin was off screen (correctness; the perf half is open) | goldens unchanged, timing within noise |
 | perf-07 | point-shadow slots cleared once on used -> unused, re-rendered when reused (a returning light used to keep a cleared slot) | feature-reel 322/319 -> 309 ms/frame |
 
-perf-01's correctness half was rev-22; its one-pass-per-draw cost, perf-02 (L),
-and perf-08..13 (low) are open. arch-01..13 are open.
+| perf-01 | terrain: per-ring params slots + one pass per terrain. every ring had drawn with the last ring's params (the rev-22 bug, still live for terrain) | feature-reel 308 -> 265 ms/frame, golden pixel-identical |
+
+water/decals still open one pass per entity; feature-reel has one of each, so
+there is no bench to show a gain yet. perf-02 (L) and perf-08..13 (low, below
+lavapipe noise) are open.
+
+architecture:
+
+| id | fix | evidence |
+|---|---|---|
+| arch-01 | a ShadowProvider hook no longer drops the z-prepass (opaque geometry vanished on mid/high with any hook) | headless test with a no-op hook |
+| arch-05 | avx2 cull kernel moved to `lunar_math::simd_cull`; lunar-3d builds with cranelift in dev | lunar-3d incremental test build 1.24 -> 1.02 s |
+| arch-08 | render_graph docs no longer claim it drives pass order | doc only; kept as the arch-02 target |
+| arch-12 | wgpu `spirv` feature native-only | naga gone from the wasm32 dependency graph |
+
+arch-02/07/09 (L), arch-03/04/06/10/13 (M) and arch-11 (rename, churn) are open.
 
 other fixes this round: rev-24 above; wasm32 `clippy -D warnings` is now clean
 for the engine crates (it never was; ci only builds wasm); unused deps removed
