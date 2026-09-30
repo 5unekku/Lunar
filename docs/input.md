@@ -42,7 +42,15 @@ input.is_mouse_button_just_pressed(MouseButton::Right)
 input.mouse_position()          // (f32, f32) in screen pixels
 input.mouse_delta()             // (f32, f32) movement this tick (useful for FPS look)
 input.mouse_scroll_delta()      // (f32, f32) wheel notches this tick, +y = up
+input.frame_mouse_delta()       // (f32, f32) movement this display frame
+input.frame_mouse_scroll()      // (f32, f32) wheel notches this display frame
 ```
+
+`mouse_delta` and the `just_pressed` edges are consumed per logic tick: each frame's
+input reaches exactly one tick. a system in the `Render` stage runs once per display
+frame, which can be several times per tick at high refresh rates, so it should read
+`frame_mouse_delta` / `frame_mouse_scroll` instead or it applies the same movement
+more than once.
 
 ### gamepad methods
 

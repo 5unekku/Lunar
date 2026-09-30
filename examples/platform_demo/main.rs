@@ -37,7 +37,8 @@ fn fps_controller(
     if *pitch == 0.0 { *pitch = std::f32::consts::FRAC_PI_2; }
 
     let dt = time.real_delta_seconds();
-    let (dx, dy) = input.mouse_delta();
+    // per-frame system (Render stage): mouse_delta is per tick and would repeat
+    let (dx, dy) = input.frame_mouse_delta();
     *yaw   -= dx * SENSITIVITY;
     *pitch  = (*pitch + dy * SENSITIVITY).clamp(0.001, std::f32::consts::PI - 0.001);
 

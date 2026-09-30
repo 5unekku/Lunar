@@ -620,6 +620,10 @@ pub struct InputState {
 	mouse_position: (f32, f32),
 	mouse_delta: (f32, f32),
 	mouse_scroll: (f32, f32),
+	/// motion and scroll of the current display frame (reset by begin_frame), for
+	/// per-frame readers such as camera look in the Render stage
+	frame_mouse_delta: (f32, f32),
+	frame_mouse_scroll: (f32, f32),
 	mouse_buttons_held: [bool; MOUSE_BUTTON_COUNT],
 	mouse_buttons_just_pressed: [bool; MOUSE_BUTTON_COUNT],
 	mouse_buttons_just_released: [bool; MOUSE_BUTTON_COUNT],
@@ -655,6 +659,8 @@ impl InputState {
 			mouse_position: (0.0, 0.0),
 			mouse_delta: (0.0, 0.0),
 			mouse_scroll: (0.0, 0.0),
+			frame_mouse_delta: (0.0, 0.0),
+			frame_mouse_scroll: (0.0, 0.0),
 			mouse_buttons_held: [false; MOUSE_BUTTON_COUNT],
 			mouse_buttons_just_pressed: [false; MOUSE_BUTTON_COUNT],
 			mouse_buttons_just_released: [false; MOUSE_BUTTON_COUNT],
@@ -737,10 +743,27 @@ impl InputState {
 		self.mouse_position
 	}
 
-	/// get the mouse movement delta this frame
+	/// mouse movement consumed by this logic tick (a frame's motion goes to exactly
+	/// one tick). for per-frame systems use [`frame_mouse_delta`](Self::frame_mouse_delta).
 	#[must_use]
 	pub const fn mouse_delta(&self) -> (f32, f32) {
 		self.mouse_delta
+	}
+
+	/// mouse movement during this display frame. use it in per-frame systems
+	/// (the Render stage): [`mouse_delta`](Self::mouse_delta) is per logic tick
+	/// and repeats on frames that run no tick, so a per-frame reader would apply
+	/// it more than once at high refresh rates.
+	#[must_use]
+	pub const fn frame_mouse_delta(&self) -> (f32, f32) {
+		self.frame_mouse_delta
+	}
+
+	/// scroll wheel movement during this display frame (see
+	/// [`frame_mouse_delta`](Self::frame_mouse_delta)).
+	#[must_use]
+	pub const fn frame_mouse_scroll(&self) -> (f32, f32) {
+		self.frame_mouse_scroll
 	}
 
 	/// scroll wheel movement this tick as (x, y) in wheel notches. positive y
@@ -777,6 +800,8 @@ impl InputState {
 		for gamepad in self.gamepads.iter_mut().flatten() {
 			gamepad.begin_frame();
 		}
+		self.frame_mouse_delta = (0.0, 0.0);
+		self.frame_mouse_scroll = (0.0, 0.0);
 	}
 
 	/// get gamepad state by index (0-based).
@@ -917,6 +942,7 @@ impl InputState {
 
 	/// accumulate scroll wheel movement (notches) into this frame's pending input
 	pub fn add_mouse_scroll(&mut self, x: f32, y: f32) {
+		self.frame_mouse_scroll = (self.frame_mouse_scroll.0 + x, self.frame_mouse_scroll.1 + y);
 		self.pending_mouse_scroll = (
 			self.pending_mouse_scroll.0 + x,
 			self.pending_mouse_scroll.1 + y,
@@ -926,6 +952,10 @@ impl InputState {
 	/// add to the mouse delta (for accumulating motion events). accumulates into
 	/// the pending buffer so a tick sees the whole frame's motion exactly once.
 	pub fn add_mouse_delta(&mut self, delta_x: f32, delta_y: f32) {
+		self.frame_mouse_delta = (
+			self.frame_mouse_delta.0 + delta_x,
+			self.frame_mouse_delta.1 + delta_y,
+		);
 		self.pending_mouse_delta = (
 			self.pending_mouse_delta.0 + delta_x,
 			self.pending_mouse_delta.1 + delta_y,
@@ -2147,6 +2177,27 @@ mod tests {
 			web_pad_input(16),
 			Some(WebPadInput::Button(GamepadButton::Home))
 		);
+	}
+
+	/// mouse_delta is per logic tick, so a per-frame reader (camera look in the
+	/// Render stage) saw the same delta again on every frame that ran no tick and
+	/// over-rotated on high-refresh displays. frame_mouse_delta is this frame's motion.
+	#[test]
+	fn frame_mouse_delta_is_per_display_frame() {
+		let mut input = make_input();
+		input.begin_frame();
+		input.add_mouse_delta(3.0, 4.0);
+		input.add_mouse_scroll(0.0, 1.0);
+		assert_eq!(input.frame_mouse_delta(), (3.0, 4.0));
+		assert_eq!(input.frame_mouse_scroll(), (0.0, 1.0));
+		// ticks don't consume it
+		input.promote_pending();
+		input.promote_pending();
+		assert_eq!(input.frame_mouse_delta(), (3.0, 4.0));
+		// the next frame starts from zero
+		input.begin_frame();
+		assert_eq!(input.frame_mouse_delta(), (0.0, 0.0));
+		assert_eq!(input.frame_mouse_scroll(), (0.0, 0.0));
 	}
 
 	/// docs/input.md promised mouse_scroll_delta, which didn't exist: wheel input
