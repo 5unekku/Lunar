@@ -67,6 +67,8 @@ findings from the fix loop are rev-13..rev-17.
 | rev-36 | a frame whose own text overflows the glyph atlas flushed and re-uploaded it every frame (rev-30 follow-up) | fixed `0524b22` (120-frame backoff) |
 | rev-37 | sub-scene fan-out: cycles and depth were bounded but acyclic fan-out was not (2^depth entities) | fixed `3c22618` (MAX_SCENE_ENTITIES per spawn) |
 | rev-38 | web keys: a release could resolve to a different KeyCode than its press (layout-dependent `key`), leaving keys held; keys released while unfocused never released | fixed `0811cc3` |
+| rev-39 | hzb: last frame's off-screen entities read back as occluded, so anything entering the view vanished for a frame; readback matched to entities by index into the next frame's list | fixed (seed 2 = untested; readback applied to the dispatched entities) |
+| rev-40 | render-bench 2d goldens had red/blue swapped (the bench swapped already-rgba 2d readback) | fixed (both engines' readbacks return rgba) |
 | rev-25 | ci build-wasm used the dev profile, which pins cranelift (no wasm32 backend) | fixed `7261cce` (llvm override, as build-cross does) |
 
 ### 2026-07 audit findings fixed on this branch
