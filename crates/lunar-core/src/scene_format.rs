@@ -576,6 +576,10 @@ pub struct SceneLayer(pub i32);
 #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 fn parse_hex_color(hex: &str) -> Option<Color> {
 	let hex = hex.trim_start_matches('#');
+	// the digits are sliced by byte offset: a non-ascii string would split a char
+	if !hex.is_ascii() {
+		return None;
+	}
 	let (r, g, b, a) = match hex.len() {
 		3 => {
 			// duplicate each nibble: #rgb → #rrggbb without allocating
@@ -791,6 +795,12 @@ Scene(
 		assert_eq!(e.rotation, 1.5);
 		assert_eq!(e.sprite_tint.as_deref(), Some("#ff0000"));
 		assert_eq!(e.tags, vec!["enemy"]);
+	}
+
+	#[test]
+	fn parse_hex_color_rejects_non_ascii() {
+		assert!(parse_hex_color("é1").is_none());
+		assert!(parse_hex_color("#ffé1f").is_none());
 	}
 
 	#[test]
