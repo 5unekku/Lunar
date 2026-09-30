@@ -60,8 +60,9 @@ findings from the fix loop are rev-13..rev-17.
 
 corr-01..08, corr-10..14, corr-16..40, corr-43, corr-44 are fixed test-first, one
 commit each (`git log --grep corr-`). corr-15 (scene-loader parent cycles) is
-covered by the cycle-safe hierarchy walk from corr-01. still open: corr-09 (spot
-lights never rendered, L).
+covered by the cycle-safe hierarchy walk from corr-01. corr-09 (spot lights never
+rendered) is fixed in `97f7689`: spots ride the point-light path with a cone term.
+every correctness finding is now addressed.
 
 security: all of sec-01..17 are addressed. sec-02 was covered by corr-03; sec-01
 and sec-15 are contract/doc fixes (component pointers die at structural changes;

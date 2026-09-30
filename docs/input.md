@@ -39,9 +39,9 @@ input.is_key_just_released(KeyCode::Escape)
 ```rust
 input.is_mouse_button_held(MouseButton::Left)
 input.is_mouse_button_just_pressed(MouseButton::Right)
-input.mouse_position()          // Vec2 in screen pixels
-input.mouse_delta()             // Vec2 movement since last frame (useful for FPS look)
-input.mouse_scroll_delta()      // f32 scroll wheel delta
+input.mouse_position()          // (f32, f32) in screen pixels
+input.mouse_delta()             // (f32, f32) movement this tick (useful for FPS look)
+input.mouse_scroll_delta()      // (f32, f32) wheel notches this tick, +y = up
 ```
 
 ### gamepad methods

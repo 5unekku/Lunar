@@ -619,6 +619,7 @@ pub struct InputState {
 	keys_just_released_extra: HashMap<KeyCode, bool>,
 	mouse_position: (f32, f32),
 	mouse_delta: (f32, f32),
+	mouse_scroll: (f32, f32),
 	mouse_buttons_held: [bool; MOUSE_BUTTON_COUNT],
 	mouse_buttons_just_pressed: [bool; MOUSE_BUTTON_COUNT],
 	mouse_buttons_just_released: [bool; MOUSE_BUTTON_COUNT],
@@ -632,6 +633,7 @@ pub struct InputState {
 	pending_keys_just_pressed_extra: HashMap<KeyCode, bool>,
 	pending_keys_just_released_extra: HashMap<KeyCode, bool>,
 	pending_mouse_delta: (f32, f32),
+	pending_mouse_scroll: (f32, f32),
 	pending_mouse_buttons_just_pressed: [bool; MOUSE_BUTTON_COUNT],
 	pending_mouse_buttons_just_released: [bool; MOUSE_BUTTON_COUNT],
 	/// one slot per gamepad index; a disconnect empties its slot instead of shifting
@@ -652,6 +654,7 @@ impl InputState {
 			keys_just_released_extra: HashMap::default(),
 			mouse_position: (0.0, 0.0),
 			mouse_delta: (0.0, 0.0),
+			mouse_scroll: (0.0, 0.0),
 			mouse_buttons_held: [false; MOUSE_BUTTON_COUNT],
 			mouse_buttons_just_pressed: [false; MOUSE_BUTTON_COUNT],
 			mouse_buttons_just_released: [false; MOUSE_BUTTON_COUNT],
@@ -660,6 +663,7 @@ impl InputState {
 			pending_keys_just_pressed_extra: HashMap::default(),
 			pending_keys_just_released_extra: HashMap::default(),
 			pending_mouse_delta: (0.0, 0.0),
+			pending_mouse_scroll: (0.0, 0.0),
 			pending_mouse_buttons_just_pressed: [false; MOUSE_BUTTON_COUNT],
 			pending_mouse_buttons_just_released: [false; MOUSE_BUTTON_COUNT],
 			gamepads: Vec::new(),
@@ -685,6 +689,7 @@ impl InputState {
 			[false; MOUSE_BUTTON_COUNT],
 		);
 		self.mouse_delta = std::mem::replace(&mut self.pending_mouse_delta, (0.0, 0.0));
+		self.mouse_scroll = std::mem::replace(&mut self.pending_mouse_scroll, (0.0, 0.0));
 	}
 
 	/// check if a key is currently held down
@@ -736,6 +741,13 @@ impl InputState {
 	#[must_use]
 	pub const fn mouse_delta(&self) -> (f32, f32) {
 		self.mouse_delta
+	}
+
+	/// scroll wheel movement this tick as (x, y) in wheel notches. positive y
+	/// scrolls up (away from the user), positive x scrolls right.
+	#[must_use]
+	pub const fn mouse_scroll_delta(&self) -> (f32, f32) {
+		self.mouse_scroll
 	}
 
 	/// check if a mouse button is currently held down
@@ -901,6 +913,14 @@ impl InputState {
 	/// mode (xrel/yrel from SDL) is never clobbered by absolute position diffs.
 	pub fn set_mouse_position(&mut self, x: f32, y: f32) {
 		self.mouse_position = (x, y);
+	}
+
+	/// accumulate scroll wheel movement (notches) into this frame's pending input
+	pub fn add_mouse_scroll(&mut self, x: f32, y: f32) {
+		self.pending_mouse_scroll = (
+			self.pending_mouse_scroll.0 + x,
+			self.pending_mouse_scroll.1 + y,
+		);
 	}
 
 	/// add to the mouse delta (for accumulating motion events). accumulates into
@@ -1167,6 +1187,15 @@ pub fn process_events(
 					} => {
 						input.add_mouse_delta(*xrel, *yrel);
 						input.set_mouse_position(*x, *y);
+					}
+					Event::MouseWheel { x, y, direction, .. } => {
+						// "natural" scrolling reports flipped: normalize so +y is always up
+						let sign = if *direction == sdl3::mouse::MouseWheelDirection::Flipped {
+							-1.0
+						} else {
+							1.0
+						};
+						input.add_mouse_scroll(*x * sign, *y * sign);
 					}
 					Event::Quit { .. } => got_quit = true,
 					_ => gamepad.handle_event(&event, &mut input),
@@ -1569,6 +1598,10 @@ mod web_input {
 			delta_x: f32,
 			delta_y: f32,
 		},
+		Wheel {
+			x: f32,
+			y: f32,
+		},
 		GamepadButtonPress {
 			gamepad_index: usize,
 			button: GamepadButton,
@@ -1618,6 +1651,11 @@ mod web_input {
 		});
 	}
 
+	/// push scroll wheel movement in notches (+y up)
+	pub fn push_wheel(x: f32, y: f32) {
+		EVENT_QUEUE.with(|q| q.borrow_mut().push_back(WebEvent::Wheel { x, y }));
+	}
+
 	/// drain all queued events and apply them to the input state
 	pub fn drain_to_input(input: &mut super::InputState) {
 		EVENT_QUEUE.with(|q| {
@@ -1643,6 +1681,7 @@ mod web_input {
 						input.add_mouse_delta(delta_x, delta_y);
 						input.set_mouse_position(x, y);
 					}
+					WebEvent::Wheel { x, y } => input.add_mouse_scroll(x, y),
 					// the browser api reports pads by index and nothing registers them
 					// (sdl's device-added event is native-only), so without this every
 					// web gamepad event hit an empty gamepad list and was dropped
@@ -1901,6 +1940,25 @@ pub fn setup_web_input(canvas: &web_sys::HtmlElement) {
 			.expect("failed to add mousemove listener");
 		mousemove_closure.forget();
 
+		// wheel deltas come in pixels, lines or pages; convert to notches and flip y
+		// so +y is up like the native path. ~100 px or 3 lines per notch.
+		let wheel_closure =
+			wasm_bindgen::closure::Closure::wrap(Box::new(move |event: web_sys::WheelEvent| {
+				let per_notch = match event.delta_mode() {
+					web_sys::WheelEvent::DOM_DELTA_LINE => 3.0,
+					web_sys::WheelEvent::DOM_DELTA_PAGE => 1.0,
+					_ => 100.0,
+				};
+				web_input::push_wheel(
+					(event.delta_x() / per_notch) as f32,
+					(-event.delta_y() / per_notch) as f32,
+				);
+			}) as Box<dyn FnMut(_)>);
+		canvas_target
+			.add_event_listener_with_callback("wheel", wheel_closure.as_ref().unchecked_ref())
+			.expect("failed to add wheel listener");
+		wheel_closure.forget();
+
 		// request pointer lock on click so mouse movement stays captured inside the page
 		let canvas_for_lock = canvas.clone();
 		let click_closure = wasm_bindgen::closure::Closure::wrap(Box::new(move || {
@@ -2029,6 +2087,20 @@ mod tests {
 			web_pad_input(16),
 			Some(WebPadInput::Button(GamepadButton::Home))
 		);
+	}
+
+	/// docs/input.md promised mouse_scroll_delta, which didn't exist: wheel input
+	/// was dropped. it accumulates per display frame and is consumed per tick.
+	#[test]
+	fn scroll_accumulates_and_is_consumed_per_tick() {
+		let mut input = make_input();
+		input.add_mouse_scroll(0.0, 1.0);
+		input.add_mouse_scroll(0.5, 2.0);
+		assert_eq!(input.mouse_scroll_delta(), (0.0, 0.0), "not visible before the tick");
+		input.promote_pending();
+		assert_eq!(input.mouse_scroll_delta(), (0.5, 3.0));
+		input.promote_pending();
+		assert_eq!(input.mouse_scroll_delta(), (0.0, 0.0));
 	}
 
 	/// corr-38: an axis binding's just-pressed/just-released must be edges, not
