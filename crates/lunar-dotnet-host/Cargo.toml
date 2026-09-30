@@ -5,7 +5,6 @@ edition     = "2024"
 license     = "MPL-2.0"
 description = "embed the .NET CoreCLR runtime in a Rust process via hostfxr"
 repository  = "https://gitlab.com/5unekku/Lunar"
-homepage    = "https://gitlab.com/5unekku/Lunar"
 
 [dependencies]
 libloading = { workspace = true }

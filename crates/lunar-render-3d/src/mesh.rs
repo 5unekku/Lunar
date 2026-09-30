@@ -465,7 +465,10 @@ impl RenderEngine3d {
 	}
 	pub(crate) fn pack_mesh_uniforms(staging: &mut [u8], slot: usize, model: Mat4) {
 		let offset = slot * UNIFORM_STRIDE as usize;
-		Self::pack_mesh_uniforms_at(&mut staging[offset..offset + 112], model);
+		Self::pack_mesh_uniforms_at(
+			&mut staging[offset..offset + MESH_UNIFORMS_SIZE as usize],
+			model,
+		);
 	}
 	/// write the 112-byte mesh block (model matrix + normal matrix) at the start of
 	/// `slot_buf`. the slot-relative form lets the per-entity packing loop run over

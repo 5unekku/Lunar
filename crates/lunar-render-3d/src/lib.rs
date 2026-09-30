@@ -238,7 +238,6 @@ const ATLAS_SIZE: u32 = 4096;
 
 /// per-entity transform data: model mat4 (64) + normal matrix 3×vec4 (48) = 112 bytes,
 /// padded to UNIFORM_STRIDE (256) in the staging buffer.
-#[allow(dead_code)]
 const MESH_UNIFORMS_SIZE: u64 = 112;
 
 /// group 3: ambient(16) + dir(32) + 3×light_space(192) + cascade_splits(16) + sh(160) = 416 bytes.
