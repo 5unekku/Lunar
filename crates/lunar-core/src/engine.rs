@@ -16,6 +16,10 @@ use bevy_ecs::schedule::{ExecutorKind, ScheduleLabel};
 #[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Startup;
 
+/// schedule for shutdown systems that run once after the main loop exits
+#[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Shutdown;
+
 /// the engine owns the ECS world and schedules.
 ///
 /// this is the low-level wrapper around `bevy_ecs`.
@@ -37,6 +41,8 @@ pub struct Engine {
 	world: World,
 	/// the startup schedule (run once before main loop)
 	startup_schedule: Schedule,
+	/// the shutdown schedule (run once after the main loop exits)
+	shutdown_schedule: Schedule,
 	/// per-stage schedules for ordered system execution
 	stage_schedules: [Schedule; 5],
 }
@@ -62,6 +68,8 @@ impl Engine {
 		};
 		let mut startup = Schedule::new(Startup);
 		startup.set_executor_kind(ExecutorKind::SingleThreaded);
+		let mut shutdown = Schedule::new(Shutdown);
+		shutdown.set_executor_kind(ExecutorKind::SingleThreaded);
 		let make_stage = |label: UpdateStage| {
 			let mut s = Schedule::new(label);
 			s.set_executor_kind(parallel);
@@ -70,6 +78,7 @@ impl Engine {
 		Self {
 			world: World::new(),
 			startup_schedule: startup,
+			shutdown_schedule: shutdown,
 			stage_schedules: [
 				make_stage(UpdateStage::Input),
 				make_stage(UpdateStage::Physics),
@@ -106,6 +115,16 @@ impl Engine {
 	/// run all startup systems once
 	pub fn run_startup(&mut self) {
 		self.startup_schedule.run(&mut self.world);
+	}
+
+	/// get mutable access to the shutdown schedule
+	pub const fn shutdown_schedule_mut(&mut self) -> &mut Schedule {
+		&mut self.shutdown_schedule
+	}
+
+	/// run all shutdown systems once
+	pub fn run_shutdown(&mut self) {
+		self.shutdown_schedule.run(&mut self.world);
 	}
 
 	/// run all stage schedules in order: Input → Physics → Update → Render → PostUpdate

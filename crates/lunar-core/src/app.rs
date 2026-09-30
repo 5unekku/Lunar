@@ -265,6 +265,16 @@ impl App {
 		self
 	}
 
+	/// add one or more shutdown systems that run once after the main loop exits
+	/// (a normal quit via `EngineState::Stopping`; not on a panic or `process::exit`)
+	pub fn add_shutdown_system<M>(
+		&mut self,
+		systems: impl IntoScheduleConfigs<ScheduleSystem, M>,
+	) -> &mut Self {
+		self.engine.shutdown_schedule_mut().add_systems(systems);
+		self
+	}
+
 	/// add a plugin to the app
 	/// plugins are built in dependency order using topological sort.
 	/// each plugin's dependencies must be built before the plugin itself.
@@ -407,6 +417,7 @@ impl App {
 			game_loop.apply_frame_cap();
 			process_events(self.engine.world_mut());
 		}
+		self.engine.run_shutdown();
 	}
 
 	/// drive one render frame from an external pacing source (requestAnimationFrame
@@ -506,6 +517,28 @@ pub trait GamePlugin: Send {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	/// the ffi exposes a Shutdown schedule but the engine had no shutdown stage, so
+	/// nothing registered for shutdown ever ran. systems added with
+	/// add_shutdown_system run once when the loop exits.
+	#[test]
+	fn shutdown_systems_run_when_the_loop_exits() {
+		#[derive(Resource, Default)]
+		struct ShutdownRan(u32);
+		fn stop(mut state: ResMut<EngineState>) {
+			*state = EngineState::Stopping;
+		}
+		fn on_shutdown(mut ran: ResMut<ShutdownRan>) {
+			ran.0 += 1;
+		}
+		let mut app = App::new();
+		app.insert_resource(ShutdownRan::default());
+		app.insert_resource(EngineState::Running);
+		app.add_system(stop);
+		app.add_shutdown_system(on_shutdown);
+		app.run(LoopConfig::default());
+		assert_eq!(app.world_mut().resource::<ShutdownRan>().0, 1);
+	}
 	use std::sync::{Arc, Mutex};
 
 	type Log = Arc<Mutex<Vec<String>>>;

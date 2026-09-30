@@ -338,6 +338,10 @@ impl GamePlugin for CsPlugin {
             let _ = Box::leak(Box::new(loader));
             app.add_system_to_stage(lunar_core::UpdateStage::Update, dispatch_ffi_update);
         }
+        // the ffi's other two schedules were accepted but never dispatched: fixed
+        // update rides the fixed-step physics stage, shutdown the engine's shutdown
+        app.add_system_to_stage(lunar_core::UpdateStage::Physics, dispatch_ffi_fixed_update);
+        app.add_shutdown_system(dispatch_ffi_shutdown);
     }
 }
 
@@ -398,6 +402,14 @@ impl CsPlugin {
 
 fn dispatch_ffi_update(world: &mut World) {
     lunar_ffi::dispatch_systems(world, LunarSchedule::Update);
+}
+
+fn dispatch_ffi_fixed_update(world: &mut World) {
+    lunar_ffi::dispatch_systems(world, LunarSchedule::FixedUpdate);
+}
+
+fn dispatch_ffi_shutdown(world: &mut World) {
+    lunar_ffi::dispatch_systems(world, LunarSchedule::Shutdown);
 }
 
 fn dispatch_ffi_update_hot(world: &mut World) {
