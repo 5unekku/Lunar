@@ -292,7 +292,7 @@ fn boot_and_measure_2d(
 
 /// convert a raw (bgra, w, h) readback to (rgba, w, h) for golden io.
 fn to_rgba((mut bytes, width, height): (Vec<u8>, u32, u32)) -> (Vec<u8>, u32, u32) {
-	golden::bgra_to_rgba_in_place(&mut bytes);
+	golden::force_opaque_in_place(&mut bytes);
 	(bytes, width, height)
 }
 

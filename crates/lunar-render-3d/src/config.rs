@@ -1469,8 +1469,8 @@ impl RenderEngine3d {
 		}
 	}
 
-	/// copy a surface-sized COPY_SRC texture back to CPU as tightly-packed bytes in
-	/// the texture's own channel order. blocks until the gpu copy completes: for
+	/// copy a surface-sized COPY_SRC texture back to CPU as tightly-packed rgba8
+	/// (bgra targets are swizzled). blocks until the gpu copy completes: for
 	/// one-shot capture/editor use, never a hot path. shared by headless readback
 	/// and the [`CaptureRequest`] path.
 	#[cfg(not(target_arch = "wasm32"))]
@@ -1528,6 +1528,15 @@ impl RenderEngine3d {
 		}
 		drop(mapped);
 
+		// normalize to rgba: headless and swapchain targets are often bgra
+		if matches!(
+			texture.format(),
+			wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+		) {
+			for pixel in out.as_chunks_mut::<4>().0 {
+				pixel.swap(0, 2);
+			}
+		}
 		Some((out, width, height))
 	}
 }

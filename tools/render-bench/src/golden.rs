@@ -8,11 +8,11 @@ use std::path::Path;
 /// never a bump of this value.
 pub const CHANNEL_TOLERANCE: u8 = 2;
 
-/// the headless target reads back bgra; swap to rgba and force alpha opaque
-/// (alpha carries no color information in the composite output).
-pub fn bgra_to_rgba_in_place(bytes: &mut [u8]) {
+/// force alpha opaque: it carries no color information in the composite output.
+/// (both engines' readbacks already return rgba; this used to also swap r/b,
+/// which was right for the bgra 3d target but swapped the rgba 2d goldens)
+pub fn force_opaque_in_place(bytes: &mut [u8]) {
 	for px in bytes.as_chunks_mut::<4>().0 {
-		px.swap(0, 2);
 		px[3] = 0xff;
 	}
 }

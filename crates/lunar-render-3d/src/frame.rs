@@ -2153,23 +2153,14 @@ impl RenderEngine3d {
 
 		// ── publish a serviced frame capture ─────────────────────────────
 		// read the mirrored composite back and hand games a sampleable texture. the
-		// readback blocks briefly (one-shot at a transition, never a hot path). the
-		// swapchain format may be bgra, so swizzle to the rgba order create_texture
-		// and the surface-shader sampler expect.
+		// readback blocks briefly (one-shot at a transition, never a hot path) and
+		// returns rgba, the order create_texture and the surface-shader sampler expect.
 		#[cfg(not(target_arch = "wasm32"))]
 		if self.capture_this_frame {
 			self.capture_this_frame = false;
 			if let Some((texture, _)) = self.capture_target.as_ref()
-				&& let Some((mut bytes, width, height)) = self.readback_texture(texture)
+				&& let Some((bytes, width, height)) = self.readback_texture(texture)
 			{
-				if matches!(
-					self.surface_config.format,
-					wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
-				) {
-					for pixel in bytes.as_chunks_mut::<4>().0 {
-						pixel.swap(0, 2);
-					}
-				}
 				let handle = world
 					.resource_mut::<lunar_assets::AssetServer>()
 					.create_texture(width, height, bytes);
