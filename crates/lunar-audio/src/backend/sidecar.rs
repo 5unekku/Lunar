@@ -13,7 +13,12 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(inline_js = r#"
 export function audio_init(freq, channels) {
-    return window.__audioSidecar._audio_init(freq, channels);
+    // the sidecar is optional: without it report failure (0) so the rust side
+    // returns Err and the game runs silent. calling into undefined would throw a
+    // js exception straight through the wasm frames and abort startup.
+    const M = window.__audioSidecar;
+    if (!M || typeof M._audio_init !== "function") return 0;
+    return M._audio_init(freq, channels);
 }
 export function audio_push(data) {
     if (data.length === 0) return;
@@ -55,7 +60,8 @@ pub struct SidecarBackend {
 
 impl SidecarBackend {
     /// create the sidecar backend. `window.__audioSidecar` must already be
-    /// initialized (see `scripts/run_wasm.go`).
+    /// initialized (see `scripts/run_wasm.go`); without it this returns `Err` and
+    /// the game runs without audio.
     pub fn new() -> Result<Self, String> {
         if audio_init(SAMPLE_RATE as i32, 2) == 0 {
             return Err("audio_sidecar: audio_init failed".to_string());
