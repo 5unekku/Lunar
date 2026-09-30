@@ -370,14 +370,8 @@ impl SceneLoader3d {
         scene: &SceneDefinition3d,
         scene_registry: Option<&HashMap<String, SceneDefinition3d>>,
     ) -> HashMap<String, Entity> {
-        Self::spawn_internal(
-            commands,
-            registry,
-            scene,
-            scene_registry,
-            None,
-            &mut SpawnGuard::default(),
-        )
+        Self::spawn_internal(commands, registry, scene, scene_registry, &mut SpawnGuard::default())
+            .0
     }
 
     /// load a scene from a `.ls3` file and spawn it into the world.
@@ -398,12 +392,14 @@ impl SceneLoader3d {
         registry: &mut MeshRegistry,
         scene: &SceneDefinition3d,
         scene_registry: Option<&HashMap<String, SceneDefinition3d>>,
-        parent_entity: Option<Entity>,
         guard: &mut SpawnGuard,
-    ) -> HashMap<String, Entity> {
+    ) -> (HashMap<String, Entity>, Vec<Entity>) {
+        // (id -> entity, roots): roots are the entities with no parent inside this
+        // scene, id or not. a sub-scene's roots are what its instance entity adopts
         let mut id_map: HashMap<String, Entity> = HashMap::default();
         let mut parent_refs: Vec<(Entity, String)> = Vec::new();
         let mut sub_scene_roots: Vec<(Entity, String)> = Vec::new();
+        let mut roots: Vec<Entity> = Vec::new();
 
         for def in &scene.entities {
             if guard.spawned >= MAX_SCENE_ENTITIES {
@@ -527,12 +523,14 @@ impl SceneLoader3d {
                 id_map.insert(id.clone(), entity);
             }
 
-            if let Some(ref parent_id) = def.parent {
-                parent_refs.push((entity, parent_id.clone()));
+            match def.parent {
+                Some(ref parent_id) => parent_refs.push((entity, parent_id.clone())),
+                None => roots.push(entity),
             }
         }
 
-        // second pass: wire parent/child relationships
+        // second pass: wire parent/child relationships. Children are collected and
+        // written once at the end, so sub-scene roots added below merge with them
         let mut parent_to_children: HashMap<Entity, Vec<Entity>> = HashMap::default();
         for (entity, parent_id) in parent_refs {
             if let Some(&parent) = id_map.get(&parent_id) {
@@ -540,12 +538,8 @@ impl SceneLoader3d {
                 parent_to_children.entry(parent).or_default().push(entity);
             } else {
                 log::warn!("SceneLoader3d: parent '{parent_id}' not found");
+                roots.push(entity);
             }
-        }
-        for (parent, children) in parent_to_children {
-            commands
-                .entity(parent)
-                .insert(Children(children.into()));
         }
 
         // third pass: resolve sub-scene instances
@@ -567,39 +561,25 @@ impl SceneLoader3d {
                 && let Some(sub_scene) = registry_map.get(&sub_name)
             {
                 guard.chain.push(sub_name.clone());
-                let sub_map = Self::spawn_internal(
-                    commands,
-                    registry,
-                    sub_scene,
-                    Some(registry_map),
-                    Some(entity),
-                    guard,
-                );
+                let (_, sub_roots) =
+                    Self::spawn_internal(commands, registry, sub_scene, Some(registry_map), guard);
                 guard.chain.pop();
-                let sub_children: Vec<Entity> = sub_map.values().copied().collect();
-                for &child in &sub_children {
+                // only the sub-scene's roots join the instance: links inside the
+                // sub-scene stay, and the instance keeps its own in-scene children
+                for &child in &sub_roots {
                     commands.entity(child).insert(Parent(entity));
                 }
-                if !sub_children.is_empty() {
-                    commands.entity(entity).insert(Children(sub_children.into()));
-                }
+                parent_to_children.entry(entity).or_default().extend(sub_roots);
             } else {
                 log::warn!("SceneLoader3d: sub-scene '{sub_name}' not found in registry");
             }
         }
 
-        // parent all root entities under the caller-supplied parent
-        if let Some(parent) = parent_entity {
-            let root_children: Vec<Entity> = id_map.values().copied().collect();
-            for &child in &root_children {
-                commands.entity(child).insert(Parent(parent));
-            }
-            if !root_children.is_empty() {
-                commands.entity(parent).insert(Children(root_children.into()));
-            }
+        for (parent, children) in parent_to_children {
+            commands.entity(parent).insert(Children(children.into()));
         }
 
-        id_map
+        (id_map, roots)
     }
 }
 
@@ -702,6 +682,69 @@ mod tests {
             back.entities[0].behaviors[0].fields[0].1,
             FieldValueRon::Float(2.5)
         );
+    }
+
+    /// instancing a sub-scene reparented every entity with an id to the instance,
+    /// overwriting links inside the sub-scene (arm -> body), replaced the instance's
+    /// own in-scene children, and left id-less roots unparented.
+    #[test]
+    fn sub_scene_instancing_keeps_its_hierarchy() {
+        use bevy_ecs::world::CommandQueue;
+        use lunar_core::{Children, Parent};
+        let ent = |id: Option<&str>, parent: Option<&str>, sub: Option<&str>| EntityDefinition3d {
+            id: id.map(Into::into),
+            parent: parent.map(Into::into),
+            sub_scene: sub.map(Into::into),
+            ..Default::default()
+        };
+        let mut scenes = HashMap::default();
+        scenes.insert(
+            "robot".to_string(),
+            SceneDefinition3d {
+                name: "robot".into(),
+                entities: vec![
+                    ent(Some("body"), None, None),
+                    ent(Some("arm"), Some("body"), None),
+                    ent(None, None, None), // id-less root
+                ],
+            },
+        );
+        let outer = SceneDefinition3d {
+            name: "outer".into(),
+            entities: vec![
+                ent(Some("holder"), None, Some("robot")),
+                ent(Some("tag"), Some("holder"), None),
+            ],
+        };
+        let mut world = World::new();
+        let mut queue = CommandQueue::default();
+        let ids = {
+            let mut commands = Commands::new(&mut queue, &world);
+            let mut mesh_registry = MeshRegistry::default();
+            SceneLoader3d::spawn_scene(&mut commands, &mut mesh_registry, &outer, Some(&scenes))
+        };
+        queue.apply(&mut world);
+        let holder = ids["holder"];
+        let tag = ids["tag"];
+        let spawned: Vec<(Entity, Option<String>)> = world
+            .query::<(Entity, &SceneEntity3d)>()
+            .iter(&world)
+            .map(|(e, s)| (e, s.entity_id.clone()))
+            .collect();
+        let named = |name: Option<&str>| {
+            spawned.iter().find(|(_, id)| id.as_deref() == name).map(|(e, _)| *e).unwrap()
+        };
+        let (body, arm, anon) = (named(Some("body")), named(Some("arm")), named(None));
+        let parent_of = |e: Entity| world.get::<Parent>(e).map(|p| p.0);
+        assert_eq!(parent_of(arm), Some(body), "in-sub-scene link kept");
+        assert_eq!(parent_of(body), Some(holder));
+        assert_eq!(parent_of(anon), Some(holder), "id-less root parented too");
+        assert_eq!(parent_of(tag), Some(holder));
+        let children: Vec<Entity> = world.get::<Children>(holder).unwrap().iter().copied().collect();
+        for e in [tag, body, anon] {
+            assert!(children.contains(&e), "holder must list {e:?}");
+        }
+        assert!(!children.contains(&arm));
     }
 
     /// sec-10 follow-up: acyclic fan-out (each scene includes the next twice) is
