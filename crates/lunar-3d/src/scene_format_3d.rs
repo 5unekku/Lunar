@@ -171,7 +171,8 @@ pub struct MaterialDef {
     /// metallic factor [0, 1]
     #[serde(default)]
     pub metallic: f32,
-    /// emissive hex color; absent = no emission
+    /// emissive hex color. reserved: MaterialData has no emission yet, so this is
+    /// parsed but not rendered (the loader warns when a scene sets it)
     pub emissive: Option<String>,
 }
 
@@ -601,6 +602,9 @@ fn local_transform(def: &EntityDefinition3d) -> LocalTransform3d {
 }
 
 fn material_data(def: &MaterialDef) -> MaterialData {
+    if def.emissive.is_some() {
+        log::warn!("scene material sets `emissive`, which the renderer does not support yet");
+    }
     let base_color = parse_hex_color(&def.base_color).unwrap_or(Color::WHITE);
     MaterialData {
         shading: ShadingModel::Pbr,
