@@ -7,17 +7,20 @@ at any time: changes apply next frame.
 ## quality presets
 
 ```rust
-use lunar::lunar_render_3d::QualitySettings;
+use lunar::lunar_render_3d::{QualityPreset, QualitySettings, RenderTier};
 
-// set from a preset
-fn apply_settings(mut quality: ResMut<QualitySettings>) {
+// set from a preset. RenderTier is a resource the renderer inserts from the adapter.
+fn apply_settings(mut quality: ResMut<QualitySettings>, tier: Res<RenderTier>) {
     *quality = QualitySettings::minimum();  // accessibility floor: all post-fx off
-    // or:
-    *quality = QualitySettings::from_tier(RenderTier::detect(adapter_info));
+    // or the tier's default:
+    *quality = QualitySettings::from_tier(*tier);
+    // or a named preset on this tier:
+    *quality = QualitySettings::from_tier_and_preset(*tier, QualityPreset::Low);
 }
 ```
 
-preset constructors: `minimum()`, `low()`, `medium()`, `high()`, `ultra()` (via `from_tier_and_preset`).
+constructors: `minimum()`, `maximum()`, `from_tier(tier)`, and
+`from_tier_and_preset(tier, preset)` for the named presets.
 
 `QualityPreset` enum: `Minimum`, `Low`, `Medium`, `High`, `Ultra`.
 

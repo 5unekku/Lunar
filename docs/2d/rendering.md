@@ -75,7 +75,7 @@ to update text, query the component and write to `.content`:
 
 ```rust
 fn update_score(score: Res<Score>, mut query: Query<&mut Text, With<ScoreLabel>>) {
-    if let Ok(mut text) = query.get_single_mut() {
+    if let Ok(mut text) = query.single_mut() {
         text.content = Arc::from(format!("Score: {}", score.0));
     }
 }

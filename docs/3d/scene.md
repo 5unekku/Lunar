@@ -115,7 +115,7 @@ fn setup(mut commands: Commands) {
 
 `Projection` variants:
 - `Perspective { fov_y, near, far }`: standard 3d perspective
-- `Orthographic { height, near, far }`: isometric/top-down views
+- `Orthographic { width, near, far }`: isometric/top-down views (height follows the aspect ratio)
 
 moving the camera each tick:
 
@@ -123,9 +123,9 @@ moving the camera each tick:
 fn camera_movement(
     input: Res<InputState>,
     time: Res<Time>,
-    mut query: Query<&mut LocalTransform3d, With<ActiveCamera3d>>,
+    mut query: Query<&mut LocalTransform3d, With<Camera3d>>,
 ) {
-    let Ok(mut transform) = query.get_single_mut() else { return };
+    let Ok(mut transform) = query.single_mut() else { return };
     let speed = 5.0 * time.delta_seconds();
 
     if input.is_key_held(KeyCode::W) {
@@ -160,12 +160,12 @@ useful for rendering mirrors, minimap cameras, or UI elements in 3d space.
 // entity only visible on layer 1
 commands.spawn((
     Mesh3dBundle { ..Default::default() },
-    RenderLayers::from_layers(&[1]),
+    RenderLayers::layer(1),
 ));
 
 // camera that only sees layer 1
 commands.spawn((
     Camera3dBundle { ..Default::default() },
-    RenderLayers::from_layers(&[1]),
+    RenderLayers::layer(1),
 ));
 ```
