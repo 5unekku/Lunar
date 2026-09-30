@@ -694,9 +694,16 @@ pub unsafe extern "C" fn lunar_query_foreach(
     let ids = |ptr: *const LunarComponentId, count: usize| -> &[LunarComponentId] {
         if ptr.is_null() || count == 0 { &[] } else { unsafe { std::slice::from_raw_parts(ptr, count) } }
     };
-    let include_ids: Vec<ComponentId> = {
+    // an include id that was never registered can't be on any entity: match
+    // nothing (dropping it from the filter matched everything)
+    let Some(include_ids) = ({
         let reg = world.resource::<FfiRegistry>();
-        ids(include, include_count).iter().filter_map(|id| reg.component_ids.get(id).copied()).collect()
+        ids(include, include_count)
+            .iter()
+            .map(|id| reg.component_ids.get(id).copied())
+            .collect::<Option<Vec<ComponentId>>>()
+    }) else {
+        return;
     };
     let exclude_ids: Vec<ComponentId> = {
         let reg = world.resource::<FfiRegistry>();
@@ -1934,6 +1941,28 @@ mod tests {
             );
         }
         assert!(matches >= 2);
+    }
+
+    /// an include id that was never registered was dropped from the filter, so the
+    /// query matched every entity instead of none.
+    #[test]
+    fn query_with_unknown_include_matches_nothing() {
+        let mut world = ffi_world();
+        world.spawn_empty();
+        let mut matches = 0usize;
+        let bogus: [LunarComponentId; 1] = [12345];
+        unsafe {
+            lunar_query_foreach(
+                world_ptr(&mut world),
+                bogus.as_ptr(),
+                1,
+                std::ptr::null(),
+                0,
+                Some(count_match),
+                &mut matches as *mut usize as *mut c_void,
+            );
+        }
+        assert_eq!(matches, 0);
     }
 
     /// sec-07 / sec-16: a null `data` is warned about and ignored like every
