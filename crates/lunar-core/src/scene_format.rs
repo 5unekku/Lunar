@@ -361,6 +361,20 @@ pub struct SceneData(pub Option<serde_json::Value>);
 /// bounds legitimately deep (or adversarially wide-and-deep) registries.
 const MAX_SUB_SCENE_DEPTH: usize = 32;
 
+/// most entities one top-level spawn may create across all sub-scene expansion.
+/// cycles and depth are bounded separately, but fan-out is not: 32 levels that
+/// each include the next scene twice is 2^32 entities.
+pub const MAX_SCENE_ENTITIES: usize = 100_000;
+
+/// per-spawn guards threaded through sub-scene recursion (sec-10)
+#[derive(Default)]
+struct SpawnGuard {
+	/// registry keys of the sub-scenes currently being expanded
+	chain: Vec<String>,
+	/// entities spawned so far by this top-level spawn
+	spawned: usize,
+}
+
 impl SceneLoader {
 	/// spawn all entities from a scene definition into the world.
 	/// returns a map of entity ids (from the scene file) to spawned [`Entity`] handles.
@@ -370,7 +384,7 @@ impl SceneLoader {
 		scene: &SceneDefinition,
 		scene_registry: Option<&HashMap<String, SceneDefinition>>,
 	) -> HashMap<String, Entity> {
-		Self::spawn_scene_internal(commands, scene, scene_registry, None, &mut Vec::new())
+		Self::spawn_scene_internal(commands, scene, scene_registry, None, &mut SpawnGuard::default())
 	}
 
 	fn spawn_scene_internal(
@@ -378,8 +392,7 @@ impl SceneLoader {
 		scene: &SceneDefinition,
 		scene_registry: Option<&HashMap<String, SceneDefinition>>,
 		parent_entity: Option<Entity>,
-		// registry keys of the sub-scenes currently being expanded (sec-10)
-		chain: &mut Vec<String>,
+		guard: &mut SpawnGuard,
 	) -> HashMap<String, Entity> {
 		let mut id_map: HashMap<String, Entity> = HashMap::default();
 		let mut parent_refs: Vec<(Entity, String)> = Vec::new();
@@ -387,6 +400,14 @@ impl SceneLoader {
 
 		// first pass: spawn entities and store components
 		for entity_def in &scene.entities {
+			if guard.spawned >= MAX_SCENE_ENTITIES {
+				log::warn!(
+					"SceneLoader: stopped at {MAX_SCENE_ENTITIES} entities while spawning '{}' (sub-scene fan-out)",
+					scene.name
+				);
+				break;
+			}
+			guard.spawned += 1;
 			let mut spawn = commands.spawn((
 				LocalTransform {
 					translation: Vec2::new(entity_def.x, entity_def.y),
@@ -465,14 +486,14 @@ impl SceneLoader {
 
 		// third pass: resolve sub-scene instances
 		for (entity, sub_scene_name) in sub_scene_roots {
-			if chain.contains(&sub_scene_name) {
+			if guard.chain.contains(&sub_scene_name) {
 				log::warn!(
 					"SceneLoader: sub-scene cycle {} -> {sub_scene_name}, not expanding",
-					chain.join(" -> ")
+					guard.chain.join(" -> ")
 				);
 				continue;
 			}
-			if chain.len() >= MAX_SUB_SCENE_DEPTH {
+			if guard.chain.len() >= MAX_SUB_SCENE_DEPTH {
 				log::warn!(
 					"SceneLoader: sub-scene '{sub_scene_name}' nested deeper than {MAX_SUB_SCENE_DEPTH}, not expanding"
 				);
@@ -484,15 +505,15 @@ impl SceneLoader {
 				commands.entity(entity).insert(SceneInstance {
 					scene_path: sub_scene_name.clone(),
 				});
-				chain.push(sub_scene_name.clone());
+				guard.chain.push(sub_scene_name.clone());
 				let sub_id_map = Self::spawn_scene_internal(
 					commands,
 					sub_scene,
 					Some(registry),
 					Some(entity),
-					chain,
+					guard,
 				);
-				chain.pop();
+				guard.chain.pop();
 				// parent all sub-scene root entities under this entity in one Children insert
 				let mut sub_children: smallvec::SmallVec<[Entity; 4]> = smallvec::SmallVec::new();
 				for sub_entity in sub_id_map.values() {
@@ -602,6 +623,32 @@ fn parse_hex_color(hex: &str) -> Option<Color> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	/// sec-10 follow-up: without a cycle, fan-out still exploded. a chain of scenes
+	/// that each include the next one twice spawns 2^depth entities; the total per
+	/// spawn is capped.
+	#[test]
+	fn sub_scene_fan_out_is_bounded() {
+		use bevy_ecs::world::{CommandQueue, World};
+		let mut registry = HashMap::default();
+		for level in 0..30 {
+			let next = format!("s{}", level + 1);
+			let ron = format!(
+				r#"Scene(name: "s{level}", entities: [(sub_scene: Some("{next}")), (sub_scene: Some("{next}"))])"#
+			);
+			registry.insert(format!("s{level}"), SceneDefinition::from_ron(&ron).unwrap());
+		}
+		let root = registry["s0"].clone();
+		let mut world = World::new();
+		let mut queue = CommandQueue::default();
+		{
+			let mut commands = Commands::new(&mut queue, &world);
+			SceneLoader::spawn_scene(&mut commands, &root, Some(&registry));
+		}
+		queue.apply(&mut world);
+		let spawned = world.query::<&SceneEntity>().iter(&world).count();
+		assert!(spawned <= MAX_SCENE_ENTITIES, "spawned {spawned}");
+	}
 
 	/// sec-10: a sub-scene that references itself (directly or via a chain) used
 	/// to recurse until the stack overflowed. the cycle is skipped instead.

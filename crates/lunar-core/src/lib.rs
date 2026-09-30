@@ -85,8 +85,8 @@ pub use hierarchy::{Children, HierarchyPlugin, Parent, PostUpdate, hierarchy_dep
 pub use scene::{Scene, SceneManager};
 /// scene definition format: RON authoring and binary runtime
 pub use scene_format::{
-	EntityDefinition, SceneData, SceneDefinition, SceneEntity, SceneInstance, SceneLayer,
-	SceneLoader, SceneSprite, SceneTags, SceneText, SpriteDef, TextDef, TransformDef,
+	EntityDefinition, MAX_SCENE_ENTITIES, SceneData, SceneDefinition, SceneEntity, SceneInstance,
+	SceneLayer, SceneLoader, SceneSprite, SceneTags, SceneText, SpriteDef, TextDef, TransformDef,
 };
 /// system scheduling: the built-in update stages
 pub use schedule::UpdateStage;

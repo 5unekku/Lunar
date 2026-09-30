@@ -345,6 +345,20 @@ pub struct SceneLoader3d;
 /// bounds legitimately deep (or adversarially wide-and-deep) registries.
 const MAX_SUB_SCENE_DEPTH: usize = 32;
 
+/// most entities one top-level spawn may create across all sub-scene expansion
+/// (fan-out is otherwise unbounded: 32 levels that each include the next scene
+/// twice is 2^32 entities). same cap as the 2d loader.
+pub const MAX_SCENE_ENTITIES: usize = lunar_core::MAX_SCENE_ENTITIES;
+
+/// per-spawn guards threaded through sub-scene recursion (sec-10)
+#[derive(Default)]
+struct SpawnGuard {
+    /// registry keys of the sub-scenes currently being expanded
+    chain: Vec<String>,
+    /// entities spawned so far by this top-level spawn
+    spawned: usize,
+}
+
 impl SceneLoader3d {
     /// spawn all entities from a scene definition into the world.
     ///
@@ -356,7 +370,14 @@ impl SceneLoader3d {
         scene: &SceneDefinition3d,
         scene_registry: Option<&HashMap<String, SceneDefinition3d>>,
     ) -> HashMap<String, Entity> {
-        Self::spawn_internal(commands, registry, scene, scene_registry, None, &mut Vec::new())
+        Self::spawn_internal(
+            commands,
+            registry,
+            scene,
+            scene_registry,
+            None,
+            &mut SpawnGuard::default(),
+        )
     }
 
     /// load a scene from a `.ls3` file and spawn it into the world.
@@ -378,14 +399,21 @@ impl SceneLoader3d {
         scene: &SceneDefinition3d,
         scene_registry: Option<&HashMap<String, SceneDefinition3d>>,
         parent_entity: Option<Entity>,
-        // registry keys of the sub-scenes currently being expanded (sec-10)
-        chain: &mut Vec<String>,
+        guard: &mut SpawnGuard,
     ) -> HashMap<String, Entity> {
         let mut id_map: HashMap<String, Entity> = HashMap::default();
         let mut parent_refs: Vec<(Entity, String)> = Vec::new();
         let mut sub_scene_roots: Vec<(Entity, String)> = Vec::new();
 
         for def in &scene.entities {
+            if guard.spawned >= MAX_SCENE_ENTITIES {
+                log::warn!(
+                    "SceneLoader3d: stopped at {MAX_SCENE_ENTITIES} entities while spawning '{}' (sub-scene fan-out)",
+                    scene.name
+                );
+                break;
+            }
+            guard.spawned += 1;
             let local = local_transform(def);
             let marker = SceneEntity3d {
                 scene_name: scene.name.clone(),
@@ -522,14 +550,14 @@ impl SceneLoader3d {
 
         // third pass: resolve sub-scene instances
         for (entity, sub_name) in sub_scene_roots {
-            if chain.contains(&sub_name) {
+            if guard.chain.contains(&sub_name) {
                 log::warn!(
                     "SceneLoader3d: sub-scene cycle {} -> {sub_name}, not expanding",
-                    chain.join(" -> ")
+                    guard.chain.join(" -> ")
                 );
                 continue;
             }
-            if chain.len() >= MAX_SUB_SCENE_DEPTH {
+            if guard.chain.len() >= MAX_SUB_SCENE_DEPTH {
                 log::warn!(
                     "SceneLoader3d: sub-scene '{sub_name}' nested deeper than {MAX_SUB_SCENE_DEPTH}, not expanding"
                 );
@@ -538,16 +566,16 @@ impl SceneLoader3d {
             if let Some(registry_map) = scene_registry
                 && let Some(sub_scene) = registry_map.get(&sub_name)
             {
-                chain.push(sub_name.clone());
+                guard.chain.push(sub_name.clone());
                 let sub_map = Self::spawn_internal(
                     commands,
                     registry,
                     sub_scene,
                     Some(registry_map),
                     Some(entity),
-                    chain,
+                    guard,
                 );
-                chain.pop();
+                guard.chain.pop();
                 let sub_children: Vec<Entity> = sub_map.values().copied().collect();
                 for &child in &sub_children {
                     commands.entity(child).insert(Parent(entity));
@@ -674,6 +702,34 @@ mod tests {
             back.entities[0].behaviors[0].fields[0].1,
             FieldValueRon::Float(2.5)
         );
+    }
+
+    /// sec-10 follow-up: acyclic fan-out (each scene includes the next twice) is
+    /// capped at MAX_SCENE_ENTITIES per spawn.
+    #[test]
+    fn sub_scene_fan_out_is_bounded() {
+        use bevy_ecs::world::CommandQueue;
+        let mut scenes = HashMap::default();
+        for level in 0..30 {
+            let child = || EntityDefinition3d {
+                sub_scene: Some(format!("s{}", level + 1)),
+                ..Default::default()
+            };
+            scenes.insert(
+                format!("s{level}"),
+                SceneDefinition3d { name: format!("s{level}"), entities: vec![child(), child()] },
+            );
+        }
+        let mut world = World::new();
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            let mut mesh_registry = MeshRegistry::default();
+            SceneLoader3d::spawn_scene(&mut commands, &mut mesh_registry, &scenes["s0"], Some(&scenes));
+        }
+        queue.apply(&mut world);
+        let spawned = world.query::<&SceneEntity3d>().iter(&world).count();
+        assert!(spawned <= MAX_SCENE_ENTITIES, "spawned {spawned}");
     }
 
     /// sec-10: sub-scene chains a -> b -> a used to recurse until the stack
