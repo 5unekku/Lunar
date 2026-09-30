@@ -1092,7 +1092,9 @@ impl RenderEngine3d {
 			let base = ENTITY_SLOT_START;
 			// bind the distinct fields to locals so the closure borrows them disjointly:
 			// read-only scene data plus two mutable, non-overlapping staging slices.
-			let has_indirect = self.has_indirect;
+			// only the gpu multi-draw path binds the lightmap atlas; the per-batch
+			// path binds each entity's own lightmap (and directional lightmap)
+			let atlas_path = self.gpu_indirect_active();
 			let atlas_lm_uvs = &self.atlas_lm_uvs;
 			let mat_texsets = &self.mat_texsets;
 			let bindless_tex_slots = &self.bindless_tex_slots;
@@ -1116,9 +1118,9 @@ impl RenderEngine3d {
 					Self::pack_sh_uniforms_at(uniform_slot, &coeffs);
 				}
 				let (has_lightmap, lm_uv_offset, lm_uv_scale) =
-					Self::lightmap_binding(lm_id, has_indirect, atlas_lm_uvs);
+					Self::lightmap_binding(lm_id, atlas_path, atlas_lm_uvs);
 				// bit 1 = has directional lightmap; only set when not in GPU indirect path (dir not atlased)
-				let dir_flag: u32 = if dir_lm_id != u32::MAX && !has_indirect {
+				let dir_flag: u32 = if dir_lm_id != u32::MAX && !atlas_path {
 					2
 				} else {
 					0
@@ -2204,20 +2206,24 @@ impl RenderEngine3d {
 	}
 	/// update the EMA frame-time tracker and adjust resolution scale.
 	/// called by `render_3d_system` after each frame with the measured CPU frame time.
-	/// (has_lightmap, uv offset, uv scale) for an entity's lightmap `lm_id`. on the
-	/// atlas path (`has_indirect`) a lightmap is only present if it got an atlas
-	/// slot: one that didn't (atlas full, compressed, oversized, still loading)
-	/// used to fall back to offset 0 / scale 1 and sample the whole atlas.
+	/// (has_lightmap, uv offset, uv scale) for an entity's lightmap `lm_id`.
+	/// `atlas_path` is true when the frame draws through the gpu multi-draw path,
+	/// the only one that binds the lightmap atlas. there a lightmap is present only
+	/// if it got an atlas slot: one that didn't (atlas full, compressed, oversized,
+	/// still loading) used to fall back to offset 0 / scale 1 and sample the whole
+	/// atlas. elsewhere each entity binds its own lightmap, whose full 0..1 range is
+	/// the lightmap (atlas uvs used to leak onto that path too whenever the atlas
+	/// existed, sampling a sub-rect of the entity's own texture).
 	pub(crate) fn lightmap_binding(
 		lm_id: u32,
-		has_indirect: bool,
+		atlas_path: bool,
 		atlas_uvs: &HashMap<u32, [f32; 4]>,
 	) -> (u32, [f32; 2], [f32; 2]) {
 		const WHOLE: ([f32; 2], [f32; 2]) = ([0.0, 0.0], [1.0, 1.0]);
 		if lm_id == u32::MAX {
 			return (0, WHOLE.0, WHOLE.1);
 		}
-		if !has_indirect {
+		if !atlas_path {
 			return (1, WHOLE.0, WHOLE.1);
 		}
 		match atlas_uvs.get(&lm_id) {
