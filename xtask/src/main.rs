@@ -1,11 +1,13 @@
 //! cargo xtask: build/dist/run task runner.
 //!
 //! usage:
-//!   cargo xtask build [--release]            build C# plugin + Rust binary
-//!   cargo xtask dist --modular               release build, separate binary + .so → dist/
-//!   cargo xtask dist --single                release build, .so embedded in binary → dist/
-//!   cargo xtask run                          debug build (CoreCLR), then run platform_demo_cs
-//!   cargo xtask bench [-- <render-bench args>]   release build + run the headless render bench
+//! ```text
+//! cargo xtask build [--release]            build C# plugin + Rust binary
+//! cargo xtask dist --modular               release build, separate binary + .so → dist/
+//! cargo xtask dist --single                release build, .so embedded in binary → dist/
+//! cargo xtask run                          debug build (CoreCLR), then run platform_demo_cs
+//! cargo xtask bench [-- <render-bench args>]   release build + run the headless render bench
+//! ```
 //!
 //! debug builds use the CoreCLR hosting path (dotnet build → .dll, no NativeAOT).
 //! release / dist builds use NativeAOT (dotnet publish -p:PublishAot=true → .so).

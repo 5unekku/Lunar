@@ -236,7 +236,7 @@ pub fn compile_scene_file(path: &str) -> Result<Vec<u8>, String> {
 
 /// compile a world manifest XML source string into the compact binary format.
 ///
-/// the resulting blob can be loaded at runtime using [`WorldManifest::from_binary`].
+/// the resulting blob can be loaded at runtime using `WorldManifest::from_binary`.
 ///
 /// # Errors
 ///

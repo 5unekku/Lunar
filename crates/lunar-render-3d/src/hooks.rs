@@ -1,7 +1,7 @@
 //! engine patch traits: replace built-in render passes without forking.
 //!
 //! each trait covers one hookable seam in the render pipeline. register an
-//! implementation on [`RenderEngine3d`] from a startup system and the engine
+//! implementation on [`RenderEngine3d`](crate::RenderEngine3d) from a startup system and the engine
 //! calls it in place of the built-in logic for that pass.
 //!
 //! # example: custom shadow technique
@@ -37,13 +37,13 @@ pub struct ShadowCtx<'a> {
     /// format: `Depth32Float`, `2DArray`, one slice per cascade (3). point-light
     /// shadows live in a separate texture the hook does not replace.
     pub shadow_atlas:      &'a wgpu::Texture,
-    /// full-array default view of [`shadow_atlas`].
+    /// full-array default view of [`shadow_atlas`](Self::shadow_atlas).
     pub shadow_atlas_view: &'a wgpu::TextureView,
 }
 
 /// implement this to replace the built-in shadow passes.
 ///
-/// the engine calls [`render_shadows`] in place of its own cascade and point-light
+/// the engine calls [`render_shadows`](ShadowProvider::render_shadows) in place of its own cascade and point-light
 /// shadow recording; the z-prepass still runs.
 /// any wgpu work must be submitted before returning (use `context.queue.submit`).
 pub trait ShadowProvider: Send + Sync + 'static {

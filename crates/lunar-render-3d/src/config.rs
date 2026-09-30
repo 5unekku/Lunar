@@ -1417,7 +1417,7 @@ impl RenderEngine3d {
 
 	/// register a custom shadow technique.
 	///
-	/// the engine calls [`ShadowProvider::render_shadows`] in place of its
+	/// the engine calls [`ShadowProvider::render_shadows`](crate::hooks::ShadowProvider::render_shadows) in place of its
 	/// built-in cascade + point-light shadow pass every frame. pass `None` to
 	/// revert to the built-in technique.
 	///

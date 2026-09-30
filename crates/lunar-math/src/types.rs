@@ -9,7 +9,7 @@ use bevy_ecs::prelude::Component;
 ///
 /// this is the primary way to represent an entity's placement in the world.
 /// it supports translation (x, y), rotation (radians), and scale (x, y).
-/// for depth sorting, assign a layer via `lunar::layers` constants on your [`Sprite`].
+/// for depth sorting, assign a layer via `lunar::layers` constants on your `Sprite`.
 ///
 /// # builder pattern
 ///

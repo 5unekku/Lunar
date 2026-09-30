@@ -5,7 +5,8 @@
 //! and written to docs/bench/.
 //!
 //! usage:
-//!   cargo run --release -p render-bench -- [flags]
+//! ```text
+//! cargo run --release -p render-bench -- [flags]
 //!
 //! flags:
 //!   --scene <name>       run only one scene (static-city|dynamic-swarm|feature-reel|sprite-storm)
@@ -14,6 +15,7 @@
 //!   --golden <mode>      off | capture | check   (default check)
 //!   --cache-probe        additionally measure pipeline-cache cold vs warm boot
 //!   --out <dir>          output directory (default docs/bench)
+//! ```
 
 // wgpu's handle types nest deeply enough (TextureView -> ... -> wgpu_core registries)
 // that proving `Send`/`Sync` for a struct holding them overflows the default limit of

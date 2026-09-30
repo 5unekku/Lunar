@@ -98,7 +98,7 @@ unsafe impl Sync for LoaderBackend {}
 // ── PluginLoader ──────────────────────────────────────────────────────────────
 
 /// holds the active plugin backend. stored as an ECS [`Resource`] when hot
-/// reload is enabled so [`dispatch_ffi_update_hot`] can reload between frames.
+/// reload is enabled so `dispatch_ffi_update_hot` can reload between frames.
 #[derive(Resource, Default)]
 pub struct PluginLoader {
     backend: LoaderBackend,
@@ -285,7 +285,7 @@ impl CsPlugin {
     ///
     /// - NativeAOT build: `path` is the `.so` / `.dll` / `.dylib`
     /// - CoreCLR build: `path` is the managed `.dll`; the host bootstrapper
-    ///   (`LunarHost.dll`) must be in the same directory or set via [`CsPlugin::with_host_dll`]
+    ///   (`LunarHost.dll`) must be in the same directory or set via `CsPlugin::with_host_dll`
     pub fn new(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         #[cfg(feature = "coreclr")]

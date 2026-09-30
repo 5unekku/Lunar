@@ -1782,7 +1782,7 @@ pub enum TextureCompression {
 /// loaded texture asset.
 ///
 /// game code references textures via [`Handle<Texture>`] and passes handles to
-/// [`Sprite`], [`UiImage`], and similar components. direct access to pixel data
+/// `Sprite`, `UiImage`, and similar components. direct access to pixel data
 /// is available for procedural generation or custom read-back.
 pub struct Texture {
 	pub width: u32,
@@ -1973,7 +1973,7 @@ impl Asset for Sound {}
 /// loaded font asset.
 ///
 /// game code references fonts via [`Handle<Font>`] and passes handles to
-/// [`Text`] components or UI widgets for rendering.
+/// `Text` components or UI widgets for rendering.
 pub struct Font {
 	pub data: Vec<u8>,
 }

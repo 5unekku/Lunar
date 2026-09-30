@@ -1252,7 +1252,7 @@ impl RenderEngine {
 	///
 	/// blocks until the gpu copy completes — tooling and tests only, never a
 	/// per-frame path. returns `None` for an unknown target id or a failed map.
-	/// the 3d counterpart is [`read_headless_rgba`] on `RenderEngine3d`; this one
+	/// the 3d counterpart is `read_headless_rgba` on `RenderEngine3d`; this one
 	/// normalizes to rgba regardless of the underlying target format.
 	#[cfg(not(target_arch = "wasm32"))]
 	pub fn read_target_rgba(&self, id: RenderTargetId) -> Option<(Vec<u8>, u32, u32)> {

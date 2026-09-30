@@ -31,7 +31,7 @@ pub enum CullMode {
 /// surface material data.
 ///
 /// defines how a mesh surface responds to light, color, roughness, metallic,
-/// normal map, and optional lightmap. pass to [`MeshRegistry::add_material`] to
+/// normal map, and optional lightmap. pass to [`MeshRegistry::add_material`](crate::MeshRegistry::add_material) to
 /// get a handle you can assign to a [`Material3d`] component.
 ///
 /// # normal maps
