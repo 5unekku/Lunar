@@ -71,8 +71,8 @@ struct HzbParams {
 fn cs_cull_hzb(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
     if i >= hzb_params.entity_count { return; }
-    // skip already-culled entities (frustum culled)
-    if hzb_flags[i] == 0u { return; }
+    // only entities seeded 1 (inside the frustum) are tested; 2 = outside, untested
+    if hzb_flags[i] != 1u { return; }
 
     let center = hzb_aabbs[i].center;
     let he     = hzb_aabbs[i].half_extent;

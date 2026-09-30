@@ -4112,6 +4112,7 @@ impl RenderEngine3d {
 			hzb_cull_params_buf: None,
 			hzb_staging_pending: false,
 			hzb_pending_entity_count: 0,
+			hzb_dispatch_entities: Vec::new(),
 			hzb_seed_scratch: Vec::new(),
 			hzb_view_proj: Mat4::IDENTITY,
 			hzb_built: false,

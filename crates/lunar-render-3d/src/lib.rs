@@ -2074,6 +2074,9 @@ pub struct RenderEngine3d {
 	// 1-frame pipeline state for hzb occlusion readback
 	hzb_staging_pending: bool,
 	hzb_pending_entity_count: usize,
+	/// entity for each index of the in-flight hzb dispatch (the readback arrives
+	/// next frame, when CullSoa may have changed)
+	hzb_dispatch_entities: Vec<Entity>,
 	// u32 widening of frustum_flags_scratch, uploaded to seed hzb_occ_buf
 	hzb_seed_scratch: Vec<u32>,
 	// view_proj the current HZB depth was drawn with: the occlusion test must
@@ -2325,6 +2328,29 @@ mod visual_style_tests {
 		assert_eq!(profile.style.vertex_snap, 240.0);
 		assert!(profile.style.affine_textures);
 		assert!(!profile.style.is_neutral());
+	}
+}
+
+#[cfg(test)]
+mod hzb_apply_tests {
+	use super::*;
+
+	/// the occlusion readback is one frame old. seeding it from the frustum result
+	/// made an entity that was off-screen then (flag 0, never tested) read as
+	/// occluded now, hiding everything that had just come into view for a frame; and
+	/// results were matched to this frame's entity list by index, so any add/remove
+	/// shifted them onto the wrong entities.
+	#[test]
+	fn only_tested_and_occluded_entities_are_removed() {
+		let mut world = World::new();
+		let [a, b, c, d] = [(); 4].map(|_| world.spawn_empty().id());
+		let mut visible: HashSet<Entity> = [a, b, c, d].into_iter().collect();
+		// dispatched last frame for [a, b, c]: a occluded, b visible, c off-screen then
+		RenderEngine3d::apply_hzb_occlusion(&mut visible, &[a, b, c], &[0, 1, 2]);
+		assert!(!visible.contains(&a), "tested and occluded");
+		assert!(visible.contains(&b));
+		assert!(visible.contains(&c), "untested last frame: not occluded");
+		assert!(visible.contains(&d), "not in last frame's dispatch at all");
 	}
 }
 

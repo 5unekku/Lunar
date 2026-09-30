@@ -21,6 +21,21 @@ impl RenderEngine3d {
 	/// applies the previous frame's HZB occlusion result (1-frame pipelined,
 	/// tested against the view_proj snapshot the HZB was built with) and
 	/// dispatches this frame's occlusion compute. populates `self.frustum_visible`.
+	/// apply last frame's hzb readback: `flags[i]` is for `dispatched[i]`, and only
+	/// 0 (tested and occluded) removes an entity. 2 (outside the frustum then, never
+	/// tested) and 1 (visible) keep it.
+	pub(crate) fn apply_hzb_occlusion(
+		visible: &mut HashSet<Entity>,
+		dispatched: &[Entity],
+		flags: &[u32],
+	) {
+		for (&entity, &flag) in dispatched.iter().zip(flags) {
+			if flag == 0 {
+				visible.remove(&entity);
+			}
+		}
+	}
+
 	pub(crate) fn cull_entities(&mut self, world: &mut World) {
 		// ── frustum cull: CPU SIMD sweep, every tier ─────────────────────
 		// always this-frame correct. the old high-tier path gated visibility on
@@ -136,12 +151,11 @@ impl RenderEngine3d {
 							let slice = occ_staging.slice(0..(prev * 4) as u64);
 							let data = slice.get_mapped_range();
 							let flags = mapped_u32s(&data);
-							let soa = world.resource::<CullSoa>();
-							for (i, &entity) in soa.entities.iter().take(prev).enumerate() {
-								if i < flags.len() && flags[i] == 0 {
-									self.frustum_visible.remove(&entity);
-								}
-							}
+							Self::apply_hzb_occlusion(
+								&mut self.frustum_visible,
+								&self.hzb_dispatch_entities[..prev.min(self.hzb_dispatch_entities.len())],
+								&flags,
+							);
 						}
 						occ_staging.unmap();
 					}
@@ -169,10 +183,17 @@ impl RenderEngine3d {
 				params_data[18] = f32::from_bits(self.hzb_mip_count);
 				params_data[19] = f32::from_bits(entity_count as u32);
 
-				// seed occlusion flags from this frame's fresh CPU frustum result
+				// seed: 1 = in the frustum, test it; 2 = outside, don't test. only a tested
+				// entity the shader clears to 0 counts as occluded when read back next
+				// frame (seeding 0 for outside made anything entering the view vanish)
 				self.hzb_seed_scratch.clear();
-				self.hzb_seed_scratch
-					.extend(self.frustum_flags_scratch.iter().map(|&flag| flag as u32));
+				self.hzb_seed_scratch.extend(
+					self.frustum_flags_scratch.iter().map(|&flag| if flag != 0 { 1u32 } else { 2 }),
+				);
+				// the readback lands next frame: remember which entity each index was
+				self.hzb_dispatch_entities.clear();
+				self.hzb_dispatch_entities
+					.extend_from_slice(&world.resource::<CullSoa>().entities[..entity_count]);
 				self.queue.write_buffer(
 					self.hzb_occ_buf.as_ref().unwrap(),
 					0,
