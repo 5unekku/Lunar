@@ -5,9 +5,11 @@
 //! the graph builds a dependency DAG and returns passes in topological order,
 //! so all writes happen before the reads that depend on them.
 //!
-//! this replaces the hardcoded sequential pass order in `render_frame`:
-//! instead of a fixed list, passes register themselves and the graph resolves
-//! the correct execution order automatically from resource dependencies.
+//! status: the engine does not execute passes through this graph yet. the real
+//! pass order is still hardcoded in `render_frame`; the engine builds a graph
+//! describing it only to trace the resolved order in debug builds. it is the
+//! intended target for the per-feature renderer split (arch-02), and usable by
+//! games that want dependency-ordered passes of their own.
 //!
 //! # usage
 //!

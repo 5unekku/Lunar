@@ -1664,7 +1664,8 @@ impl RenderEngine3d {
 		}
 
 		// ── render graph pass ordering (debug diagnostic only) ────────────
-		// log the topological pass order so the DAG is visibly driving intent.
+		// log the graph's topological order. the graph does not drive execution (the
+		// order below is hardcoded); this only shows what it resolves to.
 		// compile-time gated: in release this whole block, including the sorted_pass_ids
 		// copy, is gone, instead of allocating a Vec every frame that nothing then reads.
 		#[cfg(debug_assertions)]

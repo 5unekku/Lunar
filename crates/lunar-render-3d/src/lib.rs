@@ -2031,8 +2031,8 @@ pub struct RenderEngine3d {
 	surface_evict_scratch: Vec<u32>, // surface texture ids to evict cpu data for
 	surface_params_staging: Vec<u8>, // strided stage params, uploaded in one write_buffer
 
-	// render graph DAG: built once at init, drives pass execution order in render_frame.
-	// models pass dependencies via declared texture reads/writes and topological sort.
+	// render graph DAG built once at init. descriptive only: render_frame hardcodes the
+	// pass order and uses this just for a debug trace (see render_graph.rs).
 	render_graph: render_graph::RenderGraph,
 
 	// GPU-driven indirect rendering (High tier, MULTI_DRAW_INDIRECT + INDIRECT_FIRST_INSTANCE).
