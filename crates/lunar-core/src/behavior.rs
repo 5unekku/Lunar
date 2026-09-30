@@ -284,12 +284,12 @@ use bevy_ecs::prelude::{Commands, Entity as EntityParam, Query, Res};
 pub fn instantiate_pending_behaviors(
 	mut commands: Commands,
 	registry: Option<Res<BehaviorRegistry>>,
-	pending: Query<(EntityParam, &PendingBehaviors)>,
+	mut pending: Query<(EntityParam, &PendingBehaviors, Option<&mut Behaviors>)>,
 ) {
 	let Some(registry) = registry else {
 		return;
 	};
-	for (entity, pending) in pending.iter() {
+	for (entity, pending, existing) in &mut pending {
 		let mut behaviors = Behaviors::default();
 		for reference in &pending.0 {
 			match registry.create(&reference.id) {
@@ -308,10 +308,22 @@ pub fn instantiate_pending_behaviors(
 				}
 			}
 		}
-		commands
-			.entity(entity)
-			.insert(behaviors)
-			.remove::<PendingBehaviors>();
+		// append to behaviors already attached: replacing the component dropped
+		// them without on_destroy
+		match existing {
+			Some(mut existing) => {
+				for attached in behaviors.take_items() {
+					existing.push(attached);
+				}
+				commands.entity(entity).remove::<PendingBehaviors>();
+			}
+			None => {
+				commands
+					.entity(entity)
+					.insert(behaviors)
+					.remove::<PendingBehaviors>();
+			}
+		}
 	}
 }
 
@@ -439,7 +451,9 @@ impl GamePlugin for BehaviorPlugin {
 		"BehaviorPlugin"
 	}
 	fn build(&mut self, app: &mut App) {
-		app.insert_resource(BehaviorRegistry::default());
+		// keep a registry a plugin built earlier already filled (the C# host
+		// registers its behaviors in its own build)
+		app.world_mut().init_resource::<BehaviorRegistry>();
 		// instantiate pending refs on startup and early each update
 		app.add_startup_system(instantiate_pending_behaviors);
 		// exclusive dispatch systems, one per dispatched stage. the ordering edge
@@ -721,6 +735,49 @@ mod tests {
 		let restored = world.entity(entity).get::<Behaviors>().unwrap();
 		assert_eq!(restored.items().len(), 1);
 		assert_eq!(DROPS.load(Ordering::SeqCst), 1);
+	}
+
+	/// BehaviorPlugin inserted a fresh registry, wiping behaviors a plugin built
+	/// earlier (the C# host) had already registered.
+	#[test]
+	fn plugin_keeps_an_existing_registry() {
+		use crate::app::App;
+		let mut app = App::new();
+		let mut registry = BehaviorRegistry::default();
+		registry.register("Counter", || Box::new(Counter { ticks: 0 }));
+		app.insert_resource(registry);
+		app.add_plugin(BehaviorPlugin);
+		app.tick(1.0 / 60.0);
+		assert!(app.world_mut().resource::<BehaviorRegistry>().create("Counter").is_some());
+	}
+
+	/// instantiating pending refs replaced the entity's Behaviors, dropping any
+	/// already attached (without on_destroy).
+	#[test]
+	fn pending_behaviors_append_to_existing() {
+		use crate::app::App;
+		let mut app = App::new();
+		app.insert_resource(TickLog::default());
+		app.add_plugin(BehaviorPlugin);
+		app.tick(1.0 / 60.0);
+		app.world_mut()
+			.resource_mut::<BehaviorRegistry>()
+			.register("Counter", || Box::new(Counter { ticks: 0 }));
+		let mut existing = Behaviors::default();
+		existing.push(AttachedBehavior {
+			id: "Counter".into(),
+			behavior: Box::new(Counter { ticks: 0 }),
+			started: false,
+		});
+		let entity = app
+			.world_mut()
+			.spawn((
+				existing,
+				PendingBehaviors(vec![BehaviorRefData { id: "Counter".into(), fields: Vec::new() }]),
+			))
+			.id();
+		app.tick(1.0 / 60.0);
+		assert_eq!(app.world_mut().entity(entity).get::<Behaviors>().unwrap().len(), 2);
 	}
 
 	/// corr-34: a behavior instantiated from PendingBehaviors must run on_update in
