@@ -69,6 +69,8 @@ findings from the fix loop are rev-13..rev-17.
 | rev-38 | web keys: a release could resolve to a different KeyCode than its press (layout-dependent `key`), leaving keys held; keys released while unfocused never released | fixed `0811cc3` |
 | rev-39 | hzb: last frame's off-screen entities read back as occluded, so anything entering the view vanished for a frame; readback matched to entities by index into the next frame's list | fixed (seed 2 = untested; readback applied to the dispatched entities) |
 | rev-40 | render-bench 2d goldens had red/blue swapped (the bench swapped already-rgba 2d readback) | fixed (both engines' readbacks return rgba) |
+| rev-41 | per-tick `mouse_delta` read by per-frame (Render-stage) systems repeated on frames without a tick: mouse-look over-rotated ~2.4x at 144 hz | fixed (`frame_mouse_delta` / `frame_mouse_scroll`, demo + docs) |
+| rev-42 | web audio: a missing optional sidecar threw a js exception through wasm and aborted startup | fixed (init reports failure; game runs silent) |
 | rev-25 | ci build-wasm used the dev profile, which pins cranelift (no wasm32 backend) | fixed `7261cce` (llvm override, as build-cross does) |
 
 ### 2026-07 audit findings fixed on this branch
