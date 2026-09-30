@@ -61,6 +61,10 @@ findings from the fix loop are rev-13..rev-17.
 | rev-30 | 2d glyph atlas: once full, every glyph that didn't fit was cached as "no glyph" forever, so new characters/sizes never rendered again | fixed `01bdc63` (flush between frames) |
 | rev-31 | 3d lightmap atlas: a lightmap with no atlas slot sampled the whole atlas as its lighting | fixed `1ea12a4` |
 | rev-32 | shadow casters outside the camera frustum cast nothing, for cascades as well as point lights: every shadow list is built from the camera-visible `draw_scratch`, so a building behind the camera never shadows the view and shadows pop as the camera turns (rev-20's "off-screen casters" is one case of this) | open (L: shadow-only instances need their own slot range after the surface slots, threaded through the static bundle, gpu-driven and hzb paths) |
+| rev-33 | every StaticMesh was drawn twice: the static RenderBundle drew it, then the opaque pass (per-batch and gpu multi-draw) drew it again | fixed `81d3062` (bundle removed; goldens unchanged; static-city 359 -> 286 ms/frame) |
+| rev-34 | point-shadow recording stopped at the first non-casting light while slot assignment skipped it, leaving later casters' slots empty | fixed `423e083` |
+| rev-35 | lightmap uvs keyed on `has_indirect` instead of the draw path taken: atlas sub-rects leaked onto per-entity lightmaps, and (after rev-31) atlas-less lightmaps vanished on the per-batch path | fixed `d2bfb9a` |
+| rev-36 | a frame whose own text overflows the glyph atlas flushed and re-uploaded it every frame (rev-30 follow-up) | fixed `0524b22` (120-frame backoff) |
 | rev-25 | ci build-wasm used the dev profile, which pins cranelift (no wasm32 backend) | fixed `7261cce` (llvm override, as build-cross does) |
 
 ### 2026-07 audit findings fixed on this branch
