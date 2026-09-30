@@ -60,6 +60,7 @@ findings from the fix loop are rev-13..rev-17.
 | rev-29 | the wasm cross-compile test (`tests/cross_compile.rs`) failed on the native-only render-bench | fixed `987466b` |
 | rev-30 | 2d glyph atlas: once full, every glyph that didn't fit was cached as "no glyph" forever, so new characters/sizes never rendered again | fixed `01bdc63` (flush between frames) |
 | rev-31 | 3d lightmap atlas: a lightmap with no atlas slot sampled the whole atlas as its lighting | fixed `1ea12a4` |
+| rev-32 | shadow casters outside the camera frustum cast nothing, for cascades as well as point lights: every shadow list is built from the camera-visible `draw_scratch`, so a building behind the camera never shadows the view and shadows pop as the camera turns (rev-20's "off-screen casters" is one case of this) | open (L: shadow-only instances need their own slot range after the surface slots, threaded through the static bundle, gpu-driven and hzb paths) |
 | rev-25 | ci build-wasm used the dev profile, which pins cranelift (no wasm32 backend) | fixed `7261cce` (llvm override, as build-cross does) |
 
 ### 2026-07 audit findings fixed on this branch
