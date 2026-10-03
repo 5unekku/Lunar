@@ -123,11 +123,12 @@ architecture:
 | arch-01 | a ShadowProvider hook no longer drops the z-prepass (opaque geometry vanished on mid/high with any hook) | headless test with a no-op hook |
 | arch-05 | avx2 cull kernel moved to `lunar_math::simd_cull`; lunar-3d builds with cranelift in dev | lunar-3d incremental test build 1.24 -> 1.02 s |
 | arch-08 | render_graph docs no longer claim it drives pass order | doc only; kept as the arch-02 target |
+| arch-03 | facade `2d` feature gates lunar-render and the 2D bootstrap/prelude | `cargo check` clean for none/2d/3d/full feature sets, workspace clippy clean |
 | arch-12 | wgpu `spirv` feature native-only | naga gone from the wasm32 dependency graph |
 
 arch-02/07/09 (L), arch-04/06/10/13 (M) and arch-11 (rename, churn) are open.
-arch-03 (make the facade's `2d` feature gate lunar-render) is ready to do but is a
-breaking change for 3d-only users of 2D types, so it waits on sign-off.
+arch-03 (the facade's `2d` feature now gates lunar-render, `bootstrap`, `lunar_app!` and the 2D prelude
+re-exports) is done as a deliberate breaking change; 3d-only users no longer compile the 2D renderer.
 
 other fixes this round: rev-24 above; wasm32 `clippy -D warnings` is now clean
 for the engine crates (it never was; ci only builds wasm); unused deps removed

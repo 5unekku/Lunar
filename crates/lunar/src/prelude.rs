@@ -92,6 +92,7 @@ pub use bevy_ecs::bundle::Bundle;
 // lunar-render types
 pub use lunar_gamedata::{DataRecord, DataTable, DataValue, GameData};
 
+#[cfg(feature = "2d")]
 pub use lunar_render::{
 	Camera, CameraFollow2d, ColorTint, PostEffect, PostProcessStack, RenderConfig, RenderEngine,
 	RenderInfo, RenderQueue, RenderTargetId, RenderTargetStore, ScreenFlash, ScreenShake, Sprite,

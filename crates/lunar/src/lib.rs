@@ -91,6 +91,7 @@ pub use lunar_bsp;
 pub use lunar_core;
 pub use lunar_input;
 pub use lunar_math;
+#[cfg(feature = "2d")]
 pub use lunar_render;
 #[cfg(feature = "3d")]
 pub use lunar_render_3d;
@@ -100,15 +101,15 @@ pub use prelude::*;
 
 // private module names use a `_impl` suffix to avoid rustdoc collision with the
 // same-named public functions they export.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "2d"))]
 #[path = "bootstrap.rs"]
 mod bootstrap_impl;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "2d"))]
 pub use bootstrap_impl::bootstrap;
 
 // `lunar_app!` lives here; it expands to a native `main` that calls `bootstrap`.
 // `#[macro_export]` hoists the macro to the crate root once the module compiles.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "2d"))]
 mod app_macro;
 
 // shared per-frame window reconciliation, reusable by custom native loops.
@@ -123,10 +124,10 @@ mod bootstrap_3d_impl;
 #[cfg(all(not(target_arch = "wasm32"), feature = "3d"))]
 pub use bootstrap_3d_impl::bootstrap_3d;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "2d"))]
 #[path = "bootstrap_wasm.rs"]
 mod bootstrap_wasm_impl;
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "2d"))]
 pub use bootstrap_wasm_impl::bootstrap_wasm;
 
 #[cfg(all(target_arch = "wasm32", feature = "3d"))]
@@ -142,6 +143,7 @@ pub use lunar_input::{ActionMap, InputBinding, InputState, KeyCode, MouseButton}
 pub use lunar_math::{
 	Color, Mat2, Mat3, Mat4, Quat, Rect, ScreenRect, Transform, Vec2, Vec3, Vec4,
 };
+#[cfg(feature = "2d")]
 pub use lunar_render::{
 	Camera, RenderConfig, RenderEngine, RenderInfo, RenderQueue, Sprite, Text, layers,
 };

@@ -12,7 +12,7 @@ keywords.workspace = true
 [features]
 # select rendering dimensions. enable any combination, or neither for headless/text games.
 default = ["2d"]
-2d = ["dep:lunar-2d"]
+2d = ["dep:lunar-2d", "dep:lunar-render"]
 3d = ["dep:lunar-3d", "dep:lunar-render-3d", "dep:lunar-bsp", "dep:lunar-lightmap"]
 audio = ["dep:lunar-audio"]
 
@@ -31,7 +31,7 @@ lunar-3d = { path = "../lunar-3d", version = "1.0.0", optional = true }
 lunar-render-3d = { path = "../lunar-render-3d", version = "1.0.0", optional = true }
 lunar-bsp      = { path = "../lunar-bsp", version = "1.0.0", optional = true }
 lunar-lightmap = { path = "../lunar-lightmap", version = "1.0.0", optional = true }
-lunar-render = { path = "../lunar-render", version = "1.0.0" }
+lunar-render = { path = "../lunar-render", version = "1.0.0", optional = true }
 lunar-input = { path = "../lunar-input", version = "1.0.0" }
 lunar-assets = { path = "../lunar-assets", version = "1.0.0" }
 lunar-gamedata = { path = "../lunar-gamedata", version = "1.0.0" }

@@ -142,3 +142,26 @@ impl WindowHost {
 		}
 	}
 }
+
+/// wgpu instance with engine-tuned flags.
+///
+/// release builds on non-windows targets drop `VALIDATION_INDIRECT_CALL`: it
+/// reroutes every `draw_indirect` through a validation compute pass and adds
+/// bind groups to every INDIRECT-usage buffer, but the engine's indirect
+/// commands come from its own gpu-cull shaders, never from untrusted data.
+/// dx12 (windows) keeps it; wgpu relies on that pass for correct
+/// `instance_index` / `vertex_index` builtins in indirect draws there.
+/// `WGPU_VALIDATION_INDIRECT_CALL=1` still re-enables it for debugging.
+#[cfg(any(feature = "2d", feature = "3d"))]
+pub(crate) fn engine_wgpu_instance() -> wgpu::Instance {
+	#[allow(unused_mut)] // mutated only in non-windows release builds
+	let mut flags = wgpu::InstanceFlags::default();
+	#[cfg(all(not(debug_assertions), not(target_os = "windows")))]
+	{
+		flags -= wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL;
+	}
+	wgpu::Instance::new(wgpu::InstanceDescriptor {
+		flags: flags.with_env(),
+		..wgpu::InstanceDescriptor::new_without_display_handle()
+	})
+}
