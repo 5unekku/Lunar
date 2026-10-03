@@ -9,13 +9,16 @@ pub use lunar_math::simd_cull::cull_aabbs_soa;
 mod tests {
 	use super::cull_aabbs_soa;
 	use crate::visibility::Frustum;
-	use lunar_math::{glam::camera::rh, Vec3A};
+	use lunar_math::{Vec3A, glam::camera::rh};
 
 	/// tiny deterministic LCG so tests don't pull a rng dependency.
 	struct Lcg(u64);
 	impl Lcg {
 		fn next_f32(&mut self, lo: f32, hi: f32) -> f32 {
-			self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+			self.0 = self
+				.0
+				.wrapping_mul(6364136223846793005)
+				.wrapping_add(1442695040888963407);
 			let unit = ((self.0 >> 40) as f32) / ((1u64 << 24) as f32);
 			lo + unit * (hi - lo)
 		}
@@ -60,7 +63,10 @@ mod tests {
 				Vec3A::new(hx[i], hy[i], hz[i]),
 			);
 			if truth {
-				assert_eq!(flags[i], 1, "box {i} kept by intersects_aabb but culled by SIMD");
+				assert_eq!(
+					flags[i], 1,
+					"box {i} kept by intersects_aabb but culled by SIMD"
+				);
 			}
 		}
 

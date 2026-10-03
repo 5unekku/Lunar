@@ -34,13 +34,13 @@
 
 pub mod animation;
 pub mod bundles;
-pub mod scene_format_3d;
 pub mod collision;
 pub mod decals;
 pub mod fog;
 pub mod mesh_registry;
 pub mod particles;
 pub mod primitives;
+pub mod scene_format_3d;
 pub mod simd;
 pub mod surface_shader;
 pub mod terrain;
@@ -81,13 +81,13 @@ pub use mesh::{
 pub use mesh_registry::MeshRegistry;
 pub use particles::ParticleEmitter;
 pub use plugin::Plugin3d;
+pub use simd::cull_aabbs_soa;
 pub use surface_shader::{
 	AlphaGen, BlendMode, Overlay, SkySurface, SurfaceShader, SurfaceStage, TcGen, UvTransform,
 };
 pub use systems::{TransformScratch3d, copy_prev_transforms, propagate_transforms_3d};
 pub use terrain::Terrain;
 pub use transform::{LocalTransform3d, WorldTransform3d};
-pub use simd::cull_aabbs_soa;
 pub use visibility::{
 	Aabb3d, ComputedVisibility, CullSoa, Frustum, RenderLayers, ShadowCaster, ShadowReceiver,
 	ViewportAspect, Visibility, VisibilityScratch, build_cull_soa, propagate_visibility,

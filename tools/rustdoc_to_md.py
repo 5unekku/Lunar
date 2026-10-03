@@ -121,8 +121,8 @@ KIND_TITLES = {
 	"macro": "Macros",
 }
 
-FACADE_PACKAGE = "lunar-lib"
-SURFACE_PACKAGES = frozenset({"lunar-lib", "lunar-pathfinding-rt"})
+FACADE_PACKAGE = "lunar-engine"
+SURFACE_PACKAGES = frozenset({"lunar-engine", "lunar-pathfinding-rt"})
 SURFACE_PREFIXES = ("lunar-plugin-",)
 
 # core dep crates that feed the "## core api" section, in output order.
@@ -494,8 +494,8 @@ def generate_rustdoc_json(project_root: Path, metadata: dict, target_dir: Path, 
 			target_name = pkg["name"] if target_args[0] != "--bin" else target_args[1]
 			if not should_generate_json(pkg, target_dir, target_name, force):
 				continue
-			# only lunar-lib gates 2d/3d via cargo features
-			extra = ["--features", "2d,3d"] if pkg["name"] == "lunar-lib" else []
+			# only lunar-engine gates 2d/3d via cargo features
+			extra = ["--features", "2d,3d"] if pkg["name"] == "lunar-engine" else []
 			subprocess.run(
 				[
 					"cargo", "+nightly", "rustdoc",

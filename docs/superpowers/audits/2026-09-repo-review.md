@@ -81,6 +81,9 @@ findings from the fix loop are rev-13..rev-17.
 | rev-50 | ffi systems ran in hash-map order, not registration order | fixed (BTreeMap) |
 | rev-51 | C# FixedUpdate / Shutdown systems were accepted but never run; the engine had no shutdown stage | fixed (`App::add_shutdown_system`; FixedUpdate in the physics stage) |
 | rev-52 | coreclr hot reload: the old plugin's system GCHandles pinned its load context, leaking a copy per reload | fixed (host releases them before unload; not compiled here, no dotnet sdk) |
+| rev-53 | rustdoc_to_md.py still targeted the renamed `lunar-lib` facade | fixed (`lunar-engine`) |
+| rev-54 | transform propagation early-out missed `LocalTransform3d` removal when `Visibility` stayed | fixed (transform-count probe + test) |
+| rev-55 | joint-track cache keyed by raw clip address could alias a freed-and-reallocated clip | fixed (`Weak` handle pins the allocation) |
 | rev-25 | ci build-wasm used the dev profile, which pins cranelift (no wasm32 backend) | fixed `7261cce` (llvm override, as build-cross does) |
 
 ### 2026-07 audit findings fixed on this branch

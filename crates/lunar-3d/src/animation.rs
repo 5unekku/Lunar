@@ -1,5 +1,5 @@
 use rustc_hash::FxHashMap as HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use bevy_ecs::prelude::*;
 use lunar_core::Time;
@@ -165,10 +165,10 @@ pub struct AnimationTarget {
 	pub player: Entity,
 	/// matched against a joint name in the clip; resolved to a track index once and cached.
 	pub joint_name: String,
-	/// cached `(clip pointer, resolved track index)`. `usize::MAX` index = no matching track.
+	/// cached `(weak clip handle, resolved track index)`; the weak ref pins the allocation so a freed clip's address can't be reused and alias a stale entry. `usize::MAX` index = no matching track.
 	/// re-resolved only when the player swaps to a different clip. interior to the type so the
 	/// per-frame sampler skips the name hash. construct via [`Self::new`].
-	cache: Option<(usize, usize)>,
+	cache: Option<(Weak<AnimationClip>, usize)>,
 }
 
 impl AnimationTarget {
@@ -287,12 +287,13 @@ pub fn advance_animations(
 
 		// resolve joint_name → track index once per (target, clip); the hashed name lookup
 		// only fires the first time a target is sampled, or when the player swaps clips.
-		let clip_ptr = Arc::as_ptr(clip) as usize;
-		let track_index = match target.cache {
-			Some((cached_ptr, track_index)) if cached_ptr == clip_ptr => track_index,
+		let track_index = match &target.cache {
+			Some((cached, track_index)) if std::ptr::eq(cached.as_ptr(), Arc::as_ptr(clip)) => {
+				*track_index
+			}
 			_ => {
 				let resolved = clip.track_index(&target.joint_name).unwrap_or(usize::MAX);
-				target.cache = Some((clip_ptr, resolved));
+				target.cache = Some((Arc::downgrade(clip), resolved));
 				resolved
 			}
 		};

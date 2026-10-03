@@ -102,7 +102,11 @@ impl Default for MaterialData {
 impl MaterialData {
 	/// flat-color material with the given shading model. all other fields default.
 	pub fn color(base_color: Color, shading: ShadingModel) -> Self {
-		Self { base_color, shading, ..Self::default() }
+		Self {
+			base_color,
+			shading,
+			..Self::default()
+		}
 	}
 }
 

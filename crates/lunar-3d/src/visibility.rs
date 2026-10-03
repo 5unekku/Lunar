@@ -599,7 +599,10 @@ mod tests {
 		world.insert_resource(CullSoa::default());
 		for i in 0..n {
 			world.spawn((
-				Aabb3d { center: Vec3A::ZERO, half_extents: Vec3A::splat(0.5) },
+				Aabb3d {
+					center: Vec3A::ZERO,
+					half_extents: Vec3A::splat(0.5),
+				},
 				WorldTransform3d {
 					translation: Vec3::new(i as f32, 0.0, 0.0),
 					..WorldTransform3d::new()

@@ -896,7 +896,10 @@ mod tests {
 			);
 			assert_eq!(fast, brute, "query_sphere() differs at {centre:?}");
 		}
-		let mut fast: Vec<_> = cw.all_overlaps().map(|(a, b)| (a.min(b), a.max(b))).collect();
+		let mut fast: Vec<_> = cw
+			.all_overlaps()
+			.map(|(a, b)| (a.min(b), a.max(b)))
+			.collect();
 		fast.sort();
 		let mut brute = Vec::new();
 		for (i, a) in cw.entries.iter().enumerate() {
@@ -936,18 +939,30 @@ mod tests {
 		let b = spawn_aabb(&mut world, Vec3::new(10.0, 0.0, 0.0), Vec3::splat(2.0));
 		let c = spawn_aabb(&mut world, Vec3::new(-10.0, 0.0, 0.0), Vec3::splat(2.0));
 		let _ = system.run((), &mut world);
-		assert_eq!(world.resource::<CollisionWorld3d>().overlapping(a).count(), 0);
+		assert_eq!(
+			world.resource::<CollisionWorld3d>().overlapping(a).count(),
+			0
+		);
 		// quiet tick
 		let _ = system.run((), &mut world);
 		assert_eq!(world.resource::<CollisionWorld3d>().entries.len(), 3);
 
 		world.get_mut::<WorldTransform3d>(b).unwrap().translation = Vec3::new(1.0, 0.0, 0.0);
 		let _ = system.run((), &mut world);
-		assert_eq!(world.resource::<CollisionWorld3d>().overlapping(a).collect::<Vec<_>>(), [b]);
+		assert_eq!(
+			world
+				.resource::<CollisionWorld3d>()
+				.overlapping(a)
+				.collect::<Vec<_>>(),
+			[b]
+		);
 
 		world.despawn(b);
 		let _ = system.run((), &mut world);
-		assert_eq!(world.resource::<CollisionWorld3d>().overlapping(a).count(), 0);
+		assert_eq!(
+			world.resource::<CollisionWorld3d>().overlapping(a).count(),
+			0
+		);
 
 		world.entity_mut(c).remove::<Collider3d>();
 		let _ = system.run((), &mut world);
@@ -986,7 +1001,9 @@ mod tests {
 			let _ = system.run((), &mut world);
 		}
 		let build = start.elapsed().as_secs_f64() * 1000.0 / 5.0;
-		println!("5000 colliders: overlapping() for all {per_pass:.2} ms, rebuild {build:.3} ms ({hits} hits)");
+		println!(
+			"5000 colliders: overlapping() for all {per_pass:.2} ms, rebuild {build:.3} ms ({hits} hits)"
+		);
 	}
 
 	#[test]

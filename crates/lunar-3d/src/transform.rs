@@ -157,7 +157,10 @@ mod tests {
 			offset_of!(LocalTransform3d, rotation) + size_of::<lunar_math::Quat>()
 		);
 		// alignment matches Quat (16 on SIMD builds, 4 on scalar-math)
-		assert_eq!(align_of::<LocalTransform3d>(), align_of::<lunar_math::Quat>());
+		assert_eq!(
+			align_of::<LocalTransform3d>(),
+			align_of::<lunar_math::Quat>()
+		);
 	}
 
 	#[test]
@@ -173,6 +176,9 @@ mod tests {
 			offset_of!(WorldTransform3d, scale),
 			offset_of!(WorldTransform3d, rotation) + size_of::<lunar_math::Quat>()
 		);
-		assert_eq!(align_of::<WorldTransform3d>(), align_of::<lunar_math::Quat>());
+		assert_eq!(
+			align_of::<WorldTransform3d>(),
+			align_of::<lunar_math::Quat>()
+		);
 	}
 }

@@ -44,6 +44,7 @@ pub struct TransformScratch3d {
 	/// entities with a `Parent` last run: removing a Parent changes neither
 	/// `last_count` nor any `Changed<>` filter, but it does change this
 	last_parent_count: usize,
+	last_transform_count: usize,
 	initialized: bool,
 	/// cached early-out probes. building them with world.query_filtered every frame
 	/// re-matched every archetype and allocated, three times per quiet frame (perf-04)
@@ -51,12 +52,17 @@ pub struct TransformScratch3d {
 }
 
 type RelevantFilter = Or<(With<LocalTransform3d>, With<Visibility>)>;
-type RelevantChanged = Or<(Changed<LocalTransform3d>, Changed<Visibility>, Changed<Parent>)>;
+type RelevantChanged = Or<(
+	Changed<LocalTransform3d>,
+	Changed<Visibility>,
+	Changed<Parent>,
+)>;
 
 struct EarlyOutProbes {
 	relevant: QueryState<(), RelevantFilter>,
 	changed: QueryState<(), RelevantChanged>,
 	parented: QueryState<(), With<Parent>>,
+	transformed: QueryState<(), With<LocalTransform3d>>,
 }
 
 /// propagate [`LocalTransform3d`] and [`Visibility`] through the entity hierarchy in one pass.
@@ -82,14 +88,17 @@ pub fn propagate_transforms_3d(world: &mut World) {
 			relevant: world.query_filtered(),
 			changed: world.query_filtered(),
 			parented: world.query_filtered(),
+			transformed: world.query_filtered(),
 		});
 		// archetype filters only: len() sums archetype sizes instead of walking entities
 		let count = probes.relevant.iter(world).len();
 		let any_changed = probes.changed.iter(world).next().is_some();
 		let parent_count = probes.parented.iter(world).len();
+		let transform_count = probes.transformed.iter(world).len();
 		if scratch.initialized
 			&& count == scratch.last_count
 			&& parent_count == scratch.last_parent_count
+			&& transform_count == scratch.last_transform_count
 			&& !any_changed
 		{
 			world.insert_resource(scratch);
@@ -97,6 +106,7 @@ pub fn propagate_transforms_3d(world: &mut World) {
 		}
 		scratch.last_count = count;
 		scratch.last_parent_count = parent_count;
+		scratch.last_transform_count = transform_count;
 		scratch.initialized = true;
 	}
 
@@ -358,13 +368,23 @@ mod tests {
 		let mut world = World::new();
 		world.init_resource::<TransformScratch3d>();
 		let a = world.spawn(LocalTransform3d::from_xyz(1.0, 0.0, 0.0)).id();
-		let b = world.spawn((LocalTransform3d::from_xyz(2.0, 0.0, 0.0), Parent(a))).id();
+		let b = world
+			.spawn((LocalTransform3d::from_xyz(2.0, 0.0, 0.0), Parent(a)))
+			.id();
 		world.entity_mut(a).insert(Parent(b));
-		let loner = world.spawn((LocalTransform3d::from_xyz(3.0, 0.0, 0.0), Parent(b))).id();
+		let loner = world
+			.spawn((LocalTransform3d::from_xyz(3.0, 0.0, 0.0), Parent(b)))
+			.id();
 		propagate_transforms_3d(&mut world);
 		propagate_transforms_3d(&mut world);
 		for e in [a, b, loner] {
-			assert!(world.get::<WorldTransform3d>(e).unwrap().translation.is_finite());
+			assert!(
+				world
+					.get::<WorldTransform3d>(e)
+					.unwrap()
+					.translation
+					.is_finite()
+			);
 		}
 	}
 
@@ -384,7 +404,11 @@ mod tests {
 		world.entity_mut(child).remove::<Parent>();
 		propagate_transforms_3d(&mut world);
 		let cw = world.get::<WorldTransform3d>(child).unwrap();
-		assert!(close(cw.translation, Vec3::new(1.0, 0.0, 0.0)), "got {:?}", cw.translation);
+		assert!(
+			close(cw.translation, Vec3::new(1.0, 0.0, 0.0)),
+			"got {:?}",
+			cw.translation
+		);
 	}
 
 	// child world transform composes with its parent's.
@@ -510,6 +534,25 @@ mod tests {
 		assert!(close(
 			world.get::<WorldTransform3d>(a).unwrap().translation,
 			Vec3::new(1.0, 0.0, 0.0)
+		));
+	}
+
+	// removing Parent (or LocalTransform3d while Visibility stays) leaves no Changed trace.
+	#[test]
+	fn early_out_reruns_after_parent_removal() {
+		let mut world = World::new();
+		world.init_resource::<TransformScratch3d>();
+		let a = world.spawn(LocalTransform3d::from_xyz(1.0, 0.0, 0.0)).id();
+		let b = world
+			.spawn((LocalTransform3d::from_xyz(2.0, 0.0, 0.0), Parent(a)))
+			.id();
+		propagate_transforms_3d(&mut world);
+		world.clear_trackers();
+		world.entity_mut(b).remove::<Parent>();
+		propagate_transforms_3d(&mut world);
+		assert!(close(
+			world.get::<WorldTransform3d>(b).unwrap().translation,
+			Vec3::new(2.0, 0.0, 0.0)
 		));
 	}
 
