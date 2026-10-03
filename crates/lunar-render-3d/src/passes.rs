@@ -1314,28 +1314,11 @@ impl RenderEngine3d {
 				.map(|d| d.point_light_shadows)
 				.unwrap_or(true);
 
-		// ── collect shadow casters ────────────────────────────────────────
-		// shadow_list: (mesh_id, draw_scratch_index) for all visible shadow casters.
-		// using entity lookup so every caster gets its own correct transform.
-		// sorted by mesh_id so consecutive shadow draws can share VBO/IBO.
-		// reused scratch: visible shadow-caster entity set, then the (mesh_id, draw index) list
-		self.shadow_entities_scratch.clear();
-		{
-			let q = &mut self.queries.as_mut().unwrap().shadow_casters;
-			for (e, vis, _) in q.iter(world) {
-				if vis.0 {
-					self.shadow_entities_scratch.insert(e);
-				}
-			}
-		}
-		self.shadow_list_scratch.clear();
-		for (i, entry) in self.draw_scratch.iter().enumerate() {
-			if self.shadow_entities_scratch.contains(&entry.0) {
-				self.shadow_list_scratch.push((entry.1, i));
-			}
-		}
-		self.shadow_list_scratch
-			.sort_unstable_by_key(|&(mesh_id, _)| mesh_id);
+		// ── shadow casters ────────────────────────────────────────────────
+		// frame.rs gathers every visible ShadowCaster (frustum-independent: a building behind
+		// the camera still shadows the view) into shadow_inst_scratch, packs each one's
+		// transform into its own slot range after the surface slots, and builds
+		// shadow_runs_scratch: (mesh_id, first slot, instance count), one run per mesh.
 
 		// ── point light shadow pass ──────────────────────────────────────
 		// for each light with casts_shadows=true (up to MAX_POINT_SHADOW_LIGHTS),
@@ -1348,10 +1331,10 @@ impl RenderEngine3d {
 			let signature = {
 				use std::hash::{Hash, Hasher};
 				let mut hasher = rustc_hash::FxHasher::default();
-				for draw in &self.draw_scratch {
-					draw.0.to_bits().hash(&mut hasher);
+				for draw in &self.shadow_inst_scratch {
 					draw.1.hash(&mut hasher);
-					for v in draw.6.to_cols_array() {
+					draw.0.hash(&mut hasher);
+					for v in draw.2.to_cols_array() {
 						v.to_bits().hash(&mut hasher);
 					}
 				}
@@ -1433,7 +1416,7 @@ impl RenderEngine3d {
 				let ent_bg = &self.entity_bg;
 				let face_views = &self.point_shadow_face_views;
 				let mesh_gpu = &self.mesh_gpu;
-				let draw_ref = &self.draw_scratch;
+				let runs_ref = &self.shadow_runs_scratch;
 				let cmds: Vec<wgpu::CommandBuffer> = self
 					.point_shadow_layer_scratch
 					.par_iter()
@@ -1467,33 +1450,11 @@ impl RenderEngine3d {
 								&[layer as u32 * UNIFORM_STRIDE as u32],
 							);
 							pt_pass.set_bind_group(1, ent_bg, &[]);
-							let mut last_mesh = u32::MAX;
-							let mut last_gs = 0usize;
-							let sn = draw_ref.len();
-							for si in 0..=sn {
-								let cur_mesh = if si == sn { u32::MAX } else { draw_ref[si].1 };
-								if cur_mesh != last_mesh {
-									if si > last_gs
-										&& let Some(gpu) = mesh_gpu.get(&last_mesh)
-									{
-										let base = (ENTITY_SLOT_START + last_gs) as u32;
-										pt_pass.draw_indexed(
-											0..gpu.index_count,
-											0,
-											base..base + (si - last_gs) as u32,
-										);
-									}
-									if si < sn {
-										if let Some(gpu) = mesh_gpu.get(&cur_mesh) {
-											pt_pass.set_vertex_buffer(0, gpu.pos_buf.slice(..));
-											pt_pass.set_index_buffer(
-												gpu.ibuf.slice(..),
-												gpu.index_fmt,
-											);
-										}
-										last_mesh = cur_mesh;
-										last_gs = si;
-									}
+							for &(mesh_id, first, count) in runs_ref {
+								if let Some(gpu) = mesh_gpu.get(&mesh_id) {
+									pt_pass.set_vertex_buffer(0, gpu.pos_buf.slice(..));
+									pt_pass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+									pt_pass.draw_indexed(0..gpu.index_count, 0, first..first + count);
 								}
 							}
 						}
@@ -1529,34 +1490,11 @@ impl RenderEngine3d {
 					&[layer as u32 * UNIFORM_STRIDE as u32],
 				);
 				pt_pass.set_bind_group(1, &self.entity_bg, &[]);
-				let mut last_mesh = u32::MAX;
-				let mut last_gs = 0usize;
-				let sn = self.draw_scratch.len();
-				for si in 0..=sn {
-					let cur_mesh = if si == sn {
-						u32::MAX
-					} else {
-						self.draw_scratch[si].1
-					};
-					if cur_mesh != last_mesh {
-						if si > last_gs
-							&& let Some(gpu) = self.mesh_gpu.get(&last_mesh)
-						{
-							let base = (ENTITY_SLOT_START + last_gs) as u32;
-							pt_pass.draw_indexed(
-								0..gpu.index_count,
-								0,
-								base..base + (si - last_gs) as u32,
-							);
-						}
-						if si < sn {
-							if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
-								pt_pass.set_vertex_buffer(0, gpu.pos_buf.slice(..));
-								pt_pass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
-							}
-							last_mesh = cur_mesh;
-							last_gs = si;
-						}
+				for &(mesh_id, first, count) in &self.shadow_runs_scratch {
+					if let Some(gpu) = self.mesh_gpu.get(&mesh_id) {
+						pt_pass.set_vertex_buffer(0, gpu.pos_buf.slice(..));
+						pt_pass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+						pt_pass.draw_indexed(0..gpu.index_count, 0, first..first + count);
 					}
 				}
 			}
@@ -1666,7 +1604,7 @@ impl RenderEngine3d {
 				let depth_vw = &self.depth_view;
 				let draw_ref = &self.draw_scratch;
 				let surf_ref = &self.surface_scratch;
-				let shadow_ref = &self.shadow_list_scratch;
+				let shadow_ref = &self.shadow_runs_scratch;
 				tasks[..task_count]
 					.par_iter()
 					.map(move |&task| {
@@ -1847,34 +1785,11 @@ impl RenderEngine3d {
 							spass.set_pipeline(s_shad_pl);
 							spass.set_bind_group(0, s_shad_gbg, &[Self::slot_offset(cascade)]);
 							spass.set_bind_group(1, s_ent_bg, &[]);
-							let mut last_mesh = u32::MAX;
-							let mut gs_slot = 0usize;
-							let mut gs_idx = 0usize;
-							let sn = shadow_list.len();
-							for idx in 0..=sn {
-								let done = idx == sn;
-								let cur_mesh = if done { u32::MAX } else { shadow_list[idx].0 };
-								if cur_mesh != last_mesh
-									&& idx > gs_idx && let Some(gpu) = s_mesh_gpu.get(&last_mesh)
-								{
-									let base = (ENTITY_SLOT_START + gs_slot) as u32;
-									spass.draw_indexed(
-										0..gpu.index_count,
-										0,
-										base..base + (idx - gs_idx) as u32,
-									);
-								}
-								if done {
-									break;
-								}
-								if cur_mesh != last_mesh {
-									if let Some(gpu) = s_mesh_gpu.get(&cur_mesh) {
-										spass.set_vertex_buffer(0, gpu.pos_buf.slice(..));
-										spass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
-									}
-									last_mesh = cur_mesh;
-									gs_slot = shadow_list[idx].1;
-									gs_idx = idx;
+							for &(mesh_id, first, count) in shadow_list {
+								if let Some(gpu) = s_mesh_gpu.get(&mesh_id) {
+									spass.set_vertex_buffer(0, gpu.pos_buf.slice(..));
+									spass.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+									spass.draw_indexed(0..gpu.index_count, 0, first..first + count);
 								}
 							}
 						}
@@ -1892,7 +1807,7 @@ impl RenderEngine3d {
 			// WASM: sequential shadow + z-prepass on the main encoder
 			#[cfg(target_arch = "wasm32")]
 			{
-				let shadow_list = &self.shadow_list_scratch;
+				let shadow_list = &self.shadow_runs_scratch;
 				for cascade in (0..NUM_CASCADES as usize).filter(|&c| active[c]) {
 					let mut sp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 						label: Some(SHADOW_CASCADE_LABELS[cascade]),
@@ -1912,35 +1827,11 @@ impl RenderEngine3d {
 					sp.set_pipeline(&self.shadow_pipeline);
 					sp.set_bind_group(0, &self.shadow_globals_bg, &[Self::slot_offset(cascade)]);
 					sp.set_bind_group(1, &self.entity_bg, &[]);
-					let mut last_mesh = u32::MAX;
-					let mut gs_slot = 0usize;
-					let mut gs_idx = 0usize;
-					let sn = shadow_list.len();
-					for idx in 0..=sn {
-						let done = idx == sn;
-						let cur_mesh = if done { u32::MAX } else { shadow_list[idx].0 };
-						if cur_mesh != last_mesh
-							&& idx > gs_idx
-							&& let Some(gpu) = self.mesh_gpu.get(&last_mesh)
-						{
-							let base = (ENTITY_SLOT_START + gs_slot) as u32;
-							sp.draw_indexed(
-								0..gpu.index_count,
-								0,
-								base..base + (idx - gs_idx) as u32,
-							);
-						}
-						if done {
-							break;
-						}
-						if cur_mesh != last_mesh {
-							if let Some(gpu) = self.mesh_gpu.get(&cur_mesh) {
-								sp.set_vertex_buffer(0, gpu.pos_buf.slice(..));
-								sp.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
-							}
-							last_mesh = cur_mesh;
-							gs_slot = shadow_list[idx].1;
-							gs_idx = idx;
+					for &(mesh_id, first, count) in shadow_list {
+						if let Some(gpu) = self.mesh_gpu.get(&mesh_id) {
+							sp.set_vertex_buffer(0, gpu.pos_buf.slice(..));
+							sp.set_index_buffer(gpu.ibuf.slice(..), gpu.index_fmt);
+							sp.draw_indexed(0..gpu.index_count, 0, first..first + count);
 						}
 					}
 				}

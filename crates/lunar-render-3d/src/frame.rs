@@ -571,6 +571,70 @@ impl RenderEngine3d {
 			}
 		}
 
+		// ── shadow casters ────────────────────────────────────────────────
+		// every visible ShadowCaster within range of the camera, whether or not the camera frustum
+		// sees it: a building behind the camera still shadows the view. each gets its own slot
+		// after the surface slots, so runs per mesh are contiguous by construction (the old
+		// scheme reused draw slots, which mixed in non-casters sharing a mesh).
+		self.shadow_inst_scratch.clear();
+		self.shadow_runs_scratch.clear();
+		{
+			let interp_alpha = world
+				.get_resource::<lunar_core::Time>()
+				.map(|t| t.interp_alpha())
+				.unwrap_or(1.0);
+			let range_sq = SHADOW_CASTER_RANGE * SHADOW_CASTER_RANGE;
+			let q = &mut self.queries.as_mut().unwrap().shadow_casters;
+			for (entity, vis, _, mesh, wt, lod, prev) in q.iter(world) {
+				if !vis.0 {
+					continue;
+				}
+				let render_wt = prev.map(|p| p.0.lerp(wt, interp_alpha)).unwrap_or(*wt);
+				let dist_sq = (Vec3A::from(render_wt.translation) - Vec3A::from(cam_pos))
+					.length_squared();
+				if dist_sq > range_sq {
+					continue;
+				}
+				let mesh_id = lod.and_then(|l| l.select(dist_sq)).unwrap_or(mesh.0).id();
+				self.shadow_inst_scratch
+					.push((mesh_id, entity.to_bits(), render_wt.to_matrix()));
+			}
+		}
+		// stable order (mesh, then entity) so the point-shadow signature is deterministic
+		self.shadow_inst_scratch
+			.sort_unstable_by_key(|&(mesh_id, bits, _)| (mesh_id, bits));
+		self.shadow_slot_base = ENTITY_SLOT_START
+			+ self.draw_scratch.len()
+			+ self.surface_scratch.len()
+			+ self.surface_overlay_scratch.len();
+		{
+			let mut i = 0usize;
+			while i < self.shadow_inst_scratch.len() {
+				let mesh_id = self.shadow_inst_scratch[i].0;
+				let mut j = i;
+				while j < self.shadow_inst_scratch.len() && self.shadow_inst_scratch[j].0 == mesh_id {
+					j += 1;
+				}
+				// a mesh that never reached the draw list (off-screen) isn't on the gpu yet
+				if !self.mesh_gpu.contains_key(&mesh_id) {
+					let registry = world.resource::<MeshRegistry>();
+					if let Some(data) = registry.get_mesh(lunar_assets::Handle::new(mesh_id, 0)) {
+						let gpu = Self::upload_mesh_data(&self.device, &self.queue, data);
+						self.mesh_gpu.insert(mesh_id, gpu);
+						if data.gpu_only {
+							self.mesh_evict_scratch.push(mesh_id);
+						}
+					}
+				}
+				self.shadow_runs_scratch.push((
+					mesh_id,
+					(self.shadow_slot_base + i) as u32,
+					(j - i) as u32,
+				));
+				i = j;
+			}
+		}
+
 		// evict cpu mesh data for newly uploaded gpu_only meshes
 		if !self.mesh_evict_scratch.is_empty() {
 			self.mesh_evict_scratch.sort_unstable();
@@ -585,7 +649,8 @@ impl RenderEngine3d {
 		let needed = ENTITY_SLOT_START
 			+ self.draw_scratch.len()
 			+ self.surface_scratch.len()
-			+ self.surface_overlay_scratch.len();
+			+ self.surface_overlay_scratch.len()
+			+ self.shadow_inst_scratch.len();
 		if needed > self.entity_capacity {
 			self.entity_capacity = needed.next_power_of_two().max(INITIAL_ENTITY_CAPACITY);
 			self.entity_buf = Self::make_entity_buf(&self.device, self.entity_capacity);
@@ -609,6 +674,10 @@ impl RenderEngine3d {
 			self.material_staging
 				.resize(self.entity_capacity * MATERIAL_UNIFORMS_SIZE as usize, 0);
 			log::debug!("draw buffers grown to {} slots", self.entity_capacity);
+		}
+
+		for (k, inst) in self.shadow_inst_scratch.iter().enumerate() {
+			Self::pack_mesh_uniforms(&mut self.uniform_staging, self.shadow_slot_base + k, inst.2);
 		}
 
 		// ── pack mesh + material staging ──────────────────────────────────

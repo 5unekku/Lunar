@@ -270,6 +270,9 @@ const CASCADE_LAMBDA: f32 = 0.5;
 /// near and far planes used for cascade split computation.
 const SHADOW_NEAR: f32 = 0.1;
 const SHADOW_FAR: f32 = 200.0;
+/// casters farther than this from the camera are dropped from every shadow pass. beyond the
+/// cascades (SHADOW_FAR) with headroom for casters whose shadow reaches back into range.
+const SHADOW_CASTER_RANGE: f32 = SHADOW_FAR * 1.5;
 
 /// maximum number of bloom mip levels.
 const MAX_BLOOM_MIPS: usize = 7;
@@ -1451,7 +1454,16 @@ pub(crate) struct FrameQueries {
 		&'static WorldTransform3d,
 		&'static ComputedVisibility,
 	)>,
-	pub(crate) shadow_casters: QueryState<(Entity, &'static ComputedVisibility, &'static ShadowCaster)>,
+	#[allow(clippy::type_complexity)]
+	pub(crate) shadow_casters: QueryState<(
+		Entity,
+		&'static ComputedVisibility,
+		&'static ShadowCaster,
+		&'static Mesh3d,
+		&'static WorldTransform3d,
+		Option<&'static MeshLod>,
+		Option<&'static PrevWorldTransform3d>,
+	)>,
 	pub(crate) planar_reflectors: QueryState<(
 		&'static PlanarReflector,
 		&'static WorldTransform3d,
@@ -1582,9 +1594,12 @@ pub struct RenderEngine3d {
 
 	// cascade N held caster depth last frame; cleared once when it goes inactive
 	shadow_cascade_live: [bool; 3],
-	// reused shadow-caster scratch: visible casters set + (mesh_id, draw index) list, refilled each frame
-	shadow_entities_scratch: HashSet<Entity>,
-	shadow_list_scratch: Vec<(u32, usize)>,
+	// shadow casters, refilled each frame and independent of camera visibility:
+	// (mesh_id, entity bits, model) sorted by mesh, their slots start at shadow_slot_base
+	// (after the surface slots), and one (mesh_id, first slot, count) run per mesh
+	shadow_inst_scratch: Vec<(u32, u64, Mat4)>,
+	shadow_runs_scratch: Vec<(u32, u32, u32)>,
+	shadow_slot_base: usize,
 
 	// point light cube shadow maps: 4 lights × 6 faces as 24-layer depth 2D array.
 	// layer = shadow_index * 6 + face; face order: 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z.
@@ -3091,6 +3106,59 @@ mod headless_tests {
 		// +x face of shadow slot 0, which belongs to the casting light
 		let covered = covered_footprint(&engine, &engine.point_shadow_tex, 0).2;
 		assert!(covered > 0, "the casting light's shadow slot was never rendered");
+	}
+
+	/// rev-32: shadow lists were built from the camera-visible draw list, so a caster behind the
+	/// camera never shadowed the view.
+	#[test]
+	fn caster_behind_camera_is_in_shadow_runs() {
+		let Some((mut engine, mut world, _quad, material)) = feature_test_setup() else {
+			return;
+		};
+		let ball = world.resource_mut::<MeshRegistry>().add_mesh(sphere_mesh(0.5, 16, 12));
+		world.spawn((
+			Mesh3d(ball),
+			Material3d(material),
+			WorldTransform3d {
+				translation: Vec3::new(0.0, 0.0, 10.0),
+				..WorldTransform3d::new()
+			},
+			ComputedVisibility(true),
+			ShadowCaster,
+		));
+		render_frames(&mut engine, &mut world, 2);
+		assert_eq!(
+			engine.shadow_runs_scratch.iter().map(|r| r.2).sum::<u32>(),
+			1,
+			"an off-screen caster must still be drawn into the shadow maps"
+		);
+	}
+
+	/// a non-caster sharing a mesh with casters sat inside the caster run's slot range and was
+	/// drawn into the shadow map in place of the last caster.
+	#[test]
+	fn non_caster_between_casters_is_not_a_shadow_instance() {
+		let Some((mut engine, mut world, _quad, material)) = feature_test_setup() else {
+			return;
+		};
+		let ball = world.resource_mut::<MeshRegistry>().add_mesh(sphere_mesh(0.5, 16, 12));
+		for (i, caster) in [true, false, true].into_iter().enumerate() {
+			let mut e = world.spawn((
+				Mesh3d(ball),
+				Material3d(material),
+				WorldTransform3d {
+					translation: Vec3::new(i as f32, 0.0, -8.0),
+					..WorldTransform3d::new()
+				},
+				ComputedVisibility(true),
+			));
+			if caster {
+				e.insert(ShadowCaster);
+			}
+		}
+		render_frames(&mut engine, &mut world, 2);
+		assert_eq!(engine.shadow_inst_scratch.len(), 2);
+		assert_eq!(engine.shadow_runs_scratch.iter().map(|r| r.2).sum::<u32>(), 2);
 	}
 
 	/// perf-07: a slot left unused is cleared; when a light comes back to it at the
